@@ -2,9 +2,11 @@
 
 ## Project
 
-This repo is `pievo` (Pi Evolution): a Pi-only chat relay for long-running Telegram/Mattermost assistants.
+This repo is `pievo` (Pi Evolution): an additional harness layer for durable, continuously evolving agents on top of Pi.
 
-It was forked from `anyagent`, but the active runtime should stay Pi-native:
+The long-term direction includes durable orchestration, memory layers, and continuous-evolution loops for agents, prompts, schedules, tools, and workflows.
+
+The current active runtime is a Pi-only chat relay for long-running Telegram/Mattermost assistants. It was forked from `anyagent`, but the active runtime should stay Pi-native:
 
 - Do not reintroduce Codex or Claude adapters.
 - Do not reintroduce legacy text output contracts (`REPLY`, `NO_REPLY`, `ATTACH`) as the primary delivery path.

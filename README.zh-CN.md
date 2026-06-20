@@ -1,12 +1,12 @@
 # Pievo
 
-Pievo（Pi Evolution）是一个面向 Pi 的聊天中继，用于构建长期运行的 Telegram / Mattermost Agents Assistant。
+Pievo（Pi Evolution）是一个面向 durable agents 的附加 harness layer，目标是在 Pi 之上构建 agent 编排、记忆与持续演化能力。
 
-该仓库从 `anyagent` fork 而来，并简化为仅支持 Pi。Codex/Claude adapter 与旧的文本输出契约不再作为运行时路径使用。
+当前实现首先提供一个 Pi-native 聊天中继，用于构建长期运行的 Telegram / Mattermost Agents Assistant。该仓库从 `anyagent` fork 而来，并简化为仅支持 Pi。Codex/Claude adapter 与旧的文本输出契约不再作为运行时路径使用。
 
 ## Pi 原生工具
 
-Pievo 会在每次 Pi run 中注入一个 Pi extension，并注册这些工具：
+当前聊天中继会在每次 Pi run 中注入一个 Pi extension，并注册这些工具：
 
 - `send_reply`：在群聊中发送可见回复，仅群聊使用。
 - `send_attachment`：把本地文件发送到当前聊天。

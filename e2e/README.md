@@ -1,6 +1,6 @@
 # Scenario E2E Tests
 
-These are opt-in real-Pi behavior tests for prompt/tool regressions. They replay editable chat scenarios through the same `ChatSession` and Pi tool bridge used by Pievo.
+These are opt-in real-Pi behavior tests for prompt/tool regressions in Pievo's current chat relay. They replay editable chat scenarios through the same `ChatSession` and Pi tool bridge used by the runtime.
 
 ## Run
 

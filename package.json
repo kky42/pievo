@@ -1,7 +1,7 @@
 {
   "name": "@kky42/pievo",
   "version": "0.1.0",
-  "description": "Pi-native chat assistant relay with group tools and schedules",
+  "description": "Durable agent evolution harness with a Pi-native chat relay",
   "type": "module",
   "bin": {
     "pievo": "bin/pievo.js"

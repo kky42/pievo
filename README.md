@@ -1,8 +1,8 @@
 # Pievo
 
-Pievo (Pi Evolution) is a Pi-native chat relay for long-running assistants in Telegram and Mattermost.
+Pievo (Pi Evolution) is an additional harness layer for durable agents: orchestration, memory, and continuous evolution on top of Pi.
 
-This repo was forked from `anyagent` and simplified to target Pi only. Codex/Claude adapters and text output contracts have been removed from the active runtime.
+The current implementation starts with a Pi-native chat relay for long-running assistants in Telegram and Mattermost. This repo was forked from `anyagent` and simplified to target Pi only. Codex/Claude adapters and text output contracts have been removed from the active runtime.
 
 ## Prompt files
 
@@ -14,7 +14,7 @@ Model-facing prompts and templates are centralized under `src/prompts/`:
 
 ## Native Pi tools
 
-Pievo injects a Pi extension into each Pi run. The extension registers chat-native tools:
+Pievo's current chat relay injects a Pi extension into each Pi run. The extension registers chat-native tools:
 
 - `send_reply` — send visible group-chat replies. Group chats only.
 - `send_attachment` — send a local file to the current chat.

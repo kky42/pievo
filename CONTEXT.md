@@ -1,8 +1,18 @@
 # Pievo Context
 
-Pievo (Pi Evolution) is a Pi-only chat relay for Telegram and Mattermost.
+Pievo (Pi Evolution) is an additional harness layer for durable, continuously evolving agents on top of Pi.
 
-Core ideas:
+Long-term direction:
+
+- Durable agent orchestration across long-running tasks and conversations.
+- Memory layers that preserve useful state beyond a single Pi session.
+- Continuous-evolution loops for agents, prompts, schedules, tools, and workflows.
+
+Current runtime:
+
+Pievo currently implements a Pi-only chat relay for Telegram and Mattermost.
+
+Current core ideas:
 
 - One front agent session per conversation.
 - Group chats provide transcript input, but visible group output must be sent with the native `send_reply` tool.
