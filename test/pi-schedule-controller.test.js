@@ -101,7 +101,9 @@ test("background schedules create a Pi tool bridge and pass its env to the run",
 
   assert.equal(bridgeCalls.length, 1);
   assert.equal(bridgeCalls[0].isGroupTurn, true);
+  assert.equal(bridgeCalls[0].disableScheduleTools, true);
   assert.equal(session.capturedRunParams.extraEnv.PIEVO_TOOL_BRIDGE_TOKEN, "token");
+  assert.match(session.capturedRunParams.message, /Run this existing scheduled task once/);
   assert.match(session.capturedRelayInstructions, /send_reply/);
   assert.equal(disposed, true);
 });

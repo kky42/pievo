@@ -11,6 +11,7 @@ import {
 import { toErrorMessage } from "../utils.js";
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
+const SCHEDULE_TOOLS = new Set(["add_schedule", "list_schedule", "remove_schedule"]);
 
 let bridgeState = null;
 
@@ -161,9 +162,13 @@ async function dispatchTool({
   isGroupTurn,
   replyTarget,
   onSchedulesChanged,
-  onToolCall
+  onToolCall,
+  disableScheduleTools = false
 }) {
   const { tool, params } = normalizeToolPayload(payload);
+  if (disableScheduleTools && SCHEDULE_TOOLS.has(tool)) {
+    throw new Error("Schedule tools are disabled for scheduled runs.");
+  }
   if (typeof onToolCall === "function") {
     await onToolCall({ tool, params });
   }
@@ -257,7 +262,8 @@ export async function createPiToolBridge({
   isGroupTurn,
   replyTarget = null,
   onSchedulesChanged = null,
-  onToolCall = null
+  onToolCall = null,
+  disableScheduleTools = false
 }) {
   const bridge = await ensureBridgeServer();
   const token = crypto.randomBytes(32).toString("hex");
@@ -268,14 +274,16 @@ export async function createPiToolBridge({
     isGroupTurn,
     replyTarget,
     onSchedulesChanged,
-    onToolCall
+    onToolCall,
+    disableScheduleTools
   }));
 
   return {
     env: {
       PIEVO_TOOL_BRIDGE_URL: bridge.url,
       PIEVO_TOOL_BRIDGE_TOKEN: token,
-      PIEVO_CHAT_MODE: isGroupTurn ? "group" : "private"
+      PIEVO_CHAT_MODE: isGroupTurn ? "group" : "private",
+      ...(disableScheduleTools ? { PIEVO_DISABLE_SCHEDULE_TOOLS: "1" } : {})
     },
     dispose() {
       bridge.handlers.delete(token);

@@ -152,6 +152,13 @@ export function buildHeartbeatPrivatePrompt(scheduleName, prompt) {
   });
 }
 
+export function buildBackgroundPrompt(scheduleName, prompt) {
+  return renderPrompt("templates/background-scheduled-turn.md", {
+    schedule_name: scheduleName,
+    prompt: String(prompt ?? "").trim()
+  });
+}
+
 export function buildHeartbeatGroupTranscriptMessage(scheduleName, prompt, now = new Date()) {
   return renderPrompt("templates/heartbeat-group-message.md", {
     timestamp: formatLocalTimestamp(Math.floor(now.getTime() / 1000)),

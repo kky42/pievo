@@ -245,7 +245,8 @@ export async function runFrontAgentTurn({
         isGroupTurn,
         replyTarget: turn.replyTarget,
         onSchedulesChanged: session.onSchedulesChanged,
-        onToolCall: session.onPiToolCall
+        onToolCall: session.onPiToolCall,
+        disableScheduleTools: Boolean(turn.scheduleName)
       });
     } catch (error) {
       await session.renderErrorText(`Failed to start Pi tool bridge: ${toErrorMessage(error)}`, {

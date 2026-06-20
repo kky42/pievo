@@ -11,6 +11,10 @@ function chatMode() {
 	return process.env.PIEVO_CHAT_MODE === "group" ? "group" : "private";
 }
 
+function scheduleToolsEnabled() {
+	return process.env.PIEVO_DISABLE_SCHEDULE_TOOLS !== "1";
+}
+
 function toolPrompt(toolName: string) {
 	const prompt = TOOL_PROMPTS[toolName] ?? {};
 	return {
@@ -112,58 +116,60 @@ export default function pievoChatTools(pi: ExtensionAPI) {
 		});
 	}
 
-	{
-		const prompt = toolPrompt("add_schedule");
-		pi.registerTool({
-			name: "add_schedule",
-			label: prompt.label,
-			description: prompt.description,
-			promptSnippet: prompt.promptSnippet,
-			promptGuidelines: prompt.promptGuidelines,
-			parameters: Type.Object({
-				mode: StringEnum(SCHEDULE_MODES, { description: parameterDescription("add_schedule", "mode") }),
-				name: Type.String({ description: parameterDescription("add_schedule", "name") }),
-				cron: Type.String({ description: parameterDescription("add_schedule", "cron") }),
-				prompt: Type.String({ description: parameterDescription("add_schedule", "prompt") }),
-			}),
-			async execute(_toolCallId, params, signal) {
-				const body = await callBridge("add_schedule", params, signal);
-				return bridgeResult(body, "Schedule added.");
-			},
-		});
-	}
+	if (scheduleToolsEnabled()) {
+		{
+			const prompt = toolPrompt("add_schedule");
+			pi.registerTool({
+				name: "add_schedule",
+				label: prompt.label,
+				description: prompt.description,
+				promptSnippet: prompt.promptSnippet,
+				promptGuidelines: prompt.promptGuidelines,
+				parameters: Type.Object({
+					mode: StringEnum(SCHEDULE_MODES, { description: parameterDescription("add_schedule", "mode") }),
+					name: Type.String({ description: parameterDescription("add_schedule", "name") }),
+					cron: Type.String({ description: parameterDescription("add_schedule", "cron") }),
+					prompt: Type.String({ description: parameterDescription("add_schedule", "prompt") }),
+				}),
+				async execute(_toolCallId, params, signal) {
+					const body = await callBridge("add_schedule", params, signal);
+					return bridgeResult(body, "Schedule added.");
+				},
+			});
+		}
 
-	{
-		const prompt = toolPrompt("list_schedule");
-		pi.registerTool({
-			name: "list_schedule",
-			label: prompt.label,
-			description: prompt.description,
-			promptSnippet: prompt.promptSnippet,
-			promptGuidelines: prompt.promptGuidelines,
-			parameters: Type.Object({}),
-			async execute(_toolCallId, params, signal) {
-				const body = await callBridge("list_schedule", params, signal);
-				return bridgeResult(body, "Schedules listed.");
-			},
-		});
-	}
+		{
+			const prompt = toolPrompt("list_schedule");
+			pi.registerTool({
+				name: "list_schedule",
+				label: prompt.label,
+				description: prompt.description,
+				promptSnippet: prompt.promptSnippet,
+				promptGuidelines: prompt.promptGuidelines,
+				parameters: Type.Object({}),
+				async execute(_toolCallId, params, signal) {
+					const body = await callBridge("list_schedule", params, signal);
+					return bridgeResult(body, "Schedules listed.");
+				},
+			});
+		}
 
-	{
-		const prompt = toolPrompt("remove_schedule");
-		pi.registerTool({
-			name: "remove_schedule",
-			label: prompt.label,
-			description: prompt.description,
-			promptSnippet: prompt.promptSnippet,
-			promptGuidelines: prompt.promptGuidelines,
-			parameters: Type.Object({
-				name: Type.String({ description: parameterDescription("remove_schedule", "name") }),
-			}),
-			async execute(_toolCallId, params, signal) {
-				const body = await callBridge("remove_schedule", params, signal);
-				return bridgeResult(body, "Schedule removed.");
-			},
-		});
+		{
+			const prompt = toolPrompt("remove_schedule");
+			pi.registerTool({
+				name: "remove_schedule",
+				label: prompt.label,
+				description: prompt.description,
+				promptSnippet: prompt.promptSnippet,
+				promptGuidelines: prompt.promptGuidelines,
+				parameters: Type.Object({
+					name: Type.String({ description: parameterDescription("remove_schedule", "name") }),
+				}),
+				async execute(_toolCallId, params, signal) {
+					const body = await callBridge("remove_schedule", params, signal);
+					return bridgeResult(body, "Schedule removed.");
+				},
+			});
+		}
 	}
 }

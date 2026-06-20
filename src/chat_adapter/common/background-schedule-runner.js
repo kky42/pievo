@@ -5,7 +5,7 @@ import {
   buildGroupOutputDeveloperInstructions,
   PRIVATE_OUTPUT_DEVELOPER_INSTRUCTIONS
 } from "./output-instructions.js";
-import { buildBackgroundNotificationText } from "./schedules.js";
+import { buildBackgroundNotificationText, buildBackgroundPrompt } from "./schedules.js";
 
 const PI_RUN_ID = "pi";
 const PI_RUN_DISPLAY_NAME = "Pi";
@@ -75,7 +75,8 @@ export class BackgroundScheduleRunner {
           isGroupTurn: isGroupRun,
           replyTarget,
           onSchedulesChanged: (changedSession) => this.syncConversationSchedules(changedSession),
-          onToolCall
+          onToolCall,
+          disableScheduleTools: true
         });
       } catch (error) {
         failureText = `Failed to start Pi tool bridge: ${toErrorMessage(error)}`;
@@ -88,7 +89,7 @@ export class BackgroundScheduleRunner {
           run = session.createAgentRun({
             workdir: session.workdir,
             sessionId: null,
-            message: schedule.prompt,
+            message: buildBackgroundPrompt(schedule.name, schedule.prompt),
             autoMode: session.auto,
             model: session.model,
             reasoningEffort: session.reasoningEffort,

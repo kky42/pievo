@@ -131,6 +131,31 @@ test("Pi tool bridge sends attachments through the chat renderer", async () => {
   }
 });
 
+test("Pi tool bridge can disable schedule tools for scheduled runs", async () => {
+  const session = createFakeSession();
+  const bridge = await createPiToolBridge({
+    session,
+    isGroupTurn: false,
+    disableScheduleTools: true
+  });
+
+  try {
+    assert.equal(bridge.env.PIEVO_DISABLE_SCHEDULE_TOOLS, "1");
+    const result = await callTool(bridge.env, "add_schedule", {
+      mode: "background",
+      name: "loop",
+      cron: "*/3 * * * *",
+      prompt: "repeat"
+    });
+    assert.equal(result.status, 500);
+    assert.equal(result.body.ok, false);
+    assert.match(result.body.error, /disabled for scheduled runs/);
+    assert.deepEqual(session.schedules, []);
+  } finally {
+    bridge.dispose();
+  }
+});
+
 test("Pi tool bridge manages schedules and resyncs timers", async () => {
   const session = createFakeSession();
   let syncCount = 0;
