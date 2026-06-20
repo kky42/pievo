@@ -1,0 +1,305 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
+import {
+  ATTACHMENT_SIZE_LIMIT_BYTES,
+  attachmentLimitText,
+  buildAttachmentFileName
+} from "../common/attachments.js";
+import { formatAuto } from "../../auto-mode.js";
+import { ChatSession as CommonChatSession } from "../common/chat-session.js";
+import { ensureCacheScope } from "../common/cache-scope.js";
+import { appendReferenceContext } from "../common/reference-context.js";
+import { DEFAULT_CACHE_PATH, formatLocalTimestamp, formatTokenCountK, toErrorMessage } from "../../utils.js";
+import { summarizeQueue } from "../common/render.js";
+import { describeNextSchedule } from "../common/schedules.js";
+import {
+  attachmentDescriptorFromMessage,
+  unsupportedAttachmentMessage
+} from "./attachments.js";
+import { MessageRenderer } from "./message-renderer.js";
+
+function normalizeCaption(value) {
+  return String(value ?? "").trim();
+}
+
+function inlineValue(value) {
+  return String(value ?? "").replace(/\s*\r?\n\s*/g, " ").trim();
+}
+
+function markdownKeyValues(rows) {
+  return rows.map(([key, value]) => `- **${key}:** ${inlineValue(value)}`).join("\n");
+}
+
+function nextScheduleSummary(schedules) {
+  const enabledSchedules = schedules.filter((schedule) => schedule.enabled !== false);
+  if (enabledSchedules.length === 0) {
+    return "n/a";
+  }
+
+  const nextSchedule = enabledSchedules
+    .map((schedule) => {
+      try {
+        return {
+          ...schedule,
+          next: describeNextSchedule(schedule)
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.next.getTime() - right.next.getTime())[0];
+
+  return nextSchedule
+    ? `${nextSchedule.mode} ${nextSchedule.name} at ${formatLocalTimestamp(
+        Math.floor(nextSchedule.next.getTime() / 1000)
+      )}`
+    : "n/a";
+}
+
+function renderTelegramStatusMarkdown(session) {
+  const enabledSchedules = session.schedules.filter((schedule) => schedule.enabled !== false);
+  const disabledSchedules = session.schedules.filter((schedule) => schedule.enabled === false);
+  return [
+    "# Pievo Status",
+    "",
+    markdownKeyValues([
+      ["running", session.isRunning ? "yes" : "no"],
+      ["workdir", session.workdir],
+      ["auto", formatAuto(session.auto)],
+      ["model", session.model],
+      ["reasoning_effort", session.reasoningEffort],
+      ["context_length", formatTokenCountK(session.contextLength)],
+      ["schedules", `${enabledSchedules.length} enabled, ${disabledSchedules.length} disabled`],
+      ["next_schedule", nextScheduleSummary(session.schedules)]
+    ]),
+    "",
+    "## Queue",
+    summarizeQueue(session.queue)
+  ].join("\n");
+}
+
+export function replyTargetFromTelegramMessage(message) {
+  const target = {};
+  const messageThreadId = message?.message_thread_id;
+  const directMessagesTopicId = message?.direct_messages_topic?.topic_id;
+
+  if (messageThreadId !== null && messageThreadId !== undefined) {
+    target.messageThreadId = messageThreadId;
+  }
+  if (
+    directMessagesTopicId !== null &&
+    directMessagesTopicId !== undefined
+  ) {
+    target.directMessagesTopicId = directMessagesTopicId;
+  }
+  return Object.keys(target).length > 0 ? target : null;
+}
+
+export class ChatSession extends CommonChatSession {
+  constructor({
+    botConfig,
+    botApi,
+    configStore,
+    logger,
+    chatId,
+    conversationId = chatId,
+    cacheRootDir = DEFAULT_CACHE_PATH,
+    stateStore = null,
+    deliveryAnchor = null,
+    createAgentRun = null,
+    resolveContextLength = null,
+    resolveHomeDir,
+    onSchedulesChanged = null
+  }) {
+    const messageRenderer = new MessageRenderer({ botApi, chatId, logger });
+    super({
+      bindingConfig: botConfig,
+      output: messageRenderer,
+      configStore,
+      logger,
+      platform: "telegram",
+      bindingId: botConfig.username,
+      conversationId,
+      cacheRootDir,
+      stateStore,
+      deliveryAnchor,
+      createAgentRun,
+      resolveContextLength,
+      resolveHomeDir,
+      onSchedulesChanged
+    });
+    this.botApi = botApi;
+    this.chatId = chatId;
+    this.messageRenderer = messageRenderer;
+  }
+
+  startTyping(replyTarget = this.activeReplyTarget) {
+    return this.messageRenderer.startTyping(replyTarget);
+  }
+
+  stopTyping() {
+    return this.messageRenderer.stopTyping();
+  }
+
+  sendRichText(markdown, options = {}) {
+    return this.messageRenderer.sendRichText(markdown, options);
+  }
+
+  async handleStatus(options = {}) {
+    await this.sendRichText(renderTelegramStatusMarkdown(this), {
+      ...options,
+      fallbackText: super.statusText()
+    });
+  }
+
+  async resolveAttachmentLocalPath(descriptor, filePath) {
+    const scope = this.cacheScope();
+    await ensureCacheScope(scope);
+
+    for (let collisionIndex = 1; collisionIndex <= 1000; collisionIndex += 1) {
+      const fileName = buildAttachmentFileName({
+        kind: descriptor.kind,
+        fileName: descriptor.fileName,
+        filePath,
+        sourceMessageId: descriptor.sourceMessageId,
+        collisionIndex
+      });
+      const localPath = path.join(scope.scopeDir, fileName);
+
+      try {
+        await fs.stat(localPath);
+      } catch (error) {
+        if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+          return { fileName, localPath };
+        }
+        throw error;
+      }
+    }
+
+    throw new Error("Could not allocate a unique attachment cache filename.");
+  }
+
+  async stageAttachment(descriptor) {
+    if (descriptor.fileSize !== null && descriptor.fileSize > ATTACHMENT_SIZE_LIMIT_BYTES) {
+      throw new Error(
+        `${descriptor.fileName ?? descriptor.kind} exceeds the ${attachmentLimitText()} limit.`
+      );
+    }
+
+    const file = await this.botApi.getFile(descriptor.telegramFileId);
+    const resolvedFileSize =
+      Number.isFinite(Number(file?.file_size)) ? Number(file.file_size) : descriptor.fileSize;
+    if (resolvedFileSize !== null && resolvedFileSize > ATTACHMENT_SIZE_LIMIT_BYTES) {
+      throw new Error(
+        `${descriptor.fileName ?? descriptor.kind} exceeds the ${attachmentLimitText()} limit.`
+      );
+    }
+
+    if (typeof file?.file_path !== "string" || !file.file_path) {
+      throw new Error("Telegram did not return a downloadable file path.");
+    }
+
+    const { fileName, localPath } = await this.resolveAttachmentLocalPath(
+      descriptor,
+      file.file_path
+    );
+
+    const buffer = await this.botApi.downloadFile(file.file_path, {
+      maxBytes: ATTACHMENT_SIZE_LIMIT_BYTES
+    });
+    await fs.writeFile(localPath, buffer);
+
+    return {
+      ...descriptor,
+      localPath,
+      fileName,
+      fileSize: resolvedFileSize ?? buffer.length
+    };
+  }
+
+  async buildAttachmentTurn(messages) {
+    const attachments = [];
+    const downloadedPaths = [];
+    let promptText = "";
+
+    try {
+      for (const message of messages) {
+        const descriptor = attachmentDescriptorFromMessage(message);
+        if (!descriptor) {
+          throw new Error(unsupportedAttachmentMessage());
+        }
+
+        promptText ||= normalizeCaption(message?.caption);
+        const attachment = await this.stageAttachment(descriptor);
+        attachments.push(attachment);
+        downloadedPaths.push(attachment.localPath);
+      }
+    } catch (error) {
+      await Promise.allSettled(downloadedPaths.map((filePath) => fs.rm(filePath, { force: true })));
+      throw error;
+    }
+
+    return {
+      promptText,
+      attachments
+    };
+  }
+
+  async stageAttachmentsFromMessages(messages) {
+    const attachments = [];
+    const downloadedPaths = [];
+
+    try {
+      for (const message of messages) {
+        const descriptor = attachmentDescriptorFromMessage(message);
+        if (!descriptor) {
+          continue;
+        }
+
+        const attachment = await this.stageAttachment(descriptor);
+        attachments.push(attachment);
+        downloadedPaths.push(attachment.localPath);
+      }
+    } catch (error) {
+      await Promise.allSettled(downloadedPaths.map((filePath) => fs.rm(filePath, { force: true })));
+      throw error;
+    }
+
+    return attachments;
+  }
+
+  async stageInputAttachmentsFromMessage(message) {
+    const descriptor = attachmentDescriptorFromMessage(message);
+    if (!descriptor) {
+      return [];
+    }
+
+    try {
+      const attachment = await this.stageAttachment(descriptor);
+      return [{ kind: attachment.kind, localPath: attachment.localPath }];
+    } catch (error) {
+      this.logger(`incoming attachment unavailable: ${toErrorMessage(error)}`);
+      return [{ kind: descriptor.kind, localPath: "unavailable" }];
+    }
+  }
+
+  async handleAttachmentMessages(messages, options = {}) {
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return;
+    }
+    const replyTarget = replyTargetFromTelegramMessage(messages[0]);
+
+    try {
+      const turn = await this.buildAttachmentTurn(messages);
+      if (options.referenceText) {
+        turn.promptText = appendReferenceContext(turn.promptText, options.referenceText);
+      }
+      turn.replyTarget = replyTarget;
+      await this.enqueueTurn(turn);
+    } catch (error) {
+      await this.sendText(toErrorMessage(error), { replyTarget });
+    }
+  }
+}

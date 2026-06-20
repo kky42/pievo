@@ -1,0 +1,44 @@
+{
+  "name": "@kky42/pievo",
+  "version": "0.1.0",
+  "description": "Pi-native chat assistant relay with group tools and schedules",
+  "type": "module",
+  "bin": {
+    "pievo": "bin/pievo.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/kky42/pievo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kky42/pievo/issues"
+  },
+  "homepage": "https://github.com/kky42/pievo#readme",
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node ./bin/pievo.js",
+    "test": "node --test test/pi-*.test.js test/scenario-*.test.js test/schedules.test.js test/conversation-state.test.js test/process-runner.test.js test/input-message.test.js test/utils.test.js",
+    "test:e2e:scenario": "node ./e2e/run-scenario.js"
+  },
+  "keywords": [
+    "agent",
+    "pi",
+    "telegram",
+    "mattermost",
+    "relay"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "marked": "^18.0.3",
+    "ws": "^8.20.1"
+  }
+}

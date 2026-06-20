@@ -1,0 +1,55 @@
+# User-editable real-agent E2E scenario.
+# Run with:
+#   PIEVO_E2E_MODEL=provider/model npm run test:e2e:scenario -- e2e/scenarios/group-basic.yaml
+
+name: group-basic
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+# Optional files are created in an isolated temp workdir before the scenario starts.
+files:
+  - path: notes.txt
+    content: |
+      Team decision log:
+      - Use native Pi tools for group chat delivery.
+      - Keep prompts centralized under src/prompts.
+
+steps:
+  - id: unrelated-smalltalk
+    messages:
+      - from: Alice
+        handle: "@alice"
+        text: "@bob Lunch later? This is just between us; no assistant needed."
+      - from: Bob
+        handle: "@bob"
+        text: "Sure, Alice. Let's keep the bot out of this."
+    expect:
+      noReply: true
+      toolCalls:
+        send_reply: 0
+
+  - id: addressed-question
+    messages:
+      - from: Alice
+        handle: "@alice"
+        text: |
+          @relaybot without modifying any files, read notes.txt and reply in the group with one short sentence summarizing the decision.
+    expect:
+      toolCalls:
+        send_reply: 1
+      replies:
+        - contains: "native Pi tools"
+          maxLength: 300
+
+  - id: follow-up-shorter
+    messages:
+      - from: Alice
+        handle: "@alice"
+        text: "Can you make that even shorter?"
+    expect:
+      toolCalls:
+        send_reply: 1
+      replies:
+        - maxLength: 160

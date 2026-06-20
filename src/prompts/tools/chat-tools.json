@@ -1,0 +1,94 @@
+{
+  "send_reply": {
+    "label": "Send Reply",
+    "description": "Send a visible reply to the current group chat thread.",
+    "promptSnippet": "Send a visible reply to the current group chat thread",
+    "promptGuidelines": [
+      "Use send_reply when you need to make a visible group-chat reply.",
+      "If a group-chat transcript does not need a visible bot response, do not call send_reply."
+    ],
+    "parameters": {
+      "text": {
+        "description": "Visible message text to send to the group chat."
+      }
+    }
+  },
+  "send_attachment": {
+    "label": "Send Attachment",
+    "description": "Send a local file to the current chat. Relative paths resolve from the current workdir.",
+    "promptSnippet": "Send a local file attachment to the current chat",
+    "promptGuidelines": [
+      "Use send_attachment to send generated local files to the chat."
+    ],
+    "groupPromptGuidelines": [
+      "Use send_reply in group chats for explanatory text that should accompany an attachment."
+    ],
+    "parameters": {
+      "path": {
+        "description": "Local file path. Relative paths resolve from the current workdir."
+      },
+      "kind": {
+        "description": "Attachment kind. Defaults to document."
+      },
+      "fileName": {
+        "description": "Optional display filename."
+      },
+      "caption": {
+        "description": "Optional attachment caption when supported."
+      }
+    }
+  },
+  "add_schedule": {
+    "label": "Add Schedule",
+    "description": "Add a heartbeat or background schedule for the current chat.",
+    "promptSnippet": "Add a scheduled task for the current chat",
+    "promptGuidelines": [
+      "Use add_schedule only when the user explicitly asks to create or replace a recurring scheduled task."
+    ],
+    "groupPromptGuidelines": [
+      "After add_schedule in group chat, call send_reply to confirm the schedule if a visible confirmation is needed."
+    ],
+    "parameters": {
+      "mode": {
+        "description": "heartbeat runs in the current front-agent session; background starts a fresh matching agent."
+      },
+      "name": {
+        "description": "Schedule name: letters, numbers, underscore, or dash."
+      },
+      "cron": {
+        "description": "Five-field cron expression: minute hour day-of-month month day-of-week."
+      },
+      "prompt": {
+        "description": "Prompt to run when the schedule fires."
+      }
+    }
+  },
+  "list_schedule": {
+    "label": "List Schedules",
+    "description": "List schedules for the current chat.",
+    "promptSnippet": "List scheduled tasks for the current chat",
+    "promptGuidelines": [
+      "Use list_schedule when the user asks what scheduled tasks exist for this chat."
+    ],
+    "groupPromptGuidelines": [
+      "After list_schedule in group chat, call send_reply with the list if a visible answer is needed."
+    ],
+    "parameters": {}
+  },
+  "remove_schedule": {
+    "label": "Remove Schedule",
+    "description": "Remove a schedule from the current chat by name.",
+    "promptSnippet": "Remove a scheduled task from the current chat",
+    "promptGuidelines": [
+      "Use remove_schedule only when the user explicitly asks to remove a scheduled task."
+    ],
+    "groupPromptGuidelines": [
+      "After remove_schedule in group chat, call send_reply to confirm removal if a visible confirmation is needed."
+    ],
+    "parameters": {
+      "name": {
+        "description": "Schedule name to remove."
+      }
+    }
+  }
+}

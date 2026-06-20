@@ -1,0 +1,54 @@
+# User-editable schedule scenario.
+# This checks that the real agent chooses schedule tools and then replies visibly in group chat.
+
+name: group-schedule
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+steps:
+  - id: create-heartbeat
+    messages:
+      - from: Manager
+        handle: "@manager"
+        text: |
+          @relaybot add a heartbeat schedule named daily-standup with cron 0 9 * * *.
+          The scheduled prompt should be: remind us to post blockers and priorities.
+          After creating it, send a visible group reply that mentions daily-standup.
+    expect:
+      toolCalls:
+        add_schedule: 1
+        send_reply: 1
+      schedules:
+        contains:
+          name: daily-standup
+          mode: heartbeat
+      replies:
+        - contains: "daily-standup"
+
+  - id: list-schedules
+    messages:
+      - from: Manager
+        handle: "@manager"
+        text: "@relaybot what schedules exist here? Reply visibly and mention daily-standup if it exists."
+    expect:
+      toolCalls:
+        list_schedule: 1
+        send_reply: 1
+      replies:
+        - contains: "daily-standup"
+
+  - id: remove-schedule
+    messages:
+      - from: Manager
+        handle: "@manager"
+        text: "@relaybot remove the daily-standup schedule, then reply visibly that daily-standup was removed."
+    expect:
+      toolCalls:
+        remove_schedule: 1
+        send_reply: 1
+      schedules:
+        count: 0
+      replies:
+        - contains: "daily-standup"

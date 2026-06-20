@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "conversation": {
+    "agentId": "primary-agent",
+    "platform": "telegram",
+    "bindingId": "relaybot",
+    "conversationId": "1001"
+  },
+  "deliveryAnchor": {
+    "chatId": 1001,
+    "replyTarget": {
+      "messageThreadId": 42
+    }
+  },
+  "session": {
+    "id": "legacy-session",
+    "contextLength": 2048,
+    "basis": {
+      "workdir": "/tmp/legacy-project",
+      "additionalSystemPromptSnapshot": "legacy frozen prompt",
+      "cli": "pi"
+    }
+  },
+  "overrides": {
+    "workdir": "/tmp/legacy-project",
+    "auto": "high",
+    "model": "gpt-5.4-mini",
+    "reasoningEffort": "high",
+    "cli": "pi"
+  },
+  "schedules": [
+    {
+      "name": "legacy-pulse",
+      "mode": "heartbeat",
+      "cron": "0 * * * *",
+      "prompt": "summarize status",
+      "enabled": true
+    }
+  ]
+}
