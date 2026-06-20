@@ -11,12 +11,10 @@ export class BackgroundScheduleRunner {
   constructor({
     log = noop,
     deliveryAnchorForSession = (session) => session.deliveryAnchor ?? null,
-    isDirectConversation = () => true,
     eventToActions = piEventToActions
   } = {}) {
     this.log = log;
     this.deliveryAnchorForSession = deliveryAnchorForSession;
-    this.isDirectConversation = isDirectConversation;
     this.eventToActions = eventToActions;
     this.activeRuns = new Set();
   }
@@ -32,8 +30,6 @@ export class BackgroundScheduleRunner {
   async run(session, schedule, now = new Date()) {
     const deliveryAnchor = await this.deliveryAnchorForSession(session);
     const replyTarget = deliveryAnchor?.replyTarget ?? null;
-    const isDirect = await this.isDirectConversation({ session, deliveryAnchor });
-    const isGroupRun = !isDirect;
     const triggeredAt = formatLocalTimestamp(Math.floor(now.getTime() / 1000));
     const messageParts = [];
     let failureText = null;
@@ -94,16 +90,6 @@ export class BackgroundScheduleRunner {
 
       if (run?.suppressBackgroundNotification) {
         this.log(`background run notification suppressed: ${schedule.name} in ${session.conversationId}`);
-        return;
-      }
-
-      if (isGroupRun && !failureText) {
-        if (messageParts.some((text) => String(text ?? "").trim())) {
-          session.logger?.(`${PI_RUN_ID} background final group text suppressed; background runs do not expose chat tools.`);
-        } else {
-          this.log(`background run produced no group notification: ${schedule.name} in ${session.conversationId}`);
-        }
-        this.log(`background run finished: ${schedule.name} in ${session.conversationId} (failed=false)`);
         return;
       }
 

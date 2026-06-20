@@ -52,8 +52,7 @@ export class ScheduleController {
     this.scheduleTimers = new Map();
     this.backgroundRunner = new BackgroundScheduleRunner({
       log,
-      deliveryAnchorForSession,
-      isDirectConversation
+      deliveryAnchorForSession
     });
     this.commandHandler = new ScheduleCommandHandler({
       presenter: schedulePresenter,

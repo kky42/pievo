@@ -89,7 +89,7 @@ test("background schedules run as plain Pi invocations without Pievo tools", asy
   assert.equal(session.capturedRelayInstructions, null);
 });
 
-test("group background final text is suppressed instead of delivered with sendText", async () => {
+test("group background final text is delivered as a runtime notification", async () => {
   const session = createBackgroundSession();
   const { controller } = createController({
     getSession: () => session,
@@ -101,10 +101,11 @@ test("group background final text is suppressed instead of delivered with sendTe
     name: "daily",
     cron: "* * * * *",
     prompt: "summarize"
-  });
+  }, new Date("2026-06-20T12:34:56Z"));
 
-  assert.deepEqual(session.sentTexts, []);
-  assert.match(session.sessionLogs.join("\n"), /background final group text suppressed/);
+  assert.equal(session.sentTexts.length, 1);
+  assert.match(session.sentTexts[0].text, /Background scheduled run: daily/);
+  assert.match(session.sentTexts[0].text, /background result/);
 });
 
 test("private background final text is delivered as a notification", async () => {

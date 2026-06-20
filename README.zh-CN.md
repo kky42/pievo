@@ -16,7 +16,7 @@ Pievo（Pi Evolution）是一个面向 durable agents 的附加 harness layer，
 
 群聊输出由工具驱动：最终 assistant 文本不会自动发到群里，只有 `send_reply` 会产生可见群聊消息。
 
-Background schedule 不同：它会用相同 profile settings 启动一个新的普通 Pi invocation，但不注入 Pievo chat/schedule tools。
+Background schedule 不同：它会用相同 profile settings 启动一个新的普通 Pi invocation，但不注入 Pievo chat/schedule tools；最终结果由 Pievo runtime 作为通知发回聊天。
 
 ## 运行
 

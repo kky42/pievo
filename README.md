@@ -24,7 +24,7 @@ Pievo's current chat relay injects a Pi extension into front-agent runs. The ext
 
 Group-chat visibility is tool-driven: final assistant text is suppressed in groups, and only `send_reply` posts visible text.
 
-Background schedules are different: they run as fresh plain Pi invocations with the same profile settings, but without Pievo chat/schedule tools.
+Background schedules are different: they run as fresh plain Pi invocations with the same profile settings, but without Pievo chat/schedule tools. Pievo posts the final result back to the chat as a runtime notification.
 
 ## Run
 
