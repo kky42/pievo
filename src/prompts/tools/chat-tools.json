@@ -44,7 +44,9 @@
     "description": "Add a heartbeat or background schedule for the current chat.",
     "promptSnippet": "Add a scheduled task for the current chat",
     "promptGuidelines": [
-      "Use add_schedule only when the user explicitly asks to create or replace a recurring scheduled task."
+      "Use add_schedule only when the user explicitly asks to create or replace a recurring scheduled task.",
+      "Put cadence in cron and the actual work instruction in task.",
+      "Do not put scheduling instructions, schedule names, or requests to create/list/remove schedules inside task."
     ],
     "groupPromptGuidelines": [
       "After add_schedule in group chat, call send_reply to confirm the schedule if a visible confirmation is needed."
@@ -59,8 +61,8 @@
       "cron": {
         "description": "Five-field cron expression: minute hour day-of-month month day-of-week."
       },
-      "prompt": {
-        "description": "Prompt to run when the schedule fires."
+      "task": {
+        "description": "Task instruction to execute each time the schedule fires. Describe only the work to do then; exclude cadence, schedule setup/removal/listing instructions, and phrases like \"create a schedule\"."
       }
     }
   },

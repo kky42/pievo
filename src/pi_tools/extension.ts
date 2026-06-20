@@ -129,7 +129,7 @@ export default function pievoChatTools(pi: ExtensionAPI) {
 					mode: StringEnum(SCHEDULE_MODES, { description: parameterDescription("add_schedule", "mode") }),
 					name: Type.String({ description: parameterDescription("add_schedule", "name") }),
 					cron: Type.String({ description: parameterDescription("add_schedule", "cron") }),
-					prompt: Type.String({ description: parameterDescription("add_schedule", "prompt") }),
+					task: Type.String({ description: parameterDescription("add_schedule", "task") }),
 				}),
 				async execute(_toolCallId, params, signal) {
 					const body = await callBridge("add_schedule", params, signal);

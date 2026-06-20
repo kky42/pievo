@@ -33,7 +33,7 @@ export function parseScheduleAddArgs(args) {
 
   if (headerRest.length >= 5) {
     // Single-line format: the next 5 tokens form the cron expression,
-    // and everything after is the prompt.
+    // and everything after is the scheduled task instruction.
     cron = headerRest.slice(0, 5).join(" ");
     prompt = headerRest.slice(5).join(" ").trim();
     if (lines.length > 0) {
@@ -43,7 +43,7 @@ export function parseScheduleAddArgs(args) {
       }
     }
   } else if (headerRest.length === 0) {
-    // Multi-line format: cron on the next line, prompt on remaining lines.
+    // Multi-line format: cron on the next line, task instruction on remaining lines.
     cron = String(lines.shift() ?? "").trim();
     if (!cron) {
       throw new Error("Schedule cron is required on the second line.");
@@ -52,13 +52,13 @@ export function parseScheduleAddArgs(args) {
   } else {
     throw new Error(
       "Schedule name cannot contain spaces. " +
-      "Put the cron expression on the next line, or provide all 5 cron fields after the name on the same line followed by the prompt."
+      "Put the cron expression on the next line, or provide all 5 cron fields after the name on the same line followed by the task."
     );
   }
 
   parseCronExpression(cron);
   if (!prompt) {
-    throw new Error("Schedule prompt is required after the cron expression.");
+    throw new Error("Schedule task is required after the cron expression.");
   }
 
   return {
@@ -90,15 +90,15 @@ export function scheduleCommandHelp(commandName = "schedule") {
     "Add heartbeat:",
     `  ${commandName} add heartbeat <name>`,
     "  <cron>",
-    "  <prompt>",
+    "  <task>",
     "",
     "Add background:",
     `  ${commandName} add background <name>`,
     "  <cron>",
-    "  <prompt>",
+    "  <task>",
     "",
     "Single-line add:",
-    `  ${commandName} add background <name> <5 cron fields> <prompt>`,
+    `  ${commandName} add background <name> <5 cron fields> <task>`,
     "",
     "Manage:",
     `  ${commandName} remove <name>`,

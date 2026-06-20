@@ -172,7 +172,7 @@ test("Pi tool bridge manages schedules and resyncs timers", async () => {
       mode: "heartbeat",
       name: "pulse",
       cron: "*/5 * * * *",
-      prompt: "check the queue"
+      task: "check the queue"
     });
     assert.equal(added.status, 200);
     assert.match(added.body.text, /Added schedule "pulse"/);

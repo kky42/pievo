@@ -14,7 +14,7 @@ steps:
         handle: "@manager"
         text: |
           @relaybot add a heartbeat schedule named daily-standup with cron 0 9 * * *.
-          The scheduled prompt should be: remind us to post blockers and priorities.
+          The scheduled task should be: remind us to post blockers and priorities.
           After creating it, send a visible group reply that mentions daily-standup.
     expect:
       toolCalls:

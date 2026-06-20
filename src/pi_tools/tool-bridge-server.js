@@ -137,10 +137,10 @@ function normalizeCron(cron) {
   return normalized;
 }
 
-function normalizePrompt(prompt) {
-  const normalized = String(prompt ?? "").trim();
+function normalizeScheduleTask(task) {
+  const normalized = String(task ?? "").trim();
   if (!normalized) {
-    throw new Error("Schedule prompt is required.");
+    throw new Error("Schedule task is required.");
   }
   return normalized;
 }
@@ -216,7 +216,7 @@ async function dispatchTool({
         mode: normalizeScheduleMode(params.mode),
         name: validateScheduleName(params.name),
         cron: normalizeCron(params.cron),
-        prompt: normalizePrompt(params.prompt),
+        prompt: normalizeScheduleTask(params.task ?? params.prompt),
         enabled: true
       };
       if (session.schedules.some((candidate) => candidate.name === schedule.name)) {
