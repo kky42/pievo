@@ -4,7 +4,8 @@
     "description": "Send a visible reply to the current group chat thread.",
     "promptSnippet": "Send a visible reply to the current group chat thread",
     "promptGuidelines": [
-      "Use send_reply when you need to make a visible group-chat reply.",
+      "Use send_reply whenever you need to make a visible group-chat reply.",
+      "Final assistant text is hidden in group chats; do not rely on it for visible answers.",
       "If a group-chat transcript does not need a visible bot response, do not call send_reply."
     ],
     "parameters": {

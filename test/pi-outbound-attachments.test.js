@@ -12,7 +12,9 @@ import {
 import {
   MessageRenderer as TelegramMessageRenderer,
   TELEGRAM_RICH_DRAFTS_ENV,
-  isTelegramRichDraftsEnabled
+  TELEGRAM_RICH_MESSAGES_ENV,
+  isTelegramRichDraftsEnabled,
+  isTelegramRichMessagesEnabled
 } from "../src/chat_adapter/telegram/message-renderer.js";
 import { MessageRenderer as MattermostMessageRenderer } from "../src/chat_adapter/mattermost/message-renderer.js";
 import { FakeBotApi } from "./support/fakes.js";
@@ -189,7 +191,11 @@ test("Mattermost renderer sends native attachments through the common resolver",
   });
 });
 
-test("Telegram rich drafts use only the Pievo env name", () => {
+test("Telegram rich features use only explicit Pievo env names", () => {
+  assert.equal(isTelegramRichMessagesEnabled({ [TELEGRAM_RICH_MESSAGES_ENV]: "1" }), true);
+  assert.equal(isTelegramRichMessagesEnabled({ [TELEGRAM_RICH_MESSAGES_ENV]: "0" }), false);
+  assert.equal(isTelegramRichMessagesEnabled({ OTHER_RICH_MESSAGES_ENV: "1" }), false);
+
   assert.equal(isTelegramRichDraftsEnabled({ [TELEGRAM_RICH_DRAFTS_ENV]: "1" }), true);
   assert.equal(isTelegramRichDraftsEnabled({ [TELEGRAM_RICH_DRAFTS_ENV]: "0" }), false);
   assert.equal(isTelegramRichDraftsEnabled({ OTHER_RICH_DRAFTS_ENV: "1" }), false);

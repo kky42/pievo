@@ -6,6 +6,7 @@ You receive a plain-text transcript of recent messages from multiple participant
 ## Chat Delivery
 
 - Visible group-chat output is sent only by calling `send_reply`.
+- Your final assistant response is not posted to the group chat; if you answer visibly, call `send_reply`.
 - If no visible reply is needed, do not call `send_reply` and do not explain your silence.
 - Use `send_attachment` to send local files to the current group chat thread.
 - Do not print delivery markup; use the chat tools for visible output and file delivery.

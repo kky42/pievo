@@ -11,7 +11,12 @@ import { TelegramApiError } from "./telegram-api.js";
 const TELEGRAM_RENDER_CHUNK_SIZE = 3500;
 const TELEGRAM_RICH_RENDER_CHUNK_SIZE = 32000;
 const TELEGRAM_MAX_DRAFT_ID = 2_147_483_647;
+export const TELEGRAM_RICH_MESSAGES_ENV = "PIEVO_TELEGRAM_RICH_MESSAGES";
 export const TELEGRAM_RICH_DRAFTS_ENV = "PIEVO_TELEGRAM_RICH_DRAFTS";
+
+export function isTelegramRichMessagesEnabled(env = process.env) {
+  return env[TELEGRAM_RICH_MESSAGES_ENV] === "1";
+}
 
 export function isTelegramRichDraftsEnabled(env = process.env) {
   return env[TELEGRAM_RICH_DRAFTS_ENV] === "1";
@@ -172,7 +177,11 @@ export class MessageRenderer {
   }
 
   async trySendRichMarkdown(rawText, options = {}) {
-    if (this.richMessagesUnavailable || typeof this.botApi.sendRichMessage !== "function") {
+    if (
+      !isTelegramRichMessagesEnabled() ||
+      this.richMessagesUnavailable ||
+      typeof this.botApi.sendRichMessage !== "function"
+    ) {
       return null;
     }
 
