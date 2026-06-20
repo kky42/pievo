@@ -69,27 +69,11 @@ function createBackgroundSession(overrides = {}) {
   return session;
 }
 
-test("background schedules create a Pi tool bridge and pass its env to the run", async () => {
+test("background schedules run as plain Pi invocations without Pievo tools", async () => {
   const session = createBackgroundSession();
-  const bridgeCalls = [];
-  let disposed = false;
   const { controller } = createController({
     getSession: () => session,
-    isDirectConversation: () => false,
-    groupIdentity: () => ({ botName: "Relay", botHandle: "@relaybot" }),
-    createToolBridge: async (params) => {
-      bridgeCalls.push(params);
-      return {
-        env: {
-          PIEVO_TOOL_BRIDGE_URL: "http://127.0.0.1:1234/tool",
-          PIEVO_TOOL_BRIDGE_TOKEN: "token",
-          PIEVO_CHAT_MODE: params.isGroupTurn ? "group" : "private"
-        },
-        dispose() {
-          disposed = true;
-        }
-      };
-    }
+    isDirectConversation: () => false
   });
 
   await controller.runBackgroundSchedule(session, {
@@ -99,21 +83,17 @@ test("background schedules create a Pi tool bridge and pass its env to the run",
     prompt: "summarize"
   });
 
-  assert.equal(bridgeCalls.length, 1);
-  assert.equal(bridgeCalls[0].isGroupTurn, true);
-  assert.equal(bridgeCalls[0].disableScheduleTools, true);
-  assert.equal(session.capturedRunParams.extraEnv.PIEVO_TOOL_BRIDGE_TOKEN, "token");
-  assert.match(session.capturedRunParams.message, /Run this existing scheduled task once/);
-  assert.match(session.capturedRelayInstructions, /send_reply/);
-  assert.equal(disposed, true);
+  assert.equal(session.capturedRunParams.message, "summarize");
+  assert.equal(session.capturedRunParams.enablePievoTools, false);
+  assert.equal(session.capturedRunParams.extraEnv, undefined);
+  assert.equal(session.capturedRelayInstructions, null);
 });
 
 test("group background final text is suppressed instead of delivered with sendText", async () => {
   const session = createBackgroundSession();
   const { controller } = createController({
     getSession: () => session,
-    isDirectConversation: () => false,
-    createToolBridge: async () => ({ env: {}, dispose() {} })
+    isDirectConversation: () => false
   });
 
   await controller.runBackgroundSchedule(session, {
@@ -131,8 +111,7 @@ test("private background final text is delivered as a notification", async () =>
   const session = createBackgroundSession();
   const { controller } = createController({
     getSession: () => session,
-    isDirectConversation: () => true,
-    createToolBridge: async () => ({ env: { PIEVO_CHAT_MODE: "private" }, dispose() {} })
+    isDirectConversation: () => true
   });
 
   await controller.runBackgroundSchedule(session, {

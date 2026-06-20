@@ -265,6 +265,60 @@ process.stdout.write(JSON.stringify({
   }
 });
 
+test("startPiRun can omit the Pievo tool extension", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pievo-pi-no-tools-"));
+  const workdir = path.join(tempDir, "workspace");
+  await fs.mkdir(workdir);
+  const fakeCommand = await createFakeCliCommand(
+    tempDir,
+    "pi",
+    `if (process.argv.includes("-h")) {
+  process.stdout.write("Options:\\n  --sandbox <value>\\n");
+  process.exit(0);
+}
+process.stdout.write(JSON.stringify({ args: process.argv.slice(2) }) + "\\n");
+`
+  );
+
+  resetPiFeatureDetectionCache();
+
+  try {
+    const run = startPiRun({
+      workdir,
+      message: "hello",
+      autoMode: "low",
+      enablePievoTools: false
+    });
+
+    const chunks = [];
+    run.child.stdout.setEncoding("utf8");
+    run.child.stdout.on("data", (chunk) => {
+      chunks.push(chunk);
+    });
+
+    await run.done;
+
+    const output = JSON.parse(chunks.join("").trim());
+    assert.deepEqual(output.args, [
+      "-p",
+      "--approve",
+      "--mode",
+      "json",
+      "--sandbox",
+      "read-only",
+      "--model",
+      "deepseek/deepseek-v4-flash",
+      "--thinking",
+      "high",
+      "hello"
+    ]);
+  } finally {
+    fakeCommand.restorePath();
+    resetPiFeatureDetectionCache();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("detectPiSandboxFlagSupport returns false when pi help does not expose the sandbox flag", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pievo-pi-detect-"));
   const fakeCommand = await createFakeCliCommand(

@@ -49,7 +49,8 @@ export function startPiRun({
   onEvent = async () => {},
   onStdErr = () => {},
   extraEnv = {},
-  disableAmbientResources = false
+  disableAmbientResources = false,
+  enablePievoTools = true
 }) {
   const args = buildPiArgs({
     sessionId,
@@ -60,7 +61,7 @@ export function startPiRun({
     developerInstructions,
     sessionDir,
     supportsSandboxFlag: detectPiSandboxFlagSupport({ cwd: workdir }),
-    extensionPaths: [PIEVO_EXTENSION_PATH],
+    extensionPaths: enablePievoTools ? [PIEVO_EXTENSION_PATH] : [],
     disableAmbientResources
   });
 

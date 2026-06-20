@@ -14,7 +14,7 @@ Model-facing prompts and templates are centralized under `src/prompts/`:
 
 ## Native Pi tools
 
-Pievo's current chat relay injects a Pi extension into each Pi run. The extension registers chat-native tools:
+Pievo's current chat relay injects a Pi extension into front-agent runs. The extension registers chat-native tools:
 
 - `send_reply` — send visible group-chat replies. Group chats only.
 - `send_attachment` — send a local file to the current chat.
@@ -23,6 +23,8 @@ Pievo's current chat relay injects a Pi extension into each Pi run. The extensio
 - `remove_schedule` — remove a schedule from the current chat.
 
 Group-chat visibility is tool-driven: final assistant text is suppressed in groups, and only `send_reply` posts visible text.
+
+Background schedules are different: they run as fresh plain Pi invocations with the same profile settings, but without Pievo chat/schedule tools.
 
 ## Run
 

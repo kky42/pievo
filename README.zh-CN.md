@@ -6,7 +6,7 @@ Pievo（Pi Evolution）是一个面向 durable agents 的附加 harness layer，
 
 ## Pi 原生工具
 
-当前聊天中继会在每次 Pi run 中注入一个 Pi extension，并注册这些工具：
+当前聊天中继会在前台 agent run 中注入一个 Pi extension，并注册这些工具：
 
 - `send_reply`：在群聊中发送可见回复，仅群聊使用。
 - `send_attachment`：把本地文件发送到当前聊天。
@@ -15,6 +15,8 @@ Pievo（Pi Evolution）是一个面向 durable agents 的附加 harness layer，
 - `remove_schedule`：删除当前聊天的 schedule。
 
 群聊输出由工具驱动：最终 assistant 文本不会自动发到群里，只有 `send_reply` 会产生可见群聊消息。
+
+Background schedule 不同：它会用相同 profile settings 启动一个新的普通 Pi invocation，但不注入 Pievo chat/schedule tools。
 
 ## 运行
 

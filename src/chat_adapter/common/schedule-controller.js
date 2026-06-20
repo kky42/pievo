@@ -1,4 +1,3 @@
-import { createPiToolBridge } from "../../pi_tools/tool-bridge-server.js";
 import { toErrorMessage } from "../../utils.js";
 import { BackgroundScheduleRunner } from "./background-schedule-runner.js";
 import { ScheduleCommandHandler, createPlainSchedulePresenter } from "./schedule-command-handler.js";
@@ -24,7 +23,6 @@ export class ScheduleController {
     deliveryAnchorForSession = (session) => session.deliveryAnchor ?? null,
     isDirectConversation = () => true,
     groupIdentity = () => ({}),
-    createToolBridge = createPiToolBridge,
     schedulePresenter = null,
     scheduleCommandName = "schedule"
   }) {
@@ -54,11 +52,8 @@ export class ScheduleController {
     this.scheduleTimers = new Map();
     this.backgroundRunner = new BackgroundScheduleRunner({
       log,
-      syncConversationSchedules: (session) => this.syncConversationSchedules(session),
       deliveryAnchorForSession,
-      isDirectConversation,
-      groupIdentity,
-      createToolBridge
+      isDirectConversation
     });
     this.commandHandler = new ScheduleCommandHandler({
       presenter: schedulePresenter,
