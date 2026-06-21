@@ -240,3 +240,74 @@ test("fired timers are removed when no live or restored session exists", async (
 
   assert.equal(controller.scheduleTimers.has(key), false);
 });
+
+test("one-time heartbeat schedules are removed when triggered without clearing queued turns", async () => {
+  const { session } = await createSession();
+  session.isRunning = true;
+  let removeQueuedCalls = 0;
+  const originalRemoveQueued = session.removeQueuedScheduledTurns.bind(session);
+  session.removeQueuedScheduledTurns = (name) => {
+    removeQueuedCalls += 1;
+    return originalRemoveQueued(name);
+  };
+  await session.replaceSchedules([
+    {
+      mode: "heartbeat",
+      name: "once-hb",
+      trigger: "once",
+      runAt: "2999-06-22T09:00:00+08:00",
+      prompt: "beat once",
+      enabled: true
+    }
+  ]);
+  const { controller } = createController({
+    getSession: () => session,
+    restoreSession: () => session,
+    isDirectConversation: () => true
+  });
+  const timer = { id: "expected" };
+  const key = controller.scheduleKey(session.conversationId, "once-hb");
+  controller.scheduleTimers.set(key, timer);
+
+  await controller.handleScheduledOccurrence(session.conversationId, "once-hb", timer);
+
+  assert.deepEqual(session.schedules, []);
+  assert.equal(removeQueuedCalls, 0);
+  assert.equal(session.queue.length, 1);
+  assert.equal(session.queue[0].scheduleName, "once-hb");
+  assert.equal(controller.scheduleTimers.has(key), false);
+});
+
+test("one-time background schedules are removed before the background run completes", async () => {
+  const { session, runnerFactory } = await createSession();
+  await session.replaceSchedules([
+    {
+      mode: "background",
+      name: "once-bg",
+      trigger: "once",
+      runAt: "2999-06-22T09:00:00+08:00",
+      prompt: "run once",
+      enabled: true
+    }
+  ]);
+  const { controller } = createController({
+    getSession: () => session,
+    restoreSession: () => session,
+    isDirectConversation: () => true
+  });
+  const timer = { id: "expected" };
+  const key = controller.scheduleKey(session.conversationId, "once-bg");
+  controller.scheduleTimers.set(key, timer);
+
+  const triggered = controller.handleScheduledOccurrence(session.conversationId, "once-bg", timer);
+  for (let index = 0; index < 20 && runnerFactory.runs.length === 0; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  assert.equal(runnerFactory.runs.length, 1);
+  assert.deepEqual(session.schedules, []);
+  assert.equal(controller.scheduleTimers.has(key), false);
+
+  runnerFactory.runs[0].finish({ code: 0, signal: null, aborted: false, sawTerminalEvent: true });
+  await triggered;
+});

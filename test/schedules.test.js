@@ -1,32 +1,59 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import {
-  parseScheduleAddArgs,
-  scheduleCommandHelp
-} from "../src/chat_adapter/common/schedules.js";
+import { buildScheduleListText } from "../src/chat_adapter/common/schedules.js";
+import { ScheduleCommandHandler } from "../src/chat_adapter/common/schedule-command-handler.js";
+import { normalizeRunAt } from "../src/chat_adapter/common/schedule-time.js";
 
-test("parseScheduleAddArgs accepts single-line cron and task", () => {
-  assert.deepEqual(
-    parseScheduleAddArgs("add background joke */5 * * * * 讲一个 3 句话的科幻故事"),
-    {
-      mode: "background",
-      name: "joke",
-      cron: "*/5 * * * *",
-      prompt: "讲一个 3 句话的科幻故事"
-    }
+test("one-time schedule run_at requires seconds and timezone", () => {
+  assert.equal(normalizeRunAt("2026-06-22T09:00:00+08:00"), "2026-06-22T09:00:00+08:00");
+  assert.throws(
+    () => normalizeRunAt("2026-06-22 09:00:00"),
+    /ISO 8601 with seconds and timezone/
+  );
+  assert.throws(
+    () => normalizeRunAt("2026-02-31T09:00:00+08:00"),
+    /valid calendar time/
   );
 });
 
-test("scheduleCommandHelp renders explicit multiline examples", () => {
-  const help = scheduleCommandHelp("!schedule");
+test("buildScheduleListText renders cron and one-time schedules", () => {
+  const text = buildScheduleListText([
+    {
+      mode: "heartbeat",
+      name: "pulse",
+      trigger: "cron",
+      cron: "*/5 * * * *",
+      prompt: "check",
+      enabled: true
+    },
+    {
+      mode: "background",
+      name: "once-report",
+      trigger: "once",
+      runAt: "2999-06-22T09:00:00+08:00",
+      prompt: "report",
+      enabled: true
+    }
+  ]);
 
-  assert.match(help, /^Schedule commands:/);
-  assert.match(help, /Add heartbeat:\n  !schedule add heartbeat <name>\n  <cron>\n  <task>/);
-  assert.match(help, /Add background:\n  !schedule add background <name>\n  <cron>\n  <task>/);
-  assert.match(
-    help,
-    /Single-line add:\n  !schedule add background <name> <5 cron fields> <task>/
-  );
-  assert.doesNotMatch(help, /^- !schedule add/m);
+  assert.match(text, /heartbeat  pulse\ncron: \*\/5 \* \* \* \*/);
+  assert.match(text, /background  once-report\nonce: 2999-06-22T09:00:00\+08:00/);
+});
+
+test("/schedule command lists only and rejects mutation syntax", async () => {
+  const sentTexts = [];
+  const session = {
+    schedules: [],
+    async sendText(text) {
+      sentTexts.push(text);
+    }
+  };
+  const handler = new ScheduleCommandHandler();
+
+  await handler.handle(session, "");
+  await handler.handle(session, "add background pulse */5 * * * * check");
+
+  assert.equal(sentTexts[0], "No schedules.");
+  assert.match(sentTexts[1], /only lists scheduled tasks/);
 });

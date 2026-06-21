@@ -2,9 +2,11 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 
 import { loadToolPromptCatalog } from "../prompts/index.js";
+import { formatUtcOffset } from "../utils.js";
 
 const ATTACHMENT_KINDS = ["document", "photo", "video", "audio", "voice", "animation"];
 const SCHEDULE_MODES = ["heartbeat", "background"];
+const SCHEDULE_TRIGGERS = ["cron", "once"];
 const TOOL_PROMPTS = loadToolPromptCatalog();
 
 function chatMode() {
@@ -15,12 +17,31 @@ function scheduleToolsEnabled() {
 	return process.env.PIEVO_DISABLE_SCHEDULE_TOOLS !== "1";
 }
 
+function fallbackUtcOffset() {
+	return formatUtcOffset(-new Date().getTimezoneOffset());
+}
+
+function promptValue(key: string) {
+	switch (key) {
+		case "local_timezone":
+			return process.env.PIEVO_LOCAL_TIMEZONE || Intl.DateTimeFormat().resolvedOptions().timeZone || "local";
+		case "local_utc_offset":
+			return process.env.PIEVO_LOCAL_UTC_OFFSET || fallbackUtcOffset();
+		default:
+			return null;
+	}
+}
+
+function interpolateToolPromptText(value: unknown) {
+	return String(value ?? "").replace(/\{\{([A-Za-z0-9_]+)\}\}/g, (match, key) => promptValue(key) ?? match);
+}
+
 function toolPrompt(toolName: string) {
 	const prompt = TOOL_PROMPTS[toolName] ?? {};
 	return {
-		label: prompt.label ?? toolName,
-		description: prompt.description ?? toolName,
-		promptSnippet: prompt.promptSnippet,
+		label: interpolateToolPromptText(prompt.label ?? toolName),
+		description: interpolateToolPromptText(prompt.description ?? toolName),
+		promptSnippet: prompt.promptSnippet ? interpolateToolPromptText(prompt.promptSnippet) : prompt.promptSnippet,
 		promptGuidelines: [
 			...(Array.isArray(prompt.promptGuidelines) ? prompt.promptGuidelines : []),
 			...(chatMode() === "group" && Array.isArray(prompt.groupPromptGuidelines)
@@ -29,12 +50,12 @@ function toolPrompt(toolName: string) {
 			...(chatMode() === "private" && Array.isArray(prompt.privatePromptGuidelines)
 				? prompt.privatePromptGuidelines
 				: []),
-		],
+		].map(interpolateToolPromptText),
 	};
 }
 
 function parameterDescription(toolName: string, parameterName: string) {
-	return TOOL_PROMPTS[toolName]?.parameters?.[parameterName]?.description ?? parameterName;
+	return interpolateToolPromptText(TOOL_PROMPTS[toolName]?.parameters?.[parameterName]?.description ?? parameterName);
 }
 
 async function callBridge(tool: string, params: unknown, signal?: AbortSignal) {
@@ -127,7 +148,9 @@ export default function pievoChatTools(pi: ExtensionAPI) {
 				parameters: Type.Object({
 					mode: StringEnum(SCHEDULE_MODES, { description: parameterDescription("add_schedule", "mode") }),
 					name: Type.String({ description: parameterDescription("add_schedule", "name") }),
-					cron: Type.String({ description: parameterDescription("add_schedule", "cron") }),
+					trigger: Type.Optional(StringEnum(SCHEDULE_TRIGGERS, { description: parameterDescription("add_schedule", "trigger") })),
+					cron: Type.Optional(Type.String({ description: parameterDescription("add_schedule", "cron") })),
+					run_at: Type.Optional(Type.String({ description: parameterDescription("add_schedule", "run_at") })),
 					task: Type.String({ description: parameterDescription("add_schedule", "task") }),
 				}),
 				async execute(_toolCallId, params, signal) {

@@ -39,10 +39,14 @@
   "add_schedule": {
     "label": "Add Schedule",
     "description": "Add a heartbeat or background schedule for the current chat.",
-    "promptSnippet": "Add a scheduled task for the current chat",
+    "promptSnippet": "Add a recurring or one-time scheduled task for the current chat",
     "promptGuidelines": [
-      "Use add_schedule only when the user explicitly asks to create or replace a recurring scheduled task.",
-      "Put cadence in cron and the actual work instruction in task.",
+      "Use add_schedule only when the user explicitly asks to create a scheduled task.",
+      "Use trigger=cron with cron for recurring schedules; cron is minute-level only.",
+      "Use trigger=once with run_at for one-time schedules; run_at is second-level.",
+      "If the user does not specify a timezone for a one-time schedule, use the runtime local timezone: {{local_timezone}} (UTC{{local_utc_offset}}).",
+      "Put only the actual work instruction in task.",
+      "To replace an existing schedule, remove it first, then add the new schedule.",
       "Do not put scheduling instructions, schedule names, or requests to create/list/remove schedules inside task."
     ],
     "groupPromptGuidelines": [
@@ -55,11 +59,17 @@
       "name": {
         "description": "Schedule name: letters, numbers, underscore, or dash."
       },
+      "trigger": {
+        "description": "Schedule trigger type. Use cron for recurring schedules and once for one-time schedules. Defaults from whether cron or run_at is provided."
+      },
       "cron": {
-        "description": "Five-field cron expression: minute hour day-of-month month day-of-week."
+        "description": "Five-field cron expression for recurring schedules: minute hour day-of-month month day-of-week. Minute-level only. Required when trigger is cron; omit when trigger is once."
+      },
+      "run_at": {
+        "description": "ISO 8601 timestamp for a one-time schedule with seconds and timezone offset, for example 2026-06-22T09:00:00{{local_utc_offset}}. Required when trigger is once; omit when trigger is cron. If the user did not specify a timezone, use the runtime local timezone: {{local_timezone}} (UTC{{local_utc_offset}})."
       },
       "task": {
-        "description": "Task instruction to execute each time the schedule fires. Describe only the work to do then; exclude cadence, schedule setup/removal/listing instructions, and phrases like \"create a schedule\"."
+        "description": "Task instruction to execute when the schedule fires. Describe only the work to do then; exclude cadence, schedule setup/removal/listing instructions, and phrases like \"create a schedule\"."
       }
     }
   },

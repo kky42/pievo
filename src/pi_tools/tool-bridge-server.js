@@ -8,7 +8,8 @@ import {
   SCHEDULE_MODES,
   validateScheduleName
 } from "../chat_adapter/common/schedules.js";
-import { toErrorMessage } from "../utils.js";
+import { assertFutureRunAt, normalizeScheduleTrigger } from "../chat_adapter/common/schedule-time.js";
+import { localTimeZoneInfo, toErrorMessage } from "../utils.js";
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const SCHEDULE_TOOLS = new Set(["add_schedule", "list_schedule", "remove_schedule"]);
@@ -137,6 +138,22 @@ function normalizeCron(cron) {
   return normalized;
 }
 
+function normalizeScheduleTriggerParam(params) {
+  const trigger = normalizeScheduleTrigger(params.trigger, {
+    runAt: params.run_at ?? params.runAt
+  });
+  const hasCron = String(params.cron ?? "").trim() !== "";
+  const hasRunAt = String(params.run_at ?? params.runAt ?? "").trim() !== "";
+
+  if (trigger === "cron" && (!hasCron || hasRunAt)) {
+    throw new Error('Cron schedules require cron and must not include run_at.');
+  }
+  if (trigger === "once" && (!hasRunAt || hasCron)) {
+    throw new Error('One-time schedules require run_at and must not include cron.');
+  }
+  return trigger;
+}
+
 function normalizeScheduleTask(task) {
   const normalized = String(task ?? "").trim();
   if (!normalized) {
@@ -211,13 +228,24 @@ async function dispatchTool({
     }
 
     case "add_schedule": {
-      const schedule = {
-        mode: normalizeScheduleMode(params.mode),
-        name: validateScheduleName(params.name),
-        cron: normalizeCron(params.cron),
-        prompt: normalizeScheduleTask(params.task ?? params.prompt),
-        enabled: true
-      };
+      const trigger = normalizeScheduleTriggerParam(params);
+      const schedule = trigger === "once"
+        ? {
+            mode: normalizeScheduleMode(params.mode),
+            name: validateScheduleName(params.name),
+            trigger,
+            runAt: assertFutureRunAt(params.run_at ?? params.runAt),
+            prompt: normalizeScheduleTask(params.task ?? params.prompt),
+            enabled: true
+          }
+        : {
+            mode: normalizeScheduleMode(params.mode),
+            name: validateScheduleName(params.name),
+            trigger,
+            cron: normalizeCron(params.cron),
+            prompt: normalizeScheduleTask(params.task ?? params.prompt),
+            enabled: true
+          };
       if (session.schedules.some((candidate) => candidate.name === schedule.name)) {
         throw new Error(`Schedule "${schedule.name}" already exists.`);
       }
@@ -277,11 +305,15 @@ export async function createPiToolBridge({
     disableScheduleTools
   }));
 
+  const { timeZone, utcOffset } = localTimeZoneInfo();
+
   return {
     env: {
       PIEVO_TOOL_BRIDGE_URL: bridge.url,
       PIEVO_TOOL_BRIDGE_TOKEN: token,
       PIEVO_CHAT_MODE: isGroupTurn ? "group" : "private",
+      PIEVO_LOCAL_TIMEZONE: timeZone,
+      PIEVO_LOCAL_UTC_OFFSET: utcOffset,
       ...(disableScheduleTools ? { PIEVO_DISABLE_SCHEDULE_TOOLS: "1" } : {})
     },
     dispose() {

@@ -1,3 +1,5 @@
+import { normalizeRunAt, normalizeScheduleTrigger } from "./schedule-time.js";
+
 export const CONVERSATION_STATE_VERSION = 1;
 
 export function cloneStateValue(value) {
@@ -78,18 +80,38 @@ export function normalizeSchedule(schedule, index = 0) {
 
   const name = normalizeString(schedule.name);
   const mode = normalizeString(schedule.mode);
+  const trigger = normalizeScheduleTrigger(schedule.trigger ?? schedule.kind, schedule);
   const cron = normalizeString(schedule.cron);
+  const runAtValue = schedule.runAt ?? schedule.run_at;
   const prompt = typeof schedule.prompt === "string" ? schedule.prompt.trim() : "";
-  if (!name || !mode || !cron || !prompt) {
-    throw new Error(`schedule[${index}] must include name, mode, cron, and prompt`);
+  if (!name || !mode || !prompt) {
+    throw new Error(`schedule[${index}] must include name, mode, and prompt`);
   }
   if (mode !== "heartbeat" && mode !== "background") {
     throw new Error(`schedule[${index}] mode must be "heartbeat" or "background"`);
   }
 
+  if (trigger === "once") {
+    if (!runAtValue || cron) {
+      throw new Error(`schedule[${index}] one-time schedules must include runAt and no cron`);
+    }
+    return {
+      name,
+      mode,
+      trigger,
+      runAt: normalizeRunAt(runAtValue),
+      prompt,
+      enabled: schedule.enabled !== false
+    };
+  }
+
+  if (!cron || runAtValue) {
+    throw new Error(`schedule[${index}] cron schedules must include cron and no runAt`);
+  }
   return {
     name,
     mode,
+    trigger,
     cron,
     prompt,
     enabled: schedule.enabled !== false

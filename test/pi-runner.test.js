@@ -154,6 +154,14 @@ test("buildPiArgs can still request Pi CLI defaults explicitly", () => {
   ]);
 });
 
+test("private relay instructions include runtime local timezone", () => {
+  assert.match(
+    PRIVATE_OUTPUT_DEVELOPER_INSTRUCTIONS,
+    /Runtime local timezone: .+ \(UTC[+-]\d{2}:\d{2}\)/
+  );
+  assert.doesNotMatch(PRIVATE_OUTPUT_DEVELOPER_INSTRUCTIONS, /\{\{local_timezone\}\}/);
+});
+
 test("buildPiArgs appends model, thinking, system prompt, and extension paths", () => {
   const freshArgs = buildPiArgs({
     message: "hello",

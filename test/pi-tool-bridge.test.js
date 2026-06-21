@@ -167,6 +167,9 @@ test("Pi tool bridge manages schedules and resyncs timers", async () => {
   });
 
   try {
+    assert.match(bridge.env.PIEVO_LOCAL_TIMEZONE, /.+/);
+    assert.match(bridge.env.PIEVO_LOCAL_UTC_OFFSET, /^[+-]\d{2}:\d{2}$/);
+
     const added = await callTool(bridge.env, "add_schedule", {
       mode: "heartbeat",
       name: "pulse",
@@ -179,6 +182,7 @@ test("Pi tool bridge manages schedules and resyncs timers", async () => {
       {
         mode: "heartbeat",
         name: "pulse",
+        trigger: "cron",
         cron: "*/5 * * * *",
         prompt: "check the queue",
         enabled: true
@@ -196,6 +200,53 @@ test("Pi tool bridge manages schedules and resyncs timers", async () => {
     assert.deepEqual(session.schedules, []);
     assert.deepEqual(session.removedQueuedScheduleNames, ["pulse"]);
     assert.equal(syncCount, 2);
+  } finally {
+    bridge.dispose();
+  }
+});
+
+test("Pi tool bridge adds one-time schedules with run_at", async () => {
+  const session = createFakeSession();
+  let syncCount = 0;
+  const bridge = await createPiToolBridge({
+    session,
+    isGroupTurn: false,
+    onSchedulesChanged: () => {
+      syncCount += 1;
+    }
+  });
+
+  try {
+    const added = await callTool(bridge.env, "add_schedule", {
+      mode: "background",
+      name: "once_report",
+      trigger: "once",
+      run_at: "2999-06-22T09:00:00+08:00",
+      task: "send the report"
+    });
+    assert.equal(added.status, 200);
+    assert.match(added.body.text, /once: 2999-06-22T09:00:00\+08:00/);
+    assert.deepEqual(session.schedules, [
+      {
+        mode: "background",
+        name: "once_report",
+        trigger: "once",
+        runAt: "2999-06-22T09:00:00+08:00",
+        prompt: "send the report",
+        enabled: true
+      }
+    ]);
+    assert.equal(syncCount, 1);
+
+    const invalid = await callTool(bridge.env, "add_schedule", {
+      mode: "background",
+      name: "bad_once",
+      trigger: "once",
+      run_at: "2026-06-22 09:00:00",
+      task: "bad"
+    });
+    assert.equal(invalid.status, 500);
+    assert.match(invalid.body.error, /ISO 8601/);
   } finally {
     bridge.dispose();
   }

@@ -6,7 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { addAgentConfig } from "../src/config-scaffold.js";
-import { formatLocalTimestamp, writeJsonFileAtomic } from "../src/utils.js";
+import { formatLocalTimestamp, localTimeZoneInfo, writeJsonFileAtomic } from "../src/utils.js";
 
 test("formatLocalTimestamp uses local timezone without a suffix", () => {
   const previousTimezone = process.env.TZ;
@@ -14,6 +14,21 @@ test("formatLocalTimestamp uses local timezone without a suffix", () => {
   try {
     assert.equal(formatLocalTimestamp(1700000001), "2023-11-15 06:13:21");
     assert.doesNotMatch(formatLocalTimestamp(1700000001), /UTC|Z\b|[+-]\d\d:\d\d/);
+  } finally {
+    if (previousTimezone === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = previousTimezone;
+    }
+  }
+});
+
+test("localTimeZoneInfo exposes local timezone and UTC offset", () => {
+  const previousTimezone = process.env.TZ;
+  process.env.TZ = "Asia/Shanghai";
+  try {
+    assert.equal(localTimeZoneInfo(new Date("2026-06-20T12:00:00Z")).utcOffset, "+08:00");
+    assert.equal(localTimeZoneInfo(new Date("2026-06-20T12:00:00Z")).timeZone, "Asia/Shanghai");
   } finally {
     if (previousTimezone === undefined) {
       delete process.env.TZ;

@@ -124,6 +124,22 @@ export function formatLocalTimestamp(timestampSeconds) {
   return `${datePart} ${timePart}`;
 }
 
+export function formatUtcOffset(offsetMinutes) {
+  const sign = offsetMinutes < 0 ? "-" : "+";
+  const absolute = Math.abs(offsetMinutes);
+  const hours = String(Math.floor(absolute / 60)).padStart(2, "0");
+  const minutes = String(absolute % 60).padStart(2, "0");
+  return `${sign}${hours}:${minutes}`;
+}
+
+export function localTimeZoneInfo(date = new Date()) {
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "local";
+  return {
+    timeZone,
+    utcOffset: formatUtcOffset(-date.getTimezoneOffset())
+  };
+}
+
 export function truncateText(text, maxLength = 120) {
   if (text.length <= maxLength) {
     return text;

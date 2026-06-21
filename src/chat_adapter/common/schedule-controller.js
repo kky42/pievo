@@ -6,8 +6,11 @@ import {
   buildHeartbeatPrivatePrompt,
   describeNextSchedule
 } from "./schedules.js";
+import { isOneTimeSchedule } from "./schedule-time.js";
 
 export { createPlainSchedulePresenter } from "./schedule-command-handler.js";
+
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 function noop() {}
 
@@ -23,8 +26,7 @@ export class ScheduleController {
     deliveryAnchorForSession = (session) => session.deliveryAnchor ?? null,
     isDirectConversation = () => true,
     groupIdentity = () => ({}),
-    schedulePresenter = null,
-    scheduleCommandName = "schedule"
+    schedulePresenter = null
   }) {
     if (!stateStore) {
       throw new Error("ScheduleController requires a stateStore.");
@@ -55,9 +57,7 @@ export class ScheduleController {
       deliveryAnchorForSession
     });
     this.commandHandler = new ScheduleCommandHandler({
-      presenter: schedulePresenter,
-      commandName: scheduleCommandName,
-      syncConversationSchedules: (session) => this.syncConversationSchedules(session)
+      presenter: schedulePresenter
     });
   }
 
@@ -109,17 +109,48 @@ export class ScheduleController {
 
     try {
       const next = describeNextSchedule(schedule);
+      // Past one-time runAt values intentionally fire immediately on restore: this is
+      // the catch-up path for runs missed while the relay was offline.
       const delayMs = Math.max(0, next.getTime() - Date.now());
+      const cappedDelayMs = Math.min(delayMs, MAX_TIMER_DELAY_MS);
       const timer = setTimeout(() => {
+        if (delayMs > MAX_TIMER_DELAY_MS) {
+          void this.refreshScheduleTimer(session.conversationId, schedule.name, timer);
+          return;
+        }
         void this.handleScheduledOccurrence(session.conversationId, schedule.name, timer);
-      }, delayMs);
+      }, cappedDelayMs);
       timer.unref?.();
       this.scheduleTimers.set(key, timer);
     } catch (error) {
       this.log(
-        `invalid scheduled cron for ${session.conversationId}/${schedule.name}: ${toErrorMessage(error)}`
+        `invalid schedule for ${session.conversationId}/${schedule.name}: ${toErrorMessage(error)}`
       );
     }
+  }
+
+  async refreshScheduleTimer(conversationId, scheduleName, expectedTimer = null) {
+    const scheduleTimerKey = this.scheduleKey(conversationId, scheduleName);
+    if (expectedTimer && this.scheduleTimers.get(scheduleTimerKey) !== expectedTimer) {
+      this.log(`schedule refresh skipped (timer superseded): ${scheduleName} in ${conversationId}`);
+      return;
+    }
+    this.scheduleTimers.delete(scheduleTimerKey);
+    if (!this.isRunning()) {
+      this.log(`schedule refresh skipped (runtime stopped): ${scheduleName} in ${conversationId}`);
+      return;
+    }
+
+    const session = this.getSession(conversationId);
+    if (!session) {
+      this.log(`schedule refresh skipped (no session): ${scheduleName} in ${conversationId}`);
+      return;
+    }
+    const schedule = session.schedules.find((candidate) => candidate.name === scheduleName);
+    if (!schedule || schedule.enabled === false) {
+      return;
+    }
+    this.syncScheduleTimer(session, schedule);
   }
 
   syncConversationSchedules(session) {
@@ -212,7 +243,19 @@ export class ScheduleController {
       return;
     }
 
+    const oneTime = isOneTimeSchedule(schedule);
+
     try {
+      if (oneTime) {
+        // Remove before dispatch so /schedule reflects that the task has triggered,
+        // and so a long background run cannot later remove a reused schedule name.
+        // If persistence fails, skip the run rather than risk duplicate execution
+        // with a still-persisted one-time schedule; restart will catch it up from disk.
+        await session.replaceSchedules(
+          session.schedules.filter((candidate) => candidate.name !== scheduleName)
+        );
+      }
+
       if (schedule.mode === "background") {
         await this.runBackgroundSchedule(session, schedule);
       } else {
@@ -221,9 +264,11 @@ export class ScheduleController {
     } catch (error) {
       this.log(`scheduled run "${scheduleName}" failed in ${conversationId}: ${toErrorMessage(error)}`);
     } finally {
-      const nextSchedule = session.schedules.find((candidate) => candidate.name === scheduleName);
-      if (nextSchedule && this.isRunning()) {
-        this.syncScheduleTimer(session, nextSchedule);
+      if (!oneTime) {
+        const nextSchedule = session.schedules.find((candidate) => candidate.name === scheduleName);
+        if (nextSchedule && this.isRunning()) {
+          this.syncScheduleTimer(session, nextSchedule);
+        }
       }
     }
   }

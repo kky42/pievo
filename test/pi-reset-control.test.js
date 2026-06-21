@@ -41,6 +41,7 @@ function makeStateRecord(scope, { deliveryAnchor, sessionId = "session-1" } = {}
       {
         name: "daily",
         mode: "heartbeat",
+        trigger: "cron",
         cron: "0 9 * * *",
         prompt: "check status",
         enabled: true
@@ -385,6 +386,7 @@ test("conversation resetter resets durable binding records without touching live
     {
       name: "daily",
       mode: "heartbeat",
+      trigger: "cron",
       cron: "0 9 * * *",
       prompt: "check status",
       enabled: true

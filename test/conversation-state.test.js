@@ -65,6 +65,7 @@ test("ConversationState loads and rewrites golden legacy v1 state fixture", asyn
     {
       name: "legacy-pulse",
       mode: "heartbeat",
+      trigger: "cron",
       cron: "0 * * * *",
       prompt: "summarize status",
       enabled: true
@@ -105,6 +106,7 @@ test("ConversationState loads and rewrites golden legacy v1 state fixture", asyn
       {
         name: "legacy-pulse",
         mode: "heartbeat",
+        trigger: "cron",
         cron: "0 * * * *",
         prompt: "summarize status",
         enabled: true
@@ -145,8 +147,17 @@ test("ConversationState persists delivery anchor, overrides, schedules, and sess
     {
       name: "pulse",
       mode: "heartbeat",
+      trigger: "cron",
       cron: "*/5 * * * *",
       prompt: "check the queue",
+      enabled: true
+    },
+    {
+      name: "once-report",
+      mode: "background",
+      trigger: "once",
+      runAt: "2999-06-22T09:00:00+08:00",
+      prompt: "send the report",
       enabled: true
     }
   ]);
@@ -174,8 +185,17 @@ test("ConversationState persists delivery anchor, overrides, schedules, and sess
     {
       name: "pulse",
       mode: "heartbeat",
+      trigger: "cron",
       cron: "*/5 * * * *",
       prompt: "check the queue",
+      enabled: true
+    },
+    {
+      name: "once-report",
+      mode: "background",
+      trigger: "once",
+      runAt: "2999-06-22T09:00:00+08:00",
+      prompt: "send the report",
       enabled: true
     }
   ]);

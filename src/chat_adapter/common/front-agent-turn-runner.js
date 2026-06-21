@@ -6,7 +6,7 @@ import { toErrorMessage } from "../../utils.js";
 import { buildGroupInputMessage } from "./group-turn.js";
 import {
   buildGroupOutputDeveloperInstructions,
-  PRIVATE_OUTPUT_DEVELOPER_INSTRUCTIONS
+  buildPrivateOutputDeveloperInstructions
 } from "./output-instructions.js";
 
 export const PI_RUN_ID = "pi";
@@ -72,7 +72,7 @@ function buildRelayInstructions(turn, isGroupTurn) {
   return turn.developerInstructions ??
     (isGroupTurn
       ? buildGroupOutputDeveloperInstructions(turn.groupIdentity ?? {})
-      : PRIVATE_OUTPUT_DEVELOPER_INSTRUCTIONS);
+      : buildPrivateOutputDeveloperInstructions());
 }
 
 function resolveAdditionalSystemPromptSnapshot(session, relayInstructions) {

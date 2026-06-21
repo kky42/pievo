@@ -1,7 +1,7 @@
 import { formatAuto } from "../../auto-mode.js";
 import { formatLocalTimestamp } from "../../utils.js";
 import { summarizeTurn } from "./attachments.js";
-import { nextCronOccurrence, parseCronExpression } from "./cron.js";
+import { describeNextSchedule } from "./schedules.js";
 
 export const CHAT_COMMANDS = [
   { command: "status", description: "Show current agent status" },
@@ -12,7 +12,7 @@ export const CHAT_COMMANDS = [
   { command: "clear_cache", description: "Clear cached attachments for this chat" },
   { command: "abort", description: "Abort current run and clear queued messages" },
   { command: "new", description: "Start a fresh session and clear context" },
-  { command: "schedule", description: "List or manage scheduled runs for this chat" },
+  { command: "schedule", description: "List scheduled runs for this chat" },
   { command: "reset", description: "Reload config defaults for this chat" }
 ];
 
@@ -43,7 +43,7 @@ export function renderStatusMessage({
         try {
           return {
             ...schedule,
-            next: nextCronOccurrence(parseCronExpression(schedule.cron))
+            next: describeNextSchedule(schedule)
           };
         } catch {
           return null;
