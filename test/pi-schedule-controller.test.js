@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { ScheduleController } from "../src/chat_adapter/common/schedule-controller.js";
+import { createSession } from "./support/builders.js";
 
 function createController(options = {}) {
   const logs = [];
@@ -125,6 +126,106 @@ test("private background final text is delivered as a notification", async () =>
   assert.equal(session.sentTexts.length, 1);
   assert.match(session.sentTexts[0].text, /Background scheduled run: daily/);
   assert.match(session.sentTexts[0].text, /background result/);
+});
+
+test("heartbeat schedules stay in the foreground FIFO with user messages", async () => {
+  const { session, fakeBotApi } = await createSession();
+  session.isRunning = true;
+  const { controller } = createController({
+    getSession: () => session,
+    restoreSession: () => session,
+    isDirectConversation: () => true
+  });
+
+  await session.enqueueMessage("user-1");
+  await controller.runHeartbeatSchedule(session, {
+    mode: "heartbeat",
+    name: "hb1",
+    cron: "* * * * *",
+    prompt: "beat 1"
+  });
+  await controller.runHeartbeatSchedule(session, {
+    mode: "heartbeat",
+    name: "hb2",
+    cron: "* * * * *",
+    prompt: "beat 2"
+  });
+  await session.enqueueMessage("user-2");
+
+  assert.equal(session.queue.length, 4);
+  assert.equal(session.queue[0].promptText, "user-1");
+  assert.equal(session.queue[0].scheduleName, null);
+  assert.equal(session.queue[1].scheduleName, "hb1");
+  assert.equal(session.queue[1].suppressQueueNotice, true);
+  assert.equal(session.queue[2].scheduleName, "hb2");
+  assert.equal(session.queue[2].suppressQueueNotice, true);
+  assert.equal(session.queue[3].promptText, "user-2");
+  assert.equal(session.queue[3].scheduleName, null);
+  assert.deepEqual(fakeBotApi.messages.map((message) => message.text), [
+    "Queued message 1.",
+    "Queued message 4."
+  ]);
+});
+
+test("background schedules start independently while foreground turns stay queued", async () => {
+  const { session, fakeBotApi, runnerFactory } = await createSession();
+  session.isRunning = true;
+  const { controller } = createController({
+    getSession: () => session,
+    restoreSession: () => session,
+    isDirectConversation: () => true
+  });
+
+  await session.enqueueMessage("user-1");
+
+  const bg1Promise = controller.runBackgroundSchedule(
+    session,
+    {
+      mode: "background",
+      name: "bg1",
+      cron: "* * * * *",
+      prompt: "bg 1"
+    },
+    new Date("2026-06-20T12:34:56Z")
+  );
+  const bg2Promise = controller.runBackgroundSchedule(
+    session,
+    {
+      mode: "background",
+      name: "bg2",
+      cron: "* * * * *",
+      prompt: "bg 2"
+    },
+    new Date("2026-06-20T12:34:56Z")
+  );
+  await session.enqueueMessage("user-2");
+
+  assert.equal(session.queue.length, 2);
+  assert.equal(session.queue[0].promptText, "user-1");
+  assert.equal(session.queue[1].promptText, "user-2");
+  assert.deepEqual(fakeBotApi.messages.map((message) => message.text).slice(0, 2), [
+    "Queued message 1.",
+    "Queued message 2."
+  ]);
+  assert.equal(runnerFactory.runs.length, 2);
+  assert.deepEqual(
+    runnerFactory.runs.map((run) => ({
+      message: run.params.message,
+      enablePievoTools: run.params.enablePievoTools,
+      sessionId: run.params.sessionId
+    })),
+    [
+      { message: "bg 1", enablePievoTools: false, sessionId: null },
+      { message: "bg 2", enablePievoTools: false, sessionId: null }
+    ]
+  );
+
+  runnerFactory.runs[0].finish({ code: 0, signal: null, aborted: false, sawTerminalEvent: true });
+  runnerFactory.runs[1].finish({ code: 0, signal: null, aborted: false, sawTerminalEvent: true });
+  await Promise.all([bg1Promise, bg2Promise]);
+
+  assert.match(String(fakeBotApi.messages[2].text ?? ""), /Background scheduled run: bg1/);
+  assert.match(String(fakeBotApi.messages[3].text ?? ""), /Background scheduled run: bg2/);
 });
 
 test("fired timers are removed when no live or restored session exists", async () => {
