@@ -31,9 +31,6 @@
       "kind": {
         "description": "Attachment kind. Defaults to document."
       },
-      "fileName": {
-        "description": "Optional display filename."
-      },
       "caption": {
         "description": "Optional attachment caption when supported."
       }

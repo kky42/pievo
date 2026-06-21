@@ -85,7 +85,7 @@ test("Pi tool bridge sends visible group replies and rejects private send_reply"
   }
 });
 
-test("Pi tool bridge sends attachments through the chat renderer", async () => {
+test("Pi tool bridge sends attachments through the chat renderer and ignores stale fileName", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pievo-tool-attachment-"));
   const filePath = path.join(tempDir, "report.txt");
   await fs.writeFile(filePath, "report", "utf8");
@@ -105,7 +105,7 @@ test("Pi tool bridge sends attachments through the chat renderer", async () => {
     const result = await callTool(bridge.env, "send_attachment", {
       path: "report.txt",
       kind: "document",
-      fileName: "visible.txt",
+      fileName: "ignored.txt",
       caption: "Here it is"
     });
     assert.equal(result.status, 200);
@@ -116,7 +116,6 @@ test("Pi tool bridge sends attachments through the chat renderer", async () => {
         entry: {
           path: "report.txt",
           kind: "document",
-          fileName: "visible.txt",
           caption: "Here it is"
         },
         options: {

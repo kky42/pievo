@@ -198,7 +198,6 @@ async function dispatchTool({
       await session.output.sendNativeAttachment({
         path: filePath,
         kind: normalizeAttachmentKind(params.kind),
-        fileName: String(params.fileName ?? "").trim() || null,
         caption: String(params.caption ?? "").trim() || null
       }, {
         workdir: session.workdir,

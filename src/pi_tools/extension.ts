@@ -106,7 +106,6 @@ export default function pievoChatTools(pi: ExtensionAPI) {
 			parameters: Type.Object({
 				path: Type.String({ description: parameterDescription("send_attachment", "path") }),
 				kind: Type.Optional(StringEnum(ATTACHMENT_KINDS, { description: parameterDescription("send_attachment", "kind") })),
-				fileName: Type.Optional(Type.String({ description: parameterDescription("send_attachment", "fileName") })),
 				caption: Type.Optional(Type.String({ description: parameterDescription("send_attachment", "caption") })),
 			}),
 			async execute(_toolCallId, params, signal) {
