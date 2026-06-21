@@ -1,47 +1,55 @@
 # Pievo
 
+[![CI](https://github.com/kky42/pievo/actions/workflows/ci.yml/badge.svg)](https://github.com/kky42/pievo/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/@kky42/pievo.svg)](https://www.npmjs.com/package/@kky42/pievo)
+
 Pievo（Pi Evolution）是一个面向 durable agents 的附加 harness layer，目标是在 Pi 之上构建 agent 编排、记忆与持续演化能力。
 
 当前实现首先提供一个 Pi-native 聊天中继，用于构建长期运行的 Telegram / Mattermost Agents Assistant。该仓库从 `anyagent` fork 而来，并简化为仅支持 Pi。Codex/Claude adapter 与旧的文本输出契约不再作为运行时路径使用。
 
-## Pi 原生工具
+## How to use
 
-当前聊天中继会在前台 agent run 中注入一个 Pi extension，并注册这些工具：
+### 安装
 
-- `send_reply`：在群聊中发送可见回复，仅群聊使用。
-- `send_attachment`：把本地文件发送到当前聊天。
-- `add_schedule`：为当前聊天添加 heartbeat/background schedule。
-- `list_schedule`：列出当前聊天的 schedules。
-- `remove_schedule`：删除当前聊天的 schedule。
-
-群聊输出由工具驱动：最终 assistant 文本不会自动发到群里，只有 `send_reply` 会产生可见群聊消息。
-
-Background schedule 不同：它会用相同 profile settings 启动一个新的普通 Pi invocation，但不注入 Pievo chat/schedule tools；最终结果由 Pievo runtime 作为通知发回聊天。
-
-## 运行
+通过 npm 安装 Pievo：
 
 ```bash
-npm start
+npm install -g @kky42/pievo
 ```
 
-创建 agent 配置：
+Pievo 在 agent 运行时会调用 `pi` CLI，因此请先安装并配置 Pi，再启动 relay。
+
+### 创建并连接第一个 Telegram agent
+
+先用 [BotFather](https://t.me/BotFather) 创建 Telegram bot，并保存 bot token 和 bot username。
+
+创建本地 Pievo agent 配置：
 
 ```bash
-node ./bin/pievo.js add my-agent
+pievo add my-agent
 ```
 
-默认运行状态目录：`~/.pievo`。
+编辑 `~/.pievo/agents/my-agent/config.json`：
 
-默认 Pi 模型是 `deepseek/deepseek-v4-flash`，reasoning effort 为 `high`。可以在聊天中用 `/model` 和 `/reasoning_effort` 覆盖当前会话。
+- 将 `profile.workdir` 设置为 agent 的工作目录。
+- 将 `bindings.telegram.allowedUsernames` 和 `bindings.telegram.managerUsernames` 替换为你的 Telegram username，不要带 `@`。
+- 在 `bindings.telegram.bots` 下添加 bot：
 
-## 测试
+```json
+{
+  "username": "your_bot_username",
+  "token": "123456:telegram-bot-token",
+  "allowedUsernames": ["your-telegram-username"],
+  "managerUsernames": ["your-telegram-username"]
+}
+```
+
+启动 relay：
 
 ```bash
-npm test
+pievo
 ```
 
-真实 Pi 场景 E2E 测试：
+打开 Telegram，进入和 bot 的私聊并发送消息。若要在群里使用，将 bot 加入群聊后在消息或命令里 mention 它，例如 `/status @your_bot_username`。
 
-```bash
-npm run test:e2e:scenario
-```
+运行状态默认保存在 `~/.pievo`。

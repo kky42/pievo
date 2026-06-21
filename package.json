@@ -1,6 +1,6 @@
 {
   "name": "@kky42/pievo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Durable agent evolution harness with a Pi-native chat relay",
   "type": "module",
   "bin": {
@@ -14,6 +14,9 @@
     "url": "https://github.com/kky42/pievo/issues"
   },
   "homepage": "https://github.com/kky42/pievo#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "bin",
     "src",
