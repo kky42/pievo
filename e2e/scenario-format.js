@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { formatInputAttachment } from "../src/pi_run/input-message.js";
+import { formatInputAttachments } from "../src/pi_run/input-message.js";
 import { formatLocalTimestamp } from "../src/utils.js";
 
 export function sanitizeFileName(value) {
@@ -27,7 +27,7 @@ export function formatScenarioMessage(message, stepIndex, messageIndex) {
 
 function appendAttachmentsToMessage(message, attachments) {
   const renderedMessage = String(message ?? "").trimEnd();
-  const attachmentBlock = attachments.map(formatInputAttachment).join("\n\n");
+  const attachmentBlock = formatInputAttachments(attachments);
   return renderedMessage ? `${renderedMessage}\n\n${attachmentBlock}` : attachmentBlock;
 }
 

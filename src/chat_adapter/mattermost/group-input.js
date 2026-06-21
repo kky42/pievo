@@ -1,4 +1,4 @@
-import { formatInputAttachment } from "../../pi_run/input-message.js";
+import { formatInputAttachments } from "../../pi_run/input-message.js";
 import { formatLocalTimestamp } from "../../utils.js";
 
 function parseFiniteNumber(value) {
@@ -72,9 +72,9 @@ export function renderGroupInputPost(post, attachments = []) {
     lines.push("(no text)");
   }
 
-  for (const attachment of attachments) {
+  if (attachments.length > 0) {
     lines.push("");
-    lines.push(formatInputAttachment(attachment));
+    lines.push(formatInputAttachments(attachments));
   }
 
   return lines.join("\n");

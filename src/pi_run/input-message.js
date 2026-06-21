@@ -9,9 +9,21 @@ import { renderPrompt } from "../prompts/index.js";
 export function formatInputAttachment(attachment) {
   const localPath = String(attachment?.localPath ?? attachment?.path ?? "unavailable").trim() || "unavailable";
   const kind = String(attachment?.kind ?? "document").trim() || "document";
-  return renderPrompt("templates/attachment-input.md", {
+  return renderPrompt("templates/attachment-input-item.md", {
     path: localPath,
     kind
+  });
+}
+
+export function formatInputAttachments(attachments) {
+  const localAttachments = attachments.filter(Boolean);
+  if (localAttachments.length === 0) {
+    return "";
+  }
+
+  return renderPrompt("templates/attachment-input.md", {
+    label: localAttachments.length === 1 ? "Attached file" : "Attached files",
+    items: localAttachments.map(formatInputAttachment).join("\n")
   });
 }
 
@@ -23,7 +35,7 @@ function buildAttachmentPrompt(promptText, attachments) {
     return normalizedPrompt;
   }
 
-  const attachmentBlock = localAttachments.map(formatInputAttachment).join("\n\n");
+  const attachmentBlock = formatInputAttachments(localAttachments);
   return normalizedPrompt ? `${normalizedPrompt}\n\n${attachmentBlock}` : attachmentBlock;
 }
 

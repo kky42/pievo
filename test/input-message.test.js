@@ -13,7 +13,7 @@ test("buildTurnInputMessage returns plain prompt when there are no attachments",
   );
 });
 
-test("buildTurnInputMessage renders all local attachments as plain text entries", () => {
+test("buildTurnInputMessage renders all local attachments as one compact list", () => {
   assert.equal(
     buildTurnInputMessage({
       promptText: "inspect",
@@ -25,13 +25,9 @@ test("buildTurnInputMessage renders all local attachments as plain text entries"
     [
       "inspect",
       "",
-      "Attached file:",
-      "- path: /tmp/input.jpg",
-      "- kind: photo",
-      "",
-      "Attached file:",
-      "- path: /tmp/spec.pdf",
-      "- kind: document"
+      "Attached files:",
+      "- kind: photo, path: /tmp/input.jpg",
+      "- kind: document, path: /tmp/spec.pdf"
     ].join("\n")
   );
 });
@@ -46,8 +42,7 @@ test("buildTurnInputMessage renders unavailable attachment paths", () => {
     }),
     [
       "Attached file:",
-      "- path: unavailable",
-      "- kind: photo"
+      "- kind: photo, path: unavailable"
     ].join("\n")
   );
 });

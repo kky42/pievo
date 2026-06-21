@@ -1,3 +1,2 @@
-Attached file:
-- path: {{path}}
-- kind: {{kind}}
+{{label}}:
+{{items}}

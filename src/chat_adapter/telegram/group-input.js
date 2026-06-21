@@ -1,4 +1,4 @@
-import { formatInputAttachment } from "../../pi_run/input-message.js";
+import { formatInputAttachments } from "../../pi_run/input-message.js";
 import { formatLocalTimestamp, normalizeTelegramUsername } from "../../utils.js";
 import { telegramMessageText } from "./rich-message.js";
 
@@ -50,9 +50,9 @@ export function renderGroupInputMessage(message, attachments = []) {
     lines.push("(no text)");
   }
 
-  for (const attachment of attachments) {
+  if (attachments.length > 0) {
     lines.push("");
-    lines.push(formatInputAttachment(attachment));
+    lines.push(formatInputAttachments(attachments));
   }
 
   return lines.join("\n");

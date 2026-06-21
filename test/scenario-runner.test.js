@@ -89,10 +89,9 @@ test("runStep renders group step attachments into the group transcript", async (
     assert.ok(turns[0].groupInput.messages[0].includes("Alice (@alice):"));
     assert.ok(turns[0].groupInput.messages[0].includes("@relaybot inspect the attached report"));
     assert.ok(turns[0].groupInput.messages[0].includes("Attached file:"));
-    assert.ok(turns[0].groupInput.messages[0].includes(`- path: ${reportPath}`));
-    assert.ok(turns[0].groupInput.messages[0].includes("- kind: document"));
+    assert.ok(turns[0].groupInput.messages[0].includes(`- kind: document, path: ${reportPath}`));
     assert.ok(turns[0].promptText.includes("Attached file:"));
-    assert.ok(turns[0].promptText.includes(`- path: ${reportPath}`));
+    assert.ok(turns[0].promptText.includes(`- kind: document, path: ${reportPath}`));
   });
 });
 
