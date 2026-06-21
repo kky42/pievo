@@ -35,10 +35,20 @@ function hasOwnField(object, fieldName) {
   return Object.prototype.hasOwnProperty.call(object ?? {}, fieldName);
 }
 
+function normalizeConfiguredUsername(value, fieldPath) {
+  const username = String(value ?? "").trim();
+  if (username.startsWith("@")) {
+    throw new Error(`${fieldPath} must be written without "@"`);
+  }
+  return username.toLowerCase();
+}
+
 function normalizeUsernameList(value, fieldPath) {
   const usernames = value ?? [];
   assertArrayOfStrings(usernames, fieldPath);
-  return usernames.map(normalizeTelegramUsername).filter(Boolean);
+  return usernames
+    .map((username, index) => normalizeConfiguredUsername(username, `${fieldPath}[${index}]`))
+    .filter(Boolean);
 }
 
 function normalizeAllowedUsernames(value, fieldPath) {
@@ -50,6 +60,17 @@ function normalizeManagerUsernames(value, fieldPath) {
 }
 
 function normalizeTelegramBotUsername(value, fieldPath) {
+  const username = normalizeConfiguredUsername(value, fieldPath);
+  if (!username) {
+    throw new Error(`${fieldPath} must be a non-empty Telegram bot username`);
+  }
+  if (!/^[a-z0-9_]+$/.test(username)) {
+    throw new Error(`${fieldPath} must contain only letters, numbers, or "_"`);
+  }
+  return username;
+}
+
+function normalizeTelegramBotLookupUsername(value, fieldPath) {
   const username = normalizeTelegramUsername(value);
   if (!username) {
     throw new Error(`${fieldPath} must be a non-empty Telegram bot username`);
@@ -77,7 +98,7 @@ function normalizeMattermostServerUrl(value, fieldPath) {
 }
 
 function normalizeMattermostUsername(value, fieldPath) {
-  const username = String(value ?? "").trim().replace(/^@+/, "").toLowerCase();
+  const username = normalizeConfiguredUsername(value, fieldPath);
   if (!username) {
     throw new Error(`${fieldPath} must be a non-empty Mattermost username`);
   }
@@ -371,7 +392,7 @@ function normalizeChatBindingLookup({ platform, bindingId }) {
   if (normalizedPlatform === "telegram") {
     return {
       platform: normalizedPlatform,
-      bindingId: normalizeTelegramBotUsername(bindingId, "telegram bot username")
+      bindingId: normalizeTelegramBotLookupUsername(bindingId, "telegram bot username")
     };
   }
 
