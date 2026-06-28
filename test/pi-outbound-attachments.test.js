@@ -191,6 +191,45 @@ test("Mattermost renderer sends native attachments through the common resolver",
   });
 });
 
+test("Telegram final rendering can avoid reusing an active progress message", async () => {
+  const botApi = new FakeBotApi();
+  const renderer = new TelegramMessageRenderer({ botApi, chatId: 42 });
+  renderer.progressMessageId = 7;
+  renderer.lastRenderedProgressText = "🟢 working";
+
+  await renderer.renderFinalMessage("**done**", { reuseProgressMessage: false });
+
+  assert.equal(botApi.edits.length, 0);
+  assert.equal(botApi.messages.length, 1);
+  assert.equal(renderer.progressMessageId, 7);
+  assert.equal(renderer.lastRenderedProgressText, "🟢 working");
+});
+
+test("Mattermost final rendering can avoid reusing an active progress post", async () => {
+  const botApi = {
+    posts: [],
+    updates: [],
+    async createPost(payload) {
+      this.posts.push(payload);
+      return { id: `post-${this.posts.length}` };
+    },
+    async updatePost(payload) {
+      this.updates.push(payload);
+      return { id: payload.postId };
+    }
+  };
+  const renderer = new MattermostMessageRenderer({ botApi, channelId: "channel-1" });
+  renderer.progressMessageId = "progress-1";
+  renderer.lastRenderedProgressText = ":hourglass_flowing_sand: **Running:** working";
+
+  await renderer.renderFinalMessage("done", { reuseProgressMessage: false });
+
+  assert.equal(botApi.updates.length, 0);
+  assert.deepEqual(botApi.posts, [{ channelId: "channel-1", message: "done", rootId: null }]);
+  assert.equal(renderer.progressMessageId, "progress-1");
+  assert.equal(renderer.lastRenderedProgressText, ":hourglass_flowing_sand: **Running:** working");
+});
+
 test("Telegram rich features use only explicit Pievo env names", () => {
   assert.equal(isTelegramRichMessagesEnabled({ [TELEGRAM_RICH_MESSAGES_ENV]: "1" }), true);
   assert.equal(isTelegramRichMessagesEnabled({ [TELEGRAM_RICH_MESSAGES_ENV]: "0" }), false);

@@ -162,7 +162,7 @@ export class MessageRenderer {
     const rawChunks = splitPlainText(rawText, MATTERMOST_RENDER_CHUNK_SIZE);
     const [firstChunk, ...remainingChunks] = rawChunks;
 
-    if (this.progressMessageId) {
+    if (this.progressMessageId && options.reuseProgressMessage !== false) {
       try {
         if (firstChunk !== this.lastRenderedProgressText) {
           await this.editMessageChunk(this.progressMessageId, firstChunk);

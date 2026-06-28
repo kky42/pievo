@@ -93,14 +93,17 @@ export class BackgroundScheduleRunner {
         return;
       }
 
-      await session.sendText(
+      await session.renderFinalMessage(
         buildBackgroundNotificationText({
           scheduleName: schedule.name,
           triggeredAt,
           failed: Boolean(failureText),
           body: failureText ?? messageParts.join("\n\n")
         }),
-        { replyTarget }
+        {
+          replyTarget,
+          reuseProgressMessage: false
+        }
       );
 
       this.log(`background run finished: ${schedule.name} in ${session.conversationId} (failed=${Boolean(failureText)})`);

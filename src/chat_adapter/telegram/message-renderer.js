@@ -361,6 +361,10 @@ export class MessageRenderer {
       return false;
     }
 
+    if (options.reuseProgressMessage === false) {
+      return true;
+    }
+
     if (this.progressMessageId) {
       await this.clearProgressMessage();
     } else {
@@ -381,7 +385,7 @@ export class MessageRenderer {
     const rawChunks = splitPlainText(rawText, TELEGRAM_RENDER_CHUNK_SIZE);
     const [firstChunk, ...remainingChunks] = rawChunks;
 
-    if (this.progressMessageId) {
+    if (this.progressMessageId && options.reuseProgressMessage !== false) {
       if (firstChunk !== this.lastRenderedProgressText) {
         try {
           await this.editMessageChunk(this.progressMessageId, firstChunk, options);
@@ -399,7 +403,9 @@ export class MessageRenderer {
     }
 
     await this.sendSplitText(rawText, options);
-    this.markProgressSuperseded();
+    if (options.reuseProgressMessage !== false) {
+      this.markProgressSuperseded();
+    }
   }
 
   async sendAttachment(attachment, options = {}) {

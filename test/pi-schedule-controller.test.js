@@ -19,6 +19,7 @@ function createController(options = {}) {
 
 function createBackgroundSession(overrides = {}) {
   const sentTexts = [];
+  const renderedFinalMessages = [];
   const sessionLogs = [];
   let capturedRunParams = null;
   let capturedRelayInstructions = null;
@@ -31,6 +32,7 @@ function createBackgroundSession(overrides = {}) {
     reasoningEffort: "default",
     schedules: [],
     sentTexts,
+    renderedFinalMessages,
     sessionLogs,
     logger(message) {
       sessionLogs.push(message);
@@ -57,6 +59,9 @@ function createBackgroundSession(overrides = {}) {
     },
     async sendText(text, options = {}) {
       sentTexts.push({ text, options });
+    },
+    async renderFinalMessage(text, options = {}) {
+      renderedFinalMessages.push({ text, options });
     },
     get capturedRunParams() {
       return capturedRunParams;
@@ -90,7 +95,7 @@ test("background schedules run as plain Pi invocations without Pievo tools", asy
   assert.equal(session.capturedRelayInstructions, null);
 });
 
-test("group background final text is delivered as a runtime notification", async () => {
+test("group background final text is delivered through final-message rendering", async () => {
   const session = createBackgroundSession();
   const { controller } = createController({
     getSession: () => session,
@@ -104,12 +109,14 @@ test("group background final text is delivered as a runtime notification", async
     prompt: "summarize"
   }, new Date("2026-06-20T12:34:56Z"));
 
-  assert.equal(session.sentTexts.length, 1);
-  assert.match(session.sentTexts[0].text, /Background scheduled run: daily/);
-  assert.match(session.sentTexts[0].text, /background result/);
+  assert.equal(session.sentTexts.length, 0);
+  assert.equal(session.renderedFinalMessages.length, 1);
+  assert.match(session.renderedFinalMessages[0].text, /Background scheduled run: daily/);
+  assert.match(session.renderedFinalMessages[0].text, /background result/);
+  assert.equal(session.renderedFinalMessages[0].options.reuseProgressMessage, false);
 });
 
-test("private background final text is delivered as a notification", async () => {
+test("private background final text is delivered through final-message rendering", async () => {
   const session = createBackgroundSession();
   const { controller } = createController({
     getSession: () => session,
@@ -123,9 +130,11 @@ test("private background final text is delivered as a notification", async () =>
     prompt: "summarize"
   }, new Date("2026-06-20T12:34:56Z"));
 
-  assert.equal(session.sentTexts.length, 1);
-  assert.match(session.sentTexts[0].text, /Background scheduled run: daily/);
-  assert.match(session.sentTexts[0].text, /background result/);
+  assert.equal(session.sentTexts.length, 0);
+  assert.equal(session.renderedFinalMessages.length, 1);
+  assert.match(session.renderedFinalMessages[0].text, /Background scheduled run: daily/);
+  assert.match(session.renderedFinalMessages[0].text, /background result/);
+  assert.equal(session.renderedFinalMessages[0].options.reuseProgressMessage, false);
 });
 
 test("heartbeat schedules stay in the foreground FIFO with user messages", async () => {
