@@ -15,7 +15,7 @@ export const TELEGRAM_RICH_MESSAGES_ENV = "PIEVO_TELEGRAM_RICH_MESSAGES";
 export const TELEGRAM_RICH_DRAFTS_ENV = "PIEVO_TELEGRAM_RICH_DRAFTS";
 
 export function isTelegramRichMessagesEnabled(env = process.env) {
-  return env[TELEGRAM_RICH_MESSAGES_ENV] === "1";
+  return env[TELEGRAM_RICH_MESSAGES_ENV] !== "0";
 }
 
 export function isTelegramRichDraftsEnabled(env = process.env) {

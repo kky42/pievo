@@ -230,11 +230,13 @@ test("Mattermost final rendering can avoid reusing an active progress post", asy
   assert.equal(renderer.lastRenderedProgressText, ":hourglass_flowing_sand: **Running:** working");
 });
 
-test("Telegram rich features use only explicit Pievo env names", () => {
+test("Telegram rich messages default on while rich drafts require explicit opt-in", () => {
+  assert.equal(isTelegramRichMessagesEnabled({}), true);
   assert.equal(isTelegramRichMessagesEnabled({ [TELEGRAM_RICH_MESSAGES_ENV]: "1" }), true);
   assert.equal(isTelegramRichMessagesEnabled({ [TELEGRAM_RICH_MESSAGES_ENV]: "0" }), false);
-  assert.equal(isTelegramRichMessagesEnabled({ OTHER_RICH_MESSAGES_ENV: "1" }), false);
+  assert.equal(isTelegramRichMessagesEnabled({ OTHER_RICH_MESSAGES_ENV: "0" }), true);
 
+  assert.equal(isTelegramRichDraftsEnabled({}), false);
   assert.equal(isTelegramRichDraftsEnabled({ [TELEGRAM_RICH_DRAFTS_ENV]: "1" }), true);
   assert.equal(isTelegramRichDraftsEnabled({ [TELEGRAM_RICH_DRAFTS_ENV]: "0" }), false);
   assert.equal(isTelegramRichDraftsEnabled({ OTHER_RICH_DRAFTS_ENV: "1" }), false);
