@@ -86,19 +86,31 @@ export function buildHeartbeatGroupTranscriptMessage(scheduleName, prompt, now =
   });
 }
 
-export function buildBackgroundNotificationText({
+export function buildBackgroundTaskPrompt(scheduleName, prompt) {
+  return renderPrompt("templates/background-task.md", {
+    schedule_name: scheduleName,
+    prompt: String(prompt ?? "").trim()
+  });
+}
+
+export function buildBackgroundTriggerPrompt({
   scheduleName,
+  task,
   triggeredAt,
+  completedAt,
   failed = false,
   body
 }) {
   const header = failed
-    ? `Background scheduled run failed: ${scheduleName}`
-    : `Background scheduled run: ${scheduleName}`;
+    ? "Background schedule failed"
+    : "Background schedule result";
   const normalizedBody = String(body ?? "").trim() || "(no final response)";
-  return renderPrompt("templates/background-notification.md", {
+  return renderPrompt("templates/background-trigger.md", {
     header,
+    schedule_name: scheduleName,
     triggered_at: triggeredAt,
+    completed_at: completedAt,
+    task: String(task ?? "").trim(),
     body: normalizedBody
   });
 }

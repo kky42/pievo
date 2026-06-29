@@ -1,0 +1,38 @@
+# Heartbeat loop trigger scenario.
+# User asks for a simple recurring reminder/check in natural language.
+# The agent should infer a heartbeat schedule because the work is chat-contextual
+# and should be handled by the front agent when it fires.
+
+name: group-heartbeat-loop-trigger
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+steps:
+  - id: create-heartbeat-loop
+    messages:
+      - from: Manager
+        handle: "@manager"
+        text: |
+          @relaybot 每天早上 9 点帮我们回来看一下这个群里有没有需要跟进的事项；
+          到时候直接在群里给一个简短结论就行。现在先设置好，然后告诉我一声。
+    expect:
+      toolCalls:
+        add_schedule: 1
+        send_reply: 1
+      schedules:
+        contains:
+          mode: heartbeat
+      replies:
+        - matches: "(?i)(done|set|scheduled|设置|安排|好了|每天|9)"
+
+  - id: trigger-heartbeat-loop
+    triggerSchedule:
+      mode: heartbeat
+    expect:
+      toolCalls:
+        send_reply:
+          min: 1
+      replies:
+        - matches: "(?i)(follow|need|done|check|跟进|事项|没有|需要|结论)"

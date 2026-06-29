@@ -1,6 +1,6 @@
 import { eventToActions as piEventToActions } from "../../pi_run/events.js";
 import { formatLocalTimestamp, toErrorMessage } from "../../utils.js";
-import { buildBackgroundNotificationText } from "./schedules.js";
+import { buildBackgroundTaskPrompt, buildBackgroundTriggerPrompt } from "./schedules.js";
 
 const PI_RUN_ID = "pi";
 const PI_RUN_DISPLAY_NAME = "Pi";
@@ -11,10 +11,17 @@ export class BackgroundScheduleRunner {
   constructor({
     log = noop,
     deliveryAnchorForSession = (session) => session.deliveryAnchor ?? null,
+    // Adapter callback signature: async ({ session, deliveryAnchor }) => boolean.
+    // True means route the background result as a private/direct front-agent turn;
+    // false means route it as a group-style front-agent turn.
+    isDirectConversation = () => true,
+    groupIdentity = () => ({}),
     eventToActions = piEventToActions
   } = {}) {
     this.log = log;
     this.deliveryAnchorForSession = deliveryAnchorForSession;
+    this.isDirectConversation = isDirectConversation;
+    this.groupIdentity = groupIdentity;
     this.eventToActions = eventToActions;
     this.activeRuns = new Set();
   }
@@ -44,7 +51,7 @@ export class BackgroundScheduleRunner {
         run = session.createAgentRun({
           workdir: session.workdir,
           sessionId: null,
-          message: schedule.prompt,
+          message: buildBackgroundTaskPrompt(schedule.name, schedule.prompt),
           autoMode: session.auto,
           model: session.model,
           reasoningEffort: session.reasoningEffort,
@@ -93,18 +100,34 @@ export class BackgroundScheduleRunner {
         return;
       }
 
-      await session.renderFinalMessage(
-        buildBackgroundNotificationText({
-          scheduleName: schedule.name,
-          triggeredAt,
-          failed: Boolean(failureText),
-          body: failureText ?? messageParts.join("\n\n")
-        }),
-        {
+      const completedAt = formatLocalTimestamp(Math.floor(Date.now() / 1000));
+      const triggerPrompt = buildBackgroundTriggerPrompt({
+        scheduleName: schedule.name,
+        task: schedule.prompt,
+        triggeredAt,
+        completedAt,
+        failed: Boolean(failureText),
+        body: failureText ?? messageParts.join("\n\n")
+      });
+
+      if (await this.isDirectConversation({ session, deliveryAnchor })) {
+        await session.enqueueTurn({
+          mode: "private",
+          promptText: triggerPrompt,
           replyTarget,
-          reuseProgressMessage: false
-        }
-      );
+          scheduleName: schedule.name,
+          suppressQueueNotice: true
+        });
+      } else {
+        await session.enqueueTurn({
+          mode: "group",
+          groupInput: { messages: [triggerPrompt] },
+          groupIdentity: this.groupIdentity(),
+          replyTarget,
+          scheduleName: schedule.name,
+          suppressQueueNotice: true
+        });
+      }
 
       this.log(`background run finished: ${schedule.name} in ${session.conversationId} (failed=${Boolean(failureText)})`);
     } finally {

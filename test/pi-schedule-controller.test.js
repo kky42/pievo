@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -17,9 +20,19 @@ function createController(options = {}) {
   return { controller, logs };
 }
 
+async function withTempDir(fn) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pievo-schedule-test-"));
+  try {
+    return await fn(tempDir);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
 function createBackgroundSession(overrides = {}) {
   const sentTexts = [];
   const renderedFinalMessages = [];
+  const enqueuedTurns = [];
   const sessionLogs = [];
   let capturedRunParams = null;
   let capturedRelayInstructions = null;
@@ -33,6 +46,7 @@ function createBackgroundSession(overrides = {}) {
     schedules: [],
     sentTexts,
     renderedFinalMessages,
+    enqueuedTurns,
     sessionLogs,
     logger(message) {
       sessionLogs.push(message);
@@ -57,6 +71,9 @@ function createBackgroundSession(overrides = {}) {
         abort() {}
       };
     },
+    async enqueueTurn(turn) {
+      enqueuedTurns.push(turn);
+    },
     async sendText(text, options = {}) {
       sentTexts.push({ text, options });
     },
@@ -75,7 +92,7 @@ function createBackgroundSession(overrides = {}) {
   return session;
 }
 
-test("background schedules run as plain Pi invocations without Pievo tools", async () => {
+test("background schedules run as isolated Pi invocations without chat tools", async () => {
   const session = createBackgroundSession();
   const { controller } = createController({
     getSession: () => session,
@@ -89,17 +106,52 @@ test("background schedules run as plain Pi invocations without Pievo tools", asy
     prompt: "summarize"
   });
 
-  assert.equal(session.capturedRunParams.message, "summarize");
+  assert.match(session.capturedRunParams.message, /Background scheduled task: daily/);
+  assert.match(session.capturedRunParams.message, /summarize/);
   assert.equal(session.capturedRunParams.enablePievoTools, false);
   assert.equal(session.capturedRunParams.extraEnv, undefined);
   assert.equal(session.capturedRelayInstructions, null);
 });
 
-test("group background final text is delivered through final-message rendering", async () => {
+test("background schedules load Pievo agent profile instructions", async () => {
+  await withTempDir(async (tempDir) => {
+    const profileInstructionsPath = path.join(tempDir, "AGENTS.md");
+    await fs.writeFile(profileInstructionsPath, "# Pievo test profile\nKeep Pievo core context aligned.", "utf8");
+    const { session, runnerFactory } = await createSession({
+      botConfig: {
+        agent: { profileInstructionsPath }
+      }
+    });
+    const { controller } = createController({
+      getSession: () => session,
+      isDirectConversation: () => true
+    });
+
+    const runPromise = controller.runBackgroundSchedule(session, {
+      mode: "background",
+      name: "daily",
+      cron: "* * * * *",
+      prompt: "summarize"
+    });
+    for (let index = 0; index < 20 && runnerFactory.runs.length === 0; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    assert.equal(runnerFactory.runs.length, 1);
+    assert.match(runnerFactory.runs[0].params.developerInstructions, /Pievo test profile/);
+    assert.equal(runnerFactory.runs[0].params.enablePievoTools, false);
+
+    runnerFactory.runs[0].finish({ code: 0, signal: null, aborted: false, sawTerminalEvent: true });
+    await runPromise;
+  });
+});
+
+test("group background final response is routed back as a front-agent trigger turn", async () => {
   const session = createBackgroundSession();
   const { controller } = createController({
     getSession: () => session,
-    isDirectConversation: () => false
+    isDirectConversation: () => false,
+    groupIdentity: () => ({ botName: "Pievo", botHandle: "@relaybot" })
   });
 
   await controller.runBackgroundSchedule(session, {
@@ -110,13 +162,19 @@ test("group background final text is delivered through final-message rendering",
   }, new Date("2026-06-20T12:34:56Z"));
 
   assert.equal(session.sentTexts.length, 0);
-  assert.equal(session.renderedFinalMessages.length, 1);
-  assert.match(session.renderedFinalMessages[0].text, /Background scheduled run: daily/);
-  assert.match(session.renderedFinalMessages[0].text, /background result/);
-  assert.equal(session.renderedFinalMessages[0].options.reuseProgressMessage, false);
+  assert.equal(session.renderedFinalMessages.length, 0);
+  assert.equal(session.enqueuedTurns.length, 1);
+  assert.equal(session.enqueuedTurns[0].mode, "group");
+  assert.equal(session.enqueuedTurns[0].scheduleName, "daily");
+  assert.equal(session.enqueuedTurns[0].suppressQueueNotice, true);
+  assert.match(session.enqueuedTurns[0].groupInput.messages[0], /Background schedule result/);
+  assert.match(session.enqueuedTurns[0].groupInput.messages[0], /Schedule: daily/);
+  assert.match(session.enqueuedTurns[0].groupInput.messages[0], /Triggered at:/);
+  assert.match(session.enqueuedTurns[0].groupInput.messages[0], /Completed at:/);
+  assert.match(session.enqueuedTurns[0].groupInput.messages[0], /background result/);
 });
 
-test("private background final text is delivered through final-message rendering", async () => {
+test("private background final response is routed back as a front-agent trigger turn", async () => {
   const session = createBackgroundSession();
   const { controller } = createController({
     getSession: () => session,
@@ -131,10 +189,42 @@ test("private background final text is delivered through final-message rendering
   }, new Date("2026-06-20T12:34:56Z"));
 
   assert.equal(session.sentTexts.length, 0);
-  assert.equal(session.renderedFinalMessages.length, 1);
-  assert.match(session.renderedFinalMessages[0].text, /Background scheduled run: daily/);
-  assert.match(session.renderedFinalMessages[0].text, /background result/);
-  assert.equal(session.renderedFinalMessages[0].options.reuseProgressMessage, false);
+  assert.equal(session.renderedFinalMessages.length, 0);
+  assert.equal(session.enqueuedTurns.length, 1);
+  assert.equal(session.enqueuedTurns[0].mode, "private");
+  assert.equal(session.enqueuedTurns[0].scheduleName, "daily");
+  assert.equal(session.enqueuedTurns[0].suppressQueueNotice, true);
+  assert.match(session.enqueuedTurns[0].promptText, /Background schedule result/);
+  assert.match(session.enqueuedTurns[0].promptText, /Schedule: daily/);
+  assert.match(session.enqueuedTurns[0].promptText, /Triggered at:/);
+  assert.match(session.enqueuedTurns[0].promptText, /Completed at:/);
+  assert.match(session.enqueuedTurns[0].promptText, /background result/);
+});
+
+test("background failures are routed back to the front agent instead of direct user notification", async () => {
+  const session = createBackgroundSession({
+    createAgentRun() {
+      throw new Error("boom");
+    }
+  });
+  const { controller } = createController({
+    getSession: () => session,
+    isDirectConversation: () => true
+  });
+
+  await controller.runBackgroundSchedule(session, {
+    mode: "background",
+    name: "daily",
+    cron: "* * * * *",
+    prompt: "summarize"
+  }, new Date("2026-06-20T12:34:56Z"));
+
+  assert.equal(session.sentTexts.length, 0);
+  assert.equal(session.renderedFinalMessages.length, 0);
+  assert.equal(session.enqueuedTurns.length, 1);
+  assert.match(session.enqueuedTurns[0].promptText, /Background schedule failed/);
+  assert.match(session.enqueuedTurns[0].promptText, /Schedule: daily/);
+  assert.match(session.enqueuedTurns[0].promptText, /boom/);
 });
 
 test("heartbeat schedules stay in the foreground FIFO with user messages", async () => {
@@ -219,13 +309,13 @@ test("background schedules start independently while foreground turns stay queue
   assert.equal(runnerFactory.runs.length, 2);
   assert.deepEqual(
     runnerFactory.runs.map((run) => ({
-      message: run.params.message,
+      hasTask: /Background scheduled task: bg[12]/.test(run.params.message),
       enablePievoTools: run.params.enablePievoTools,
       sessionId: run.params.sessionId
     })),
     [
-      { message: "bg 1", enablePievoTools: false, sessionId: null },
-      { message: "bg 2", enablePievoTools: false, sessionId: null }
+      { hasTask: true, enablePievoTools: false, sessionId: null },
+      { hasTask: true, enablePievoTools: false, sessionId: null }
     ]
   );
 
@@ -233,8 +323,14 @@ test("background schedules start independently while foreground turns stay queue
   runnerFactory.runs[1].finish({ code: 0, signal: null, aborted: false, sawTerminalEvent: true });
   await Promise.all([bg1Promise, bg2Promise]);
 
-  assert.match(String(fakeBotApi.messages[2].text ?? ""), /Background scheduled run: bg1/);
-  assert.match(String(fakeBotApi.messages[3].text ?? ""), /Background scheduled run: bg2/);
+  assert.equal(session.queue.length, 4);
+  assert.equal(session.queue[2].scheduleName, "bg1");
+  assert.equal(session.queue[2].mode, "private");
+  assert.match(session.queue[2].promptText, /Background schedule result/);
+  assert.match(session.queue[2].promptText, /Schedule: bg1/);
+  assert.equal(session.queue[3].scheduleName, "bg2");
+  assert.match(session.queue[3].promptText, /Background schedule result/);
+  assert.match(session.queue[3].promptText, /Schedule: bg2/);
 });
 
 test("fired timers are removed when no live or restored session exists", async () => {

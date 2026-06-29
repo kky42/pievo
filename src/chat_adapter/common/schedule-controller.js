@@ -24,6 +24,8 @@ export class ScheduleController {
     getSession,
     restoreSession,
     deliveryAnchorForSession = (session) => session.deliveryAnchor ?? null,
+    // Adapter callback signature: async ({ session, deliveryAnchor }) => boolean.
+    // True means private/direct front-agent turn; false means group-style turn.
     isDirectConversation = () => true,
     groupIdentity = () => ({}),
     schedulePresenter = null
@@ -54,7 +56,9 @@ export class ScheduleController {
     this.scheduleTimers = new Map();
     this.backgroundRunner = new BackgroundScheduleRunner({
       log,
-      deliveryAnchorForSession
+      deliveryAnchorForSession,
+      isDirectConversation,
+      groupIdentity
     });
     this.commandHandler = new ScheduleCommandHandler({
       presenter: schedulePresenter

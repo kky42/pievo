@@ -5,6 +5,7 @@ import process from "node:process";
 
 import { ChatSession } from "../src/chat_adapter/common/chat-session.js";
 import { ConversationStateStore } from "../src/chat_adapter/common/conversation-state.js";
+import { BackgroundScheduleRunner } from "../src/chat_adapter/common/background-schedule-runner.js";
 import { buildGroupInputMessage } from "../src/chat_adapter/common/group-turn.js";
 import {
   buildHeartbeatGroupTranscriptMessage,
@@ -55,33 +56,44 @@ export async function runStep({ scenario, step, stepIndex, session, workdir, sta
       if (!schedule) {
         throw new Error(`triggerSchedule: no matching schedule ${JSON.stringify(triggerSpec)}`);
       }
-      if (schedule.mode !== "heartbeat") {
-        throw new Error(`triggerSchedule: schedule ${scheduleName} is ${schedule.mode}, not heartbeat`);
-      }
-      if (scenario.mode === "private") {
-        await session.enqueueTurn({
-          mode: "private",
-          promptText: buildHeartbeatPrivatePrompt(schedule.name, schedule.prompt),
-          attachments: [],
-          replyTarget: null,
-          scheduleName: schedule.name,
-          suppressQueueNotice: true
-        });
-      } else {
-        await session.enqueueTurn({
-          mode: "group",
-          groupInput: {
-            messages: [buildHeartbeatGroupTranscriptMessage(schedule.name, schedule.prompt)]
-          },
-          groupIdentity: {
+      if (schedule.mode === "heartbeat") {
+        if (scenario.mode === "private") {
+          await session.enqueueTurn({
+            mode: "private",
+            promptText: buildHeartbeatPrivatePrompt(schedule.name, schedule.prompt),
+            attachments: [],
+            replyTarget: null,
+            scheduleName: schedule.name,
+            suppressQueueNotice: true
+          });
+        } else {
+          await session.enqueueTurn({
+            mode: "group",
+            groupInput: {
+              messages: [buildHeartbeatGroupTranscriptMessage(schedule.name, schedule.prompt)]
+            },
+            groupIdentity: {
+              botName: scenario.bot?.name ?? "Pievo",
+              botHandle: scenario.bot?.handle ?? "@relaybot"
+            },
+            attachments: [],
+            replyTarget: scenario.replyTarget ?? null,
+            scheduleName: schedule.name,
+            suppressQueueNotice: true
+          });
+        }
+      } else if (schedule.mode === "background") {
+        const runner = new BackgroundScheduleRunner({
+          deliveryAnchorForSession: () => ({ replyTarget: scenario.replyTarget ?? null }),
+          isDirectConversation: () => scenario.mode === "private",
+          groupIdentity: () => ({
             botName: scenario.bot?.name ?? "Pievo",
             botHandle: scenario.bot?.handle ?? "@relaybot"
-          },
-          attachments: [],
-          replyTarget: scenario.replyTarget ?? null,
-          scheduleName: schedule.name,
-          suppressQueueNotice: true
+          })
         });
+        await runner.run(session, schedule);
+      } else {
+        throw new Error(`triggerSchedule: schedule ${scheduleName} has unsupported mode ${schedule.mode}`);
       }
     } else if (scenario.mode === "private") {
       const promptText = String(step.prompt ?? step.text ?? "").trim();

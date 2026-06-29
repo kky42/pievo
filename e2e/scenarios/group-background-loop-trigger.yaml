@@ -1,0 +1,48 @@
+# Background loop trigger/operation scenario.
+# User asks for a recurring improvement loop in natural language. The task is
+# intentionally heavier than a chat reminder, so the agent should choose a
+# background schedule. When the schedule fires, background work is routed back
+# through the front agent before any visible group reply.
+
+name: group-background-loop-trigger
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+profileInstructions: |
+  # Pievo E2E Profile
+  Keep Pievo-specific project context available to scheduled background runs.
+
+files:
+  - path: repo-status.txt
+    content: |
+      Website TODO: improve the homepage hero copy.
+
+steps:
+  - id: create-background-loop
+    messages:
+      - from: Manager
+        handle: "@manager"
+        text: |
+          @relaybot 我想让这个项目自己持续变好。每天早上帮我在后台检查一下 repo 里有没有明显的改进机会；
+          有发现的话再回来告诉我，不要让当前对话一直卡着。先帮我设置起来。
+    expect:
+      toolCalls:
+        add_schedule: 1
+        send_reply: 1
+      schedules:
+        contains:
+          mode: background
+      replies:
+        - matches: "(?i)(done|set|scheduled|background|后台|设置|安排|好了|每天)"
+
+  - id: trigger-background-loop
+    triggerSchedule:
+      mode: background
+    expect:
+      toolCalls:
+        send_reply:
+          min: 1
+      replies:
+        - matches: "(?i)(improve|homepage|hero|repo|改进|首页|检查|发现)"
