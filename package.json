@@ -1,6 +1,6 @@
 {
   "name": "@kky42/pievo",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Durable agent evolution harness with a Pi-native chat relay",
   "type": "module",
   "bin": {

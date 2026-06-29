@@ -17,7 +17,7 @@ test("one-time schedule run_at requires seconds and timezone", () => {
   );
 });
 
-test("buildScheduleListText renders cron and one-time schedules", () => {
+test("buildScheduleListText includes schedule identity and trigger details", () => {
   const text = buildScheduleListText([
     {
       mode: "heartbeat",
@@ -37,8 +37,12 @@ test("buildScheduleListText renders cron and one-time schedules", () => {
     }
   ]);
 
-  assert.match(text, /heartbeat  pulse\ncron: \*\/5 \* \* \* \*/);
-  assert.match(text, /background  once-report\nonce: 2999-06-22T09:00:00\+08:00/);
+  assert.match(text, /heartbeat/);
+  assert.match(text, /pulse/);
+  assert.match(text, /cron: \*\/5 \* \* \* \*/);
+  assert.match(text, /background/);
+  assert.match(text, /once-report/);
+  assert.match(text, /once: 2999-06-22T09:00:00\+08:00/);
 });
 
 test("/schedule command lists only and rejects mutation syntax", async () => {

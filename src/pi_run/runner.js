@@ -7,9 +7,10 @@ import { parseJsonlLine } from "./events.js";
 const PIEVO_EXTENSION_PATH = fileURLToPath(
   new URL("../pi_tools/extension.ts", import.meta.url)
 );
-const PIEVO_LOOP_SKILL_PATH = fileURLToPath(
-  new URL("../skills/loop", import.meta.url)
-);
+const PIEVO_BUILTIN_SKILL_PATHS = [
+  fileURLToPath(new URL("../skills/loop", import.meta.url)),
+  fileURLToPath(new URL("../skills/pievo-feedback", import.meta.url))
+];
 
 const sandboxFlagSupportCache = new Map();
 
@@ -66,7 +67,7 @@ export function startPiRun({
     sessionDir,
     supportsSandboxFlag: detectPiSandboxFlagSupport({ cwd: workdir }),
     extensionPaths: enablePievoTools ? [PIEVO_EXTENSION_PATH] : [],
-    skillPaths: enableBuiltinSkills ? [PIEVO_LOOP_SKILL_PATH] : [],
+    skillPaths: enableBuiltinSkills ? PIEVO_BUILTIN_SKILL_PATHS : [],
     disableAmbientResources
   });
 

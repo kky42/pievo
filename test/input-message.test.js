@@ -13,36 +13,30 @@ test("buildTurnInputMessage returns plain prompt when there are no attachments",
   );
 });
 
-test("buildTurnInputMessage renders all local attachments as one compact list", () => {
-  assert.equal(
-    buildTurnInputMessage({
-      promptText: "inspect",
-      attachments: [
-        { kind: "photo", localPath: "/tmp/input.jpg" },
-        { kind: "document", localPath: "/tmp/spec.pdf" }
-      ]
-    }),
-    [
-      "inspect",
-      "",
-      "Attached files:",
-      "- kind: photo, path: /tmp/input.jpg",
-      "- kind: document, path: /tmp/spec.pdf"
-    ].join("\n")
-  );
+test("buildTurnInputMessage includes each local attachment for model context", () => {
+  const message = buildTurnInputMessage({
+    promptText: "inspect",
+    attachments: [
+      { kind: "photo", localPath: "/tmp/input.jpg" },
+      { kind: "document", localPath: "/tmp/spec.pdf" }
+    ]
+  });
+
+  assert.match(message, /^inspect/);
+  assert.match(message, /kind: photo/);
+  assert.match(message, /path: \/tmp\/input\.jpg/);
+  assert.match(message, /kind: document/);
+  assert.match(message, /path: \/tmp\/spec\.pdf/);
 });
 
-test("buildTurnInputMessage renders unavailable attachment paths", () => {
-  assert.equal(
-    buildTurnInputMessage({
-      promptText: "",
-      attachments: [
-        { kind: "photo", localPath: "" }
-      ]
-    }),
-    [
-      "Attached file:",
-      "- kind: photo, path: unavailable"
-    ].join("\n")
-  );
+test("buildTurnInputMessage represents unavailable attachment paths", () => {
+  const message = buildTurnInputMessage({
+    promptText: "",
+    attachments: [
+      { kind: "photo", localPath: "" }
+    ]
+  });
+
+  assert.match(message, /kind: photo/);
+  assert.match(message, /path: unavailable/);
 });

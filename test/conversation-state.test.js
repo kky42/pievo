@@ -113,10 +113,9 @@ test("ConversationState loads and rewrites golden legacy v1 state fixture", asyn
       }
     ]
   };
-  assert.equal(
-    await fs.readFile(stateStore.stateJsonPath(scope), "utf8"),
-    `${JSON.stringify(expectedNormalizedRecord, null, 2)}\n`
-  );
+  const persistedRecord = JSON.parse(await fs.readFile(stateStore.stateJsonPath(scope), "utf8"));
+  assert.deepEqual(persistedRecord, expectedNormalizedRecord);
+  assert.equal(Object.hasOwn(persistedRecord, "cli"), false);
 });
 
 test("ConversationState persists delivery anchor, overrides, schedules, and session metadata", async () => {

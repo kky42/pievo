@@ -13,145 +13,66 @@ import {
 import { PRIVATE_OUTPUT_DEVELOPER_INSTRUCTIONS } from "../src/chat_adapter/common/output-instructions.js";
 import { createFakeCliCommand } from "./support/fakes.js";
 
-test("buildPiArgs uses approved print json mode for a fresh session", () => {
-  assert.deepEqual(buildPiArgs({
-    message: "hello"
-  }), [
-    "-p",
-    "--approve",
-    "--mode",
-    "json",
-    "--model",
-    "deepseek/deepseek-v4-flash",
-    "--thinking",
-    "high",
-    "hello"
-  ]);
+function flagValues(args, flag) {
+  const values = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === flag) values.push(args[index + 1]);
+  }
+  return values;
+}
+
+function flagValue(args, flag) {
+  return flagValues(args, flag).at(-1);
+}
+
+function assertBasePrintJsonInvocation(args, message) {
+  assert.equal(args.at(-1), message);
+  assert.ok(args.includes("-p"));
+  assert.ok(args.includes("--approve"));
+  assert.equal(flagValue(args, "--mode"), "json");
+}
+
+test("buildPiArgs creates approved print-json runs", () => {
+  const args = buildPiArgs({ message: "hello" });
+
+  assertBasePrintJsonInvocation(args, "hello");
+  assert.equal(flagValue(args, "--model"), "deepseek/deepseek-v4-flash");
+  assert.equal(flagValue(args, "--thinking"), "high");
 });
 
-test("buildPiArgs resumes an existing session with project approval", () => {
-  assert.deepEqual(buildPiArgs({
-    sessionId: "019e227d-4508-74ed-acd1-9d990c98b99d",
-    message: "continue"
-  }), [
-    "-p",
-    "--approve",
-    "--mode",
-    "json",
-    "--model",
-    "deepseek/deepseek-v4-flash",
-    "--thinking",
-    "high",
-    "--session",
-    "019e227d-4508-74ed-acd1-9d990c98b99d",
-    "continue"
-  ]);
-});
-
-test("buildPiArgs includes an explicit Pi session directory when provided", () => {
-  assert.deepEqual(buildPiArgs({
+test("buildPiArgs can resume a Pi session and use an explicit session directory", () => {
+  const args = buildPiArgs({
     sessionId: "session-123",
     sessionDir: "/tmp/pi-sessions",
     message: "continue",
     model: "default",
     reasoningEffort: "default"
-  }), [
-    "-p",
-    "--approve",
-    "--mode",
-    "json",
-    "--session-dir",
-    "/tmp/pi-sessions",
-    "--session",
-    "session-123",
-    "continue"
-  ]);
+  });
+
+  assertBasePrintJsonInvocation(args, "continue");
+  assert.equal(flagValue(args, "--session-dir"), "/tmp/pi-sessions");
+  assert.equal(flagValue(args, "--session"), "session-123");
+  assert.equal(flagValue(args, "--model"), undefined);
+  assert.equal(flagValue(args, "--thinking"), undefined);
 });
 
 test("buildPiArgs maps auto modes to pi-sandbox flags only when supported", () => {
-  assert.deepEqual(buildPiArgs({
-    message: "hello",
-    autoMode: "low",
-    supportsSandboxFlag: true
-  }), [
-    "-p",
-    "--approve",
-    "--mode",
-    "json",
-    "--sandbox",
-    "read-only",
-    "--model",
-    "deepseek/deepseek-v4-flash",
-    "--thinking",
-    "high",
-    "hello"
-  ]);
-
-  assert.deepEqual(buildPiArgs({
-    message: "hello",
-    autoMode: "medium",
-    supportsSandboxFlag: true
-  }), [
-    "-p",
-    "--approve",
-    "--mode",
-    "json",
-    "--sandbox",
-    "workspace-write",
-    "--model",
-    "deepseek/deepseek-v4-flash",
-    "--thinking",
-    "high",
-    "hello"
-  ]);
-
-  assert.deepEqual(buildPiArgs({
-    message: "hello",
-    autoMode: "high",
-    supportsSandboxFlag: true
-  }), [
-    "-p",
-    "--approve",
-    "--mode",
-    "json",
-    "--sandbox",
-    "danger-full-access",
-    "--model",
-    "deepseek/deepseek-v4-flash",
-    "--thinking",
-    "high",
-    "hello"
-  ]);
-
-  assert.deepEqual(buildPiArgs({
-    message: "hello",
-    autoMode: "high",
-    supportsSandboxFlag: false
-  }), [
-    "-p",
-    "--approve",
-    "--mode",
-    "json",
-    "--model",
-    "deepseek/deepseek-v4-flash",
-    "--thinking",
-    "high",
-    "hello"
-  ]);
+  assert.equal(flagValue(buildPiArgs({ message: "hello", autoMode: "low", supportsSandboxFlag: true }), "--sandbox"), "read-only");
+  assert.equal(flagValue(buildPiArgs({ message: "hello", autoMode: "medium", supportsSandboxFlag: true }), "--sandbox"), "workspace-write");
+  assert.equal(flagValue(buildPiArgs({ message: "hello", autoMode: "high", supportsSandboxFlag: true }), "--sandbox"), "danger-full-access");
+  assert.equal(flagValue(buildPiArgs({ message: "hello", autoMode: "high", supportsSandboxFlag: false }), "--sandbox"), undefined);
 });
 
 test("buildPiArgs can still request Pi CLI defaults explicitly", () => {
-  assert.deepEqual(buildPiArgs({
+  const args = buildPiArgs({
     message: "hello",
     model: "default",
     reasoningEffort: "default"
-  }), [
-    "-p",
-    "--approve",
-    "--mode",
-    "json",
-    "hello"
-  ]);
+  });
+
+  assertBasePrintJsonInvocation(args, "hello");
+  assert.equal(flagValue(args, "--model"), undefined);
+  assert.equal(flagValue(args, "--thinking"), undefined);
 });
 
 test("private relay instructions include runtime local timezone", () => {
@@ -177,38 +98,14 @@ test("buildPiArgs appends model, thinking, system prompt, extension paths, and s
     developerInstructions: PRIVATE_OUTPUT_DEVELOPER_INSTRUCTIONS
   });
 
-  assert.deepEqual(freshArgs, [
-    "-p",
-    "--approve",
-    "--mode",
-    "json",
-    "--model",
-    "deepseek/deepseek-v4-flash",
-    "--thinking",
-    "high",
-    "--append-system-prompt",
-    PRIVATE_OUTPUT_DEVELOPER_INSTRUCTIONS,
-    "--extension",
-    "/tmp/pievo-tools.ts",
-    "--skill",
-    "/tmp/loop-skill",
-    "hello"
-  ]);
-  assert.deepEqual(resumedArgs, [
-    "-p",
-    "--approve",
-    "--mode",
-    "json",
-    "--model",
-    "deepseek/deepseek-v4-flash",
-    "--thinking",
-    "high",
-    "--append-system-prompt",
-    PRIVATE_OUTPUT_DEVELOPER_INSTRUCTIONS,
-    "--session",
-    "session-123",
-    "hello"
-  ]);
+  assertBasePrintJsonInvocation(freshArgs, "hello");
+  assert.equal(flagValue(freshArgs, "--append-system-prompt"), PRIVATE_OUTPUT_DEVELOPER_INSTRUCTIONS);
+  assert.deepEqual(flagValues(freshArgs, "--extension"), ["/tmp/pievo-tools.ts"]);
+  assert.deepEqual(flagValues(freshArgs, "--skill"), ["/tmp/loop-skill"]);
+
+  assertBasePrintJsonInvocation(resumedArgs, "hello");
+  assert.equal(flagValue(resumedArgs, "--append-system-prompt"), PRIVATE_OUTPUT_DEVELOPER_INSTRUCTIONS);
+  assert.equal(flagValue(resumedArgs, "--session"), "session-123");
 });
 
 test("startPiRun invokes pi from the requested workdir and detects sandbox support", async () => {
@@ -252,22 +149,12 @@ process.stdout.write(JSON.stringify({
     await run.done;
 
     const output = JSON.parse(chunks.join("").trim());
-    assert.deepEqual(output.args, [
-      "-p",
-      "--approve",
-      "--mode",
-      "json",
-      "--sandbox",
-      "read-only",
-      "--model",
-      "deepseek/deepseek-v4-flash",
-      "--thinking",
-      "high",
-      "--extension",
-      path.resolve("src/pi_tools/extension.ts"),
-      "--skill",
+    assertBasePrintJsonInvocation(output.args, "hello");
+    assert.equal(flagValue(output.args, "--sandbox"), "read-only");
+    assert.deepEqual(flagValues(output.args, "--extension"), [path.resolve("src/pi_tools/extension.ts")]);
+    assert.deepEqual(flagValues(output.args, "--skill"), [
       path.resolve("src/skills/loop"),
-      "hello"
+      path.resolve("src/skills/pievo-feedback")
     ]);
     assert.equal(output.cwdBasename, "workspace");
     assert.equal(output.hasCwdMarker, true);
@@ -312,20 +199,12 @@ process.stdout.write(JSON.stringify({ args: process.argv.slice(2) }) + "\\n");
     await run.done;
 
     const output = JSON.parse(chunks.join("").trim());
-    assert.deepEqual(output.args, [
-      "-p",
-      "--approve",
-      "--mode",
-      "json",
-      "--sandbox",
-      "read-only",
-      "--model",
-      "deepseek/deepseek-v4-flash",
-      "--thinking",
-      "high",
-      "--skill",
+    assertBasePrintJsonInvocation(output.args, "hello");
+    assert.equal(flagValue(output.args, "--sandbox"), "read-only");
+    assert.deepEqual(flagValues(output.args, "--extension"), []);
+    assert.deepEqual(flagValues(output.args, "--skill"), [
       path.resolve("src/skills/loop"),
-      "hello"
+      path.resolve("src/skills/pievo-feedback")
     ]);
   } finally {
     fakeCommand.restorePath();

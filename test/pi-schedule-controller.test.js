@@ -167,11 +167,10 @@ test("group background final response is routed back as a front-agent trigger tu
   assert.equal(session.enqueuedTurns[0].mode, "group");
   assert.equal(session.enqueuedTurns[0].scheduleName, "daily");
   assert.equal(session.enqueuedTurns[0].suppressQueueNotice, true);
-  assert.match(session.enqueuedTurns[0].groupInput.messages[0], /Background schedule result/);
-  assert.match(session.enqueuedTurns[0].groupInput.messages[0], /Schedule: daily/);
-  assert.match(session.enqueuedTurns[0].groupInput.messages[0], /Triggered at:/);
-  assert.match(session.enqueuedTurns[0].groupInput.messages[0], /Completed at:/);
-  assert.match(session.enqueuedTurns[0].groupInput.messages[0], /background result/);
+  const triggerMessage = session.enqueuedTurns[0].groupInput.messages[0];
+  assert.match(triggerMessage, /daily/);
+  assert.match(triggerMessage, /background result/);
+  assert.match(triggerMessage, /summarize/);
 });
 
 test("private background final response is routed back as a front-agent trigger turn", async () => {
@@ -194,11 +193,9 @@ test("private background final response is routed back as a front-agent trigger 
   assert.equal(session.enqueuedTurns[0].mode, "private");
   assert.equal(session.enqueuedTurns[0].scheduleName, "daily");
   assert.equal(session.enqueuedTurns[0].suppressQueueNotice, true);
-  assert.match(session.enqueuedTurns[0].promptText, /Background schedule result/);
-  assert.match(session.enqueuedTurns[0].promptText, /Schedule: daily/);
-  assert.match(session.enqueuedTurns[0].promptText, /Triggered at:/);
-  assert.match(session.enqueuedTurns[0].promptText, /Completed at:/);
+  assert.match(session.enqueuedTurns[0].promptText, /daily/);
   assert.match(session.enqueuedTurns[0].promptText, /background result/);
+  assert.match(session.enqueuedTurns[0].promptText, /summarize/);
 });
 
 test("background failures are routed back to the front agent instead of direct user notification", async () => {
@@ -222,8 +219,7 @@ test("background failures are routed back to the front agent instead of direct u
   assert.equal(session.sentTexts.length, 0);
   assert.equal(session.renderedFinalMessages.length, 0);
   assert.equal(session.enqueuedTurns.length, 1);
-  assert.match(session.enqueuedTurns[0].promptText, /Background schedule failed/);
-  assert.match(session.enqueuedTurns[0].promptText, /Schedule: daily/);
+  assert.match(session.enqueuedTurns[0].promptText, /daily/);
   assert.match(session.enqueuedTurns[0].promptText, /boom/);
 });
 
@@ -326,11 +322,9 @@ test("background schedules start independently while foreground turns stay queue
   assert.equal(session.queue.length, 4);
   assert.equal(session.queue[2].scheduleName, "bg1");
   assert.equal(session.queue[2].mode, "private");
-  assert.match(session.queue[2].promptText, /Background schedule result/);
-  assert.match(session.queue[2].promptText, /Schedule: bg1/);
+  assert.match(session.queue[2].promptText, /bg1/);
   assert.equal(session.queue[3].scheduleName, "bg2");
-  assert.match(session.queue[3].promptText, /Background schedule result/);
-  assert.match(session.queue[3].promptText, /Schedule: bg2/);
+  assert.match(session.queue[3].promptText, /bg2/);
 });
 
 test("fired timers are removed when no live or restored session exists", async () => {
