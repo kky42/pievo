@@ -1,0 +1,58 @@
+# Realistic LOOP scenario: project health monitoring.
+# The user gives a fuzzy long-term goal. The agent should create a project-local
+# .loop state file and a background schedule. When triggered, background should
+# use LOOP guidance to update state before the front agent decides whether to reply.
+
+name: group-loop-repo-health
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+files:
+  - path: TODO.md
+    content: |
+      # TODO
+      - Investigate slow startup in src/server.js.
+  - path: src/server.js
+    content: |
+      export function start() {
+        // FIXME: startup is slow when cache is cold
+        return true;
+      }
+
+steps:
+  - id: create-repo-health-loop
+    messages:
+      - from: Maintainer
+        handle: "@maintainer"
+        text: |
+          @relaybot 我想让这个 repo 长期保持健康。请帮我设置一个叫 repo-health 的 loop，
+          每天在后台看看有没有明显需要我处理的问题，有价值再回来提醒我。
+    expect:
+      toolCalls:
+        add_schedule:
+          min: 1
+        send_reply: 1
+      schedules:
+        contains:
+          mode: background
+      files:
+        path: .loop/repo-health/state.md
+        contains:
+          - "Loop ID: repo-health"
+          - "Status: active"
+          - "## Schedules"
+          - "## Rules"
+
+  - id: trigger-repo-health-loop
+    triggerSchedule:
+      mode: background
+    expect:
+      files:
+        path: .loop/repo-health/state.md
+        contains:
+          - "Recent Runs"
+          - "src/server.js"
+      replies:
+        - matches: "(?i)(repo|health|FIXME|startup|TODO|健康|问题|处理)"

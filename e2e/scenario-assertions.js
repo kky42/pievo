@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+
 export function eventTexts(events, kinds) {
   const kindSet = new Set(kinds);
   return events.filter((event) => kindSet.has(event.kind)).map((event) => event.text ?? event.payload?.text ?? "");
@@ -84,6 +87,50 @@ export function assertSchedules(actualSchedules, spec) {
   }
 }
 
+export function normalizeFileExpectations(spec) {
+  if (!spec) return [];
+  if (Array.isArray(spec)) return spec;
+  if (spec.contains !== undefined || spec.path !== undefined || spec.exists !== undefined) return [spec];
+  return [];
+}
+
+export function assertFileExpectations(workdir, spec) {
+  const expectations = normalizeFileExpectations(spec);
+  for (const expectation of expectations) {
+    const relativePath = String(expectation.path ?? "").trim();
+    if (!relativePath) {
+      throw new Error(`files: expectation missing path: ${JSON.stringify(expectation)}`);
+    }
+    const targetPath = path.resolve(workdir, relativePath);
+    if (!targetPath.startsWith(path.resolve(workdir) + path.sep) && targetPath !== path.resolve(workdir)) {
+      throw new Error(`files: path escapes workdir: ${relativePath}`);
+    }
+    const exists = fs.existsSync(targetPath);
+    if (expectation.exists === false) {
+      if (exists) throw new Error(`files: expected ${relativePath} not to exist`);
+      continue;
+    }
+    if (!exists) {
+      throw new Error(`files: expected ${relativePath} to exist`);
+    }
+    const text = fs.readFileSync(targetPath, "utf8");
+    const containsExpectations = expectation.contains === undefined
+      ? []
+      : Array.isArray(expectation.contains)
+        ? expectation.contains.map((value) => typeof value === "string" ? { contains: value } : value)
+        : [{ contains: String(expectation.contains) }];
+    for (const containsExpectation of containsExpectations) {
+      assertTextExpectations([text], [containsExpectation], `files.${relativePath}`);
+    }
+    const textExpectations = expectation.text === undefined
+      ? []
+      : Array.isArray(expectation.text) ? expectation.text : [expectation.text];
+    for (const textExpectation of textExpectations) {
+      assertTextExpectations([text], [textExpectation], `files.${relativePath}`);
+    }
+  }
+}
+
 export function assertAttachments(attachments, spec) {
   if (!spec) return;
   assertCount(attachments.length, spec.count !== undefined || spec.min !== undefined || spec.max !== undefined ? spec : undefined, "attachments");
@@ -101,7 +148,7 @@ export function assertAttachments(attachments, spec) {
   }
 }
 
-export function assertExpectations({ scenario, step, stepResult, session }) {
+export function assertExpectations({ scenario, step, stepResult, session, workdir }) {
   const expect = step.expect ?? {};
   const events = stepResult.events;
   const visibleTexts = scenario.mode === "private"
@@ -123,6 +170,7 @@ export function assertExpectations({ scenario, step, stepResult, session }) {
   assertTextExpectations(visibleTexts, expect.replies, "replies");
   assertTextExpectations(errors, expect.errors, "errors");
   assertAttachments(attachments, expect.attachments);
+  assertFileExpectations(workdir, expect.files);
   assertSchedules(session.schedules, expect.schedules);
 
   const toolCounts = countByTool(events);

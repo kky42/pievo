@@ -128,7 +128,7 @@ export async function runStep({ scenario, step, stepIndex, session, workdir, sta
     const durationMs = Date.now() - startedAt;
     const stepEvents = state.events.slice(startEventIndex).filter((event) => event.stepId === stepId);
     const result = { id: stepId, durationMs, events: stepEvents };
-    assertExpectations({ scenario, step, stepResult: result, session });
+    assertExpectations({ scenario, step, stepResult: result, session, workdir });
     return result;
   } finally {
     state.currentStepId = null;

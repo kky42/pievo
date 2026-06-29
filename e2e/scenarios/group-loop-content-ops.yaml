@@ -1,0 +1,56 @@
+# Realistic LOOP scenario: one loop with multiple schedules.
+# Content operations often needs different cadences for ideas, drafting, publishing,
+# and feedback. The user gives an outcome, not a schedule spec.
+
+name: group-loop-content-ops
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+files:
+  - path: content/ideas.md
+    content: |
+      # Ideas
+      - Explain how Pievo background schedules work.
+  - path: content/metrics.csv
+    content: |
+      slug,views,likes
+      background-schedules,120,8
+      loop-engineering,260,21
+
+steps:
+  - id: create-content-loop
+    messages:
+      - from: Creator
+        handle: "@creator"
+        text: |
+          @relaybot 我想让这个内容账号持续变好。请设置一个叫 content-growth 的 loop：
+          平时帮我找选题和整理草稿，隔一段时间再看看反馈数据来调整方向；有需要我拍板的时候再提醒我。
+    expect:
+      toolCalls:
+        add_schedule:
+          min: 2
+        send_reply: 1
+      schedules:
+        contains:
+          mode: background
+      files:
+        path: .loop/content-growth/state.md
+        contains:
+          - "Loop ID: content-growth"
+          - "loop-content-growth"
+          - "content/metrics.csv"
+          - "Human review"
+
+  - id: trigger-content-loop
+    triggerSchedule:
+      mode: background
+    expect:
+      files:
+        path: .loop/content-growth/state.md
+        contains:
+          - "Recent Runs"
+          - "loop-engineering"
+      replies:
+        - matches: "(?i)(content|growth|idea|metrics|views|likes|内容|选题|反馈|数据)"

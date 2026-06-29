@@ -1,0 +1,52 @@
+# Realistic LOOP scenario: human-review boundary.
+# User wants monitoring and proposals, not direct edits. The loop should preserve
+# the document and record findings for review.
+
+name: group-loop-human-review-boundary
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+files:
+  - path: docs/readme.md
+    content: |
+      # Project Guide
+
+      This doc has a teh typo that should be reviewed before editing.
+
+steps:
+  - id: create-doc-review-loop
+    messages:
+      - from: Writer
+        handle: "@writer"
+        text: |
+          @relaybot 帮我做一个叫 docs-review 的长期检查。定期看看 docs 里有没有明显错别字或表达问题，
+          但不要直接改文件，先把发现记录下来并问我。
+    expect:
+      toolCalls:
+        add_schedule:
+          min: 1
+        send_reply: 1
+      schedules:
+        contains:
+          mode: background
+      files:
+        path: .loop/docs-review/state.md
+        contains:
+          - "Loop ID: docs-review"
+          - "Human review"
+
+  - id: trigger-doc-review-loop
+    triggerSchedule:
+      mode: background
+    expect:
+      files:
+        - path: docs/readme.md
+          contains: "teh typo"
+        - path: .loop/docs-review/state.md
+          contains:
+            - "Recent Runs"
+            - "teh"
+      replies:
+        - matches: "(?i)(typo|docs|review|teh|错别字|修改|确认)"

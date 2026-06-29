@@ -41,7 +41,7 @@
     "description": "Add a heartbeat or background schedule for the current chat. Heartbeat wakes the front agent directly; background runs isolated work first and routes its result back to the front agent.",
     "promptSnippet": "Add a recurring or one-time scheduled task for the current chat",
     "promptGuidelines": [
-      "Use add_schedule when the user asks for future, recurring, delayed, or self-wakeup work, even if the wording is informal.",
+      "Use add_schedule when the user asks for future, recurring, delayed, reminder, polling, monitoring, or self-wakeup work, even if the wording is informal.",
       "Choose heartbeat for lightweight chat-contextual work where the front agent should act directly when the schedule fires.",
       "Choose background for heavier inspection, research, repo scanning, trigger detection, or independent operation that should not occupy the current chat context.",
       "Background tasks may detect whether action is needed, perform safe independent work, or both; their final result will be passed back to the front agent before any visible chat reply.",

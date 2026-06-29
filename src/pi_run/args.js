@@ -29,6 +29,7 @@ const PI_SANDBOX_MODES = {
  * @property {string | null | undefined} [sessionDir]
  * @property {boolean} [supportsSandboxFlag]
  * @property {string[]} [extensionPaths]
+ * @property {string[]} [skillPaths]
  * @property {boolean} [disableAmbientResources]
  */
 
@@ -45,6 +46,7 @@ export function buildPiArgs({
   sessionDir = null,
   supportsSandboxFlag = false,
   extensionPaths = [],
+  skillPaths = [],
   disableAmbientResources = false
 }) {
   const normalizedAutoMode = normalizeAutoMode(autoMode, "autoMode");
@@ -62,6 +64,7 @@ export function buildPiArgs({
   const sessionDirArgs = sessionDir ? ["--session-dir", sessionDir] : [];
   const sessionArgs = sessionId ? ["--session", sessionId] : [];
   const extensionArgs = extensionPaths.flatMap((extensionPath) => ["--extension", extensionPath]);
+  const skillArgs = skillPaths.flatMap((skillPath) => ["--skill", skillPath]);
   const ambientResourceArgs = disableAmbientResources
     ? ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files"]
     : [];
@@ -78,6 +81,7 @@ export function buildPiArgs({
     ...reasoningArgs,
     ...developerInstructionArgs,
     ...extensionArgs,
+    ...skillArgs,
     ...sessionArgs,
     message
   ];

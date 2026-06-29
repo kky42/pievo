@@ -162,13 +162,14 @@ test("private relay instructions include runtime local timezone", () => {
   assert.doesNotMatch(PRIVATE_OUTPUT_DEVELOPER_INSTRUCTIONS, /\{\{local_timezone\}\}/);
 });
 
-test("buildPiArgs appends model, thinking, system prompt, and extension paths", () => {
+test("buildPiArgs appends model, thinking, system prompt, extension paths, and skill paths", () => {
   const freshArgs = buildPiArgs({
     message: "hello",
     model: "deepseek/deepseek-v4-flash",
     reasoningEffort: "high",
     developerInstructions: PRIVATE_OUTPUT_DEVELOPER_INSTRUCTIONS,
-    extensionPaths: ["/tmp/pievo-tools.ts"]
+    extensionPaths: ["/tmp/pievo-tools.ts"],
+    skillPaths: ["/tmp/loop-skill"]
   });
   const resumedArgs = buildPiArgs({
     sessionId: "session-123",
@@ -189,6 +190,8 @@ test("buildPiArgs appends model, thinking, system prompt, and extension paths", 
     PRIVATE_OUTPUT_DEVELOPER_INSTRUCTIONS,
     "--extension",
     "/tmp/pievo-tools.ts",
+    "--skill",
+    "/tmp/loop-skill",
     "hello"
   ]);
   assert.deepEqual(resumedArgs, [
@@ -262,6 +265,8 @@ process.stdout.write(JSON.stringify({
       "high",
       "--extension",
       path.resolve("src/pi_tools/extension.ts"),
+      "--skill",
+      path.resolve("src/skills/loop"),
       "hello"
     ]);
     assert.equal(output.cwdBasename, "workspace");
@@ -273,7 +278,7 @@ process.stdout.write(JSON.stringify({
   }
 });
 
-test("startPiRun can omit the Pievo tool extension", async () => {
+test("startPiRun can omit the Pievo tool extension while keeping built-in skills", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pievo-pi-no-tools-"));
   const workdir = path.join(tempDir, "workspace");
   await fs.mkdir(workdir);
@@ -318,6 +323,8 @@ process.stdout.write(JSON.stringify({ args: process.argv.slice(2) }) + "\\n");
       "deepseek/deepseek-v4-flash",
       "--thinking",
       "high",
+      "--skill",
+      path.resolve("src/skills/loop"),
       "hello"
     ]);
   } finally {

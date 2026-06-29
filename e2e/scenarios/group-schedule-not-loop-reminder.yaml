@@ -1,0 +1,29 @@
+# Ordinary schedule scenario: simple recurring reminder is not a LOOP.
+# A reminder has a future trigger, but no feedback metric/stateful improvement cycle.
+
+name: group-schedule-not-loop-reminder
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+steps:
+  - id: create-standup-reminder
+    messages:
+      - from: Manager
+        handle: "@manager"
+        text: |
+          @relaybot 每天早上 9 点提醒大家发一下 standup：昨天做了什么、今天计划、有没有 blocker。
+          设置好后告诉我一声。
+    expect:
+      toolCalls:
+        add_schedule: 1
+        send_reply: 1
+      schedules:
+        contains:
+          mode: heartbeat
+      files:
+        path: .loop
+        exists: false
+      replies:
+        - matches: "(?i)(standup|9|daily|remind|提醒|每天|设置|好了)"

@@ -1,0 +1,35 @@
+# Ordinary schedule scenario: self-wakeup/polling is not a LOOP.
+# It should create a schedule for a future check without creating .loop state.
+
+name: group-schedule-not-loop-self-wakeup
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+files:
+  - path: .job-state/import.status
+    content: |
+      running
+
+steps:
+  - id: create-self-wakeup-check
+    messages:
+      - from: Operator
+        handle: "@operator"
+        text: |
+          @relaybot 我刚启动了一个数据导入，可能要跑一会儿。请 20 分钟后自己回来看看 .job-state/import.status，
+          如果完成了再告诉我；没完成的话可以之后继续看。不要把现在这次对话卡住。
+    expect:
+      toolCalls:
+        add_schedule:
+          min: 1
+        send_reply: 1
+      schedules:
+        contains:
+          mode: heartbeat
+      files:
+        path: .loop
+        exists: false
+      replies:
+        - matches: "(?i)(20|check|status|import|回来|检查|设置|好了)"
