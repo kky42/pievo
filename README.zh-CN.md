@@ -19,6 +19,14 @@ npm install -g @kky42/pievo
 
 Pievo 在 agent 运行时会调用 `pi` CLI，因此请先安装并配置 Pi，再启动 relay。
 
+可选：如果复杂 LOOP 需要独立 reviewer、并行处理，或者固定的小型工作流，可以在运行 Pievo 的同一个用户环境中安装 pi-flow：
+
+```bash
+pi install npm:@kky42/pi-flow
+```
+
+Pievo schedule 仍然只是普通的 `heartbeat` 或 `background` schedule；pi-flow 提供可选的 saved `workflow` tool，安装后 scheduled background run 可以在可用时使用它。
+
 ### 创建并连接第一个 Telegram agent
 
 先用 [BotFather](https://t.me/BotFather) 创建 Telegram bot，并保存 bot token 和 bot username。

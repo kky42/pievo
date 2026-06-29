@@ -1,0 +1,60 @@
+# Non-code workflow-backed LOOP scenario: editorial/content work can benefit from
+# a simple saved workflow with domain lanes (idea/audience -> draft -> editor -> synthesis)
+# without being a code implementation workflow.
+
+name: group-loop-editorial-workflow
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+files:
+  - path: content/ideas.md
+    content: |
+      # Ideas
+      - How autonomous agents can help solo creators keep a weekly publishing rhythm.
+  - path: content/audience-notes.md
+    content: |
+      # Audience Notes
+      - Readers like practical workflows and concrete examples.
+      - Avoid publishing without final human approval.
+
+steps:
+  - id: create-editorial-workflow-loop
+    messages:
+      - from: Creator
+        handle: "@creator"
+        text: |
+          @relaybot 我想做一个叫 editorial-growth 的 LOOP，用来长期产出 newsletter 草稿。
+          后台可以研究选题、整理受众需求、写推荐语和草稿；但正式发布前必须让我确认。
+          请用 saved workflow 固化这个内容创作流程，先建立长期机制，不要现在发布内容。
+    expect:
+      toolCalls:
+        add_schedule:
+          min: 1
+      schedules:
+        contains:
+          mode: background
+          promptContains:
+            - ".loop/editorial-growth/state.md"
+            - ".pi/workflows/"
+            - "existing saved workflow"
+          promptNotContains:
+            - "export const meta"
+            - "agent("
+      files:
+        - path: .loop/editorial-growth/state.md
+          contains:
+            - "Loop ID: editorial-growth"
+            - "## Workflows"
+            - "## Human Queue"
+            - matches: "([Pp]ublish|发布|human|确认|approval|review)"
+        - pathMatches: "^\\.pi/workflows/loop-editorial-growth.*\\.js$"
+          contains:
+            - "export const meta"
+            - "agent("
+            - matches: "([Ii]dea|[Aa]udience|[Rr]esearch|选题|受众)"
+            - matches: "([Dd]raft|[Cc]reator|草稿|创作)"
+            - matches: "([Ee]ditor|[Bb]rand|[Rr]eview|编辑|审阅)"
+        - path: content/ideas.md
+          contains: "weekly publishing rhythm"

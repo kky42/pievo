@@ -69,6 +69,20 @@ export function assertTextExpectations(texts, expectations, label) {
 
 export function objectContains(actual, expected) {
   for (const [key, value] of Object.entries(expected ?? {})) {
+    if (key === "promptContains") {
+      const checks = Array.isArray(value) ? value : [value];
+      if (!checks.every((needle) => String(actual?.prompt ?? "").includes(String(needle)))) return false;
+      continue;
+    }
+    if (key === "promptNotContains") {
+      const checks = Array.isArray(value) ? value : [value];
+      if (checks.some((needle) => String(actual?.prompt ?? "").includes(String(needle)))) return false;
+      continue;
+    }
+    if (key === "promptMatches") {
+      if (!new RegExp(String(value), "s").test(String(actual?.prompt ?? ""))) return false;
+      continue;
+    }
     if (actual?.[key] !== value) return false;
   }
   return true;
@@ -94,13 +108,40 @@ export function normalizeFileExpectations(spec) {
   return [];
 }
 
+function listRelativeFiles(rootDir, currentDir = rootDir) {
+  const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const absolutePath = path.join(currentDir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listRelativeFiles(rootDir, absolutePath));
+    } else if (entry.isFile()) {
+      files.push(path.relative(rootDir, absolutePath));
+    }
+  }
+  return files;
+}
+
+function resolveExpectedFilePath(workdir, expectation) {
+  const relativePath = String(expectation.path ?? "").trim();
+  if (relativePath) return relativePath;
+
+  if (expectation.pathMatches !== undefined) {
+    const matcher = new RegExp(String(expectation.pathMatches));
+    const matches = listRelativeFiles(workdir).filter((candidate) => matcher.test(candidate));
+    if (matches.length !== 1) {
+      throw new Error(`files: expected exactly one path matching ${JSON.stringify(expectation.pathMatches)}, got ${JSON.stringify(matches)}`);
+    }
+    return matches[0];
+  }
+
+  throw new Error(`files: expectation missing path: ${JSON.stringify(expectation)}`);
+}
+
 export function assertFileExpectations(workdir, spec) {
   const expectations = normalizeFileExpectations(spec);
   for (const expectation of expectations) {
-    const relativePath = String(expectation.path ?? "").trim();
-    if (!relativePath) {
-      throw new Error(`files: expectation missing path: ${JSON.stringify(expectation)}`);
-    }
+    const relativePath = resolveExpectedFilePath(workdir, expectation);
     const targetPath = path.resolve(workdir, relativePath);
     if (!targetPath.startsWith(path.resolve(workdir) + path.sep) && targetPath !== path.resolve(workdir)) {
       throw new Error(`files: path escapes workdir: ${relativePath}`);

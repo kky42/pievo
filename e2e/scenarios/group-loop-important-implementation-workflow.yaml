@@ -1,0 +1,66 @@
+# Workflow-backed LOOP scenario: for long-running unattended implementation work
+# that can affect runtime behavior, LOOP guidance should make the front agent
+# create an inspectable saved workflow with implementation and independent review
+# lanes. The user does not spell out the workflow topology.
+
+name: group-loop-important-implementation-workflow
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+files:
+  - path: src/math.js
+    content: |
+      export function add(a, b) {
+        return a - b;
+      }
+  - path: test/math.test.js
+    content: |
+      import assert from "node:assert/strict";
+      import { add } from "../src/math.js";
+
+      assert.equal(add(1, 2), 3);
+
+steps:
+  - id: create-important-implementation-loop-with-workflow
+    messages:
+      - from: Maintainer
+        handle: "@maintainer"
+        text: |
+          @relaybot 请设置一个叫 runtime-fix 的 LOOP，用来长期维护这个 repo 里会影响运行时行为的明确 bug。
+          这类后台自动修改会影响长期运行可靠性，所以请用 saved workflow 固化后台执行流程；
+          先只建立长期后台机制，不要现在修改业务文件。以后定期检查、修复、验证，并在需要我拍板的时候再提醒我。
+    expect:
+      toolCalls:
+        add_schedule:
+          min: 1
+      schedules:
+        contains:
+          mode: background
+          promptContains:
+            - ".loop/runtime-fix/state.md"
+            - ".pi/workflows/"
+            - "existing saved workflow"
+          promptNotContains:
+            - "export const meta"
+            - "return await agent("
+            - "fix it with edit"
+            - "direct edit-tools"
+            - "trivially fixable"
+      files:
+        - path: .loop/runtime-fix/state.md
+          contains:
+            - "Loop ID: runtime-fix"
+            - "## Workflows"
+            - "loop-runtime-fix"
+            - "## Human Queue"
+        - pathMatches: "^\\.pi/workflows/loop-runtime-fix.*\\.js$"
+          contains:
+            - "export const meta"
+            - "agent("
+            - matches: "agent\\([\\s\\S]*agent\\("
+            - matches: "([Rr]eview|[Rr]eviewer|[Ii]ndependent|独立|审查)"
+            - matches: "([Ii]mplement|[Ww]orker|[Ff]ix|[Ff]ixer|修复|实现)"
+        - path: src/math.js
+          contains: "return a - b"

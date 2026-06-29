@@ -1,0 +1,63 @@
+# Non-code workflow-backed LOOP scenario: event planning benefits from a saved
+# workflow with logistics/budget/risk/action-list lanes, while purchases and
+# public commitments stay in Human Queue.
+
+name: group-loop-event-planning-workflow
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+files:
+  - path: events/vendors.csv
+    content: |
+      venue,city,capacity,estimated_cost
+      Lakeside Hall,Hangzhou,120,18000
+      Maker Space,Shanghai,80,12000
+  - path: events/requirements.md
+    content: |
+      # Requirements
+      - Technical meetup for agent builders.
+      - Target size: 80-120 people.
+      - Need venue shortlist, budget risks, and draft agenda.
+      - Do not contact vendors or make payments without approval.
+
+steps:
+  - id: create-event-planning-workflow-loop
+    messages:
+      - from: Organizer
+        handle: "@organizer"
+        text: |
+          @relaybot 我在筹备一个技术活动。请建立一个叫 conf-ops 的 LOOP，后台每周帮我推进筹备：
+          看场地、预算风险、议程草案和下一步行动。请用 saved workflow 固化这个筹备流程，
+          但不要联系供应商、不要付款、不要公开发布，涉及这些都放到 Human Queue 等我确认。
+    expect:
+      toolCalls:
+        add_schedule:
+          min: 1
+      schedules:
+        contains:
+          mode: background
+          promptContains:
+            - ".loop/conf-ops/state.md"
+            - ".pi/workflows/"
+            - "existing saved workflow"
+          promptNotContains:
+            - "export const meta"
+            - "agent("
+      files:
+        - path: .loop/conf-ops/state.md
+          contains:
+            - "Loop ID: conf-ops"
+            - "## Workflows"
+            - "## Human Queue"
+            - matches: "([Vv]enue|场地|budget|预算|vendor|供应商|agenda|议程)"
+        - pathMatches: "^\\.pi/workflows/loop-conf-ops.*\\.js$"
+          contains:
+            - "export const meta"
+            - "agent("
+            - matches: "([Vv]enue|[Ll]ogistics|场地|后勤)"
+            - matches: "([Bb]udget|[Rr]isk|预算|风险)"
+            - matches: "([Aa]genda|[Aa]ction|议程|行动)"
+        - path: events/vendors.csv
+          contains: "Lakeside Hall"

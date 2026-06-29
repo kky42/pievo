@@ -1,0 +1,49 @@
+# Low-risk content LOOP scenario: report-only observation should not force a
+# saved workflow. This guards against overusing pi-flow for every LOOP.
+
+name: group-loop-low-risk-content-no-workflow
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+files:
+  - path: content/metrics.csv
+    content: |
+      slug,views,likes
+      agent-workflows,180,12
+      schedule-basics,95,4
+
+steps:
+  - id: create-low-risk-content-loop
+    messages:
+      - from: Creator
+        handle: "@creator"
+        text: |
+          @relaybot 帮我做一个叫 content-watch 的 LOOP。每天后台看一下 content/metrics.csv，
+          如果某个主题明显变热，就记录观察并提醒我；不要写草稿、不要发布、不要改内容文件。
+    expect:
+      toolCalls:
+        add_schedule:
+          min: 1
+      schedules:
+        contains:
+          mode: background
+          promptContains:
+            - ".loop/content-watch/state.md"
+          promptNotContains:
+            - ".pi/workflows/"
+            - "existing saved workflow"
+            - "export const meta"
+            - "agent("
+      files:
+        - path: .loop/content-watch/state.md
+          contains:
+            - "Loop ID: content-watch"
+            - "content/metrics.csv"
+            - "## Schedules"
+            - "## Human Queue"
+        - path: .pi/workflows
+          exists: false
+        - path: content/metrics.csv
+          contains: "agent-workflows"

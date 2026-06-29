@@ -49,6 +49,8 @@
       "Use trigger=once with run_at for one-time schedules; run_at is second-level.",
       "If the user does not specify a timezone for a one-time schedule, use the runtime local timezone: {{local_timezone}} (UTC{{local_utc_offset}}).",
       "Put only the future task instruction in task. Make it outcome-focused and self-contained.",
+      "Workflow-backed LOOP shapes include content pipelines (explore -> create -> edit -> publish/report), research cycles (collect -> analyze -> critique -> synthesize), event planning (requirements -> logistics -> budget/risk -> action list), experiments (prepare -> run -> measure -> report), and implementation pipelines (check -> implement -> review -> fix/synthesize).",
+      "For workflow-backed LOOP tasks, reference an existing saved workflow by name or path; do not put workflow JavaScript in task, and do not include fallback instructions that bypass the workflow if it is unavailable — record a blocker instead.",
       "To replace an existing schedule, remove it first, then add the new schedule.",
       "Do not put scheduling instructions, schedule names, or requests to create/list/remove schedules inside task."
     ],
@@ -72,7 +74,7 @@
         "description": "ISO 8601 timestamp for a one-time schedule with seconds and timezone offset, for example 2026-06-22T09:00:00{{local_utc_offset}}. Required when trigger is once; omit when trigger is cron. If the user did not specify a timezone, use the runtime local timezone: {{local_timezone}} (UTC{{local_utc_offset}})."
       },
       "task": {
-        "description": "Task instruction to execute when the schedule fires. Describe the desired future outcome and enough context for that future run; exclude cadence, schedule setup/removal/listing instructions, and phrases like \"create a schedule\"."
+        "description": "Task instruction to execute when the schedule fires. Describe the desired future outcome and enough context for that future run; exclude cadence, schedule setup/removal/listing instructions, phrases like \"create a schedule\", and inline workflow scripts. Workflow-backed tasks should reference an existing saved workflow by name or path."
       }
     }
   },

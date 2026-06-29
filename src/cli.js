@@ -200,6 +200,9 @@ async function runServer(configPath) {
   process.stderr.write(
     `Running ${registry.runtimes.length} chat bot${registry.runtimes.length === 1 ? "" : "s"} using ${config.configPath}\n`
   );
+  process.stderr.write(
+    "Tip: for complex LOOPs with independent review or parallel workflow steps, install pi-flow with `pi install npm:@kky42/pi-flow` in this runtime user environment.\n"
+  );
 
   const stopKeepAlive = keepProcessAlive();
   try {

@@ -22,6 +22,8 @@ Choose the smallest useful next step toward the loop objective.
 
 For background runs, assume chat/schedule tools may be unavailable. Put needed follow-up in the final response so the front agent can continue.
 
+If this is a workflow-backed run, run only an existing saved workflow referenced by the scheduled task. Do not create, edit, or inline workflow scripts during routine scheduled execution. If the workflow tool or saved workflow is unavailable, record a blocker instead of replacing the workflow with an ad-hoc single-agent attempt.
+
 ## Verify
 
 Record evidence, not vibes:
@@ -40,8 +42,11 @@ Update only the relevant sections:
 
 - `Current focus`
 - `Working State`
+- `Human Queue` when human input or workflow setup is needed
 - one `Recent Runs` bullet
 - `Next`
+
+For workflow-backed runs, synthesize workflow output first and update state once from the parent run. Workflow subagents are fresh contexts and should not write `.loop/<loop-id>/state.md` directly.
 
 Avoid broad rewrites. Keep the state human-readable.
 

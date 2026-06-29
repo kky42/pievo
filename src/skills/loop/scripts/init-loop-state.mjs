@@ -40,6 +40,9 @@ Current focus: Define the first useful scheduled step.
 ## Schedules
 - ${scheduleName}: heartbeat, TBD, review this loop and decide the next useful action
 
+## Workflows
+- None yet.
+
 ## Rules
 Allowed actions:
 - Report findings and update this state file.
@@ -56,6 +59,9 @@ In progress:
 
 Done / learned:
 - Loop state initialized.
+
+## Human Queue
+- None.
 
 ## Recent Runs
 - ${created} — init: created loop state.

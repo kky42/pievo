@@ -19,6 +19,14 @@ npm install -g @kky42/pievo
 
 Pievo shells out to the `pi` CLI when an agent runs, so install and configure Pi before starting the relay.
 
+Optional: for complex LOOPs that need independent reviewers, parallel work, or fixed mini-workflows, install pi-flow in the same user environment that runs Pievo:
+
+```bash
+pi install npm:@kky42/pi-flow
+```
+
+Pievo schedules stay ordinary `heartbeat` or `background` schedules; pi-flow supplies the optional saved `workflow` tool that scheduled background runs can use when available.
+
 ### Create your first Telegram agent
 
 Create a Telegram bot with [BotFather](https://t.me/BotFather), then keep the bot token and bot username.
