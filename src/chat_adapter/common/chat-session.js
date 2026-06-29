@@ -62,6 +62,7 @@ export class ChatSession {
     this.queue = [];
     this.isRunning = false;
     this.activeRun = null;
+    this.activeTurn = null;
     this.activeReplyTarget = null;
     this.createAgentRun = createAgentRun ?? startPiRun;
     this.resolveContextLength = resolveContextLength ?? readContextLengthForSession;
@@ -298,6 +299,17 @@ export class ChatSession {
     return previousLength - this.queue.length;
   }
 
+  hasActiveOrQueuedHeartbeatSchedule(scheduleName) {
+    const normalizedName = String(scheduleName ?? "").trim();
+    if (!normalizedName) {
+      return false;
+    }
+    return (
+      this.activeTurn?.scheduleName === normalizedName ||
+      this.queue.some((turn) => turn.scheduleName === normalizedName)
+    );
+  }
+
   async abortCurrentRun() {
     const run = this.activeRun;
     if (!run) {
@@ -446,12 +458,19 @@ export class ChatSession {
     }
 
     this.isRunning = true;
-    await runFrontAgentTurn({
-      session: this,
-      turn: nextTurn,
-      createAgentRun: this.createAgentRun,
-      resolveContextLength: this.resolveContextLength
-    });
+    this.activeTurn = nextTurn;
+    try {
+      await runFrontAgentTurn({
+        session: this,
+        turn: nextTurn,
+        createAgentRun: this.createAgentRun,
+        resolveContextLength: this.resolveContextLength
+      });
+    } finally {
+      if (this.activeTurn === nextTurn) {
+        this.activeTurn = null;
+      }
+    }
 
     if (this.queue.length > 0) {
       void this.drainQueue();

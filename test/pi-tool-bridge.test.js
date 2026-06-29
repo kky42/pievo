@@ -205,6 +205,36 @@ test("Pi tool bridge manages schedules and resyncs timers", async () => {
   }
 });
 
+test("Pi tool bridge rejects duplicate schedule names across modes", async () => {
+  const session = createFakeSession();
+  const bridge = await createPiToolBridge({
+    session,
+    isGroupTurn: false
+  });
+
+  try {
+    const heartbeat = await callTool(bridge.env, "add_schedule", {
+      mode: "heartbeat",
+      name: "pulse",
+      cron: "*/5 * * * *",
+      task: "check the queue"
+    });
+    assert.equal(heartbeat.status, 200);
+
+    const background = await callTool(bridge.env, "add_schedule", {
+      mode: "background",
+      name: "pulse",
+      cron: "*/10 * * * *",
+      task: "summarize"
+    });
+    assert.equal(background.status, 500);
+    assert.match(background.body.error, /Schedule "pulse" already exists/);
+    assert.deepEqual(session.schedules.map((schedule) => schedule.mode), ["heartbeat"]);
+  } finally {
+    bridge.dispose();
+  }
+});
+
 test("Pi tool bridge adds one-time schedules with run_at", async () => {
   const session = createFakeSession();
   let syncCount = 0;

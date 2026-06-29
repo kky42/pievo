@@ -262,6 +262,136 @@ test("heartbeat schedules stay in the foreground FIFO with user messages", async
   ]);
 });
 
+test("duplicate heartbeat schedules are skipped while already queued", async () => {
+  const { session } = await createSession();
+  session.isRunning = true;
+  const { controller, logs } = createController({
+    getSession: () => session,
+    restoreSession: () => session,
+    isDirectConversation: () => true
+  });
+
+  await controller.runHeartbeatSchedule(session, {
+    mode: "heartbeat",
+    name: "hb1",
+    cron: "* * * * *",
+    prompt: "beat 1"
+  });
+  await controller.runHeartbeatSchedule(session, {
+    mode: "heartbeat",
+    name: "hb1",
+    cron: "* * * * *",
+    prompt: "beat 1 again"
+  });
+
+  assert.equal(session.queue.length, 1);
+  assert.equal(session.queue[0].scheduleName, "hb1");
+  assert.match(session.queue[0].promptText, /beat 1/);
+  assert.doesNotMatch(session.queue[0].promptText, /again/);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /heartbeat skipped \(already active or queued\): hb1 in /);
+});
+
+test("duplicate heartbeat schedules are skipped while already active", async () => {
+  const { session } = await createSession();
+  session.isRunning = true;
+  session.activeTurn = { scheduleName: "hb1" };
+  const { controller, logs } = createController({
+    getSession: () => session,
+    restoreSession: () => session,
+    isDirectConversation: () => true
+  });
+
+  await controller.runHeartbeatSchedule(session, {
+    mode: "heartbeat",
+    name: "hb1",
+    cron: "* * * * *",
+    prompt: "beat 1"
+  });
+
+  assert.equal(session.queue.length, 0);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /heartbeat skipped \(already active or queued\): hb1 in /);
+});
+
+test("duplicate heartbeat schedules are skipped during an actual active run", async () => {
+  const { session, runnerFactory } = await createSession();
+  const { controller, logs } = createController({
+    getSession: () => session,
+    restoreSession: () => session,
+    isDirectConversation: () => true
+  });
+
+  await controller.runHeartbeatSchedule(session, {
+    mode: "heartbeat",
+    name: "hb1",
+    cron: "* * * * *",
+    prompt: "beat 1"
+  });
+  for (let index = 0; index < 20 && runnerFactory.runs.length === 0; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  assert.equal(runnerFactory.runs.length, 1);
+  assert.equal(session.activeTurn?.scheduleName, "hb1");
+
+  await controller.runHeartbeatSchedule(session, {
+    mode: "heartbeat",
+    name: "hb1",
+    cron: "* * * * *",
+    prompt: "beat 1 again"
+  });
+
+  assert.equal(session.queue.length, 0);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /heartbeat skipped \(already active or queued\): hb1 in /);
+
+  runnerFactory.runs[0].finish({ code: 0, signal: null, aborted: false, sawTerminalEvent: true });
+  for (let index = 0; index < 20 && session.activeTurn; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(session.activeTurn, null);
+});
+
+test("overlapping heartbeat dispatches recheck before enqueue", async () => {
+  const { session } = await createSession();
+  session.isRunning = true;
+  let releaseDeliveryAnchor;
+  const deliveryAnchorReady = new Promise((resolve) => {
+    releaseDeliveryAnchor = resolve;
+  });
+  const { controller, logs } = createController({
+    getSession: () => session,
+    restoreSession: () => session,
+    deliveryAnchorForSession: async () => {
+      await deliveryAnchorReady;
+      return null;
+    },
+    isDirectConversation: () => true
+  });
+
+  const first = controller.runHeartbeatSchedule(session, {
+    mode: "heartbeat",
+    name: "hb1",
+    cron: "* * * * *",
+    prompt: "beat 1"
+  });
+  const second = controller.runHeartbeatSchedule(session, {
+    mode: "heartbeat",
+    name: "hb1",
+    cron: "* * * * *",
+    prompt: "beat 1 again"
+  });
+
+  releaseDeliveryAnchor();
+  await Promise.all([first, second]);
+
+  assert.equal(session.queue.length, 1);
+  assert.equal(session.queue[0].scheduleName, "hb1");
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /heartbeat skipped \(already active or queued\): hb1 in /);
+});
+
 test("background schedules start independently while foreground turns stay queued", async () => {
   const { session, fakeBotApi, runnerFactory } = await createSession();
   session.isRunning = true;

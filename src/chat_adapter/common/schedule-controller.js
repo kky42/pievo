@@ -188,10 +188,27 @@ export class ScheduleController {
     }
   }
 
-  async runHeartbeatSchedule(session, schedule, now = new Date()) {
-    const deliveryAnchor = await this.deliveryAnchorForSession(session);
+  shouldSkipHeartbeatSchedule(session, schedule) {
+    if (!session.hasActiveOrQueuedHeartbeatSchedule?.(schedule.name)) {
+      return false;
+    }
+    this.log(`heartbeat skipped (already active or queued): ${schedule.name} in ${session.conversationId}`);
+    return true;
+  }
 
-    if (await this.isDirectConversation({ session, deliveryAnchor })) {
+  async runHeartbeatSchedule(session, schedule, now = new Date()) {
+    if (this.shouldSkipHeartbeatSchedule(session, schedule)) {
+      return;
+    }
+
+    const deliveryAnchor = await this.deliveryAnchorForSession(session);
+    const isDirect = await this.isDirectConversation({ session, deliveryAnchor });
+
+    if (this.shouldSkipHeartbeatSchedule(session, schedule)) {
+      return;
+    }
+
+    if (isDirect) {
       await session.enqueueTurn({
         promptText: buildHeartbeatPrivatePrompt(schedule.name, schedule.prompt),
         replyTarget: deliveryAnchor?.replyTarget ?? null,
