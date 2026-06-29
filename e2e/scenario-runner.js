@@ -6,6 +6,10 @@ import process from "node:process";
 import { ChatSession } from "../src/chat_adapter/common/chat-session.js";
 import { ConversationStateStore } from "../src/chat_adapter/common/conversation-state.js";
 import { buildGroupInputMessage } from "../src/chat_adapter/common/group-turn.js";
+import {
+  buildHeartbeatGroupTranscriptMessage,
+  buildHeartbeatPrivatePrompt
+} from "../src/chat_adapter/common/schedules.js";
 import { startPiRun } from "../src/pi_run/runner.js";
 import { DEFAULT_MODEL, DEFAULT_REASONING_EFFORT } from "../src/runtime-settings.js";
 import { sleep, toErrorMessage } from "../src/utils.js";
@@ -35,7 +39,51 @@ export async function runStep({ scenario, step, stepIndex, session, workdir, sta
   const startedAt = Date.now();
 
   try {
-    if (scenario.mode === "private") {
+    await writeScenarioFiles(workdir, step.files ?? []);
+
+    if (step.triggerSchedule) {
+      const triggerSpec = step.triggerSchedule;
+      const scheduleName = typeof triggerSpec === "string" ? triggerSpec.trim() : "";
+      const scheduleMatch = triggerSpec && typeof triggerSpec === "object" && !Array.isArray(triggerSpec)
+        ? triggerSpec
+        : null;
+      const schedule = scheduleName
+        ? session.schedules.find((candidate) => candidate.name === scheduleName)
+        : session.schedules.find((candidate) => Object.entries(scheduleMatch ?? {}).every(
+            ([key, value]) => candidate?.[key] === value
+          ));
+      if (!schedule) {
+        throw new Error(`triggerSchedule: no matching schedule ${JSON.stringify(triggerSpec)}`);
+      }
+      if (schedule.mode !== "heartbeat") {
+        throw new Error(`triggerSchedule: schedule ${scheduleName} is ${schedule.mode}, not heartbeat`);
+      }
+      if (scenario.mode === "private") {
+        await session.enqueueTurn({
+          mode: "private",
+          promptText: buildHeartbeatPrivatePrompt(schedule.name, schedule.prompt),
+          attachments: [],
+          replyTarget: null,
+          scheduleName: schedule.name,
+          suppressQueueNotice: true
+        });
+      } else {
+        await session.enqueueTurn({
+          mode: "group",
+          groupInput: {
+            messages: [buildHeartbeatGroupTranscriptMessage(schedule.name, schedule.prompt)]
+          },
+          groupIdentity: {
+            botName: scenario.bot?.name ?? "Pievo",
+            botHandle: scenario.bot?.handle ?? "@relaybot"
+          },
+          attachments: [],
+          replyTarget: scenario.replyTarget ?? null,
+          scheduleName: schedule.name,
+          suppressQueueNotice: true
+        });
+      }
+    } else if (scenario.mode === "private") {
       const promptText = String(step.prompt ?? step.text ?? "").trim();
       await session.enqueueTurn({
         mode: "private",

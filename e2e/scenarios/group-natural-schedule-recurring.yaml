@@ -1,0 +1,42 @@
+# Natural-language recurring monitoring intent.
+# Baseline for prompt tuning: "盯一下 / 每 10 分钟" should become a recurring schedule.
+
+name: group-natural-schedule-recurring
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+steps:
+  - id: chinese-recurring-monitor
+    messages:
+      - from: Kevin
+        handle: "@kevin"
+        text: |
+          @relaybot 接下来每 10 分钟帮我盯一下 159516，如果明显冲高回落或者强开站稳，就在群里提醒我。
+    expect:
+      toolCalls:
+        add_schedule: 1
+      schedules:
+        contains:
+          trigger: cron
+
+  - id: stop-recurring-monitor
+    messages:
+      - from: Pievo
+        handle: "@relaybot"
+        text: |
+          159516 触发提醒：开盘后快速拉升，随后回落，当前看更像冲高回落，建议先不要追。
+      - from: Pievo
+        handle: "@relaybot"
+        text: |
+          159516 复查：走势仍偏弱，未重新站稳，继续观望。
+      - from: Kevin
+        handle: "@kevin"
+        text: |
+          @relaybot 好的，这个不用再提醒了。
+    expect:
+      toolCalls:
+        remove_schedule: 1
+      schedules:
+        count: 0

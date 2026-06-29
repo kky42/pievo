@@ -1,0 +1,39 @@
+# Natural self-wakeup intents.
+# These are delayed-observation tasks that a normal agent harness cannot do unless it creates a future wakeup.
+
+name: group-self-wakeup
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+steps:
+  - id: leaderboard-delayed-check
+    messages:
+      - from: Kevin
+        handle: "@kevin"
+        text: |
+          @relaybot 我刚提交了 Kaggle，先不用现在查。2026-07-01 20:00 回来看看 leaderboard 分数有没有刷新，然后在这个群里告诉我 private/public 分数和结论。
+    expect:
+      toolCalls:
+        add_schedule: 1
+      schedules:
+        count: 1
+        contains:
+          trigger: once
+          runAt: "2026-07-01T20:00:00+08:00"
+
+  - id: post-engagement-delayed-check
+    messages:
+      - from: Kevin
+        handle: "@kevin"
+        text: |
+          @relaybot 我刚发了一篇帖子，先别打扰我。2026-07-02 09:00 回来看一下点赞和评论，如果互动不错就提醒我继续跟进。
+    expect:
+      toolCalls:
+        add_schedule: 1
+      schedules:
+        count: 2
+        contains:
+          trigger: once
+          runAt: "2026-07-02T09:00:00+08:00"

@@ -1,0 +1,23 @@
+# Natural-language one-time watch intent.
+# Baseline for prompt tuning: "帮我看 / 到时候告诉我" should become a one-time heartbeat schedule.
+
+name: group-natural-schedule
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+steps:
+  - id: chinese-one-time-watch
+    messages:
+      - from: Kevin
+        handle: "@kevin"
+        text: |
+          @relaybot 2026-07-01 上午 09:45 帮我看一下 159516 和 515450 的开盘表现，接着这个聊天上下文，到时候直接告诉我结论：可小仓跟、继续观望、还是放弃追高。
+    expect:
+      toolCalls:
+        add_schedule: 1
+      schedules:
+        contains:
+          mode: heartbeat
+          trigger: once

@@ -1,0 +1,23 @@
+# Natural-language follow-up intent.
+# Baseline for prompt tuning: "follow up ... in this thread" should become a one-time heartbeat schedule.
+
+name: group-natural-schedule-follow-up
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+steps:
+  - id: english-follow-up
+    messages:
+      - from: Manager
+        handle: "@manager"
+        text: |
+          @relaybot please follow up on 2026-07-01 at 10:00 in this thread with a short decision based on the context above.
+    expect:
+      toolCalls:
+        add_schedule: 1
+      schedules:
+        contains:
+          mode: heartbeat
+          trigger: once

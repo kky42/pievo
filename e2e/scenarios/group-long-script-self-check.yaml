@@ -1,0 +1,56 @@
+# Long-running local job with self-wakeup check.
+# The user asks for completion notification, not schedule mechanics. The agent should infer that it needs
+# a future wakeup/check instead of blocking the current chat turn.
+
+name: group-long-script-self-check
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+files:
+  - path: scripts/long-analysis.sh
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      mkdir -p .job-state
+      echo running > .job-state/long-analysis.status
+      # Simulate a long analysis that should not block a chat turn.
+      sleep 7200
+      echo done > .job-state/long-analysis.status
+      echo "long analysis complete" > .job-state/long-analysis.result
+
+steps:
+  - id: start-long-script-and-self-check
+    messages:
+      - from: Kevin
+        handle: "@kevin"
+        text: |
+          @relaybot scripts/long-analysis.sh 这个分析要跑很久。帮我启动它，但不要让这次对话一直卡着；等它可能有结果时你自己回来检查，完成了就告诉我，没完成就之后继续看。
+    expect:
+      toolCalls:
+        add_schedule:
+          min: 1
+      schedules:
+        contains:
+          mode: heartbeat
+          trigger: cron
+
+  - id: cron-check-completed-and-remove
+    triggerSchedule:
+      mode: heartbeat
+      trigger: cron
+    files:
+      - path: .job-state/long-analysis.status
+        content: |
+          done
+      - path: .job-state/long-analysis.result
+        content: |
+          long analysis complete
+    expect:
+      toolCalls:
+        remove_schedule: 1
+      schedules:
+        count: 0
+      replies:
+        - contains: "complete"

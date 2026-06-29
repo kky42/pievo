@@ -54,7 +54,7 @@
     ],
     "parameters": {
       "mode": {
-        "description": "heartbeat runs in the current front-agent session; background starts a fresh matching agent."
+        "description": "heartbeat continues this chat with chat and schedule tools; use it for checks that must reply or manage schedules. background runs isolated heavy work without chat or schedule tools."
       },
       "name": {
         "description": "Schedule name: letters, numbers, underscore, or dash."

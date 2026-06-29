@@ -1,0 +1,42 @@
+# Natural-language bounded repetition intent.
+# The user does not mention schedules or schedule fields; the agent should expand a finite cadence into one-time tasks.
+
+name: group-natural-multi-once
+mode: group
+bot:
+  name: Pievo
+  handle: "@relaybot"
+
+files:
+  - path: scripts/ping.js
+    content: |
+      console.log("ping");
+
+steps:
+  - id: five-finite-script-runs
+    messages:
+      - from: Kevin
+        handle: "@kevin"
+        text: |
+          @relaybot 2026-07-01 这天从 10:00 开始，每隔 2 小时运行一次 scripts/ping.js，最多运行 5 次。每次运行完在群里说一声结果。
+    expect:
+      toolCalls:
+        add_schedule: 5
+      schedules:
+        count: 5
+        contains:
+          - mode: heartbeat
+            trigger: once
+            runAt: "2026-07-01T10:00:00+08:00"
+          - mode: heartbeat
+            trigger: once
+            runAt: "2026-07-01T12:00:00+08:00"
+          - mode: heartbeat
+            trigger: once
+            runAt: "2026-07-01T14:00:00+08:00"
+          - mode: heartbeat
+            trigger: once
+            runAt: "2026-07-01T16:00:00+08:00"
+          - mode: heartbeat
+            trigger: once
+            runAt: "2026-07-01T18:00:00+08:00"

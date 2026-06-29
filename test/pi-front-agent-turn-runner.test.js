@@ -46,6 +46,35 @@ function createFakeSession() {
   };
 }
 
+test("heartbeat scheduled front-agent turns keep schedule tools available", async () => {
+  const session = createFakeSession();
+  let capturedBridgeOptions = null;
+  const turn = {
+    mode: "private",
+    promptText: "Heartbeat scheduled turn: check-job",
+    attachments: [],
+    replyTarget: null,
+    scheduleName: "check-job",
+    resumeRetryCount: 0
+  };
+
+  await runFrontAgentTurn({
+    session,
+    turn,
+    createToolBridge: async (options) => {
+      capturedBridgeOptions = options;
+      return { env: {}, dispose() {} };
+    },
+    createAgentRun: () => ({
+      done: Promise.resolve({ code: 0, signal: null, aborted: false, sawTerminalEvent: true }),
+      abort() {}
+    }),
+    resolveContextLength: async () => null
+  });
+
+  assert.equal(capturedBridgeOptions.disableScheduleTools, false);
+});
+
 test("runFrontAgentTurn retries stale resumed Pi sessions reported only on stderr", async () => {
   const session = createFakeSession();
   const turn = {
