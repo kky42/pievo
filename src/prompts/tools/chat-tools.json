@@ -73,6 +73,9 @@
       "run_at": {
         "description": "ISO 8601 timestamp for a one-time schedule with seconds and timezone offset, for example 2026-06-22T09:00:00{{local_utc_offset}}. Required when trigger is once; omit when trigger is cron. If the user did not specify a timezone, use the runtime local timezone: {{local_timezone}} (UTC{{local_utc_offset}})."
       },
+      "skip_if_active": {
+        "description": "Whether to skip a firing when the same schedule is already active. Defaults to true for heartbeat and background schedules; set false only when the user explicitly wants overlapping runs."
+      },
       "task": {
         "description": "Task instruction to execute when the schedule fires. Describe the desired future outcome and enough context for that future run; exclude cadence, schedule setup/removal/listing instructions, phrases like \"create a schedule\", and inline workflow scripts. Workflow-backed tasks should reference an existing saved workflow by name or path."
       }

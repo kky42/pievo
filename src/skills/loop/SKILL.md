@@ -29,7 +29,35 @@ Default state path in the current workdir:
 .loop/<loop-id>/state.md
 ```
 
-A loop may have one schedule or many schedules. All schedules for the same loop share the same state file.
+`state.md` is the human-readable control plane. Long-running LOOP continuity must come from durable files, not from an agent session or subagent `session_key`. Treat every scheduled LOOP task as fresh-start and self-contained. Resume/continuation may be used inside one pi-flow workflow to reduce token use, but it is not the LOOP identity.
+
+The LOOP harness scripts keep the durable track under `.loop/<loop-id>/`:
+
+```text
+policy.json      loop thresholds and autonomy boundaries
+tasks.jsonl      durable tasks, blockers, dependencies, and human-queue items
+runs.jsonl       schedule/workflow/subagent start, heartbeat, finish, and failure events
+metrics.jsonl    true and proxy objective metrics
+incidents.jsonl  audit findings and repair/escalation evidence
+artifacts/       durable outputs referenced by tasks, runs, or metrics
+```
+
+Use these scripts when available instead of hand-rolling ledgers in prose:
+
+```bash
+node src/skills/loop/scripts/init-loop-state.mjs <loop-id> [target] [objective]
+node src/skills/loop/scripts/loop-run.mjs start|heartbeat|finish|fail <loop-id> ...
+node src/skills/loop/scripts/loop-task.mjs add|claim|block|done|fail|list|get <loop-id> ...
+node src/skills/loop/scripts/loop-metric.mjs add|summary|list <loop-id> ...
+node src/skills/loop/scripts/loop-audit.mjs <loop-id>
+node src/skills/loop/scripts/loop-next-action.mjs <loop-id>
+node src/skills/loop/scripts/loop-report.mjs <loop-id> [--since 24h]
+node src/skills/loop/scripts/loop-doctor.mjs <loop-id> [--fix true]
+```
+
+The scripts are deterministic harness primitives: record, validate, route, summarize, and audit. They do not replace schedules, workflows, or domain judgment.
+
+A loop may have one schedule or many schedules. All schedules for the same loop share the same state file and harness ledgers.
 
 Use schedule names that include the loop id:
 

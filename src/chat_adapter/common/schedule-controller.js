@@ -189,6 +189,9 @@ export class ScheduleController {
   }
 
   shouldSkipHeartbeatSchedule(session, schedule) {
+    if (schedule.skipIfActive === false) {
+      return false;
+    }
     if (!session.hasActiveOrQueuedHeartbeatSchedule?.(schedule.name)) {
       return false;
     }

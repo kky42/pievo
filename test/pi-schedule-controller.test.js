@@ -262,6 +262,37 @@ test("heartbeat schedules stay in the foreground FIFO with user messages", async
   ]);
 });
 
+test("heartbeat schedule overlap can be explicitly allowed", async () => {
+  const { session } = await createSession();
+  session.isRunning = true;
+  const { controller, logs } = createController({
+    getSession: () => session,
+    restoreSession: () => session,
+    isDirectConversation: () => true
+  });
+
+  await controller.runHeartbeatSchedule(session, {
+    mode: "heartbeat",
+    name: "hb1",
+    cron: "* * * * *",
+    prompt: "beat 1",
+    skipIfActive: false
+  });
+  await controller.runHeartbeatSchedule(session, {
+    mode: "heartbeat",
+    name: "hb1",
+    cron: "* * * * *",
+    prompt: "beat 1 again",
+    skipIfActive: false
+  });
+
+  assert.equal(session.queue.length, 2);
+  assert.equal(session.queue[0].scheduleName, "hb1");
+  assert.equal(session.queue[1].scheduleName, "hb1");
+  assert.match(session.queue[1].promptText, /again/);
+  assert.deepEqual(logs, []);
+});
+
 test("duplicate heartbeat schedules are skipped while already queued", async () => {
   const { session } = await createSession();
   session.isRunning = true;
@@ -455,6 +486,66 @@ test("background schedules start independently while foreground turns stay queue
   assert.match(session.queue[2].promptText, /bg1/);
   assert.equal(session.queue[3].scheduleName, "bg2");
   assert.match(session.queue[3].promptText, /bg2/);
+});
+
+test("duplicate background schedules are skipped while already active by default", async () => {
+  const { session, runnerFactory } = await createSession();
+  const { controller, logs } = createController({
+    getSession: () => session,
+    restoreSession: () => session,
+    isDirectConversation: () => true
+  });
+
+  const first = controller.runBackgroundSchedule(session, {
+    mode: "background",
+    name: "bg1",
+    cron: "* * * * *",
+    prompt: "bg 1"
+  });
+  for (let index = 0; index < 20 && runnerFactory.runs.length === 0; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  await controller.runBackgroundSchedule(session, {
+    mode: "background",
+    name: "bg1",
+    cron: "* * * * *",
+    prompt: "bg 1 again"
+  });
+
+  assert.equal(runnerFactory.runs.length, 1);
+  assert.equal(session.queue.length, 0);
+  assert.match(logs.find((message) => /background skipped/.test(message)), /background skipped \(already active\): bg1 in /);
+
+  runnerFactory.runs[0].finish({ code: 0, signal: null, aborted: false, sawTerminalEvent: true });
+  await first;
+});
+
+test("background schedule overlap can be explicitly allowed", async () => {
+  const { session, runnerFactory } = await createSession();
+  const { controller } = createController({
+    getSession: () => session,
+    restoreSession: () => session,
+    isDirectConversation: () => true
+  });
+
+  const schedule = {
+    mode: "background",
+    name: "bg1",
+    cron: "* * * * *",
+    prompt: "bg 1",
+    skipIfActive: false
+  };
+  const first = controller.runBackgroundSchedule(session, schedule);
+  const second = controller.runBackgroundSchedule(session, schedule);
+  for (let index = 0; index < 20 && runnerFactory.runs.length < 2; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  assert.equal(runnerFactory.runs.length, 2);
+  runnerFactory.runs[0].finish({ code: 0, signal: null, aborted: false, sawTerminalEvent: true });
+  runnerFactory.runs[1].finish({ code: 0, signal: null, aborted: false, sawTerminalEvent: true });
+  await Promise.all([first, second]);
 });
 
 test("fired timers are removed when no live or restored session exists", async () => {

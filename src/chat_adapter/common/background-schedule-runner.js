@@ -24,6 +24,36 @@ export class BackgroundScheduleRunner {
     this.groupIdentity = groupIdentity;
     this.eventToActions = eventToActions;
     this.activeRuns = new Set();
+    this.activeRunKeys = new Map();
+  }
+
+  backgroundRunKey(session, schedule) {
+    return `${session.conversationId}::${schedule.name}`;
+  }
+
+  activeRunKeyCount(key) {
+    return this.activeRunKeys.get(key) ?? 0;
+  }
+
+  addActiveRunKey(key) {
+    this.activeRunKeys.set(key, this.activeRunKeyCount(key) + 1);
+  }
+
+  deleteActiveRunKey(key) {
+    const count = this.activeRunKeyCount(key);
+    if (count <= 1) {
+      this.activeRunKeys.delete(key);
+      return;
+    }
+    this.activeRunKeys.set(key, count - 1);
+  }
+
+  hasActiveScheduleRun(session, schedule) {
+    return this.activeRunKeyCount(this.backgroundRunKey(session, schedule)) > 0;
+  }
+
+  shouldSkipScheduleRun(session, schedule) {
+    return schedule.skipIfActive !== false && this.hasActiveScheduleRun(session, schedule);
   }
 
   getActiveRunCount() {
@@ -35,10 +65,17 @@ export class BackgroundScheduleRunner {
   }
 
   async run(session, schedule, now = new Date()) {
-    const deliveryAnchor = await this.deliveryAnchorForSession(session);
-    const replyTarget = deliveryAnchor?.replyTarget ?? null;
+    const runKey = this.backgroundRunKey(session, schedule);
+    if (this.shouldSkipScheduleRun(session, schedule)) {
+      this.log(`background skipped (already active): ${schedule.name} in ${session.conversationId}`);
+      return;
+    }
+    this.addActiveRunKey(runKey);
+
     const triggeredAt = formatLocalTimestamp(Math.floor(now.getTime() / 1000));
     const messageParts = [];
+    let deliveryAnchor = null;
+    let replyTarget = null;
     let failureText = null;
     let run = null;
     let resolveBackgroundDone = () => {};
@@ -47,6 +84,8 @@ export class BackgroundScheduleRunner {
 
     try {
       try {
+        deliveryAnchor = await this.deliveryAnchorForSession(session);
+        replyTarget = deliveryAnchor?.replyTarget ?? null;
         const developerInstructions = await session.buildFreshAdditionalSystemPrompt(null);
         run = session.createAgentRun({
           workdir: session.workdir,
@@ -135,6 +174,7 @@ export class BackgroundScheduleRunner {
         this.activeRuns.delete(run);
         resolveBackgroundDone();
       }
+      this.deleteActiveRunKey(runKey);
     }
   }
 

@@ -162,6 +162,22 @@ function normalizeScheduleTask(task) {
   return normalized;
 }
 
+function normalizeScheduleSkipIfActive(params) {
+  const value = params.skip_if_active ?? params.skipIfActive;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  throw new Error("skip_if_active must be a boolean.");
+}
+
+function scheduleSkipIfActiveFields(params) {
+  const skipIfActive = normalizeScheduleSkipIfActive(params);
+  return skipIfActive === false ? { skipIfActive } : {};
+}
+
 function normalizeAttachmentKind(kind) {
   const normalized = String(kind ?? "document").trim().toLowerCase() || "document";
   return normalized;
@@ -236,7 +252,8 @@ async function dispatchTool({
             trigger,
             runAt: assertFutureRunAt(params.run_at ?? params.runAt),
             prompt: normalizeScheduleTask(params.task ?? params.prompt),
-            enabled: true
+            enabled: true,
+            ...scheduleSkipIfActiveFields(params)
           }
         : {
             mode: normalizeScheduleMode(params.mode),
@@ -244,7 +261,8 @@ async function dispatchTool({
             trigger,
             cron: normalizeCron(params.cron),
             prompt: normalizeScheduleTask(params.task ?? params.prompt),
-            enabled: true
+            enabled: true,
+            ...scheduleSkipIfActiveFields(params)
           };
       if (session.schedules.some((candidate) => candidate.name === schedule.name)) {
         throw new Error(`Schedule "${schedule.name}" already exists.`);

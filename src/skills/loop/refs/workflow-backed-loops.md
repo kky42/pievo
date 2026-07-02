@@ -28,7 +28,7 @@ The background agent owns scheduled execution:
 - update the LOOP state once after synthesis
 - record blockers or proposed workflow changes for the front agent only when the workflow cannot safely resolve them internally
 
-Workflow subagents are fresh contexts. They do not inherit LOOP skill guidance, the background agent's conversation context, or the loop state unless the workflow prompt/args provide it. Treat them as scoped domain lanes — such as collector, researcher, creator, editor, analyst, reviewer, QA, operator, fixer, or synthesizer — that return results to the workflow/parent run.
+Workflow subagents are fresh contexts. They do not inherit LOOP skill guidance, the background agent's conversation context, or the loop state unless the workflow prompt/args provide it. Treat them as scoped domain lanes — such as collector, researcher, creator, editor, analyst, reviewer, QA, operator, fixer, or synthesizer — that return results to the workflow/parent run. If pi-flow supports resuming a subagent inside the same workflow/session, use that only as an internal token-saving continuation; do not store it as durable LOOP identity because `/new` or a different outer session can invalidate it.
 
 ## Hard boundaries
 

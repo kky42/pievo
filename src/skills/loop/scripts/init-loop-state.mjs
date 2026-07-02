@@ -1,39 +1,28 @@
 #!/usr/bin/env node
 import fs from "node:fs";
-import path from "node:path";
+
+import {
+  ensureLoopInfrastructure,
+  failCli,
+  loopPaths,
+  normalizeLoopId,
+  parseArgs,
+  resolveNow
+} from "./_loop-lib.mjs";
 
 function usage() {
-  return "Usage: node scripts/init-loop-state.mjs <loop-id> [target] [objective]\n";
+  return "Usage: node scripts/init-loop-state.mjs <loop-id> [target] [objective] [--at ISO_TIMESTAMP]\n";
 }
 
-function normalizeLoopId(value) {
-  const id = String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
-  if (!id) throw new Error("loop-id is required");
-  return id;
-}
-
-const [, , rawLoopId, rawTarget = "", rawObjective = ""] = process.argv;
-
-try {
-  const loopId = normalizeLoopId(rawLoopId);
-  const dir = path.join(process.cwd(), ".loop", loopId);
-  const statePath = path.join(dir, "state.md");
-  fs.mkdirSync(dir, { recursive: true });
-
-  if (fs.existsSync(statePath)) {
-    process.stdout.write(`${statePath} already exists\n`);
-    process.exit(0);
-  }
-
-  const created = new Date().toISOString().slice(0, 10);
+function createStateContent({ loopId, created, target, objective }) {
   const scheduleName = `loop-${loopId}-review`;
-  const content = `# LOOP: ${loopId}
+  return `# LOOP: ${loopId}
 
 Loop ID: ${loopId}
 Status: active
 Created: ${created}
-Target: ${rawTarget || "TBD"}
-Objective: ${rawObjective || "TBD"}
+Target: ${target || "TBD"}
+Objective: ${objective || "TBD"}
 Feedback signal: TBD
 Current focus: Define the first useful scheduled step.
 
@@ -42,6 +31,14 @@ Current focus: Define the first useful scheduled step.
 
 ## Workflows
 - None yet.
+
+## Harness files
+- policy.json: loop thresholds and autonomy boundaries
+- tasks.jsonl: durable tasks, blockers, and human-queue items
+- runs.jsonl: schedule/workflow/subagent run events and heartbeats
+- metrics.jsonl: true and proxy objective signals
+- incidents.jsonl: audit findings and repair/escalation evidence
+- artifacts/: durable outputs referenced by tasks, runs, or metrics
 
 ## Rules
 Allowed actions:
@@ -64,16 +61,32 @@ Done / learned:
 - None.
 
 ## Recent Runs
-- ${created} — init: created loop state.
+- ${created} — init: created loop state and harness files.
 
 ## Next
 Next useful action: Configure schedules and narrow each scheduled task purpose.
 Review: Check whether the objective, schedules, and human-review boundaries are clear.
 `;
+}
 
-  fs.writeFileSync(statePath, content, "utf8");
-  process.stdout.write(`${statePath}\n`);
+try {
+  const { positionals, options } = parseArgs(process.argv.slice(2));
+  const [rawLoopId, rawTarget = "", rawObjective = ""] = positionals;
+  const loopId = normalizeLoopId(rawLoopId);
+  const at = resolveNow(options);
+  const created = at.slice(0, 10);
+  const paths = ensureLoopInfrastructure(loopId, { at });
+
+  if (!fs.existsSync(paths.state)) {
+    fs.writeFileSync(paths.state, createStateContent({
+      loopId,
+      created,
+      target: rawTarget,
+      objective: rawObjective
+    }), "utf8");
+  }
+
+  process.stdout.write(`${loopPaths(loopId).state}\n`);
 } catch (error) {
-  process.stderr.write(`${error.message}\n${usage()}`);
-  process.exit(1);
+  failCli(error, usage());
 }

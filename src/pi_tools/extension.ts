@@ -151,6 +151,7 @@ export default function pievoChatTools(pi: ExtensionAPI) {
 					trigger: Type.Optional(StringEnum(SCHEDULE_TRIGGERS, { description: parameterDescription("add_schedule", "trigger") })),
 					cron: Type.Optional(Type.String({ description: parameterDescription("add_schedule", "cron") })),
 					run_at: Type.Optional(Type.String({ description: parameterDescription("add_schedule", "run_at") })),
+					skip_if_active: Type.Optional(Type.Boolean({ description: parameterDescription("add_schedule", "skip_if_active") })),
 					task: Type.String({ description: parameterDescription("add_schedule", "task") }),
 				}),
 				async execute(_toolCallId, params, signal) {

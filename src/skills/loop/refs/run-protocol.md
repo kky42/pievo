@@ -1,9 +1,10 @@
 # LOOP Run Protocol
 
-Each scheduled run should be small and inspectable.
+Each scheduled run should be small and inspectable. The schedule is only the clock; LOOP continuity lives in `.loop/<loop-id>/` files. Do not rely on a prior chat session or subagent `session_key` for long-term state.
 
 ## Before acting
 
+0. When the harness scripts are available, start a run ledger entry with `loop-run.mjs start <loop-id> --lane <manager|worker|reviewer|auditor|submitter> ...`. For long work, write heartbeat entries.
 1. Read `.loop/<loop-id>/state.md`.
 2. Check `Status`:
    - `active`: continue.
@@ -51,6 +52,13 @@ For workflow-backed runs, synthesize workflow output first and update state once
 Avoid broad rewrites. Keep the state human-readable.
 
 ## Completion
+
+Before exiting, record durable outcomes:
+
+- `loop-run.mjs finish` for successful/no-op runs, or `loop-run.mjs fail` for failures.
+- `loop-task.mjs done|block|fail` for any task touched.
+- `loop-metric.mjs add` when a true or proxy metric was observed.
+- `loop-audit.mjs` or `loop-next-action.mjs` when deciding repair/dispatch/escalation.
 
 Mark `Status: complete` only when the loop objective is done or the user explicitly retires it.
 

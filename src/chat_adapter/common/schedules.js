@@ -52,8 +52,9 @@ export function buildScheduleListText(schedules) {
       return [
         `${status}  ${schedule.mode}  ${schedule.name}`,
         triggerLine,
+        schedule.skipIfActive === false ? "skip_if_active: false" : null,
         `next: ${next}`
-      ].join("\n");
+      ].filter(Boolean).join("\n");
     })
     .join("\n\n");
 }
@@ -67,6 +68,9 @@ export function buildScheduleConfirmation(action, schedule) {
     lines.push(`once: ${schedule.runAt ?? schedule.run_at}`);
   } else if (schedule.cron) {
     lines.push(`cron: ${schedule.cron}`);
+  }
+  if (schedule.skipIfActive === false) {
+    lines.push("skip_if_active: false");
   }
   return lines.join("\n");
 }

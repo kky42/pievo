@@ -157,7 +157,8 @@ test("ConversationState persists delivery anchor, overrides, schedules, and sess
       trigger: "once",
       runAt: "2999-06-22T09:00:00+08:00",
       prompt: "send the report",
-      enabled: true
+      enabled: true,
+      skipIfActive: false
     }
   ]);
   await state.updateSessionId("session-1", {
@@ -195,7 +196,8 @@ test("ConversationState persists delivery anchor, overrides, schedules, and sess
       trigger: "once",
       runAt: "2999-06-22T09:00:00+08:00",
       prompt: "send the report",
-      enabled: true
+      enabled: true,
+      skipIfActive: false
     }
   ]);
 

@@ -48,8 +48,9 @@ function buildTelegramScheduleListMarkdown(schedules) {
       return [
         `- **${inlineValue(schedule.name)}** (${inlineValue(schedule.mode)}, ${status})`,
         triggerLine,
+        schedule.skipIfActive === false ? "  - skip_if_active: `false`" : null,
         `  - next: ${inlineValue(next)}`
-      ].join("\n");
+      ].filter(Boolean).join("\n");
     });
 
   return ["# Schedules", "", blocks.join("\n")].join("\n");
@@ -64,6 +65,9 @@ function buildTelegramScheduleConfirmationMarkdown(action, schedule) {
     rows.push(["once", schedule.runAt ?? schedule.run_at]);
   } else if (schedule.cron) {
     rows.push(["cron", schedule.cron]);
+  }
+  if (schedule.skipIfActive === false) {
+    rows.push(["skip_if_active", "false"]);
   }
   return [
     `**${action} schedule \"${schedule.name}\".**`,

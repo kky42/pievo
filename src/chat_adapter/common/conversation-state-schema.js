@@ -73,6 +73,16 @@ export function normalizeOverrides(overrides = {}) {
   return normalized;
 }
 
+function normalizeOptionalBoolean(value, fieldName) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  throw new Error(`${fieldName} must be a boolean`);
+}
+
 export function normalizeSchedule(schedule, index = 0) {
   if (!schedule || typeof schedule !== "object" || Array.isArray(schedule)) {
     throw new Error(`schedule[${index}] must be an object`);
@@ -84,6 +94,10 @@ export function normalizeSchedule(schedule, index = 0) {
   const cron = normalizeString(schedule.cron);
   const runAtValue = schedule.runAt ?? schedule.run_at;
   const prompt = typeof schedule.prompt === "string" ? schedule.prompt.trim() : "";
+  const skipIfActive = normalizeOptionalBoolean(
+    schedule.skipIfActive ?? schedule.skip_if_active,
+    `schedule[${index}] skipIfActive`
+  );
   if (!name || !mode || !prompt) {
     throw new Error(`schedule[${index}] must include name, mode, and prompt`);
   }
@@ -101,7 +115,8 @@ export function normalizeSchedule(schedule, index = 0) {
       trigger,
       runAt: normalizeRunAt(runAtValue),
       prompt,
-      enabled: schedule.enabled !== false
+      enabled: schedule.enabled !== false,
+      ...(skipIfActive === false ? { skipIfActive } : {})
     };
   }
 
@@ -114,7 +129,8 @@ export function normalizeSchedule(schedule, index = 0) {
     trigger,
     cron,
     prompt,
-    enabled: schedule.enabled !== false
+    enabled: schedule.enabled !== false,
+    ...(skipIfActive === false ? { skipIfActive } : {})
   };
 }
 

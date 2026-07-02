@@ -25,6 +25,14 @@ Current focus: <what the next runs should pay attention to>
 ## Workflows
 - <workflow-name-or-path>: <purpose, owner, and when schedules may run it>
 
+## Harness files
+- policy.json: loop thresholds and autonomy boundaries
+- tasks.jsonl: durable tasks, blockers, dependencies, and human-queue items
+- runs.jsonl: schedule/workflow/subagent start, heartbeat, finish, and failure events
+- metrics.jsonl: true and proxy objective signals
+- incidents.jsonl: audit findings and repair/escalation evidence
+- artifacts/: durable outputs referenced by tasks, runs, or metrics
+
 ## Rules
 Allowed actions:
 - <what the agent may do without asking>
@@ -65,4 +73,6 @@ Guidelines:
 - Keep raw data elsewhere; link or summarize it here.
 - Use `Human Queue` instead of asking the same question in every scheduled run.
 - Workflow-backed runs should let the parent run update this state once after synthesis; workflow subagents should not edit this file directly.
+- Use `node src/skills/loop/scripts/init-loop-state.mjs <loop-id>` to create the default state and harness files.
+- Use the harness JSONL files for durable state; do not rely on prior agent sessions for LOOP continuity.
 - If using CSV/SQLite for high-volume data, keep this file as the human-readable control plane.

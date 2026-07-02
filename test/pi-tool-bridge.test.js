@@ -205,6 +205,39 @@ test("Pi tool bridge manages schedules and resyncs timers", async () => {
   }
 });
 
+test("Pi tool bridge can create schedules that allow overlap", async () => {
+  const session = createFakeSession();
+  const bridge = await createPiToolBridge({
+    session,
+    isGroupTurn: false
+  });
+
+  try {
+    const added = await callTool(bridge.env, "add_schedule", {
+      mode: "background",
+      name: "overlap",
+      cron: "*/5 * * * *",
+      task: "poll partitions concurrently",
+      skip_if_active: false
+    });
+    assert.equal(added.status, 200);
+    assert.match(added.body.text, /skip_if_active: false/);
+    assert.deepEqual(session.schedules, [
+      {
+        mode: "background",
+        name: "overlap",
+        trigger: "cron",
+        cron: "*/5 * * * *",
+        prompt: "poll partitions concurrently",
+        enabled: true,
+        skipIfActive: false
+      }
+    ]);
+  } finally {
+    bridge.dispose();
+  }
+});
+
 test("Pi tool bridge rejects duplicate schedule names across modes", async () => {
   const session = createFakeSession();
   const bridge = await createPiToolBridge({
