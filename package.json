@@ -2,7 +2,7 @@
   "name": "pievo",
   "version": "1.0.0",
   "private": true,
-  "description": "Pievo — multi-user scheduled-loop manager. Server schedules/stores/auths; execution is BYOA (claude-code on the user's own machine).",
+  "description": "Pievo — multi-user scheduled-loop manager. Server schedules/stores/auths; execution is BYOA on the user's own machine (Claude Code or Codex).",
   "type": "module",
   "packageManager": "pnpm@8.15.0",
   "engines": {
