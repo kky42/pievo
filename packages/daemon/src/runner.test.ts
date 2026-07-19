@@ -233,6 +233,7 @@ describe("buildAgentSpawn", () => {
       "--json",
       "--dangerously-bypass-approvals-and-sandbox",
       "--skip-git-repo-check",
+      "-c", "shell_environment_policy.inherit=all",
       "do it",
     ]);
     // Never emit Claude-shaped flags on the codex arm.
@@ -257,6 +258,7 @@ describe("buildAgentSpawn", () => {
       "--json",
       "--dangerously-bypass-approvals-and-sandbox",
       "--skip-git-repo-check",
+      "-c", "shell_environment_policy.inherit=all",
       "-m", "o3",
       "run once",
     ]);

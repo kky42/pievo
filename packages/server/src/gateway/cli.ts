@@ -672,8 +672,7 @@ export class CliGateway {
    * daemon passes the local facts it alone knows as context flags (`--cwd`/`--home`
    * for directory scoping, `--bin`/`--pid`/`--server` for the header); the server owns
    * the whole TOON render (text-sink). An unregistered machine renders a DEFINITIVE
-   * "not connected" state (never empty, never an error). This same text is what the
-   * SessionStart hook emits every session, so it self-heals when a machine is asleep.
+   * "not connected" state (never empty, never an error).
    */
   private async homeDevice(machineId: string, flags: Flags): Promise<string> {
     const machine = await store.getMachine(machineId);

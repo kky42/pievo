@@ -6,11 +6,9 @@
  *                                dashboard on the device credential (in a run, the
  *                                run's own-loop context). NO LONGER the poll loop.
  *   pievo up [--foreground]  → setup mode: ensure a daemon is running for this
- *                                machine (idempotent; installs the session hook + PATH
- *                                shim). `--foreground` runs the poll loop attached in
- *                                this terminal (the old bare-`pievo` behavior).
- *   pievo setup hooks        → install/refresh the SessionStart hook that lands the
- *     [--remove]                 home view as ambient context each session (P7).
+ *                                machine (idempotent; refreshes the skill + PATH shim).
+ *                                `--foreground` runs the poll loop attached in this
+ *                                terminal (the old bare-`pievo` behavior).
  *   pievo new --config […]   → setup mode: create a loop from a config file,
  *                                filling timezone/claim/auth — folds SKILL.md §3–4.
  *   pievo skill [status|install] → install the pievo agent skill at USER scope
@@ -66,8 +64,6 @@ async function main(): Promise<number> {
       return (await import("./create.js")).runCreate(r.args);
     case "skill":
       return (await import("./skill-cli.js")).runSkill(r.args);
-    case "setup":
-      return (await import("./setup.js")).runSetup(r.args);
     case "update":
       return (await import("./update.js")).runUpdate(r.args);
     case "status":

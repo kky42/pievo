@@ -115,9 +115,9 @@ describe("runHome", () => {
   });
 
   test("too-old server (a `home`/loops reply with NO `text`): a DEFINITIVE 'server too old' home, exit 0, never alarming", async () => {
-    // Batch 7: no structured-render fallback. The home stays never-empty/never-alarm on
-    // the SessionStart hot path, so it renders a definitive too-old home (exit 0), not the
-    // SERVER_TOO_OLD error other verbs print.
+    // Batch 7: no structured-render fallback. Home stays never-empty/never-alarm,
+    // rendering a definitive too-old view (exit 0), not the SERVER_TOO_OLD error
+    // other verbs print.
     const { fetchFn } = stub((url) =>
       url.includes("/api/machine/cli") ? { ok: false, status: 404, body: {} } : { ok: true, body: { loops: [{ id: "loop-1" }] } },
     );

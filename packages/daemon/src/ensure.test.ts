@@ -33,10 +33,8 @@ function seams(extra: EnsureDeps = {}): Cap {
     persist: () => {},
     readToken: () => "dk_stored",
     installSkill: async (opts) => { skillInstalls.push(opts); return { ok: true, line: "pievo skill: installed → ~/.claude/skills/pievo" }; },
-    // No-op the integration refreshers so no test ever writes the real ~/.claude
-    // settings or ~/.local/bin (the real defaults are exercised in their own tests).
+    // No-op the PATH shim so no test writes the real ~/.local/bin.
     ensureBinShim: () => {},
-    refreshHooks: async () => {},
     out: (s) => { out += s; },
     err: (s) => { err += s; },
     stdout: () => out,

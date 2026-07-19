@@ -192,26 +192,11 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   FORWARDED to the server (device cred → the crafted run-only 403, F3), never a generic
   unknown-command. `pievo show` out-of-run (F1) resolves the loop client-side (like
   `log`, reusing `log.ts` `resolveLoopId`) then forwards.
-- **`pievo setup hooks [--remove]`** (`setup.ts`, P7): idempotent SessionStart hook
-  install per `HOOK_TARGET_AGENTS` (derived from `SKILL_TARGET_AGENTS`). Claude Code
-  (`~/.claude/settings.json`) and Codex (`~/.codex/hooks.json`) have concrete installers
-  sharing ONE merge routine
-  (`installJsonSessionStartHook` — identical `{hooks:{SessionStart:[{type:"command",command:"pievo"}]}}`
-  shape), whose stdout lands as ambient context; an agent with no installer is reported
-  `skipped`. Codex additionally gates hooks behind `hooks = true` in `~/.codex/config.toml`
-  and a per-hook TRUST prompt on first session; the installer writes ONLY the `hooks.json`
-  entry (never the version-sensitive `trusted_hash`, never the TOML) and SURFACES that
-  enable/trust step in the report (and on the automatic `up`/`update` path). Matches
-  gh-axi UX (integrations report + restart hint). `pievo up`/`update` call the
-  best-effort `refreshHooks` (one line, never blocks — like the skill install). The
-  ambient hook ONLY installs with a DURABLE on-PATH `pievo` (`resolveDurableCommand`:
-  our shim OR a PATH-resolvable global install): the automatic `refreshHooks` path SKIPS
-  it with one line of `npm i -g` guidance when only a bare, non-PATH `pievo` would
-  result (the common npx-without-global flow — a hook pointing at a missing binary would
-  fail every session); the explicit `setup hooks` verb still installs but warns before
-  the bare fallback. The `home` view fetch is BOUNDED (`http.ts` `boundedFetch`,
-  `HOME_TIMEOUT_MS`) so the SessionStart hot path degrades fast — a hung server renders a
-  DEFINITIVE degraded home (`server unreachable`, exit 0), never stalling session start.
+- **No coding-agent SessionStart hook.** Pievo does not inject home into unrelated
+  Claude Code/Codex sessions. Ordinary sessions discover it through the user-scope skill
+  or explicit `pievo`; daemon edit/evolve/exec runs use the self-sufficient server-delivered
+  first user turn. `up`/`update` refresh only the skill + PATH shim. Home still uses a
+  bounded fetch (`HOME_TIMEOUT_MS`) so explicit interactive use degrades quickly.
 - **PATH shim** (`bin-shim.ts`, feedback #4): `pievo up`/`update` write a `pievo`
   re-exec wrapper (same launcher-replay as `callback-bin.ts`) to the npm global bin
   (`npm_config_prefix`) else `~/.local/bin`, with one-line PATH guidance when the dir
@@ -221,12 +206,11 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   `npm i -g` guidance) and NEVER clobbers a foreign `pievo` (only refreshes our own
   shim, detected by the `SHIM_MARKER` prefix); `ensureBinShim` returns
   `{path,onPath,written}` so callers/tests can assert skipped-vs-written.
-- **TEST HAZARD**: the `up`/`update` integration refreshers (`ensureBinShim`,
-  `refreshHooks`) write the REAL `~/.claude/settings.json` + `~/.local/bin` if not
-  injected. `ensure.test.ts`'s `seams()` MUST no-op both (it does); every setup/bin-shim
-  test injects fs/env seams and NEVER touches the real home. Batch 6 is the one
-  behavior-changing daemon batch — ships in the next `@kky42/pievo` npm release
-  (release note: bare `pievo` = home, foreground → `up --foreground`).
+- **TEST HAZARD**: `ensureBinShim` writes the REAL `~/.local/bin` if not injected.
+  `ensure.test.ts`'s `seams()` MUST no-op it (it does); bin-shim tests inject fs/env
+  seams and never touch the real home. Batch 6 is the one behavior-changing daemon
+  batch — ships in the next `@kky42/pievo` npm release (release note: bare `pievo` =
+  home, foreground → `up --foreground`).
 
 ## axi-conformance CLI (prod-E2E fixes — gate for batch 7)
 
@@ -249,16 +233,6 @@ server (deploys) vs daemon (rides the NEXT `@kky42/pievo` npm release):
   emits `error:`/`code: NOT_FOUND` to STDOUT at exit 1 (message quoted via
   `JSON.stringify`, keeping the actionable "run `pievo loops`" guidance). Other
   resolve failures (no-folder-match, ambiguous) STAY prose/exit-2 usage errors.
-- **Hook gating (F6)**: the automatic `up`/`update` refresh (`refreshHooks`) and the
-  explicit `setup hooks` BOTH derive from `resolveDurableCommand` — but `npx …`
-  PREPENDS a throwaway `…/_npx/…/.bin` onto PATH, so the durability probe counted that
-  transient `pievo` as durable and installed a bin-dependent SessionStart hook while
-  the bin shim was (correctly) skipped as ephemeral. Fix: `resolveDurableCommand`'s
-  PATH scan (`pievoPathBin`) now SKIPS ephemeral dirs (`isEphemeralEntry`), so the
-  npx-only case resolves to null → the automatic path skips the hook, parity with the
-  skipped shim. `resolveDurableCommand` now returns the ABSOLUTE path (not bare
-  `pievo`) for a PATH global — a more robust hook command; `isOurHookCommand` still
-  matches it (`endsWith("/pievo")`).
 - **`bin:` line always (F7, P8)**: the home MUST lead with `bin:`. The daemon `home.ts`
   now resolves the durable bin via `resolveDurableBinPath` (shim OR non-ephemeral PATH
   global, real path) and passes `--bin` when known; the server `renderHomeText` renders
@@ -300,7 +274,7 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   the per-verb `printText`-null → `printLoops`/`printEditDryRun`/`printCreateDryRun`/
   `formatRun` fallback: when `text` is ABSENT (a pre-0.12 server) it prints a definitive
   `error:`/`code: SERVER_TOO_OLD` to stdout, exit 1, never blank. `home` is the ONE
-  exception — it stays never-empty/never-alarm on the SessionStart hot path, rendering a
+  exception — it stays never-empty/never-alarm for interactive use, rendering a
   definitive `tooOldHome` (exit 0). `log --json` reads the retained normalized `runs`.
 - **Compat:** the 0.12 daemon (already a text sink) keeps working — it reads `text`/
   `exitCode` + the retained `loops`/`runs`. Daemons **≤ 0.11** (which render the structured

@@ -56,6 +56,7 @@ const cases: RealCase[] = [
       "--json",
       "--dangerously-bypass-approvals-and-sandbox",
       "--skip-git-repo-check",
+      "-c", "shell_environment_policy.inherit=all",
       "-m", "gpt-5.6-luna",
       "-c", 'model_reasoning_effort="high"',
       prompt,

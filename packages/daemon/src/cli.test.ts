@@ -140,11 +140,11 @@ describe("pievo CLI dispatch", () => {
     expect(r.stdout).toContain("not connected — run `pievo up`");
   });
 
-  test("help lists the new surface (bare = home, up --foreground, setup, device show)", async () => {
+  test("help lists the new surface (bare = home, up --foreground, device show)", async () => {
     const r = await runCli(["--help"]);
     expect(r.stdout).toContain("content-first HOME");
     expect(r.stdout).toContain("up [--foreground]");
-    expect(r.stdout).toContain("setup hooks");
+    expect(r.stdout).not.toContain("setup hooks");
     expect(r.stdout).toContain("show [<id>]");
   });
 });
@@ -186,8 +186,8 @@ describe("classify — CLI routing table (Batch 6)", () => {
     expect(classify(["complete"], {})).toEqual({ kind: "forward", argv: ["complete"] });
   });
 
-  test("setup + device show route to their handlers", () => {
-    expect(classify(["setup", "hooks"], {})).toEqual({ kind: "setup", args: ["hooks"] });
+  test("device show routes to its handler and removed setup is unknown", () => {
+    expect(classify(["setup", "hooks"], {})).toEqual({ kind: "unknown", verb: "setup" });
     expect(classify(["show", "loop-1"], {})).toEqual({ kind: "show", args: ["loop-1"] });
   });
 
@@ -201,7 +201,6 @@ describe("classify — CLI routing table (Batch 6)", () => {
     expect(classify(["update", "--help"], {})).toEqual({ kind: "help", verb: "update" });
     expect(classify(["update", "-h"], {})).toEqual({ kind: "help", verb: "update" });
     expect(classify(["down", "--help"], {})).toEqual({ kind: "help", verb: "down" });
-    expect(classify(["setup", "hooks", "--help"], {})).toEqual({ kind: "help", verb: "setup" });
     expect(classify(["skill", "-h"], {})).toEqual({ kind: "help", verb: "skill" });
     expect(classify(["status", "--help"], {})).toEqual({ kind: "help", verb: "status" });
     expect(classify(["new", "--help"], {})).toEqual({ kind: "help", verb: "new" });

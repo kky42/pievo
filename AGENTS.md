@@ -576,37 +576,20 @@ computes pure functions. Run instructions: `README.md`.
   `report`/`finish`/`complete` typed OUT of a run are FORWARDED to the server so its
   crafted run-only 403 reaches the agent (F3); `pievo show` out-of-run (F1) resolves the
   loop client-side (like `log`, reusing `log.ts` `resolveLoopId`) then forwards.
-- **`pievo setup hooks [--remove]`** (`setup.ts`): idempotent SessionStart hook install
-  per `HOOK_TARGET_AGENTS` (derived from `SKILL_TARGET_AGENTS`). Claude Code
-  (`~/.claude/settings.json`) and Codex (`~/.codex/hooks.json`) have concrete installers
-  sharing ONE merge routine
-  (`installJsonSessionStartHook` — both use the identical `{hooks:{SessionStart:[...]}}`
-  JSON shape); each writes a SessionStart command hook running the durable ABSOLUTE
-  `pievo` path (our shim or a PATH global), whose stdout lands as ambient context; an
-  agent with no installer is reported `skipped`. **Codex discrepancy** (verified against
-  codex-cli 0.143.0 + `/openai/codex` source): Codex additionally gates hooks behind
-  `hooks = true` in `~/.codex/config.toml` AND a per-hook TRUST layer (`[hooks.state]`
-  `trusted_hash = sha256:<canonical-TOML-of-normalized-identity>`, computed inside Codex).
-  The installer deliberately writes ONLY the `hooks.json` entry (never synthesizes the
-  version-sensitive hash, never mutates the TOML) and SURFACES the enable/trust step in the
-  report. Codex is fully executable (`codex exec` — see the
-  `loops.agent` bullet). `up`/`update` call the
-  best-effort `refreshHooks` (never blocks). The ambient hook installs ONLY with a
-  DURABLE on-PATH `pievo` (`resolveDurableCommand`: our shim OR a NON-ephemeral PATH
-  global, returned as an absolute path - the transient `npx`/`_npx` PATH entry is
-  filtered out, so it gates exactly like the bin shim, F6) — the automatic path SKIPS
-  it with `npm i -g` guidance when only a bare, non-PATH (or ephemeral npx) `pievo`
-  would result; the explicit verb still installs but warns.
+- **No coding-agent SessionStart hook.** Pievo deliberately does not inject its home
+  view into every Claude Code/Codex session. Ordinary sessions discover Pievo through
+  the user-scope skill or an explicit `pievo`; daemon edit/evolve/exec runs get their
+  complete context from the server-delivered first user turn. Keep skill installation
+  separate from agent hooks; `up`/`update` refresh only the skill + PATH shim.
 - **PATH shim** (`bin-shim.ts`): `up`/`update` write a version-consistent `pievo`
   re-exec wrapper (same launcher-replay as `callback-bin.ts`) to the npm global bin
   (`npm_config_prefix`) else `~/.local/bin`, with one-line PATH guidance. It lands ONLY
   from a durable install (`isEphemeralEntry` skips an npx/npm-cache re-exec) and NEVER
   clobbers a foreign `pievo` (refreshes only our own shim, detected by `SHIM_MARKER`).
   `ensureBinShim` returns `{path,onPath,written}` so callers/tests assert skipped-vs-written.
-  **TEST HAZARD**: `ensureBinShim`/`refreshHooks` write the REAL `~/.claude/settings.json`
-  + `~/.local/bin` unless injected — `ensure.test.ts`'s `seams()` no-ops both, and every
-  setup/bin-shim test injects fs/env seams. See `packages/server/AGENTS.md` for the server
-  `home` verb + full text-sink notes.
+  **TEST HAZARD**: `ensureBinShim` writes the REAL `~/.local/bin` unless injected —
+  `ensure.test.ts`'s `seams()` no-ops it, and bin-shim tests inject fs/env seams. See
+  `packages/server/AGENTS.md` for the server `home` verb + full text-sink notes.
 - Pidfile `~/.pievo/daemon.pid` records `<pid>:<startTime>` so a pid reused after
   an unclean crash is never mistaken for the daemon (or SIGTERMed by `down`).
   `pievo up` consults the pidfile first (never spawns a second daemon); the device
@@ -629,9 +612,12 @@ computes pure functions. Run instructions: `README.md`.
   (delivered by server `gateway/delivery.ts`):
   - `claude-code` → `claude` (`PIEVO_CLAUDE_BIN`) with stream-json + bypassPermissions
   - `codex` → `codex exec` (`PIEVO_CODEX_BIN`): `--json`,
-    `--dangerously-bypass-approvals-and-sandbox`, `--skip-git-repo-check`, optional
-    `-m`; `execEnv("codex")` forwards `OPENAI_API_KEY`/`CODEX_API_KEY`/`CODEX_HOME`
-    (session/config under `~/.codex` free via `HOME`)
+    `--dangerously-bypass-approvals-and-sandbox`, `--skip-git-repo-check`,
+    `-c shell_environment_policy.inherit=all`, optional `-m`; the inherit override is
+    load-bearing because Codex otherwise may replace the daemon-prepended PATH and run
+    a stale global `pievo` instead of the run-token callback shim. `execEnv("codex")`
+    forwards `OPENAI_API_KEY`/`CODEX_API_KEY`/`CODEX_HOME` (session/config under
+    `~/.codex` free via `HOME`)
   Both structured-output streams feed provider-specific TERMINAL collectors only:
   session id, final assistant text, and normalized token usage. Events are consumed
   locally and discarded—there is no transcript/tool-activity transport or dollar-cost

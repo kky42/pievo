@@ -85,8 +85,9 @@ export interface AgentSpawn {
  *   - `codex`: a DIFFERENT surface — `codex exec`, not `-p`.
  *     Flags verified against codex-cli 0.143.0: `--json` (JSONL on stdout),
  *     `--dangerously-bypass-approvals-and-sandbox` (unattended BYOA), optional
- *     `-m` / `--model`, and `--skip-git-repo-check` so non-git loop workdirs are
- *     not rejected.
+ *     `-m` / `--model`, `--skip-git-repo-check` so non-git loop workdirs are not
+ *     rejected, and full child-env inheritance so the run-scoped `pievo` callback
+ *     shim at the front of PATH survives Codex's shell environment policy.
  *
  * Escape hatches: `PIEVO_CLAUDE_BIN` / `PIEVO_CODEX_BIN`.
  *
@@ -109,6 +110,7 @@ export function buildAgentSpawn(opts: {
       "--json",
       "--dangerously-bypass-approvals-and-sandbox",
       "--skip-git-repo-check",
+      "-c", "shell_environment_policy.inherit=all",
       ...modelArgs,
     ];
     return {

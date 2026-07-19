@@ -25,7 +25,7 @@ const FORWARD_VERBS = new Set(["report", "finish", "complete"]);
 // short-circuits to that verb's usage BEFORE its handler runs — so a foot-gun like
 // `update` (immediate daemon handover) is always safe to inspect, and a NEW verb inherits
 // the guarantee by being added here alongside its branch.
-const COMMAND_VERBS = new Set(["up", "new", "skill", "setup", "update", "status", "down", "log", "show", ...INTERACTIVE_VERBS, ...FORWARD_VERBS]);
+const COMMAND_VERBS = new Set(["up", "new", "skill", "update", "status", "down", "log", "show", ...INTERACTIVE_VERBS, ...FORWARD_VERBS]);
 
 function hasHelpFlag(args: string[]): boolean {
   return args.some((a) => HELP_FLAG_ARGS.has(a));
@@ -39,7 +39,6 @@ export type Route =
   | { kind: "ensure"; args: string[] } // `up` (detached, idempotent)
   | { kind: "create"; args: string[] }
   | { kind: "skill"; args: string[] }
-  | { kind: "setup"; args: string[] }
   | { kind: "update"; args: string[] }
   | { kind: "status"; args: string[] }
   | { kind: "down"; args: string[] }
@@ -74,7 +73,6 @@ export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
   if (verb === "up") return argv.includes("--foreground") ? { kind: "daemon" } : { kind: "ensure", args: argv.slice(1) };
   if (verb === "new") return { kind: "create", args: argv.slice(1) };
   if (verb === "skill") return { kind: "skill", args: argv.slice(1) };
-  if (verb === "setup") return { kind: "setup", args: argv.slice(1) };
   if (verb === "update") return { kind: "update", args: argv.slice(1) };
   if (verb === "status") return { kind: "status", args: argv.slice(1) };
   if (verb === "down") return { kind: "down", args: argv.slice(1) };

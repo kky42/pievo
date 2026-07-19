@@ -25,18 +25,16 @@ Usage: pievo [command] [options]
 
 Setup
   up [--foreground]       Connect this machine / ensure its daemon is running
-                          (idempotent; refreshes the pievo skill, the SessionStart
-                          hook, and the \`pievo\` PATH shim). --foreground runs the
-                          poll loop attached in this terminal instead of detached.
+                          (idempotent; refreshes the pievo skill and the \`pievo\`
+                          PATH shim). --foreground runs the poll loop attached in
+                          this terminal instead of detached.
   new --json '<config>'   Create a loop from an inline JSON config (--json - reads
     [--dry-run]           stdin). --dry-run validates + previews, creates nothing.
-  setup hooks [--remove]  Install/refresh the SessionStart hook that lands the home
-                          view as ambient context each session (--remove uninstalls).
   skill [status|install]  Manage the pievo agent skill install (user scope by
     [--project]           default; --project installs into the current directory).
   update                  Update this machine's daemon to the version you invoked
                           (run via npx @kky42/pievo@latest update): stops the
-                          running daemon, starts the new one, refreshes the skill/hook/shim.
+                          running daemon, starts the new one, refreshes the skill/shim.
 
 Management
   status                  Is this machine's daemon running? Show pid + connection.
@@ -68,11 +66,10 @@ Interactive (edit loops from your own agent session, using the stored device tok
  * degrades to the full usage screen rather than throwing.
  */
 const VERB_USAGE: Record<string, string> = {
-  up: "pievo up [--foreground]\n  Connect this machine / ensure its daemon is running (idempotent; refreshes the\n  pievo skill, the SessionStart hook, and the PATH shim). --foreground runs the\n  poll loop attached in this terminal instead of detached.",
+  up: "pievo up [--foreground]\n  Connect this machine / ensure its daemon is running (idempotent; refreshes the\n  pievo skill and PATH shim). --foreground runs the poll loop attached in this\n  terminal instead of detached.",
   new: "pievo new --json '<config>' [--dry-run]\n  Create a loop from an inline JSON config (--json - reads stdin). --dry-run\n  validates + previews, creating nothing.",
   skill: "pievo skill [status|install] [--project]\n  Manage the pievo agent skill install (user scope by default; --project installs\n  into the current directory).",
-  setup: "pievo setup hooks [--remove]\n  Install/refresh (or --remove) the SessionStart hook that lands the home view as\n  ambient context each session.",
-  update: "pievo update\n  Hand this machine's daemon over to the (newer) CLI you invoked: stop the running\n  daemon, start the new one, refresh the skill/hook/shim.",
+  update: "pievo update\n  Hand this machine's daemon over to the (newer) CLI you invoked: stop the running\n  daemon, start the new one, refresh the skill/shim.",
   status: "pievo status\n  Report whether this machine's daemon is running (local pid) + its connection state.",
   down: "pievo down\n  Stop the detached daemon this machine started with `up`.",
   log: "pievo log [<loop>] [--json] [--limit N]\n  Show a loop's recent runs (concise: status + metrics + session id). Defaults to the\n  loop for the current directory.",

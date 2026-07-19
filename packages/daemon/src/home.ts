@@ -11,12 +11,10 @@
  * home is rendered (no structured-render fallback anymore). The in-run bare `pievo`
  * is handled separately (cli.ts routes it to the callback as `home` on the run cred).
  *
- * Bounded on the hot path (feedback follow-up): batch 6 runs this home view on EVERY
- * SessionStart via the installed hook, so the network round-trip must degrade fast. The
- * home POST goes through `boundedFetch` (a few-second timeout + AbortSignal), so an
- * unreachable-but-not-refused server (a hung TCP connection) fails fast to a DEFINITIVE
- * degraded home (`server unreachable`) instead of stalling session start until the OS
- * timeout. Interactive verbs keep their own fetch budgets.
+ * Bounded for responsive interactive use: the home POST goes through `boundedFetch`
+ * (a few-second timeout + AbortSignal), so an unreachable-but-not-refused server fails
+ * fast to a definitive degraded home (`server unreachable`) instead of waiting for the
+ * OS timeout. Other interactive verbs keep their own fetch budgets.
  *
  * Every external touch (fetch, cwd, homedir, pid, server, output) is an injectable
  * seam so tests need no real process/network/~.pievo.
@@ -30,8 +28,7 @@ import { resolveServerUrl } from "./config.js";
 import { boundedFetch } from "./http.js";
 import { verifiedRunningPid } from "./pidfile.js";
 
-/** The SessionStart hot path budget: fail fast to a degraded home rather than stall a
- *  session on a hung server. */
+/** Keep the interactive home responsive when the configured server hangs. */
 const HOME_TIMEOUT_MS = 4_000;
 
 /** `fetch` bounded to `HOME_TIMEOUT_MS` — the default home transport (tests inject
@@ -93,9 +90,8 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
     return 0;
   }
   if (r.kind === "read-error") return out(`error: "cannot read ${r.path}"\ncode: ERROR\n`), 1;
-  // Unreachable / hung server (incl. a bounded-fetch timeout on the SessionStart hot
-  // path): render a DEFINITIVE degraded home — never hang, never empty, never a raw
-  // error line that would surface the ambient hook as a failure.
+  // Unreachable / hung server: render a definitive degraded home — never hang,
+  // never empty, never surface a raw transport error.
   if (r.kind === "network-error") {
     out(degradedHome(bin, serverDisplay, r.message));
     return 0;
@@ -105,10 +101,9 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
   const code = printText(r.body, r.status, out);
   if (code !== null) return code;
 
-  // A too-old server (no `text` — predates the axi home verb). The home must stay
-  // never-empty/never-alarm on the SessionStart hot path, so render a DEFINITIVE
-  // "server too old" home (exit 0) rather than the SERVER_TOO_OLD error other verbs
-  // print — no structured-render fallback anymore.
+  // A too-old server (no `text` — predates the axi home verb). Keep home
+  // never-empty/never-alarm by rendering a definitive "server too old" view (exit 0)
+  // rather than the SERVER_TOO_OLD error other verbs print.
   out(tooOldHome(bin, serverDisplay));
   return 0;
 }
@@ -133,9 +128,8 @@ function notConnectedHome(bin: string | null): string {
   );
 }
 
-/** The definitive DEGRADED home when the server is unreachable or hung (the machine IS
- *  configured, so this isn't the not-connected view). Never empty; exits 0 so the
- *  SessionStart hook never surfaces as a failure. */
+/** The definitive degraded home when the server is unreachable or hung (the machine
+ *  is configured, so this isn't the not-connected view). Never empty; exits 0. */
 function degradedHome(bin: string | null, server: string, reason: string): string {
   return (
     `${binLine(bin)}\n` +
@@ -147,9 +141,8 @@ function degradedHome(bin: string | null, server: string, reason: string): strin
 }
 
 /** The definitive home when the server predates the axi `home` verb (no rendered
- *  `text`). The machine IS configured, so this isn't the not-connected view; it names
- *  the too-old server + the fix. Never empty; exits 0 so the SessionStart hook never
- *  surfaces as a failure. */
+ *  `text`). The machine is configured, so this isn't the not-connected view; it names
+ *  the too-old server + the fix. Never empty; exits 0. */
 function tooOldHome(bin: string | null, server: string): string {
   return (
     `${binLine(bin)}\n` +

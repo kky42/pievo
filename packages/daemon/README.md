@@ -38,8 +38,8 @@ pievo up --server-url <url> --connect-key <dk_…>
 
 `up` is idempotent: it registers this machine (first time), stores the
 credentials under `~/.pievo/`, and spawns a detached daemon if none is
-running. It also refreshes the user-scope pievo skill, the SessionStart hook,
-and the `pievo` PATH shim. After that, `pievo up` alone reconnects.
+running. It also refreshes the user-scope pievo skill and the `pievo` PATH
+shim. After that, `pievo up` alone reconnects.
 
 ## Commands
 
@@ -49,19 +49,17 @@ pievo                 Show the content-first HOME: this machine's live loops +
 
 Setup
   up [--foreground]       Connect this machine / ensure its daemon is running
-                          (idempotent; refreshes the pievo skill, the SessionStart
-                          hook, and the `pievo` PATH shim). --foreground runs the
-                          poll loop attached in this terminal instead of detached.
+                          (idempotent; refreshes the pievo skill and the `pievo`
+                          PATH shim). --foreground runs the poll loop attached in
+                          this terminal instead of detached.
   new --json '<config>'   Create a loop from an inline JSON config (--json - reads
                           stdin). --dry-run validates + previews, creates nothing.
-  setup hooks [--remove]  Install/refresh the SessionStart hook that lands the home
-                          view as ambient context each session (--remove uninstalls).
   skill [status|install]  Manage the pievo agent skill install (user scope by
                           default; --project installs into the current directory).
   update                  Update this machine's daemon to the version you invoked
                           (run via npx @kky42/pievo@latest update): stops the
                           running daemon, starts the new one, refreshes the
-                          skill/hook/shim.
+                          skill/shim.
 
 Management
   status                  Is the daemon running? Show pid + server connection.

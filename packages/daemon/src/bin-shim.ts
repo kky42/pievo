@@ -3,8 +3,8 @@
  * `npx @kky42/pievo@latest …`, paying npx startup per call — and the reference
  * axi tools all live at a real bin (`bin: ~/.local/share/.../bin/gh-axi`). `pievo
  * up` (and `pievo update`) write a tiny exec wrapper named `pievo` into a user
- * bin dir on PATH so subsequent calls (and the SessionStart hook, which runs
- * `pievo` every session open) resolve to a real binary with no npx overhead.
+ * bin dir on PATH so subsequent calls resolve to a real binary with no npx
+ * overhead.
  *
  * The wrapper RE-EXECS this daemon's own launcher (execPath + execArgv + entry),
  * exactly like `callback-bin.ts` — so it stays version-consistent with whatever
@@ -21,11 +21,6 @@
  *      existing `pievo` there and skip it unless it is our OWN prior shim (starts
  *      with the re-exec marker); a real `npm i -g` binary is left untouched. Refreshing
  *      our own shim is idempotent.
- *
- * `resolveDurableCommand` reuses the same durability test for the ambient SessionStart
- * hook (`setup.ts`): the hook only installs when a durable `pievo` (our shim OR a
- * PATH-resolvable global install) exists, so the common npx-without-global flow never
- * writes a hook that would fail every session with `pievo: command not found`.
  *
  * Every external touch (write, mkdir, read, homedir, PATH, entry) is an injectable
  * seam so tests never write into the real home dir.
@@ -177,10 +172,8 @@ export function existingBinShim(injected: { env?: NodeJS.ProcessEnv; homedir?: (
 /** The absolute path of a `pievo` in a DURABLE PATH directory (a real global
  *  install), or null. EPHEMERAL PATH dirs are skipped: `npx @kky42/pievo …`
  *  PREPENDS its own throwaway `…/_npx/…/.bin` onto PATH for the duration of the
- *  invocation, so a naive PATH scan would count that transient entry as "durable" and
- *  wrongly conclude a durable `pievo` exists (the F6 hook-gating false positive — the
- *  bin shim was correctly skipped as ephemeral while the bin-dependent hook installed
- *  anyway). Filtering ephemeral dirs keeps the hook gate and the shim gate consistent. */
+ *  invocation, so a naive PATH scan would count that transient entry as durable.
+ *  Filtering ephemeral dirs keeps the home view's bin path truthful. */
 function pievoPathBin(pathVar: string | undefined, exists: (p: string) => boolean): string | null {
   if (!pathVar) return null;
   for (const dir of pathVar.split(path.delimiter)) {
@@ -203,18 +196,4 @@ export function resolveDurableBinPath(injected: { env?: NodeJS.ProcessEnv; homed
   const env = injected.env ?? process.env;
   const exists = injected.exists ?? ((p: string) => fs.existsSync(p));
   return pievoPathBin(env.PATH, exists);
-}
-
-/**
- * Resolve a DURABLE `pievo` command for the ambient SessionStart hook: our installed
- * shim or a real global install on PATH (both are absolute paths — a full path is the
- * most robust hook command). Returns null when only a BARE, non-PATH `pievo` would
- * result — the common `npx @kky42/pievo@latest up` flow where the shim was skipped
- * as ephemeral and there is no global install (the transient npx PATH entry is filtered
- * out by `resolveDurableBinPath`). The caller then SKIPS the hook (the automatic
- * up/update path) or warns before falling back to bare (the explicit verb), so we never
- * install a SessionStart hook that fails every session with `pievo: command not found`.
- */
-export function resolveDurableCommand(injected: { env?: NodeJS.ProcessEnv; homedir?: () => string; exists?: (p: string) => boolean } = {}): string | null {
-  return resolveDurableBinPath(injected);
 }
