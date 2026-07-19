@@ -1,0 +1,8 @@
+{
+  "comment": "Root holds no source — each package has its own tsconfig. `pnpm -r typecheck` runs them.",
+  "files": [],
+  "references": [
+    { "path": "packages/server" },
+    { "path": "packages/daemon" }
+  ]
+}

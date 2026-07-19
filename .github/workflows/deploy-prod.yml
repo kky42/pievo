@@ -1,0 +1,66 @@
+# Optional manual deployment of a separately configured production Fly instance.
+# No production app/origin is assumed. Configure the secret/vars below before use;
+# the preflight fails before flyctl when any required value is absent.
+name: Deploy Production Fly Instance (Manual)
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: fly-deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: flyctl deploy (configured production instance)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Preflight — require production token, app, and origin
+        env:
+          FLY_API_TOKEN_PROD: ${{ secrets.FLY_API_TOKEN_PROD }}
+          PIEVO_PROD_FLY_APP: ${{ vars.PIEVO_PROD_FLY_APP }}
+          PIEVO_PROD_URL: ${{ vars.PIEVO_PROD_URL }}
+        run: |
+          if [ -z "$FLY_API_TOKEN_PROD" ]; then
+            echo "::error::FLY_API_TOKEN_PROD is empty or unset." >&2
+            exit 1
+          fi
+          if [ -z "$PIEVO_PROD_FLY_APP" ]; then
+            echo "::error::PIEVO_PROD_FLY_APP is empty or unset — set it to the explicit production Fly app name." >&2
+            exit 1
+          fi
+          if [ -z "$PIEVO_PROD_URL" ]; then
+            echo "::error::PIEVO_PROD_URL is empty or unset — set it to the explicit production instance origin." >&2
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_PROD }}
+          PIEVO_PROD_FLY_APP: ${{ vars.PIEVO_PROD_FLY_APP }}
+        run: |
+          flyctl deploy --remote-only --ha=false -c fly.prod.toml -a "$PIEVO_PROD_FLY_APP" \
+            --build-arg GIT_SHA=${{ github.sha }} \
+            --build-arg BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      - name: Smoke — configured production origin serves the pushed SHA
+        env:
+          PIEVO_PROD_URL: ${{ vars.PIEVO_PROD_URL }}
+        run: |
+          expected='${{ github.sha }}'
+          got=''
+          for attempt in 1 2 3 4 5; do
+            if body="$(curl -fsS --max-time 15 "${PIEVO_PROD_URL%/}/api/health")"; then
+              echo "health: $body"
+              got="$(printf '%s' "$body" | sed -n 's/.*"sha":"\([^"]*\)".*/\1/p')"
+              [ "$got" = "$expected" ] && break
+              echo "health served sha=$got, want $expected (attempt $attempt); retrying in 10s…" >&2
+            else
+              echo "health not ready (attempt $attempt), retrying in 10s…" >&2
+            fi
+            sleep 10
+          done
+          if [ "$got" != "$expected" ]; then
+            echo "::error::configured production instance /api/health sha=$got but pushed sha=$expected." >&2
+            exit 1
+          fi

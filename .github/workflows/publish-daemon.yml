@@ -1,0 +1,72 @@
+# Publish @kky42/pievo (packages/daemon) to npm via OIDC Trusted Publishing.
+# No NPM_TOKEN: the runner mints a short-lived OIDC token that npm verifies against
+# the Trusted Publisher configured on npmjs.com (GitHub Actions / this repo / this
+# workflow file). Fires on a version tag (vX.Y.Z) or manual dispatch. Publishes ONLY
+# the daemon. Provenance is emitted automatically by trusted publishing once the
+# source repo is public (npm skips provenance while the repo is private, but the
+# publish still succeeds) — no `--provenance` flag is needed under OIDC.
+name: Publish daemon (npm)
+
+on:
+  push:
+    tags: ['v*']             # e.g. v0.3.1  (also matches v0.3.1-rc.1)
+  workflow_dispatch: {}      # manual re-publish button
+
+jobs:
+  publish:
+    name: npm publish @kky42/pievo
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write        # <-- lets the runner mint the OIDC token npm verifies (Trusted Publishing)
+    steps:
+      - uses: actions/checkout@v7
+
+      # pnpm version comes solely from the root package.json "packageManager"
+      # (pnpm@8.15.0, matching lockfileVersion 6.0). action-setup@v6 errors if both
+      # a `version:` input AND "packageManager" specify pnpm, so we set neither here.
+      - uses: pnpm/action-setup@v6
+
+      # NO `registry-url:` here, deliberately. setup-node's registry-url writes an
+      # .npmrc (via NPM_CONFIG_USERCONFIG) with `_authToken=${NODE_AUTH_TOKEN}` AND
+      # exports NODE_AUTH_TOKEN with a dummy value when none is given. At publish time
+      # npm then authenticates with that dummy/empty token instead of OIDC trusted
+      # publishing - which is exactly the E404 "404 Not Found / no permission" we hit
+      # on v0.3.1. Omitting registry-url means no token-based .npmrc is written, so
+      # `npm publish` falls back to the default registry (registry.npmjs.org) and the
+      # OIDC path. The public registry + access is set via packages/daemon/package.json
+      # "publishConfig.access: public" plus `--access public` below.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22                      # matches engines.node ">=22" (>= 22.14.0)
+          cache: pnpm
+
+      # Trusted publishing requires npm CLI >= 11.5.1; Node 22 bundles npm 10.x, so
+      # upgrade the global npm before publishing. (pnpm install/build below are unaffected.)
+      # Pinned to npm@11 (not @latest) for reproducibility — satisfies the >= 11.5.1
+      # minimum while shielding the publish from a future npm 12 changing behavior. Bump
+      # this pin if npm ever requires 12+ for OIDC trusted publishing.
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@11
+
+      - name: Install (workspace, frozen)
+        run: pnpm install --frozen-lockfile
+
+      # Guard: when triggered by a tag, ensure the tag matches the daemon version
+      # so a stray tag can't publish the wrong version. (Skipped on manual runs.)
+      - name: Verify tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          PKG=$(node -p "require('./packages/daemon/package.json').version")
+          TAG="${GITHUB_REF_NAME#v}"
+          test "$PKG" = "$TAG" || { echo "tag $TAG != package.json $PKG"; exit 1; }
+
+      - name: Build daemon
+        run: pnpm --filter @kky42/pievo build
+
+      - name: Publish
+        working-directory: packages/daemon       # <-- ONLY the daemon, never the server
+        # OIDC trusted publishing: no NODE_AUTH_TOKEN and no token-based .npmrc (see the
+        # setup-node note above). npm authenticates via the id-token minted above and
+        # emits provenance automatically (when repo is public).
+        run: npm publish --access public

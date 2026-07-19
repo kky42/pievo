@@ -1,0 +1,44 @@
+# Reusable Fly example: one stateless Pievo process backed by external Postgres
+# and object storage. This repository owns no Fly app, region, or public origin;
+# pass the app explicitly with `flyctl -a <app>` and configure its secrets first.
+#
+# Example setup (replace every placeholder):
+#   fly apps create <app-name>
+#   fly secrets set -a <app-name> \
+#       DATABASE_URL='postgresql://...:6543/postgres?sslmode=require' \
+#       DIRECT_DATABASE_URL='postgresql://...:5432/postgres?sslmode=require' \
+#       PIEVO_AUTH_SECRET="$(openssl rand -hex 32)" \
+#       GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... \
+#       PIEVO_BASE_URL=https://<your-instance-origin> \
+#       PIEVO_ALLOWED_LOGINS=you@example.com \
+#       PIEVO_R2_ACCOUNT_ID=... PIEVO_R2_BUCKET=... \
+#       PIEVO_R2_ACCESS_KEY_ID=... PIEVO_R2_SECRET_ACCESS_KEY=...
+#   fly deploy --ha=false -a <app-name> -c fly.prod.toml
+#
+# Exactly one machine is required: the in-process scheduler must not be duplicated.
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3000"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  # A failing health check de-routes the process; the DB watchdog exits a wedged
+  # process so Fly's restart policy can recover it.
+  [[http_service.checks]]
+    method = "get"
+    path = "/api/health/db"
+    interval = "15s"
+    timeout = "10s"
+    grace_period = "30s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1024mb"

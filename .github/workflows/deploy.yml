@@ -1,0 +1,66 @@
+# Optional manual deployment of a user-configured Pievo Fly instance.
+# The repository owns no Fly app or public origin. Configure the secret/vars named
+# below before dispatching; otherwise the preflight fails before flyctl runs.
+name: Deploy Fly Instance (Manual)
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: flyctl deploy (configured instance)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Preflight — require Fly token, app, and origin
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PIEVO_FLY_APP: ${{ vars.PIEVO_FLY_APP }}
+          PIEVO_FLY_ORIGIN: ${{ vars.PIEVO_FLY_ORIGIN }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::error::FLY_API_TOKEN is empty or unset." >&2
+            exit 1
+          fi
+          if [ -z "$PIEVO_FLY_APP" ]; then
+            echo "::error::PIEVO_FLY_APP is empty or unset — set it to the explicit Fly app name." >&2
+            exit 1
+          fi
+          if [ -z "$PIEVO_FLY_ORIGIN" ]; then
+            echo "::error::PIEVO_FLY_ORIGIN is empty or unset — set it to the explicit instance origin." >&2
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PIEVO_FLY_APP: ${{ vars.PIEVO_FLY_APP }}
+        run: |
+          flyctl deploy --remote-only --ha=false -c fly.toml -a "$PIEVO_FLY_APP" \
+            --build-arg GIT_SHA=${{ github.sha }} \
+            --build-arg BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      - name: Smoke — configured origin serves the pushed SHA
+        env:
+          PIEVO_FLY_ORIGIN: ${{ vars.PIEVO_FLY_ORIGIN }}
+        run: |
+          expected='${{ github.sha }}'
+          got=''
+          for attempt in 1 2 3 4 5; do
+            if body="$(curl -fsS --max-time 15 "${PIEVO_FLY_ORIGIN%/}/api/health")"; then
+              echo "health: $body"
+              got="$(printf '%s' "$body" | sed -n 's/.*"sha":"\([^"]*\)".*/\1/p')"
+              [ "$got" = "$expected" ] && break
+              echo "health served sha=$got, want $expected (attempt $attempt); retrying in 10s…" >&2
+            else
+              echo "health not ready (attempt $attempt), retrying in 10s…" >&2
+            fi
+            sleep 10
+          done
+          if [ "$got" != "$expected" ]; then
+            echo "::error::configured instance /api/health sha=$got but pushed sha=$expected." >&2
+            exit 1
+          fi

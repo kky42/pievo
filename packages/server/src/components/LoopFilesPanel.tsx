@@ -1,0 +1,207 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ArtifactSummary } from '../types'
+import { fmt, humanBytes } from '../lib/format'
+import { buildFileEntries, isTaskEntry } from '../lib/fileEntries'
+import { getArtifacts } from '../server/loopApi'
+import { ArtifactBody, ViewerHead } from './artifactView'
+import { TaskFileView } from './TaskFileView'
+
+/**
+ * The unified "Files" surface of the loop detail page — the loop's spec (its task
+ * file) shown ALONGSIDE every live-synced artifact in ONE master-detail panel,
+ * not two separate boxes. A file list (task file pinned first, then artifacts
+ * path-sorted) drives a content viewer on the right; the task file is selected by
+ * default. Text files render inline (markdown → formatted, else mono); binary /
+ * oversize files offer the download route. The artifact list is fetched lazily by
+ * loopId and self-polls so files appear as the loop writes them (Phase 1-2 reuse).
+ */
+
+const basename = (path: string) => path.split('/').pop() || path
+
+/** Faint type tag shown after a file's size. */
+function typeTag(path: string): string {
+  const m = path.match(/\.([a-z0-9]+)$/i)
+  return m ? m[1]!.toLowerCase() : 'file'
+}
+
+export function LoopFilesPanel({
+  loopId,
+  taskFile,
+  taskFileContent,
+  taskFileSyncedAt,
+  running,
+}: {
+  loopId: string
+  /** The loop's task-file path (relative), or undefined when it has none. */
+  taskFile?: string
+  /** The task file's synced content (markdown), or null when not yet synced. */
+  taskFileContent: string | null
+  taskFileSyncedAt: string | null
+  running?: boolean
+}) {
+  const [artifacts, setArtifacts] = useState<ArtifactSummary[] | null>(null)
+  const [selected, setSelected] = useState<string | null>(null)
+  const seq = useRef(0) // guards a stale list overwriting a fresh one
+
+  const refresh = useCallback(async () => {
+    const mine = ++seq.current
+    try {
+      const list = await getArtifacts({ data: { loopId } })
+      if (mine === seq.current) setArtifacts(list)
+    } catch {
+      if (mine === seq.current) setArtifacts((prev) => prev ?? [])
+    }
+  }, [loopId])
+
+  // Reset + fetch on loop change.
+  useEffect(() => {
+    setArtifacts(null)
+    setSelected(null)
+    void refresh()
+  }, [loopId, refresh])
+
+  // Keep the list live as the loop writes files — quick while running, calm otherwise.
+  useEffect(() => {
+    const t = setInterval(() => void refresh(), running ? 4_000 : 12_000)
+    return () => clearInterval(t)
+  }, [running, refresh])
+
+  // Build the unified entry list (task FIRST, then path-sorted artifacts) — see
+  // `buildFileEntries`: the task file IS the loop folder's README, so it appears
+  // exactly once (badge the synced artifact, or a synthetic entry pre-first-sync).
+  const entries = useMemo(() => buildFileEntries(taskFile, artifacts ?? []), [taskFile, artifacts])
+
+  // Effective selection, DERIVED during render (react.dev "You Might Not Need an
+  // Effect"): the user's explicit pick when it's still in the list, else the
+  // default — the task file first, then the first artifact. Deriving instead of
+  // copying the default into `selected` via an effect avoids the extra render
+  // auto-select cost, keeps a manual pick from fighting the live poll, and falls
+  // back cleanly when a selected file vanishes on refresh. `selected` now holds
+  // ONLY the user's explicit choice (set by the row buttons below).
+  const activePath = selected && entries.some((e) => e.path === selected) ? selected : entries[0]?.path ?? null
+  const active = entries.find((e) => e.path === activePath) ?? null
+  // The task row — synthetic OR a synced artifact badged as the task — always
+  // renders from the loop record's `taskFileContent` (authoritative + always
+  // present), not the artifact's own blob fetch. Same file, but this is robust to
+  // a missing blob and avoids a redundant round-trip.
+  const activeIsTask = isTaskEntry(active)
+
+  return (
+    // `id="files"` - the anchor the dashboard's `<loop-embed>` "open in files →"
+    // link targets (same page, the panel sits below the dashboard box).
+    <section id="files" className="min-w-0">
+      <div className="mb-2.5 flex items-end justify-between gap-3 border-b border-hairline pb-1.5">
+        <h2 className="text-label font-semibold text-secondary">
+          Files{artifacts ? ` (${entries.length})` : ''}
+        </h2>
+        <span className="text-caption font-medium text-disabled">Spec + synced artifacts</span>
+      </div>
+
+      {entries.length === 0 ? (
+        <div className="rounded-card border border-hairline bg-surface px-5 py-10 text-center text-body text-disabled shadow-card">
+          {artifacts == null ? 'Loading…' : 'No files yet - the task file and synced artifacts appear here.'}
+        </div>
+      ) : (
+        <div className="grid h-[min(600px,68vh)] grid-cols-1 overflow-hidden rounded-card border border-hairline bg-surface shadow-card sm:grid-cols-[210px_1fr]">
+          {/* file list */}
+          <nav className="max-h-44 overflow-y-auto border-b border-hairline sm:max-h-none sm:border-b-0 sm:border-r">
+            <ul className="py-1.5">
+              {entries.map((e) => {
+                const on = e.path === activePath
+                const isTask = isTaskEntry(e)
+                // Typed artifacts (front-matter `type`/`title`) get quiet chips; the
+                // task file keeps its TASK treatment and is exempt from all of this.
+                const meta = !isTask && e.kind === 'artifact' ? e.file.meta : null
+                const title = meta?.title?.trim() || ''
+                // Prefer the authored title as the display name when it improves the
+                // row (differs from the bare filename); otherwise show the filename.
+                const display = title && title !== basename(e.path) ? title : basename(e.path)
+                const showPath = e.path.includes('/') || display !== basename(e.path)
+                return (
+                  <li key={e.path}>
+                    <button
+                      type="button"
+                      onClick={() => setSelected(e.path)}
+                      className={`flex w-full items-center gap-2 border-l-2 px-3 py-2 text-left transition-colors ${
+                        on
+                          ? 'border-display bg-raised'
+                          : 'border-transparent hover:bg-raised/60'
+                      }`}
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span
+                          className={`block truncate font-mono text-label ${on ? 'text-display' : 'text-primary'}`}
+                          title={e.path}
+                        >
+                          {display}
+                        </span>
+                        {showPath && (
+                          <span className="block truncate font-mono text-micro text-disabled" title={e.path}>
+                            {e.path}
+                          </span>
+                        )}
+                      </span>
+                      {isTask ? (
+                        <span className="shrink-0 rounded-full bg-interactive-soft px-2 text-caption font-medium text-interactive">
+                          Task
+                        </span>
+                      ) : meta?.type ? (
+                        <span
+                          className="shrink-0 truncate rounded-full bg-raised px-2 text-caption font-medium text-secondary"
+                          title={`type: ${meta.type}`}
+                        >
+                          {meta.type}
+                        </span>
+                      ) : (
+                        <span className="shrink-0 font-mono text-micro text-disabled">
+                          {typeTag(e.path)}
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </nav>
+
+          {/* content viewer */}
+          <div className="min-w-0 overflow-y-auto">
+            {activeIsTask && active ? (
+              <TaskEntryView path={active.path} content={taskFileContent} syncedAt={taskFileSyncedAt} />
+            ) : active?.kind === 'artifact' ? (
+              <ArtifactEntryView loopId={loopId} file={active.file} />
+            ) : null}
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+/** The task file pane — the loop's spec, rendered as formatted markdown. */
+function TaskEntryView({ path, content, syncedAt }: { path: string; content: string | null; syncedAt: string | null }) {
+  return (
+    <>
+      <ViewerHead path={path} meta={syncedAt ? `Task file · synced ${fmt(syncedAt)}` : 'Task file'} />
+      {content == null ? (
+        <div className="px-5 py-6 text-body text-disabled">(syncs from the machine on the next run)</div>
+      ) : (
+        <TaskFileView content={content} />
+      )}
+    </>
+  )
+}
+
+/** The artifact pane — the shared caption strip over the shared content body. */
+function ArtifactEntryView({ loopId, file }: { loopId: string; file: ArtifactSummary }) {
+  const meta = [file.size != null ? humanBytes(file.size) : '', `synced ${fmt(file.updatedAt)}`]
+    .filter(Boolean)
+    .join(' · ')
+
+  return (
+    <>
+      <ViewerHead path={file.path} meta={meta} />
+      <ArtifactBody loopId={loopId} file={file} />
+    </>
+  )
+}

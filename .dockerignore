@@ -1,0 +1,14 @@
+# Never copy host-built artifacts into the image — they're built INSIDE the
+# Dockerfile. Critically, host node_modules carries darwin-arm64 native binaries
+# (better-sqlite3) that crash a linux container with "invalid ELF header".
+node_modules
+**/node_modules
+.output
+**/.output
+dist
+**/dist
+.git
+*.log
+.env
+**/.env
+.DS_Store

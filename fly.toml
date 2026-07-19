@@ -1,0 +1,48 @@
+# Reusable Fly example: one Pievo process with embedded PGlite on a volume.
+# This repository owns no Fly app, region, origin, or volume. Supply the app with
+# `flyctl -a <app>` and replace the required mount source below with a volume you
+# created for that app before deploying.
+#
+# Example setup (replace every placeholder):
+#   fly apps create <app-name>
+#   fly volumes create <volume-name> -a <app-name> --region <region> --size 1
+#   # Replace `replace_with_your_volume_name` below with <volume-name>.
+#   fly secrets set -a <app-name> \
+#       PIEVO_AUTH_SECRET="$(openssl rand -hex 32)" \
+#       GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=... \
+#       PIEVO_BASE_URL=https://<your-instance-origin> \
+#       PIEVO_ALLOWED_LOGINS=you@example.com
+#   fly deploy --ha=false -a <app-name> -c fly.toml
+#
+# Exactly one machine is required: the in-process scheduler must not be duplicated.
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PIEVO_DATA_DIR = "/data"
+  PIEVO_DB = "pglite"
+  PORT = "3000"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "get"
+    path = "/api/health/db"
+    interval = "15s"
+    timeout = "10s"
+    grace_period = "30s"
+
+[[mounts]]
+  # Fly requires a concrete volume name here; create it first and replace this.
+  source = "replace_with_your_volume_name"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

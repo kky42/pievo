@@ -1,0 +1,69 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { afterAll, beforeAll, expect, test } from 'vitest'
+
+import { CODING_AGENTS, coerceCodingAgent } from '../types.js'
+import type { JobPayload } from '../types.js'
+import type { NewLoop } from '../db/schema.js'
+
+/**
+ * The shared coding-agent enum validator + the web `patchJob` agent write path.
+ *
+ * `coerceCodingAgent` is the ONE enum validator both write surfaces read (server
+ * `buildEditUpdate` + the web `patchJob`/select), so it is exercised directly here.
+ *
+ * `patchJob` is a thin `createServerFn` wrapper; its distinguishing agent logic is
+ * `const agent = coerceCodingAgent(p.agent)` then `...(agent ? { agent } : {})`
+ * spread into `store.updateLoop`. Following the `teamUrlScope.integration`
+ * convention, this mirrors exactly that spread over a real pglite store to prove a
+ * `JobPayload` carrying a KNOWN `agent` persists, an absent one is untouched, and an
+ * UNRECOGNIZED one is dropped (never persisted).
+ */
+
+let tmp: string
+let store: typeof import('../db/store.js')
+
+/** patchJob's agent write, verbatim (the only field this test drives). */
+function agentUpdate(p: JobPayload): Partial<NewLoop> {
+  const agent = coerceCodingAgent(p.agent)
+  return { ...(agent ? { agent } : {}) }
+}
+
+beforeAll(async () => {
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pievo-patchagent-'))
+  process.env.PIEVO_DATA_DIR = tmp
+  process.env.PIEVO_DB_PATH = path.join(tmp, 'test.db')
+  process.env.PIEVO_LOG_LEVEL = 'silent'
+  const db = await import('../db/index.js')
+  await db.runMigrations()
+  store = await import('../db/store.js')
+})
+
+afterAll(() => {
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+test('coerceCodingAgent accepts every known enum value and rejects the rest', () => {
+  for (const a of CODING_AGENTS) expect(coerceCodingAgent(a)).toBe(a)
+  for (const bad of ['emacs', 'CLAUDE-CODE', '', ' codex', 42, null, undefined, {}]) {
+    expect(coerceCodingAgent(bad)).toBeNull()
+  }
+})
+
+test('patchJob agent spread persists a JobPayload agent through store.updateLoop', async () => {
+  const created = await store.createLoop({ userId: 'u1', teamId: 't1', machineId: 'm1', name: 'A', cron: '0 6 * * *' })
+  // Create default is claude-code (no agent on the create body).
+  expect(created.agent).toBe('claude-code')
+
+  const updated = await store.updateLoop(created.id, agentUpdate({ agent: 'codex' }))
+  expect(updated!.agent).toBe('codex')
+
+  // An absent agent leaves the recorded value untouched (empty spread → no write).
+  const noop = await store.updateLoop(created.id, agentUpdate({ name: 'B' }))
+  expect(noop!.agent).toBe('codex')
+
+  // An unrecognized agent is dropped by the shared validator, never persisted.
+  const dropped = await store.updateLoop(created.id, agentUpdate({ agent: 'emacs' as never }))
+  expect(dropped!.agent).toBe('codex')
+})
