@@ -144,7 +144,7 @@ export function allowlistEnv(extra: { keys?: string[]; prefixes?: string[] } = {
 /** Allowlisted env for the coding-agent subprocess — never inherit unrelated
  *  secrets. Per-agent credential sets stay tight (no full parent env dump):
  *   - claude-code: ANTHROPIC_* + CLAUDE_CODE_OAUTH_TOKEN / CLAUDE_CONFIG_DIR
- *     (proxy/gateway users + relocated config so transcripts stay findable)
+ *     (proxy/gateway users + relocated Claude config)
  *   - codex: OPENAI_API_KEY / CODEX_API_KEY (+ optional CODEX_HOME); OAuth /
  *     session files under `~/.codex` are free via HOME
  * Keys ride ONLY their agent's path so a claude run never inherits an unrelated

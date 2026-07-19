@@ -48,7 +48,7 @@ describe('LoopDetailView poll/error resilience', () => {
     const dispatch = /async function onRequestEdit\(\) \{[\s\S]*?\n  \}/.exec(src)?.[0]
     expect(dispatch, 'onRequestEdit should exist').toBeTruthy()
     expect(dispatch).toContain('setEditRunId(r.runId ?? null)')
-    expect(dispatch).toContain('setEditLog([])')
+    expect(dispatch).not.toContain('setEditLog')
   })
 })
 

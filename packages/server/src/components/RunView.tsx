@@ -1,17 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import type { ArtifactSummary, JobDetail, RunDiffResult, RunSummary, TranscriptResult } from '../types'
-import { dur, fmt, fnum, money, until } from '../lib/format'
-import { loopDir } from '../lib/editPrompt'
-import { cancelRun, getArtifacts, getJobDetail, getRunDiff, getTranscript, loadOlderRuns } from '../server/loopApi'
-import { ArtifactFileRow, UnavailableFileRow } from './ArtifactFileRow'
+import type { JobDetail, RunDiffResult, RunSummary } from '../types'
+import { dur, fmt, fnum, until } from '../lib/format'
+import { cancelRun, getJobDetail, getRunDiff, loadOlderRuns } from '../server/loopApi'
 import { DiffView } from './DiffView'
-import { TranscriptView } from './TranscriptView'
 import { btn, btnDanger, Loading, Pill, runPulseStyle, sectionHeadCls, StatusPill } from './ui'
-import { LoadErrorCard, useContinueSession } from './actionUi'
+import { LoadErrorCard } from './actionUi'
 
 /** A section card - mirrors the loop page's surface panels with a sentence-case
- *  section heading. `min-w-0` so wide inner content (a diff / transcript line)
+ *  section heading. `min-w-0` so wide inner content (a wide diff line)
  *  scrolls inside the card, never widens the page. */
 function Card({ label, count, children }: { label: string; count?: number; children: React.ReactNode }) {
   return (
@@ -32,55 +29,6 @@ function Field({ k, children }: { k: string; children: React.ReactNode }) {
       <div className="mb-0.5 text-label font-medium text-secondary">{k}</div>
       <div className="min-w-0 text-body text-primary">{children}</div>
     </div>
-  )
-}
-
-/** A friendly, expand-on-click payload block (system prompt / user query). */
-function Fold({ title, sub, body }: { title: string; sub?: string; body: string }) {
-  return (
-    <details className="group mb-2 min-w-0 overflow-hidden rounded-control border border-hairline bg-surface">
-      <summary className="flex cursor-pointer select-none items-center gap-2 px-3.5 py-2.5 text-label font-medium text-primary marker:content-['']">
-        <span aria-hidden className="shrink-0 text-micro text-disabled transition-transform group-open:rotate-90">▸</span>
-        {title}
-        {sub && <span className="font-normal text-secondary">{sub}</span>}
-      </summary>
-      <pre className="m-0 max-h-[360px] min-w-0 overflow-auto whitespace-pre-wrap break-words border-t border-hairline bg-raised px-4 py-3.5 font-mono text-meta leading-relaxed text-secondary">
-        {body}
-      </pre>
-    </details>
-  )
-}
-
-/** Historical fallback for a run with no snapshot (predates Phase 3): the run's
- *  recorded produced-file list, reusing the Phase 2 file viewer. Files still
- *  synced to the loop expand/download inline; ones with no synced blob render
- *  non-clickable with a subtle hint instead of a dead link. */
-function RecordedFiles({ run }: { run: RunSummary }) {
-  const artifacts = run.artifacts ?? []
-  const [live, setLive] = useState<ArtifactSummary[] | null>(null)
-  useEffect(() => {
-    let alive = true
-    getArtifacts({ data: { loopId: run.loopId } })
-      .then((d) => alive && setLive(d))
-      .catch(() => alive && setLive([]))
-    return () => {
-      alive = false
-    }
-  }, [run.loopId])
-
-  const byPath = new Map((live ?? []).map((f) => [f.path, f]))
-  if (live == null) return <Loading />
-  return (
-    <ul className="space-y-1">
-      {artifacts.map((a) => {
-        const f = byPath.get(a.path)
-        return f ? (
-          <ArtifactFileRow key={a.path} loopId={run.loopId} file={f} />
-        ) : (
-          <UnavailableFileRow key={a.path} path={a.path} />
-        )
-      })}
-    </ul>
   )
 }
 
@@ -111,23 +59,12 @@ function Changes({ run }: { run: RunSummary }) {
         <Loading />
       </Card>
     )
-  if (!data.hasSnapshot) {
-    // Runs predating Phase 3 have no diff snapshot — fall back to the run's
-    // recorded produced-file list so the file surface isn't lost.
-    if ((run.artifacts?.length ?? 0) > 0)
-      return (
-        <Card label="Files" count={run.artifacts?.length ?? 0}>
-          <RecordedFiles run={run} />
-        </Card>
-      )
+  if (!data.hasSnapshot)
     return (
       <Card label="Changes">
-        <div className="text-body text-disabled">
-          No recorded file changes for this run (an earlier run); runs from now on track what changed.
-        </div>
+        <div className="text-body text-disabled">No file snapshot was recorded for this run.</div>
       </Card>
     )
-  }
   return (
     <Card label="Changes" count={data.files.length}>
       {data.files.length === 0 ? (
@@ -139,74 +76,19 @@ function Changes({ run }: { run: RunSummary }) {
   )
 }
 
-function Transcript({ runId, running }: { runId: string; running?: boolean }) {
-  const [data, setData] = useState<TranscriptResult | null>(null)
-  // Keyed on `running` too: a run opened mid-flight has only a partial trace (or
-  // none yet), so refetch once it settles to pull the complete transcript.
-  useEffect(() => {
-    let alive = true
-    getTranscript({ data: { runId } })
-      .then((d) => alive && setData(d))
-      .catch((e) => alive && setData({ error: String(e) }))
-    return () => {
-      alive = false
-    }
-  }, [runId, running])
-
-  if (!data) return <Loading />
-  if ('error' in data)
-    return <div className="text-body text-accent">Couldn't load the execution trace - {data.error}</div>
-  return (
-    <div className="min-w-0">
-      {data.system && <Fold title="System prompt" sub="standing instructions · current version" body={data.system} />}
-      {data.query && <Fold title="User query" sub="actual payload sent" body={data.query} />}
-      <div className="mt-3">
-        <TranscriptView steps={data.steps} />
-      </div>
-    </div>
-  )
-}
-
-/**
- * Live activity for an in-flight run — the run detail page's answer to the loop
- * page's Runs list line (pulsing dot + step + label). Without this an executing
- * run's own page showed nothing about what it was doing (Report/Changes/Transcript
- * all settle only at finalize), while the list that links to it streamed progress.
- *
- * The page self-polls every 3s while running, so `run.progress`/`run.ts` refresh in
- * place; a local 1s timer keeps the elapsed clock smooth between polls. Renders only
- * for a running run — terminal runs never mount it, so their pages are byte-identical.
- */
-function LiveActivity({ run }: { run: RunSummary }) {
-  const [, tick] = useState(0)
-  useEffect(() => {
-    const t = setInterval(() => tick((n) => n + 1), 1_000)
-    return () => clearInterval(t)
-  }, [])
+function RunningState({ run }: { run: RunSummary }) {
   const elapsed = dur(Math.max(0, Date.now() - Date.parse(run.ts)))
   return (
     <Card label="Activity">
-      <div className="flex items-start gap-2.5">
-        <span aria-hidden className="mt-[5px] size-2 shrink-0 rounded-full" style={runPulseStyle} />
-        <div className="min-w-0 flex-1">
-          {run.progress ? (
-            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-              <span className="shrink-0 font-mono text-label text-disabled">step {run.progress.step}</span>
-              <span className="min-w-0 break-words text-body text-primary">{run.progress.label}</span>
-            </div>
-          ) : (
-            <span className="text-body text-secondary">Starting - waiting for the first heartbeat.</span>
-          )}
-          <div className="mt-1 text-meta text-disabled">{elapsed ? `Running for ${elapsed} · ` : ''}updates live</div>
-        </div>
+      <div className="flex items-center gap-2.5 text-body text-secondary">
+        <span aria-hidden className="size-2 shrink-0 rounded-full" style={runPulseStyle} />
+        <span>Run in progress{elapsed ? ` for ${elapsed}` : ''}.</span>
       </div>
     </Card>
   )
 }
 
-// The coding agent's session id behind this run — handy for resuming that session
-// in your agent (e.g. `claude --resume <id>`) or feeding the auto-evolve context.
-// Mono + click-to-copy.
+// Provider session id captured for correlation and future use. Mono + click-to-copy.
 function SessionId({ id }: { id: string }) {
   const [copied, setCopied] = useState(false)
   return (
@@ -309,22 +191,13 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
     }
   }, [detail, run, searchDone, loopId, runId])
 
-  // Keep a live run streaming in (its transcript + diff settle once it finishes).
+  // Keep a live run fresh until its terminal fields and file snapshot settle.
   const running = !!(run?.queued || run?.running)
   useEffect(() => {
     if (!running) return
     const t = setInterval(() => void poll(), 3_000)
     return () => clearInterval(t)
   }, [running, poll])
-
-  // Unconditional hook call (null sessionId while loading ⇒ renders nothing);
-  // must sit above the early-return guards below.
-  const continueSession = useContinueSession({
-    sessionId: run?.sessionId ?? null,
-    dir: detail ? detail.job.exec?.workdir || loopDir(detail.job.taskFile) : null,
-    machineName: detail?.machine.name || null,
-    label: 'Continue agent session',
-  })
 
   async function onStop() {
     if (!run) return
@@ -372,7 +245,6 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
               <span className="text-wire">·</span>
               {roleChip && <Pill>{roleChip}</Pill>}
               {run.durationMs != null && <Pill tone="ink">{dur(run.durationMs)}</Pill>}
-              {run.costUsd != null && <Pill tone="ink">{money(run.costUsd)}</Pill>}
               <code className="font-mono text-disabled">{run.id}</code>
             </div>
           </div>
@@ -382,15 +254,12 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
           <Link to="/loops/$loopId" params={{ loopId }} className={btn}>
             View the whole loop →
           </Link>
-          {continueSession.button}
           {(run.queued || run.running) && (
             <button type="button" onClick={onStop} className={btnDanger}>
               Stop run
             </button>
           )}
         </div>
-        {/* paste-it-here instruction — BELOW the toolbar row, never a flex sibling */}
-        {continueSession.hint}
       </header>
 
       {/* two-column main: meaty content wide, metadata in a capped rail */}
@@ -402,7 +271,7 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
                 Queued; it starts when this loop is free and the machine polls.
               </div>
             </Card>
-          ) : run.running ? <LiveActivity run={run} /> : null}
+          ) : run.running ? <RunningState run={run} /> : null}
 
           {run.message && (
             <Card label="Report">
@@ -430,15 +299,11 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
             </Card>
           )}
 
-          <Card label="Execution">
-            {run.sessionId ? (
-              <Transcript runId={run.id} running={run.running} />
-            ) : (
-              <div className="text-body text-disabled">
-                {run.queued ? 'Execution has not started yet.' : run.running ? 'Waiting for the first recorded session.' : 'This run has no recorded session (an earlier run).'}
-              </div>
-            )}
-          </Card>
+          {run.finalText && (
+            <Card label="Final output">
+              <div className="whitespace-pre-wrap break-words text-body text-primary">{run.finalText}</div>
+            </Card>
+          )}
         </div>
 
         {/* metadata rail */}
@@ -450,14 +315,12 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
               </Field>
               {run.status && <Field k="Status">{run.status}</Field>}
               {run.durationMs != null && <Field k="Duration">{dur(run.durationMs)}</Field>}
-              {run.costUsd != null && (
-                <Field k="Cost">
-                  {money(run.costUsd)}
-                  {run.usage && (run.usage.inputTokens != null || run.usage.outputTokens != null) && (
-                    <span className="ml-1.5 text-disabled">
-                      ({fnum((run.usage.inputTokens ?? 0) + (run.usage.cacheReadTokens ?? 0) + (run.usage.cacheCreationTokens ?? 0))} in · {fnum(run.usage.outputTokens ?? 0)} out)
-                    </span>
-                  )}
+              {run.exitCode != null && <Field k="Exit code">{run.exitCode}</Field>}
+              {run.usage && (
+                <Field k="Token usage">
+                  <span className="text-disabled">
+                    {fnum((run.usage.inputTokens ?? 0) + (run.usage.cacheReadTokens ?? 0) + (run.usage.cacheCreationTokens ?? 0))} in · {fnum(run.usage.outputTokens ?? 0)} out
+                  </span>
                 </Field>
               )}
               {run.state != null && (

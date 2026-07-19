@@ -3,7 +3,7 @@ import { Menu } from '@base-ui/react/menu'
 import { Link, useNavigate } from '@tanstack/react-router'
 import type { ChannelSummary, CodingAgent, JobDetail, RunSummary } from '../types'
 import { buildEditPrompt, loopDir } from '../lib/editPrompt'
-import { cronText, dotColor, dotLabel, dur, fmt, isClosed, isCompleted, money, rel, tsShort, until } from '../lib/format'
+import { cronText, dotColor, dotLabel, dur, fmt, isClosed, isCompleted, rel, tsShort, until } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { setActiveTeamCookie } from '../lib/teamCookie'
 import { deleteJob, evolveJob, getJobDetail, loadOlderRuns, patchJob, requestEdit, runJob } from '../server/loopApi'
@@ -12,8 +12,8 @@ import { LoopFilesPanel } from './LoopFilesPanel'
 import { LoopForm, type LoopFormHandle } from './LoopForm'
 import { MachinesModal } from './MachinesModal'
 import { Timeline, WINDOW } from './Timeline'
-import { ArtifactList, btn, btnCost, btnPrimary, btnQuiet, ErrorBanner, Loading, Pill, Pre, runPulseStyle, sectionHeadCls } from './ui'
-import { ConfirmBar, FlashLine, LoadErrorCard, useContinueSession, useDeferredDelete, useFlash } from './actionUi'
+import { btn, btnCost, btnPrimary, btnQuiet, ErrorBanner, Loading, Pill, Pre, runPulseStyle, sectionHeadCls } from './ui'
+import { ConfirmBar, FlashLine, LoadErrorCard, useDeferredDelete, useFlash } from './actionUi'
 
 const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
 
@@ -43,7 +43,7 @@ const LoopView = lazy(() => import('./LoopView').then((m) => ({ default: m.LoopV
  * header footer (same slot as the Push settings) - the page stays visible, so
  * the owner describes the change while looking at the spec/dashboard it applies
  * to. Dispatch swaps the composer for a live status card under the header
- * (queued → applying with progress → settled with report + files + a link to
+ * (queued → applying → settled with report + files + a link to
  * the edit run); the page keeps polling, so the applied change surfaces around
  * the card. Only the manual field form (the raw-settings fallback) remains a
  * full-page takeover.
@@ -60,7 +60,6 @@ export function LoopDetailView({ id }: { id: string }) {
   const [promptCopied, setPromptCopied] = useState(false) // copy-prompt path: adjust the loop yourself, no dispatch
   const [editDispatched, setEditDispatched] = useState(false) // dispatched → the live status card watches the edit run
   const [editRunId, setEditRunId] = useState<string | null>(null)
-  const [editLog, setEditLog] = useState<{ step: number; label: string }[]>([]) // accumulated live progress
   const editBoxRef = useRef<HTMLTextAreaElement>(null)
   const [pushOpen, setPushOpen] = useState(false)
   const [pushSaved, setPushSaved] = useState(false)
@@ -100,7 +99,6 @@ export function LoopDetailView({ id }: { id: string }) {
     setPromptCopied(false)
     setEditDispatched(false)
     setEditRunId(null)
-    setEditLog([])
     setPushOpen(false)
     setOlder([])
     void load()
@@ -123,18 +121,6 @@ export function LoopDetailView({ id }: { id: string }) {
     const t = setTimeout(() => setPushSaved(false), 1800)
     return () => clearTimeout(t)
   }, [pushSaved])
-
-  // While an edit is dispatched: accumulate live progress into the status card
-  // (progress is cleared server-side at finalize, so keep our own trail). The
-  // full transcript lives on the edit run's own detail page - the card links there.
-  useEffect(() => {
-    if (!editDispatched) return
-    const p = detail?.runs.find((r) => r.id === editRunId)?.progress
-    if (!p) return
-    setEditLog((prev) =>
-      prev.at(-1)?.step === p.step && prev.at(-1)?.label === p.label ? prev : [...prev, { step: p.step, label: p.label }],
-    )
-  }, [editDispatched, detail])
 
   async function refreshAll() {
     await load()
@@ -211,8 +197,7 @@ export function LoopDetailView({ id }: { id: string }) {
       const r = await requestEdit({ data: { id, instruction } })
       if (r.error) return setActionErr(`Couldn't queue the edit: ${r.error}`)
       setEditRunId(r.runId ?? null)
-      setEditLog([])
-      setEditDispatched(true)
+        setEditDispatched(true)
       setEditVia(false) // composer collapses; the live status card takes over
       setEditInstruction('')
       await refreshAll()
@@ -237,16 +222,6 @@ export function LoopDetailView({ id }: { id: string }) {
       <span aria-hidden>←</span> Loops
     </Link>
   )
-
-  // Latest resumable coding-agent session (runs are newest-first; any role — an
-  // edit/evolve session is just as continuable as an exec one). Unconditional
-  // hook call (null while loading ⇒ renders nothing); must sit above the guards.
-  const continueSession = useContinueSession({
-    sessionId: detail?.runs.find((r) => r.sessionId)?.sessionId ?? null,
-    dir: detail ? detail.job.exec?.workdir || loopDir(detail.job.taskFile) : null,
-    machineName: detail?.machine.name || null,
-    label: 'Continue agent session',
-  })
 
   if (err)
     return (
@@ -284,7 +259,6 @@ export function LoopDetailView({ id }: { id: string }) {
   const dismissEdit = () => {
     setEditDispatched(false)
     setEditRunId(null)
-    setEditLog([])
   }
   // The loop's on-disk folder — where the owner runs their own coding agent for
   // the copy-prompt path (null ⇒ generic instruction, no fabricated path).
@@ -484,7 +458,6 @@ export function LoopDetailView({ id }: { id: string }) {
       >
         Edit
       </button>
-      {continueSession.button}
       <Menu.Root>
         <Menu.Trigger className={`${btn} px-2.5`} disabled={busy} aria-label="More actions">
           <svg aria-hidden width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
@@ -516,8 +489,6 @@ export function LoopDetailView({ id }: { id: string }) {
         </Menu.Portal>
       </Menu.Root>
     </div>
-    {/* paste-it-here instruction — BELOW the toolbar row, never a flex sibling */}
-    {continueSession.hint}
     </>
   )
 
@@ -701,7 +672,6 @@ export function LoopDetailView({ id }: { id: string }) {
               <span className="inline-flex min-w-0 items-center gap-2.5 text-body text-secondary">
                 <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={runPulseStyle} />
                 <span className="shrink-0 font-medium text-primary">Applying your edit</span>
-                {editRun.progress && <span className="truncate">· {editRun.progress.label}</span>}
               </span>
             ) : (
               <span className="inline-flex min-w-0 items-center gap-2 text-body">
@@ -728,27 +698,11 @@ export function LoopDetailView({ id }: { id: string }) {
             </div>
           </div>
 
-          {/* live activity trail while it works; the settled report replaces it */}
-          {!editSettled && editLog.length > 0 && (
-            <ul className="mt-3.5 max-h-[200px] space-y-1.5 overflow-y-auto rounded-control border border-hairline bg-raised px-4 py-3 font-mono text-label leading-relaxed text-secondary">
-              {editLog.map((e, i) => (
-                <li key={i} className="flex gap-2">
-                  <span className="shrink-0 text-disabled">{e.step}</span>
-                  <span className="break-words">{e.label}</span>
-                </li>
-              ))}
-            </ul>
-          )}
           {editSettled && editRun.message && (
             <div className="mt-3.5">
               <Pre>{editRun.message}</Pre>
             </div>
           )}
-          {editSettled && editRun.artifacts?.length ? (
-            <div className="mt-3.5">
-              <ArtifactList artifacts={editRun.artifacts} />
-            </div>
-          ) : null}
         </section>
       )}
 
@@ -864,11 +818,7 @@ function RunsSection({
     <section className="min-w-0">
       <div className="mb-2.5 flex items-end justify-between gap-3 border-b border-hairline pb-1.5">
         <h2 className={sectionHeadCls}>Runs ({summary.runCount})</h2>
-        {summary.totalCostUsd != null && (
-          <span className="font-mono text-caption text-disabled" title="Total claude-reported spend across all runs">
-            {money(summary.totalCostUsd)} total
-          </span>
-        )}
+
       </div>
 
       {summary.runCount === 0 ? (
@@ -895,7 +845,6 @@ function RunsSection({
                     <span className="flex items-baseline justify-between gap-2">
                       <span className="font-mono text-label text-secondary">{tsShort(x.ts)}</span>
                       <span className="shrink-0 font-mono text-caption text-disabled">
-                        {x.costUsd != null ? `${money(x.costUsd)} · ` : ''}
                         {dur(x.durationMs)}
                       </span>
                     </span>
@@ -905,11 +854,10 @@ function RunsSection({
                           <span aria-hidden className="size-1.5 rounded-full bg-disabled" />
                           <span>Queued</span>
                         </span>
-                      ) : x.running && x.progress ? (
+                      ) : x.running ? (
                         <span className="inline-flex items-center gap-2 text-meta text-secondary">
                           <span aria-hidden className="size-1.5 rounded-full" style={runPulseStyle} />
-                          <span className="text-disabled">{x.progress.step}</span>
-                          <span className="truncate">{x.progress.label}</span>
+                          <span>Running</span>
                         </span>
                       ) : x.error ? (
                         <span className="line-clamp-2 text-meta text-secondary">{x.error}</span>

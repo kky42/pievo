@@ -126,10 +126,10 @@ describe('/api/skill/references/$', () => {
   test('evolve.md log survey names the shipped TOON columns (batch 5)', async () => {
     const body = flat(await (await call('/api/skill/references/evolve.md')).text())
     // The "reading the log" prose matches the server's `renderLogText` header + summary.
-    expect(body).toContain('runs[N]{ts,role,outcome,cost,metrics,session,message}')
+    expect(body).toContain('runs[N]{ts,role,outcome,metrics,session,message}')
     expect(body).toContain('`summary:`')
     // `pievo log` shows metric values as key=value; the task-message inline is keys-only.
-    expect(body).toContain('`metrics` column carries them as `key=value`')
+    expect(body).toContain('concise `key=value` survey')
   })
 
   test('run.md is dual-audience (in-run enrichment + owner-readable), not edit-run mechanics', async () => {

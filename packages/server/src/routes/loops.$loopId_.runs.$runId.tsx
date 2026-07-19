@@ -9,7 +9,7 @@ import { SignIn } from '../components/SignIn'
  * `_` on the `$loopId` segment opts it out of the loop page's component so the run
  * gets its own full surface, deep-linkable + browser-back friendly) rather than a
  * modal or an inline panel. It resolves the run from the loop's detail payload
- * (reusing getJobDetail — no new backend) and reuses the Phase 3 diff + transcript.
+ * (reusing getJobDetail — no new backend) and reuses the Phase 3 artifact diff.
  *
  * Auth-gated like the dashboard (`/`) so a logged-out/expired DEEP LINK shows the
  * sign-in CTA instead of a raw `loop not found` error from the blocked fetch.

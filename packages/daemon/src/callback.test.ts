@@ -108,17 +108,15 @@ describe("runCallback — unified dispatch", () => {
   test("F2: in-run `pievo log` prints the server's TOON survey text on the EXISTING daemon", async () => {
     // The server's `/api/machine/cli` `log` response carries a rendered `text` field
     // (Batch 1's F2 fix); the callback prints `body.text`. Batch 7 keeps `runs` as a
-    // retained data channel (for `--json`/`--transcript`) but the callback reads only
+    // retained data channel (for `--json`) but the callback reads only
     // `text` — so any extra structured fields the stub returns are simply ignored here.
     // This e2e proves the F2 contract at the callback boundary.
     const survey = [
       'loop: "Docs Sweep" (loop-abc)',
       "count: 1 of 12 total",
-      "runs[1]{ts,role,outcome,cost,metrics,session,message}:",
-      '  "2026-07-05 06:00",exec,ok/nothing-new,$0.08,drift=0,sess-abc,"no drift"',
+      "runs[1]{ts,role,outcome,metrics,session,message}:",
+      '  "2026-07-05 06:00",exec,ok/nothing-new,drift=0,sess-abc,"no drift"',
       "summary: showing 1 of 12 · 1 ok · last exec ok/nothing-new 2026-07-05 06:00",
-      "help[2]:",
-      "  Run `pievo log loop-abc --full` to inline each run's transcript",
     ].join("\n");
     const calls = stubFetch(() => ({
       status: 200,
@@ -132,7 +130,7 @@ describe("runCallback — unified dispatch", () => {
     // The key F2 assertion: stdout is NON-EMPTY and carries the survey.
     expect(stdout().length).toBeGreaterThan(0);
     expect(stdout()).toContain('loop: "Docs Sweep" (loop-abc)');
-    expect(stdout()).toContain("runs[1]{ts,role,outcome,cost,metrics,session,message}:");
+    expect(stdout()).toContain("runs[1]{ts,role,outcome,metrics,session,message}:");
     expect(stdout()).toContain("summary:");
   });
 

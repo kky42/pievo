@@ -23,7 +23,7 @@
  *                                is running (local pid) + its connection state.
  *   pievo down               → setup mode: stop the detached daemon `up` started.
  *   pievo log [<loop>]       → read mode: print a loop's recent run history
- *                                (status + transcript) for the loop in this workdir.
+ *                                (status + metrics) for the loop in this workdir.
  *   pievo --help | -h | help → print usage (leads with the version) and exit
  *                                (NEVER start the daemon).
  *   pievo --version | -v     → print just the daemon version and exit.

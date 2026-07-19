@@ -9,8 +9,7 @@
 /**
  * Body cap for the standard machine routes (poll / report / loop / agent-api).
  * 2MB — generously above the largest legitimate body: a report can carry a
- * 512KB taskFileContent (WIRE_TEXT_CAP) + a ~800KB transcript (200 steps ×
- * 4KB fields) + a 256KB cursor (CURSOR_CAP) ≈ 1.6MB; an editLoop/agent-api
+ * 512KB taskFileContent + 512KB finalText + a 256KB cursor; an editLoop/agent-api
  * payload maxes out around one or two 512KB content fields. The sync route has
  * its own, larger cap (SYNC_BODY_CAP — it inlines blob bytes).
  */
@@ -22,19 +21,48 @@ export type JsonBodyResult =
   | { kind: "invalid" };
 
 /**
- * Read + parse a JSON body, bounded by `maxBytes`: the declared content-length
- * is checked first (cheap reject for honest clients), then the actual text
- * length (code units ≤ UTF-8 bytes, so the cap is enforced within a small
- * constant factor — same basis the sync route always used). An unreadable or
- * empty body parses as `{}` (matching the old `request.json().catch(() => ({}))`);
- * unparseable text is reported as `invalid` so each route keeps its own policy
- * (fall back to `{}`, or 400).
+ * Read + parse a JSON body under an actual byte cap. The declared content-length
+ * is a cheap early reject; chunked/lying clients are bounded while streaming, and
+ * the reader is canceled immediately once the accumulated UTF-8 bytes cross the
+ * cap. An unreadable or empty body parses as `{}` (matching the old
+ * `request.json().catch(() => ({}))`); parse failures remain `invalid`.
  */
 export async function readJsonBody(request: Request, maxBytes: number): Promise<JsonBodyResult> {
   const declared = Number(request.headers.get("content-length") ?? "");
   if (Number.isFinite(declared) && declared > maxBytes) return { kind: "too-large" };
-  const text = await request.text().catch(() => "");
-  if (text.length > maxBytes) return { kind: "too-large" };
+  if (!request.body) return { kind: "ok", body: {} };
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        // Initiate cancellation but do not let a slow underlying cancel hook delay
+        // the 413 result; the reader has already stopped consuming chunks.
+        void reader.cancel("request body exceeds byte cap").catch(() => undefined);
+        return { kind: "too-large" };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    // Preserve the old `request.text().catch(() => "")` empty-body behavior.
+    return { kind: "ok", body: {} };
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (bytes === 0) return { kind: "ok", body: {} };
+  const body = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const text = new TextDecoder().decode(body);
   if (!text) return { kind: "ok", body: {} };
   try {
     return { kind: "ok", body: JSON.parse(text) };
@@ -73,7 +101,7 @@ export function stripNul(s: string): string {
 }
 
 /** Clip a free-text wire field to its byte-budget cap AND strip NUL — the shared
- *  chokepoint for every capped daemon string (message / transcript / taskFileContent
+ *  chokepoint for every capped daemon string (message / finalText / taskFileContent
  *  / sessionId / error / …). Caps are unchanged; NUL is removed so the DB write can't
  *  throw. */
 export function clipText(s: string, cap: number): string {

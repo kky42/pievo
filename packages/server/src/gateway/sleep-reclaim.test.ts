@@ -1,6 +1,6 @@
 /**
  * Sleep/wake reclaim reconciliation (P0 correctness bug). Seeds the store the way
- * a laptop sleep would leave it — backdated `lastSeen` / `run.ts` / `progress.at` —
+ * a laptop sleep would leave it — backdated `lastSeen` / `run.ts` / `heartbeatAt` —
  * then drives the REAL `gateway.sweep()` and `gateway.report()`. Models the
  * investigation's repro (report §3):
  *   (a) a running run reclaimed as timed-out, then a late SUCCESS wake-report →
@@ -201,7 +201,7 @@ test("(a'') a successful late reconcile advances loop.state and mirrors the scal
   expect((await store.getRun(run.id))!.phase).toBe("error");
 
   // A workflow-style run wakes and reports success with a cursor.
-  const res = (await gw.report(rt, { ok: true, message: "sweep done", cursor: { processed: 7, sha: "abc123" } }));
+  const res = (await gw.report(rt, { ok: true, finalText: "sweep done", cursor: { processed: 7, sha: "abc123" } }));
   expect(res.status).toBe(200);
   // The workflow cursor advanced loop.state (next run's `prev` binding).
   expect((await store.getLoop(loop.id))!.state).toEqual({ processed: 7, sha: "abc123" });
@@ -263,9 +263,9 @@ test("a ready pending row gets a fresh claim window after a 21-minute cross-role
 test("(c) a long-running run with a fresh heartbeat survives the sweep", async () => {
   const gw = gateway();
   const { machineId, loop } = (await seedMachineLoop(5_000)); // machine polled 5s ago (online)
-  // Claimed 30 min ago, but progress stamped 10s ago — still actively working.
+  // Claimed 30 min ago, but heartbeat stamped 10s ago — still actively working.
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(30 * MIN) }));
-  (await store.updateRun(run.id, { progress: { step: 5, label: "editing", at: isoAgo(10_000) } }));
+  (await store.updateRun(run.id, { heartbeatAt: isoAgo(10_000) }));
 
   (await gw.sweep());
   expect((await store.getRun(run.id))!.phase).toBe("running"); // inactivity timeout keyed off the fresh stamp

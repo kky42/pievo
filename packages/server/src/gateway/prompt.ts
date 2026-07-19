@@ -30,9 +30,8 @@
  * edit reads the loop's current config — both untrusted). `buildEvolveTask` no
  * longer dumps up to 12 runs as pretty-printed JSON (tens of KB of full messages +
  * full state); it emits a compact one-line-per-run SURVEY (ts / role / outcome-status
- * / cost / state KEYS only / session id / message clipped ~100 chars), headed by the
- * on-demand pointers (`pievo log [--transcript]`, now reachable in-run, and the
- * local session JSONL). `buildEditTask` KEEPS its inlined current ui/workflow/schema:
+ * / state KEYS only / session id / message clipped ~100 chars), headed by an
+ * on-demand `pievo log --json` pointer. `buildEditTask` KEEPS its inlined current ui/workflow/schema:
  * that is current config, not history, and is genuinely useful for a surgical edit.
  */
 import type { Loop, Run, StateField } from "../db/schema.js";
@@ -154,8 +153,7 @@ export function buildEditTask(loop: Loop, instruction: string): string {
   return parts.join("\n\n");
 }
 
-/** How many chars of a run's message survive in the compact survey (rest → ellipsis;
- *  the full text is a `pievo log`/session away). */
+/** How many chars of a run's message survive in the compact survey. */
 const SURVEY_MESSAGE_CAP = 100;
 
 /** A run's message collapsed to a single clipped line for the survey. */
@@ -166,41 +164,32 @@ function surveyMessage(message: string | null): string {
 }
 
 /** One run as a single survey line. State appears as KEYS only — values are noise at
- *  survey altitude, and the agent pulls them via `pievo log`/the session if a call
- *  hinges on them. The session id is kept in FULL so the deep-dive `find … -name
- *  '<session>.jsonl'` resolves; only the message is clipped. */
+ * survey altitude. The full session id remains concise correlation/continuation
+ * metadata; only the message is clipped. */
 function surveyRow(r: Run): string {
   const outcomeStatus = `${r.outcome ?? "—"}/${r.status ?? "—"}`;
-  const cost = r.costUsd != null ? `$${r.costUsd.toFixed(2)}` : "—";
   const keys = r.state && typeof r.state === "object" ? Object.keys(r.state) : [];
   const metrics = keys.length ? keys.join(",") : "—";
   return [
     (r.ts ?? "—").padEnd(24),
     (r.role ?? "—").padEnd(7),
     outcomeStatus.padEnd(16),
-    cost.padEnd(7),
     metrics.padEnd(16),
     (r.sessionId ?? "—").padEnd(38),
     surveyMessage(r.message),
   ].join(" ");
 }
 
-/** The compact recent-runs survey: one line per run (oldest → newest), headed by the
- *  on-demand pointers. Replaces the old tens-of-KB pretty-printed JSON dump — full
- *  detail (state values, un-clipped message, transcript) is a `pievo log`/session
- *  away, and `pievo log` now works IN-RUN too, so this is enrichment, not the only
- *  window into history. */
+/** The compact recent-runs survey: one line per run (oldest → newest). */
 function renderRecentRuns(runs: Run[]): string {
   const header =
-    `Recent runs (oldest → newest, N=${runs.length}) — a compact survey. Full detail on demand:\n` +
-    `  · pievo log [--transcript]  — the same survey straight from the server (works in-run); --transcript adds each run's clipped transcript\n` +
-    `  · session JSONL — take a run's session id below, then: find ~/.claude/projects -name '<session>.jsonl'  (the deep, unclipped dive)`;
+    `Recent runs (oldest → newest, N=${runs.length}) — a compact survey. ` +
+    `Run pievo log --json for normalized fields and token usage.`;
   if (!runs.length) return `${header}\n\n(no prior runs yet)`;
   const columns = [
     "ts".padEnd(24),
     "role".padEnd(7),
     "outcome/status".padEnd(16),
-    "cost".padEnd(7),
     "metrics(keys)".padEnd(16),
     "session".padEnd(38),
     "message",

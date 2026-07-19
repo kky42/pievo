@@ -29,7 +29,7 @@ describe("execEnv", () => {
     setEnv("ANTHROPIC_API_KEY", "sk-x");
     setEnv("ANTHROPIC_BASE_URL", "https://gw.example"); // proxy/gateway users
     setEnv("ANTHROPIC_AUTH_TOKEN", "tok");
-    setEnv("CLAUDE_CONFIG_DIR", "/tmp/claude-config"); // relocated config → transcripts stay findable
+    setEnv("CLAUDE_CONFIG_DIR", "/tmp/claude-config"); // relocated Claude config
     const env = execEnv();
     expect(env.ANTHROPIC_API_KEY).toBe("sk-x");
     expect(env.ANTHROPIC_BASE_URL).toBe("https://gw.example");

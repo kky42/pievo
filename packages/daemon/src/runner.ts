@@ -14,9 +14,8 @@ import { execEnv, runProcess } from "./spawn.js";
 import { runWorkflow, type AgentCall } from "./workflow.js";
 import { expandTilde } from "./loopdir.js";
 import { effectiveRoots, isWithinRoots } from "./roots.js";
-import { sessionTrace, type RunArtifact, type TranscriptStep } from "./artifacts.js";
 import { CALLBACK_BIN_DIR } from "./callback-bin.js";
-import { setProgress, clearProgress } from "./progress.js";
+import { makeTerminalCollector, type TokenUsage } from "./telemetry.js";
 import { flushLoop, markRunActive, markRunDone } from "./watcher.js";
 import { PIEVO_DIR } from "./config.js";
 import type { CodingAgent } from "./create.js";
@@ -46,36 +45,20 @@ export interface Delivery {
   task: string;
 }
 
-/** Claude-reported spend/usage for one run, lifted from the terminal `result`
- *  event (total_cost_usd + usage token counts + num_turns). All optional — an
- *  older claude / a timed-out run may carry none of it. */
-export interface RunCost {
-  usd?: number;
-  inputTokens?: number;
-  outputTokens?: number;
-  cacheReadTokens?: number;
-  cacheCreationTokens?: number;
-  numTurns?: number;
-}
-
 interface ReportBody {
   runId: string;
   ok: boolean;
+  /** Coding-agent subprocess exit code. Workflow-only success is 0; a spawn,
+   * timeout, signal, or pre-spawn failure has no numeric exit and reports null. */
+  exitCode: number | null;
   durationMs: number;
   outcome?: "direct" | "silent" | "exec" | "evolve";
   message?: string;
   /** Workflow cursor (free-form) to persist as loop.state for next run's `prev`. */
   cursor?: unknown;
   sessionId?: string;
-  /** Claude-reported cost/usage for this run (absent for workflow-only runs). */
-  cost?: RunCost;
-  /** Total claude invocations for this run (present only when > 1 — i.e. the
-   *  transient-failure recovery resumed the session at least once). */
-  attempts?: number;
-  /** Files this run's claude session created/edited (parsed from its transcript). */
-  artifacts?: RunArtifact[];
-  /** Slimmed execution trace (text/tool/result steps) for the run-detail view. */
-  transcript?: TranscriptStep[];
+  /** Provider-normalized token usage, summed across every subprocess attempt. */
+  usage?: TokenUsage;
   /** Latest content of the loop's task file (the durable context+log doc). */
   taskFileContent?: string;
   error?: string;
@@ -99,7 +82,7 @@ export interface AgentSpawn {
  *
  * Two arms (BYOA — each agent's real CLI surface):
  *   - `claude-code`: `claude -p … --output-format stream-json --verbose …`
- *   - `codex`: a DIFFERENT surface — `codex exec` / `codex exec resume`, not `-p`.
+ *   - `codex`: a DIFFERENT surface — `codex exec`, not `-p`.
  *     Flags verified against codex-cli 0.143.0: `--json` (JSONL on stdout),
  *     `--dangerously-bypass-approvals-and-sandbox` (unattended BYOA), optional
  *     `-m` / `--model`, and `--skip-git-repo-check` so non-git loop workdirs are
@@ -107,23 +90,20 @@ export interface AgentSpawn {
  *
  * Escape hatches: `PIEVO_CLAUDE_BIN` / `PIEVO_CODEX_BIN`.
  *
- * Telemetry note: codex `--json` is not Claude stream-json, so the Claude-shaped
- * `makeStreamConsumer` parses nothing from it. The run still marks OK on exit 0;
- * the agent's own `pievo report` persists the result. Daemon-side live-
- * progress/cost/transcript for Codex is degraded until a stream adapter lands.
+ * Each arm's JSONL is consumed by its provider-specific terminal collector;
+ * neither provider emits tool/text live progress through the daemon protocol.
  */
 export function buildAgentSpawn(opts: {
   agent: CodingAgent;
   prompt: string;
-  resumeSessionId?: string;
   model?: string | null;
   /** claude-only: the system-prompt file path (falsy ⇒ flag omitted). */
   sysFile?: string;
 }): AgentSpawn {
-  const { agent, prompt, resumeSessionId, model, sysFile } = opts;
+  const { agent, prompt, model, sysFile } = opts;
   if (agent === "codex") {
-    // Codex surface is `codex exec [OPTIONS] [PROMPT]` / `codex exec resume
-    // [OPTIONS] [SESSION_ID] [PROMPT]` — never Claude's `-p` / stream-json flags.
+    // Codex surface is `codex exec [OPTIONS] [PROMPT]` — never Claude's
+    // `-p` / stream-json flags and never a session resume.
     const modelArgs = model ? ["-m", model] : [];
     const unattended = [
       "--json",
@@ -131,24 +111,16 @@ export function buildAgentSpawn(opts: {
       "--skip-git-repo-check",
       ...modelArgs,
     ];
-    if (resumeSessionId) {
-      return {
-        bin: process.env.PIEVO_CODEX_BIN || "codex",
-        args: ["exec", "resume", resumeSessionId, ...unattended, prompt],
-      };
-    }
     return {
       bin: process.env.PIEVO_CODEX_BIN || "codex",
       args: ["exec", ...unattended, prompt],
     };
   }
-  const resume = resumeSessionId ? ["--resume", resumeSessionId] : [];
   const modelArgs = model ? ["--model", model] : [];
   return {
     bin: process.env.PIEVO_CLAUDE_BIN || "claude",
     args: [
       "-p", prompt,
-      ...resume,
       "--output-format", "stream-json",
       "--verbose",
       "--permission-mode", "bypassPermissions",
@@ -168,131 +140,6 @@ const rawExecTimeout = Number(process.env.PIEVO_EXEC_TIMEOUT_MS);
 const TIMEOUT_MS = Number.isFinite(rawExecTimeout) && rawExecTimeout > 0 ? rawExecTimeout : 0;
 /** Hard cap on the pre-report flush so a slow/hung server can't delay reporting. */
 const FLUSH_TIMEOUT_MS = 2500;
-
-// Transient-failure recovery: when claude dies mid-run on an infrastructure
-// error (an API "Connection closed mid-response", ECONNRESET, overloaded/5xx,
-// a rate limit), the session on disk still holds all paid-for progress — so we
-// RESUME it (`claude --resume <sessionId>`) with a short continuation prompt
-// instead of failing the run or restarting from zero. Bounded + classified:
-// only `transient` failures retry (auth/quota must not spin — BYOA decision 8 —
-// and a poisoned request would deterministically re-fail on resume); backoff
-// between attempts (base, then 4x) keeps a wobbly provider from being hammered.
-const rawRetries = Number(process.env.PIEVO_TRANSIENT_RETRIES);
-const TRANSIENT_RETRIES = Number.isFinite(rawRetries) && rawRetries >= 0 ? Math.floor(rawRetries) : 2;
-const rawRetryBase = Number(process.env.PIEVO_TRANSIENT_RETRY_BASE_MS);
-const RETRY_BASE_MS = Number.isFinite(rawRetryBase) && rawRetryBase > 0 ? rawRetryBase : 15_000;
-
-export type FailureClass = "transient" | "poisoned" | "auth" | "task";
-
-/**
- * Classify a failed claude run from its combined error text (error + final text
- * + stderr). Precedence matters: auth/quota outranks everything (a 401 body may
- * also say "API Error" — retrying spins), poisoned outranks transient (a
- * too-long prompt resumes into the same 400). Anything unrecognized is a plain
- * `task` failure — never retried. Pure + exported for tests.
- */
-export function classifyFailure(text: string): FailureClass {
-  if (
-    /\b(401|403)\b/.test(text) ||
-    /unauthoriz|forbidden|authentication_error|invalid api key|oauth/i.test(text) ||
-    /usage limit|quota exceeded|credit balance|out of credits|billing/i.test(text)
-  ) {
-    return "auth";
-  }
-  if (/invalid_request_error|prompt is too long|context (window|length)|request too large|\b400\b/i.test(text)) {
-    return "poisoned";
-  }
-  if (
-    /api error/i.test(text) ||
-    /connection (closed|reset|error|refused)/i.test(text) ||
-    /econnreset|etimedout|econnrefused|enotfound|eai_again|epipe/i.test(text) ||
-    /socket hang ?up|fetch failed|network error|request timed out/i.test(text) ||
-    /stream (closed|error|ended|disconnected)/i.test(text) ||
-    /overloaded|rate.?limit|too many requests/i.test(text) ||
-    /\b(429|500|502|503|504|529)\b/.test(text)
-  ) {
-    return "transient";
-  }
-  return "task";
-}
-
-/** The continuation prompt for a resumed session: the prior progress is already
- *  in the conversation, so the only jobs are "trust it" and "finish per the
- *  original instructions" (exactly one report/finish). Pure + exported for tests. */
-export function buildResumeTask(reason: string): string {
-  return [
-    `Your previous attempt at this run was interrupted by a transient infrastructure error (${reason}).`,
-    "You have been RESUMED in the same session: everything above this message is your own prior progress — trust it, do not redo completed work.",
-    "Continue from where you left off and finish normally: end with exactly ONE `pievo report ...` (or `pievo finish` when the goal is genuinely met), exactly as the original instructions specify.",
-  ].join("\n");
-}
-
-/** Sum two attempts' cost/usage (a resumed run pays for each invocation). */
-export function addCost(a: RunCost | undefined, b: RunCost | undefined): RunCost | undefined {
-  if (!a) return b;
-  if (!b) return a;
-  const keys: (keyof RunCost)[] = ["usd", "inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens", "numTurns"];
-  const out: RunCost = {};
-  for (const k of keys) {
-    const sum = (a[k] ?? 0) + (b[k] ?? 0);
-    if (a[k] !== undefined || b[k] !== undefined) out[k] = sum;
-  }
-  return out;
-}
-
-/** Backoff before resume attempt N (1-based): base, then 4x, ±10% jitter. */
-function retryDelayMs(attempt: number): number {
-  const base = RETRY_BASE_MS * 4 ** (attempt - 1);
-  return Math.round(base * (0.9 + Math.random() * 0.2));
-}
-
-/** Abortable sleep — a daemon shutdown must not hold the delivery hostage. */
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const done = (): void => {
-      clearTimeout(t);
-      signal?.removeEventListener("abort", done);
-      resolve();
-    };
-    const t = setTimeout(done, ms);
-    signal?.addEventListener("abort", done, { once: true });
-  });
-}
-
-interface ClaudeJson {
-  is_error?: boolean;
-  subtype?: string;
-  result?: string;
-  session_id?: string;
-  total_cost_usd?: number;
-  num_turns?: number;
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    cache_creation_input_tokens?: number;
-    cache_read_input_tokens?: number;
-  };
-}
-
-/** A finite non-negative number, else undefined (untrusted parse of claude's JSON). */
-function nonNeg(v: unknown): number | undefined {
-  return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined;
-}
-
-/** Distill the terminal `result` event's cost/usage fields into a RunCost, or
- *  undefined when the event carried none of them. Exported for tests. */
-export function costFromResult(j: ClaudeJson): RunCost | undefined {
-  const u = j.usage ?? {};
-  const cost: RunCost = {
-    usd: nonNeg(j.total_cost_usd),
-    inputTokens: nonNeg(u.input_tokens),
-    outputTokens: nonNeg(u.output_tokens),
-    cacheReadTokens: nonNeg(u.cache_read_input_tokens),
-    cacheCreationTokens: nonNeg(u.cache_creation_input_tokens),
-    numTurns: nonNeg(j.num_turns),
-  };
-  return Object.values(cost).some((v) => v !== undefined) ? cost : undefined;
-}
 
 export async function runDelivery(d: Delivery, serverUrl: string, roots: string[], signal?: AbortSignal): Promise<void> {
   // Attribute artifact syncs that happen during this run to its runId (Phase 3
@@ -327,7 +174,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
   try {
     workdir = resolveWorkdir(d.loop.workdir, d.loop.id, jail);
   } catch (err) {
-    return reportRun({ runId: d.runId, ok: false, durationMs: Date.now() - start, error: msg(err) });
+    return reportRun({ runId: d.runId, ok: false, exitCode: null, durationMs: Date.now() - start, error: msg(err) });
   }
 
   // 1. Workflow gate (cheap, zero-LLM). Pure result → report directly, no agent.
@@ -356,7 +203,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
         // Pure workflow: direct message (or silent). No claude — but still sync
         // the task file if the loop maintains one (the workflow may write it).
         return reportRun({
-          runId: d.runId, ok: true, durationMs: Date.now() - start,
+          runId: d.runId, ok: true, exitCode: 0, durationMs: Date.now() - start,
           outcome: wf.result!.message ? "direct" : "silent",
           message: wf.result!.message, cursor,
           taskFileContent: readTaskFile(workdir, d.loop.taskFile, roots),
@@ -372,8 +219,8 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
   let sessionId: string | undefined;
   let error: string | undefined;
   let finalText: string | undefined;
-  let cost: RunCost | undefined;
-  let attempts = 0;
+  let usage: TokenUsage | undefined;
+  let exitCode: number | null = null;
   // System prompt goes in ~/.pievo/runs (passed to claude by absolute path), not
   // the workdir — keeps the run's cwd clean. Removed in `finally`. Batches 1-2 move
   // the full run instructions into the first user turn, so `systemPrompt` is now empty
@@ -407,78 +254,40 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
         ? `${d.task}\n\nworkflow signal:\n${escalation}`
         : d.task;
 
-    // Attempt loop: the first pass runs the task; each further pass RESUMES the
-    // same session after a transient infrastructure failure (see the constants
-    // block above). Timeouts never retry (our own wall-clock guard, not a
-    // provider blip), a failure with no captured session has nothing to resume,
-    // and an abort (daemon shutdown / cancel) stops immediately.
-    for (;;) {
-      attempts += 1;
-      const resuming = attempts > 1;
-      const prompt = resuming ? buildResumeTask(error ?? "transient API error") : task;
-      // Claude stream-json (JSONL) yields live progress + a terminal `result` event.
-      // Codex emits a non-Claude stream we can't yet parse — see buildAgentSpawn.
-      const { bin, args } = buildAgentSpawn({
-        agent,
-        prompt,
-        resumeSessionId: resuming ? sessionId : undefined,
-        model: d.loop.model,
-        sysFile: hasSystemPrompt ? sysFile : undefined,
-      });
+    // Provider sessions are deliberately single-shot. Capture sessionId for
+    // possible future use, but never resume or retry this run's provider process.
+    const { bin, args } = buildAgentSpawn({
+      agent,
+      prompt: task,
+      model: d.loop.model,
+      sysFile: hasSystemPrompt ? sysFile : undefined,
+    });
 
-      const stream = makeStreamConsumer((p) => setProgress(d.runId, p));
-      const r = await runProcess(bin, args, { cwd: workdir, env, timeoutMs: TIMEOUT_MS, onStdout: stream.feed, signal });
-      clearProgress(d.runId);
-      const final = stream.result();
-      error = undefined;
-      finalText = undefined;
-      if (r.timedOut) {
-        error = `${agentLabel} timed out (${Math.round(TIMEOUT_MS / 1000)}s)`;
-        // The stream captured the session id early — keep the pointer so exactly
-        // the runs that need debugging (timeouts) still get the transcript/artifact
-        // recovery below instead of losing their session.
-        sessionId = final.sessionId ?? sessionId;
-        break;
-      } else if (final.json) {
-        ok = !final.json.is_error && r.code === 0;
-        // `--resume` forks a NEW session id — track the latest so a further
-        // resume (and the transcript/artifact recovery below) follow the fork.
-        sessionId = final.sessionId ?? final.json.session_id ?? sessionId;
-        finalText = final.json.result?.trim() || undefined;
-        cost = addCost(cost, costFromResult(final.json));
-        if (!ok) {
-          // A non-zero exit can arrive WITH a clean result event (subtype "success") —
-          // recording "success" as the error reads as nonsense; name the exit instead.
-          const subtype = final.json.subtype;
-          error =
-            subtype && subtype !== "success"
-              ? subtype
-              : r.code !== 0
-                ? `${agentLabel} exited with code ${r.code}`
-                : `${agentLabel} reported an error`;
+    const collector = makeTerminalCollector(agent);
+    const r = await runProcess(bin, args, { cwd: workdir, env, timeoutMs: TIMEOUT_MS, onStdout: collector.feed, signal });
+    const final = collector.result();
+    exitCode = r.code;
+    finalText = final.finalText?.trim() || undefined;
+    sessionId = final.sessionId;
+    usage = final.usage;
+
+    if (r.timedOut) {
+      error = `${agentLabel} timed out (${Math.round(TIMEOUT_MS / 1000)}s)`;
+    } else {
+      ok = !final.isError && r.code === 0;
+      if (!ok) {
+        // A non-zero exit can arrive with a provider success terminal event;
+        // in that case the process exit is the useful failure, not "success".
+        error =
+          final.errorType && final.errorType !== "success"
+            ? final.errorType
+            : r.code !== 0
+              ? `${agentLabel} exited with code ${r.code}`
+              : `${agentLabel} reported an error`;
+        if (!final.errorType && r.code !== 0) {
+          error = (r.stderr || r.stdout || error).trim().slice(0, 500);
         }
-      } else if (r.code === 0) {
-        ok = true;
-        sessionId = final.sessionId ?? sessionId;
-      } else {
-        error = (r.stderr || r.stdout || `${agentLabel} produced no output`).trim().slice(0, 500);
-        sessionId = final.sessionId ?? sessionId;
       }
-
-      if (ok || attempts > TRANSIENT_RETRIES || !sessionId || signal?.aborted) break;
-      const failureClass = classifyFailure([error, finalText, r.stderr].filter(Boolean).join("\n"));
-      if (failureClass !== "transient") break;
-      const wait = retryDelayMs(attempts);
-      logger.warn(
-        { runId: d.runId, attempt: attempts, waitMs: wait, error },
-        "transient claude failure — resuming the session after backoff",
-      );
-      // Keep the live signal honest during the wait (and the server's inactivity
-      // sweep fed — the progress stamp rides the poll heartbeat).
-      setProgress(d.runId, { step: attempts, label: `retrying after a transient API error (attempt ${attempts + 1})` });
-      await sleep(wait, signal);
-      clearProgress(d.runId);
-      if (signal?.aborted) break;
     }
   } catch (err) {
     error = `failed to run ${agentLabel}: ${msg(err)}`;
@@ -486,29 +295,14 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
     if (sysFile) fs.rmSync(sysFile, { force: true }); // don't let prompt files accumulate
   }
 
-  // Recover this session's artifacts + slimmed trace from ONE transcript read (best-effort).
-  let artifacts: RunArtifact[] | undefined;
-  let transcript: TranscriptStep[] | undefined;
-  if (sessionId) {
-    try {
-      const trace = sessionTrace(sessionId, workdir);
-      if (trace.artifacts.length) artifacts = trace.artifacts;
-      if (trace.transcript.length) transcript = trace.transcript;
-    } catch {
-      /* never let transcript parsing break the report — it's a nicety */
-    }
-  }
-
   await reportRun({
     runId: d.runId,
     ok,
+    exitCode,
     durationMs: Date.now() - start,
     outcome: d.role === "evolve" ? "evolve" : "exec",
     sessionId,
-    cost,
-    ...(attempts > 1 ? { attempts } : {}),
-    artifacts,
-    transcript,
+    usage,
     taskFileContent: readTaskFile(workdir, d.loop.taskFile, roots),
     error,
     // Every role sends finalText: the server only uses it as a message FALLBACK
@@ -678,93 +472,6 @@ function resolveWorkdir(workdir: string | null, loopId: string, roots: string[])
   }
   fs.mkdirSync(abs, { recursive: true });
   return abs;
-}
-
-interface StreamFinal {
-  sessionId?: string;
-  /** The terminal `result` event, normalized to the old single-JSON shape. */
-  json?: ClaudeJson;
-}
-
-/**
- * Parse claude's stream-json (JSONL) incrementally: derive a slim progress signal
- * from assistant tool_use/text blocks (pushed via onProgress), and capture the
- * session id (available early) + the terminal `result` event. Unparseable lines
- * are skipped so a stray non-JSON line never breaks the run. Exported for tests.
- */
-export function makeStreamConsumer(onProgress: (p: { step: number; label: string }) => void): {
-  feed: (chunk: string) => void;
-  result: () => StreamFinal;
-} {
-  let buf = "";
-  let step = 0;
-  const out: StreamFinal = {};
-  const handleLine = (line: string): void => {
-    let ev: any;
-    try {
-      ev = JSON.parse(line);
-    } catch {
-      return;
-    }
-    if (typeof ev.session_id === "string" && !out.sessionId) out.sessionId = ev.session_id;
-    if (ev.type === "result") {
-      out.json = {
-        is_error: ev.is_error,
-        subtype: ev.subtype,
-        result: ev.result,
-        session_id: ev.session_id,
-        total_cost_usd: ev.total_cost_usd,
-        num_turns: ev.num_turns,
-        usage: ev.usage,
-      };
-    } else if (ev.type === "assistant" && Array.isArray(ev.message?.content)) {
-      for (const b of ev.message.content) {
-        const label = labelForBlock(b);
-        if (label) onProgress({ step: (step += 1), label });
-      }
-    }
-  };
-  const feed = (chunk: string): void => {
-    buf += chunk;
-    let nl: number;
-    while ((nl = buf.indexOf("\n")) >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (line) handleLine(line);
-    }
-  };
-  const result = (): StreamFinal => {
-    // Flush a final UNTERMINATED line — the terminal `result` event may arrive
-    // without a trailing newline, and dropping it would lose ok/sessionId.
-    const rest = buf.trim();
-    buf = "";
-    if (rest) handleLine(rest);
-    return out;
-  };
-  return { feed, result };
-}
-
-/** A short human "what's it doing now" line distilled from one content block. */
-function labelForBlock(b: any): string | undefined {
-  if (b?.type === "tool_use" && typeof b.name === "string") {
-    const i = b.input ?? {};
-    const target = i.command ?? i.file_path ?? i.path ?? i.pattern ?? i.url ?? i.description;
-    const tail = typeof target === "string" && target.trim() ? `: ${oneLine(target)}` : "";
-    return clip(`${b.name}${tail}`);
-  }
-  if (b?.type === "text" && typeof b.text === "string") {
-    const line = oneLine(b.text);
-    return line ? clip(line) : undefined;
-  }
-  return undefined;
-}
-
-function oneLine(s: string): string {
-  return s.replace(/\s+/g, " ").trim();
-}
-
-function clip(s: string): string {
-  return s.length > 80 ? s.slice(0, 79) + "…" : s;
 }
 
 function msg(err: unknown): string {

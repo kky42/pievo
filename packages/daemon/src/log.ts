@@ -1,13 +1,8 @@
 /**
- * `pievo log [<loop>] [--limit N] [--transcript] [--json]` — print how a loop's
- * recent runs actually went, so the owner's Claude Code can read prior runs before
- * editing or evolving a loop.
- *
- * The default human render is a CONCISE survey: per run just the header, session id,
- * metrics, error, and one-line message — NOT the full clipped transcript (which is
- * up to 8KB × N runs and buries the useful bits). The session id is the pointer to
- * the full session JSONL for a deep dive. Pass `--transcript` (alias `--full`) to
- * inline the clipped transcript; `--json` always returns the full structured runs.
+ * `pievo log [<loop>] [--limit N] [--json]` — print how a loop's recent runs
+ * actually went. The default is the server's concise text survey; `--json`
+ * returns the retained structured run rows. Provider transcripts are not a
+ * daemon telemetry or CLI surface.
  *
  * Like `pievo loops`/`edit`, this is an owner-OUTSIDE-a-run command: it goes
  * through the shared CLI client (`postCli`), which reuses the device token + server
@@ -42,17 +37,11 @@ interface RunRow {
   outcome: string | null;
   status: string | null;
   durationMs: number | null;
-  /** Claude-reported spend for this run (USD estimate); null for older runs. */
-  costUsd?: number | null;
   error: string | null;
   message: string | null;
-  // The claude-code session id behind this run — lets the reader jump to its
-  // on-disk `<session>.jsonl` for the full, unclipped record (see evolve.md).
   sessionId: string | null;
   // The metrics the run reported (the state object).
   state: Record<string, unknown> | null;
-  transcript: string;
-  transcriptTruncated: boolean;
 }
 
 export type LogDeps = {
@@ -83,11 +72,11 @@ function seams(d: LogDeps): Seams {
 
 /** Boolean flags that never take a value — so `log --json <loop>` keeps `<loop>`
  *  as a positional instead of swallowing it as `--json`'s argument. */
-const BOOL_FLAGS = new Set(["json", "transcript", "full"]);
+const BOOL_FLAGS = new Set(["json"]);
 
 /** The flags `pievo log` accepts (plus the global daemon flags consumed separately).
  *  `help` is allowlisted so it never trips the unknown-flag guard. */
-const LOG_FLAGS = new Set(["json", "transcript", "full", "limit", "help", "server-url", "api-key"]);
+const LOG_FLAGS = new Set(["json", "limit", "help", "server-url", "api-key"]);
 
 /** `--k v` / `--k=v` pairs, bare/boolean `--flag` → true; everything else is positional. */
 function parseArgs(args: string[]): { positional: string[]; flags: Record<string, string | boolean> } {
@@ -169,29 +158,6 @@ export function renderResolveError(
   return 2;
 }
 
-/** One run rendered for humans: a concise header + session id + metrics + message
- *  by default; the (clipped) transcript is appended only when `showTranscript`. */
-function formatRun(r: RunRow, showTranscript: boolean): string {
-  const outcome = r.phase === "done" ? (r.outcome ?? "done") : r.phase;
-  const dur = r.durationMs != null ? ` · ${(r.durationMs / 1000).toFixed(1)}s` : "";
-  const cost = r.costUsd != null ? ` · $${r.costUsd.toFixed(2)}` : "";
-  const head = `● ${r.ts}  ${r.role}  ${outcome}${dur}${cost}`;
-  const lines = [head];
-  if (r.sessionId) lines.push(`  session: ${r.sessionId}`);
-  const metrics: string[] = [];
-  if (r.state) for (const [k, v] of Object.entries(r.state)) metrics.push(`${k}=${v}`);
-  if (metrics.length) lines.push(`  metrics: ${metrics.join(", ")}`);
-  if (r.error) lines.push(`  error: ${r.error}`);
-  if (r.message) lines.push(`  ${r.message}`);
-  // The transcript is verbose (up to 8KB/run); only inline it on --transcript/--full.
-  if (showTranscript && r.transcript) {
-    lines.push("");
-    lines.push(r.transcript);
-    if (r.transcriptTruncated) lines.push("  … (transcript truncated)");
-  }
-  return lines.join("\n");
-}
-
 export async function runLog(argv: string[], injected: LogDeps = {}): Promise<number> {
   const d = seams(injected);
   const flagServer = (() => {
@@ -213,7 +179,6 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   const unknown = Object.keys(flags).filter((k) => !LOG_FLAGS.has(k));
   if (unknown.length) return d.err(`pievo: unknown flag --${unknown[0]} — try \`pievo log --help\`\n`), 2;
   const json = flags["json"] === true || flags["json"] === "true";
-  const showTranscript = flags["transcript"] === true || flags["full"] === true;
   const limit = typeof flags["limit"] === "string" ? flags["limit"] : undefined;
 
   const notConnected = () =>
@@ -251,23 +216,14 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   if (got.kind === "network-error") return d.err(`pievo: ${got.message}\n`), 1;
   const data = got.body as { runs?: RunRow[]; error?: string };
 
-  // `--json` and `--transcript` read the RETAINED structured `runs` data channel
-  // (`CLI_RETAINED_KEYS` server-side): the concise server survey (`text`) omits per-run
-  // transcripts, so these two escape hatches render CLIENT-side from `runs`. A missing
-  // `runs` here means an error status (or a too-old server without the channel).
-  if (json || showTranscript) {
+  // `--json` reads the retained structured `runs` data channel. A missing
+  // `runs` means an error status or a too-old server without that channel.
+  if (json) {
     if (got.status >= 400 || !data.runs) {
       d.err(`pievo: ${data.error || `log failed (${got.status})`}\n`);
       return 1;
     }
-    if (json) {
-      d.out(`${JSON.stringify(data.runs, null, 2)}\n`);
-      return 0;
-    }
-    // `--transcript`/`--full`: the concise header + each run's inlined clipped transcript.
-    d.out(`${resolved.name} — ${data.runs.length} recent run${data.runs.length === 1 ? "" : "s"}\n`);
-    if (data.runs.length === 0) return d.out("no runs yet\n"), 0;
-    d.out(`\n${data.runs.map((r) => formatRun(r, true)).join("\n\n")}\n`);
+    d.out(`${JSON.stringify(data.runs, null, 2)}\n`);
     return 0;
   }
 

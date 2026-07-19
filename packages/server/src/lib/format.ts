@@ -77,14 +77,6 @@ export const fnum = (n: number): string =>
 /** Duration in ms → "Ns" (empty for null/0). */
 export const dur = (ms: number | null | undefined): string => (ms ? `${Math.round(ms / 1000)}s` : '')
 
-/** Run cost in USD → "$1.24" (sub-cent values keep a meaningful figure: "$0.004";
- *  empty for null/undefined — a zero-cost run still reads "$0.00"). */
-export const money = (usd: number | null | undefined): string => {
-  if (usd == null) return ''
-  if (usd > 0 && usd < 0.01) return `$${usd.toFixed(3)}`
-  return `$${usd.toFixed(2)}`
-}
-
 /** Magnitude-formatted byte count — "240 B", "1.8 KB", "3.4 MB" (1024 thresholds). */
 export function humanBytes(n: number): string {
   const abs = Math.abs(n)

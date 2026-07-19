@@ -224,80 +224,39 @@ test("set-schema rejects dropping keys still used by UI or recent runs", async (
   expect((await store.getRun(run.id))!.control?.[0]?.result).toBe("rejected");
 });
 
-test("report persists the slimmed transcript, retrievable by session id", async () => {
-  const { loop, machine, run } = (await seededLoop());
+test("report persists normalized terminal telemetry without cost or transcript fields", async () => {
+  const { loop, machine, run } = await seededLoop();
+  await store.updateRun(run.id, { message: "agent callback summary" });
   const token = await tokens.registerRunLease({
-    runId: run.id,
-    loopId: loop.id,
-    machineId: machine.id,
-    role: "exec",
-    allowControl: false,
+    runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false,
   });
-  const res = (await gateway().report(token, {
+  const res = await gateway().report(token, {
+    runId: run.id,
     ok: true,
+    exitCode: 0,
     durationMs: 1234,
     sessionId: "sess-abc",
-    transcript: [
-      { kind: "text", text: "Checking the feeder…" },
-      { kind: "tool", name: "Bash", input: '{"command":"curl ha"}', extra: "dropped" },
-      { kind: "result", text: "4g dispensed" },
-      { kind: "bogus", text: "ignored" }, // invalid kind → filtered
-    ],
-  }));
+    finalText: "provider final output",
+    usage: { inputTokens: 120, outputTokens: 9, cacheReadTokens: 40, cacheCreationTokens: 3 },
+  });
   expect(res.status).toBe(200);
-
-  const stored = (await store.getRun(run.id));
-  expect(stored?.sessionId).toBe("sess-abc");
-  expect(stored?.transcript).toEqual([
-    { kind: "text", text: "Checking the feeder…" },
-    { kind: "tool", name: "Bash", input: '{"command":"curl ha"}' },
-    { kind: "result", text: "4g dispensed" },
-  ]);
+  const stored = await store.getRun(run.id);
+  expect(stored).toMatchObject({
+    exitCode: 0, durationMs: 1234, sessionId: "sess-abc", finalText: "provider final output",
+    message: "agent callback summary",
+    usage: { inputTokens: 120, outputTokens: 9, cacheReadTokens: 40, cacheCreationTokens: 3 },
+  });
+  expect(stored && "costUsd" in stored).toBe(false);
+  expect(stored && "transcript" in stored).toBe(false);
 });
 
-test("report persists the claude-reported cost (usd column + usage json), rejecting garbage fields", async () => {
-  const { loop, machine, run } = (await seededLoop());
+test("report rejects a runId that does not match its lease", async () => {
+  const { loop, machine, run } = await seededLoop();
   const token = await tokens.registerRunLease({
-    runId: run.id,
-    loopId: loop.id,
-    machineId: machine.id,
-    role: "exec",
-    allowControl: false,
+    runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false,
   });
-  const res = (await gateway().report(token, {
-    ok: true,
-    durationMs: 1000,
-    cost: {
-      usd: 0.4235,
-      inputTokens: 120,
-      outputTokens: 950,
-      cacheReadTokens: 48000,
-      numTurns: 12,
-      cacheCreationTokens: -5, // negative → dropped
-    },
-  }));
-  expect(res.status).toBe(200);
-
-  const stored = (await store.getRun(run.id));
-  expect(stored?.costUsd).toBe(0.4235);
-  expect(stored?.usage).toEqual({ inputTokens: 120, outputTokens: 950, cacheReadTokens: 48000, numTurns: 12 });
-});
-
-test("report with an absent or wholly-garbage cost leaves the cost columns null", async () => {
-  const { loop, machine, run } = (await seededLoop());
-  const token = await tokens.registerRunLease({
-    runId: run.id,
-    loopId: loop.id,
-    machineId: machine.id,
-    role: "exec",
-    allowControl: false,
-  });
-  // usd over the sanity ceiling + non-numeric tokens → everything dropped.
-  const res = (await gateway().report(token, { ok: true, durationMs: 5, cost: { usd: 99_999_999, inputTokens: "lots" } }));
-  expect(res.status).toBe(200);
-  const stored = (await store.getRun(run.id));
-  expect(stored?.costUsd).toBeNull();
-  expect(stored?.usage).toBeNull();
+  expect((await gateway().report(token, { runId: "run-other", ok: true })).status).toBe(403);
+  expect((await store.getRun(run.id))?.phase).toBe("running");
 });
 
 test("report syncs the machine's task file content onto the loop", async () => {
@@ -322,9 +281,8 @@ test("report syncs the machine's task file content onto the loop", async () => {
 });
 
 test("report strips NUL (U+0000) from wire text so the Postgres write can't throw", async () => {
-  // Postgres text/jsonb columns REJECT U+0000 (SQLite tolerated it). A daemon-supplied
-  // transcript/message/taskFileContent/cursor carrying a NUL must persist with the byte
-  // removed rather than throwing mid-finalize (which the sweep later mis-reads as a timeout).
+  // Postgres text/jsonb columns reject U+0000. Normalized text and cursor fields
+  // are stripped before persistence.
   const { loop, machine, run } = (await seededLoop());
   const token = await tokens.registerRunLease({
     runId: run.id,
@@ -337,17 +295,16 @@ test("report strips NUL (U+0000) from wire text so the Postgres write can't thro
     ok: true,
     durationMs: 1000,
     sessionId: "sess\u0000abc",
-    message: "done\u0000ok",
+    finalText: "done\u0000ok",
     taskFileContent: "# Log\u0000\n2026-06-19: ok\n",
-    transcript: [{ kind: "text", text: "step\u0000one" }],
     cursor: { note: "cur\u0000sor", count: 3 },
   }));
   expect(res.status).toBe(200);
 
   const storedRun = (await store.getRun(run.id));
+  expect(storedRun?.finalText).toBe("doneok");
   expect(storedRun?.message).toBe("doneok");
   expect(storedRun?.sessionId).toBe("sessabc");
-  expect(storedRun?.transcript).toEqual([{ kind: "text", text: "stepone" }]);
 
   const storedLoop = (await store.getLoop(loop.id));
   expect(storedLoop?.taskFileContent).toBe("# Log\n2026-06-19: ok\n");
@@ -695,30 +652,6 @@ test("editLoop refuses a loop bound to a different machine (404, no change)", as
   const res = (await gateway().editLoop(tokenB, id, { cron: "*/5 * * * *" }));
   expect(res.status).toBe(404);
   expect((await store.getLoop(id))!.cron).toBe("0 8 * * *"); // untouched
-});
-
-test("poll stores live progress on this machine's running run; report clears it", async () => {
-  const token = tokens.mintDeviceToken();
-  const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
-  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
-
-  (await gateway().poll(token, undefined, [{ runId: run.id, step: 3, label: "Editing report.md" }]));
-  // The signal carries a freshness stamp (`at`) alongside step/label — the sweep's
-  // inactivity clock.
-  expect((await store.getRun(run.id))!.progress).toMatchObject({ step: 3, label: "Editing report.md" });
-  expect(((await store.getRun(run.id))!.progress as { at?: string }).at).toBeTruthy();
-
-  // A different machine can't write progress onto a run it doesn't own.
-  const other = tokens.mintDeviceToken();
-  (await gateway().poll(other, undefined, [{ runId: run.id, step: 9, label: "hijack" }]));
-  expect((await store.getRun(run.id))!.progress).toMatchObject({ step: 3, label: "Editing report.md" });
-
-  // Finalizing the run clears the live signal (the full transcript supersedes it).
-  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
-  (await gateway().report(rt, { ok: true, durationMs: 10 }));
-  expect((await store.getRun(run.id))!.progress).toBeNull();
 });
 
 test("concurrent polls deliver a pending run exactly once (atomic pending->running claim)", async () => {
@@ -1085,13 +1018,15 @@ test("finish leaves the token live for the daemon's enriching report (durationMs
   const gw = gateway();
   expect((await gw.agentApi(rt, ["finish", "--message", "done"])).status).toBe(200);
 
-  // The daemon's normal post-run report arrives with the precise durationMs + sessionId.
-  const rep = (await gw.report(rt, { ok: true, durationMs: 4321, sessionId: "sess-xyz" }));
+  // The daemon's normal post-run report arrives with precise telemetry. Its provider
+  // final text must not replace the summary already persisted by `finish`.
+  const rep = (await gw.report(rt, { ok: true, durationMs: 4321, sessionId: "sess-xyz", finalText: "provider chatter" }));
   expect(rep.status).toBe(200);
 
   const r = (await store.getRun(run.id))!;
   expect(r.durationMs).toBe(4321);
   expect(r.sessionId).toBe("sess-xyz");
+  expect(r.message).toBe("done");
   // The loop stays completed (the enriching report never re-stamps).
   expect((await store.getLoop(loop.id))!.completedAt).toBeTruthy();
   // Enrichment revoked the token — a second report is now a no-op (401).
@@ -1479,15 +1414,19 @@ test("a FAILED exec run notifies the user (first failure of a streak)", async ()
   expect(sent[0]!.message).toContain("claude exited 1");
 });
 
-test("a SUCCESSFUL exec run still notifies as before (unchanged success path)", async () => {
-  const { loop, rt } = (await seededExecRun());
+test("a pure workflow report persists and notifies its explicit message", async () => {
+  const { loop, run, rt } = await seededExecRun("always");
   const { sent, fn } = recordingNotify();
 
-  const res = (await gateway(fn).report(rt, { ok: true, message: "Breakfast report ready", durationMs: 5 }));
+  const res = await gateway(fn).report(rt, {
+    ok: true,
+    message: "Workflow found three updates",
+    finalText: "lower-priority provider fallback",
+    durationMs: 5,
+  });
   expect(res.status).toBe(200);
-  expect(sent).toHaveLength(1);
-  expect(sent[0]!.loopId).toBe(loop.id);
-  expect(sent[0]!.message).toBe("Breakfast report ready");
+  expect((await store.getRun(run.id))!.message).toBe("Workflow found three updates");
+  expect(sent).toEqual([{ loopId: loop.id, message: "Workflow found three updates" }]);
 });
 
 test("repeated consecutive failures are anti-spam'd: notify on the 1st and every Nth, not every tick", async () => {
@@ -1570,13 +1509,13 @@ test("a deferred pending run on an OFFLINE machine gets ONE calm note, stays cla
 
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date(Date.now() - 3_600_000).toISOString() }));
   (await gw.sweep());
-  (await gw.sweep()); // second sweep must not re-notify (progress label = dedup stamp)
+  (await gw.sweep()); // second sweep must not re-notify (deferredAt = dedup stamp)
 
   // Deferred, not failed: the run is still pending (the durable inbox slot),
   // stamped with the waiting hint, and exactly ONE calm note went out.
   const held = (await store.getRun(run.id))!;
   expect(held.phase).toBe("pending");
-  expect(held.progress?.label).toMatch(/deferred/);
+  expect(held.deferredAt).toBeTruthy();
   expect(sent).toHaveLength(1);
   expect(sent[0]!.loopId).toBe(loop.id);
   expect(sent[0]!.message).toMatch(/offline/i);
@@ -1747,39 +1686,10 @@ async function seededLoopWithRuns(machineId: string, count: number) {
       outcome: i % 2 === 0 ? "exec" : "error",
       sessionId: `sess-${i}`,
       ...(i % 2 === 0 ? { state: { mrr: 42 + i } } : { error: `boom ${i}` }),
-      transcript: [
-        { kind: "text", text: `run ${i} thinking` },
-        { kind: "tool", name: "Bash", input: `{"cmd":"echo ${i}"}` },
-      ],
     }));
   }
   return loop;
 }
-
-test("loopLog returns the loop's recent runs newest-first with transcript text", async () => {
-  const token = tokens.mintDeviceToken();
-  const machineId = tokens.machineIdFromToken(token);
-  const loop = (await seededLoopWithRuns(machineId, 3));
-
-  const res = (await gateway().loopLog(token, loop.id));
-  expect(res.status).toBe(200);
-  const body = res.body as { ok: boolean; loopId: string; runs: any[] };
-  expect(body.ok).toBe(true);
-  expect(body.loopId).toBe(loop.id);
-  expect(body.runs).toHaveLength(3);
-  // Newest-first.
-  expect(body.runs[0].ts > body.runs[1].ts).toBe(true);
-  // Transcript flattened to text (tool steps render as `$ <name> <input>`).
-  expect(body.runs[0].transcript).toContain("$ Bash");
-  expect(body.runs[0].transcript).toContain("thinking");
-  // Each run carries its claude-code session id so the reader can jump to the
-  // on-disk `<session>.jsonl` for a deep dive (newest-first → run index 2's id).
-  expect(body.runs[0].sessionId).toBe("sess-2");
-  expect(body.runs.every((r) => "sessionId" in r)).toBe(true);
-  // Each run also carries the metrics it reported (the state object).
-  expect(body.runs[0].state).toEqual({ mrr: 44 });
-  expect(body.runs.every((r) => "state" in r)).toBe(true);
-});
 
 test("loopLog honors and caps the run limit", async () => {
   const token = tokens.mintDeviceToken();
@@ -1791,25 +1701,6 @@ test("loopLog honors and caps the run limit", async () => {
   expect(((await gateway().loopLog(token, loop.id, 9999)).body as { runs: any[] }).runs).toHaveLength(5);
   // A non-positive / garbage limit falls back to the default (≥ all 5 here).
   expect(((await gateway().loopLog(token, loop.id, -1)).body as { runs: any[] }).runs).toHaveLength(5);
-});
-
-test("loopLog truncates an over-cap transcript and flags it", async () => {
-  const token = tokens.mintDeviceToken();
-  const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "h", online: true }));
-  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
-  (await store.addRun({
-    loopId: loop.id,
-    userId: "u1",
-    machineId,
-    phase: "done",
-    role: "exec",
-    ts: "2026-06-01T00:00:01Z",
-    transcript: [{ kind: "text", text: "x".repeat(20_000) }],
-  }));
-  const run = ((await gateway().loopLog(token, loop.id)).body as { runs: any[] }).runs[0];
-  expect(run.transcriptTruncated).toBe(true);
-  expect(run.transcript.length).toBeLessThan(20_000);
 });
 
 test("loopLog refuses a token whose machine does not own the loop (cross-device)", async () => {
@@ -1960,12 +1851,34 @@ test("concurrent terminal-grace reports consume exactly one reconcile and cannot
   expect(await tokens.resolveLease(rt)).toBeUndefined();
 });
 
+test("a reclaimed workflow run restores its explicit message on wake-report", async () => {
+  const { run, rt } = await seededExecRun("never");
+  await tokens.terminalizeLease(run.id);
+  await store.transitionRunPhase(run.id, "running", {
+    phase: "error",
+    outcome: "error",
+    error: "machine timed out / disconnected",
+    ts: new Date().toISOString(),
+  });
+
+  const res = await gateway().report(rt, {
+    ok: true,
+    message: "Workflow recovered after wake",
+    finalText: "lower-priority fallback",
+  });
+  expect((res.body as { reconciled?: boolean }).reconciled).toBe(true);
+  expect((await store.getRun(run.id))!).toMatchObject({
+    phase: "done",
+    message: "Workflow recovered after wake",
+  });
+});
+
 test("sweep marks a reclaimed run's token reclaimed: agent-api mutations are refused (409), but the token survives for one wake-report", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" }));
-  // Claimed 30min ago, no progress heard since → past the 20min inactivity window.
+  // Claimed 30min ago, no heartbeat heard since → past the 20min inactivity window.
   const staleTs = new Date(Date.now() - 30 * 60_000).toISOString();
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: staleTs }));
   const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
@@ -2081,17 +1994,16 @@ test("stale deferred stamping cannot overwrite a concurrently promoted owner row
     pending.id,
     { requestedBy: "system", updatedAt: staleUpdatedAt },
     new Date().toISOString(),
-    "deferred - waiting for machine",
   );
   expect(stamped).toBeUndefined();
   expect(await store.getRun(pending.id)).toMatchObject({
     phase: "pending",
     requestedBy: "owner",
-    progress: null,
+    deferredAt: null,
   });
 });
 
-test("sweep is INACTIVITY-based: a >20min run with a fresh progress heartbeat is NOT reclaimed", async () => {
+test("sweep is INACTIVITY-based: a >20min run with a fresh activeRunIds heartbeat is NOT reclaimed", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
@@ -2100,16 +2012,49 @@ test("sweep is INACTIVITY-based: a >20min run with a fresh progress heartbeat is
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: staleTs }));
 
   const gw = gateway();
-  // The daemon's heartbeat just refreshed the progress stamp → healthy long run.
-  (await gw.poll(token, undefined, [{ runId: run.id, step: 7, label: "still working" }]));
+  // Another machine cannot heartbeat this run.
+  const otherToken = tokens.mintDeviceToken();
+  await gw.poll(otherToken, { host: "other" }, [run.id]);
+  expect((await store.getRun(run.id))!.heartbeatAt).toBeNull();
+
+  // The owning daemon's activeRunIds heartbeat refreshes the dedicated stamp.
+  (await gw.poll(token, undefined, [run.id]));
+  expect((await store.getRun(run.id))!.heartbeatAt).toBeTruthy();
   (await gw.sweep());
   expect((await store.getRun(run.id))!.phase).toBe("running"); // never falsely failed
 
   // Once the stamp itself goes stale (nothing heard for the full window) → reclaimed.
-  (await store.updateRun(run.id, { progress: { step: 7, label: "still working", at: staleTs } as { step: number; label: string } }));
+  (await store.updateRun(run.id, { heartbeatAt: staleTs }));
   (await gw.sweep());
   expect((await store.getRun(run.id))!.phase).toBe("error");
   expect((await store.getRun(run.id))!.error).toBe("machine timed out / disconnected");
+});
+
+test("activeRunIds heartbeats every legitimate run beyond the old 32-run cap", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" });
+  const runs = await Promise.all(Array.from({ length: 40 }, (_, i) => store.addRun({
+    id: `many-active-${i}`,
+    loopId: loop.id,
+    userId: "u1",
+    machineId,
+    phase: "running",
+    role: "exec",
+    ts: new Date().toISOString(),
+  })));
+
+  await gateway().poll(token, undefined, [...runs.map((run) => run.id), ...runs.map((run) => run.id)]);
+  const stored = await Promise.all(runs.map((run) => store.getRun(run.id)));
+  expect(stored.every((run) => !!run?.heartbeatAt)).toBe(true);
+});
+
+test("heartbeat refresh throttling stays inside short custom timeout windows", () => {
+  expect(gatewayMod.heartbeatRefreshMs(9_000)).toBe(3_000);
+  expect(gatewayMod.heartbeatRefreshMs(30_000)).toBe(10_000);
+  expect(gatewayMod.heartbeatRefreshMs(10 * 60_000)).toBe(60_000);
+  expect(gatewayMod.heartbeatRefreshMs(Number.NaN)).toBe(1);
 });
 
 test("execFailureStreak is exact past any cap, so the every-Nth reminder keeps firing", async () => {
@@ -2149,23 +2094,6 @@ test("show computes `next` in the loop's timezone", async () => {
 });
 
 // ---- wire-input bounds ----
-
-test("poll processes at most 32 progress entries (excess is dropped)", async () => {
-  const token = tokens.mintDeviceToken();
-  const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
-  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
-
-  // 32 junk entries pad the front; the real run's entry sits past the cap.
-  const junk = Array.from({ length: 32 }, (_, i) => ({ runId: `nope-${i}`, step: 1, label: "x" }));
-  (await gateway().poll(token, undefined, [...junk, { runId: run.id, step: 5, label: "past the cap" }]));
-  expect((await store.getRun(run.id))!.progress).toBeNull();
-
-  // Within the cap it lands normally.
-  (await gateway().poll(token, undefined, [{ runId: run.id, step: 5, label: "in the cap" }]));
-  expect((await store.getRun(run.id))!.progress).toMatchObject({ step: 5, label: "in the cap" });
-});
 
 test("createLoop clips an oversized workflow to the 512KB wire cap", async () => {
   const token = tokens.mintDeviceToken();
@@ -2576,7 +2504,7 @@ async function seededReclaimTarget(runToken: string): Promise<string> {
 // ---- batch 1: the axi-conformance spine — every cli verb carries a TOON `text` ----
 // Batch 7 retired the superset render fields: a `/api/machine/cli` body now carries only
 // `text` + `exitCode` (+ the retained data channels `loops`/`runs` the daemon reads for
-// client-side loop resolution and the `log --json`/`--transcript` escape hatch). Errors
+// client-side loop resolution and the `log --json` escape hatch). Errors
 // render as `error:`/`code:` TOON in `text` to stdout. So these tests assert on `text`,
 // never the retired `ok`/`id`/`loop`/`changes`/`config`/`ui`/`warning`/… fields.
 
@@ -2617,7 +2545,7 @@ test("cli log [D+R]: text is the TOON run survey (F2), structured runs intact", 
   (await store.addRun({
     loopId: withRuns.id, userId: "u1", machineId, phase: "done", role: "exec",
     ts: "2026-07-05T06:00:00Z", outcome: "exec", status: "nothing-new", sessionId: "sess-abc",
-    costUsd: 0.08, state: { drift: 0 }, message: "no drift since last sweep",
+    state: { drift: 0 }, message: "no drift since last sweep",
   }));
   const res = (await gateway().cli(deviceToken, ["log", withRuns.id]));
   expect(res.status).toBe(200);
@@ -2629,8 +2557,8 @@ test("cli log [D+R]: text is the TOON run survey (F2), structured runs intact", 
   expect(body.text.length).toBeGreaterThan(0);
   expect(body.text).toContain(`loop: "Docs Sweep" (${withRuns.id})`);
   expect(body.text).toContain("count: 1 of 1 total");
-  expect(body.text).toContain("runs[1]{ts,role,outcome,cost,metrics,session,message}:");
-  expect(body.text).toContain("exec,ok/nothing-new,$0.08,drift=0,sess-abc");
+  expect(body.text).toContain("runs[1]{ts,role,outcome,metrics,session,message}:");
+  expect(body.text).toContain("exec,ok/nothing-new,drift=0,sess-abc");
   expect(body.text).toContain("summary:");
   expect(body.exitCode).toBe(0);
 });

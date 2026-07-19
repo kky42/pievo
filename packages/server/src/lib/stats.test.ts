@@ -6,17 +6,18 @@ const run = (ts: string, state: RunSummary['state']): RunSummary => ({
   id: `run-${ts}`,
   loopId: 'loop-1',
   ts,
+  agent: null,
   outcome: 'exec',
   status: 'nothing-new',
   message: null,
   durationMs: null,
-  costUsd: null,
+  exitCode: null,
+  finalText: null,
   usage: null,
   error: null,
   state,
   control: null,
   sessionId: null,
-  artifacts: null,
 })
 
 describe('numericSeries', () => {

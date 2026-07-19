@@ -37,8 +37,8 @@ to parse the list instead of read it.
 
 Before reshaping a loop, see how its recent runs actually went with
 `<pievo-cli> log` (the loop for the current directory) or
-`<pievo-cli> log <loop-id>` (`--limit N`, `--json`; `--transcript` for the full
-transcript) — a concise survey of status, metrics, and session ids. Read it first so
+`<pievo-cli> log <loop-id>` (`--limit N`, `--json`) — a concise survey of status,
+metrics, and session ids. Read it first so
 an edit is grounded in what the runs really did, not a guess.
 
 ## Edit the envelope — one JSON patch

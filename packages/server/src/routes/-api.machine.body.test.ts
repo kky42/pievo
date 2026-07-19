@@ -27,21 +27,56 @@ const oversized = (url: string, method = 'POST') =>
 describe('readJsonBody', () => {
   const req = (body: string, headers: Record<string, string> = {}) =>
     new Request('http://localhost/x', { method: 'POST', headers, body })
+  const encoder = new TextEncoder()
+  const streamReq = (chunks: string[], cancel?: () => void) => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
+        // Leave an observed oversize stream open so readJsonBody must cancel it.
+        if (!cancel) controller.close()
+      },
+      cancel,
+    })
+    return new Request('http://localhost/x', {
+      method: 'POST',
+      body,
+      duplex: 'half',
+    } as RequestInit)
+  }
 
-  test('parses a normal body', async () => {
-    expect(await readJsonBody(req('{"a":1}'), 1024)).toEqual({ kind: 'ok', body: { a: 1 } })
+  test('parses a valid streamed body', async () => {
+    expect(await readJsonBody(streamReq(['{"a":', '1}']), 1024)).toEqual({ kind: 'ok', body: { a: 1 } })
   })
 
-  test('empty body parses as {} (matches the old .catch(() => ({})) behavior)', async () => {
-    expect(await readJsonBody(req(''), 1024)).toEqual({ kind: 'ok', body: {} })
+  test('chunked oversized body stops and cancels as soon as the byte cap is crossed', async () => {
+    let canceled = false
+    const request = streamReq(['1234', '5678', 'unread tail'], () => { canceled = true })
+    expect(await readJsonBody(request, 5)).toEqual({ kind: 'too-large' })
+    expect(canceled).toBe(true)
+  })
+
+  test('enforces bytes rather than UTF-16 code units for multibyte JSON', async () => {
+    // `"é"` is 3 JS code units but 4 UTF-8 bytes.
+    expect(await readJsonBody(streamReq(['"é"']), 3)).toEqual({ kind: 'too-large' })
+    expect(await readJsonBody(streamReq(['"é"']), 4)).toEqual({ kind: 'ok', body: 'é' })
   })
 
   test('unparseable JSON → invalid (each route keeps its own policy)', async () => {
     expect(await readJsonBody(req('not json'), 1024)).toEqual({ kind: 'invalid' })
   })
 
-  test('over-cap body → too-large (actual text, and the declared content-length)', async () => {
-    expect(await readJsonBody(req('x'.repeat(2049)), 2048)).toEqual({ kind: 'too-large' })
+  test('empty and unreadable bodies parse as {}', async () => {
+    expect(await readJsonBody(req(''), 1024)).toEqual({ kind: 'ok', body: {} })
+    const unreadable = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.error(new Error('read failed')) },
+    })
+    const request = new Request('http://localhost/x', {
+      method: 'POST', body: unreadable, duplex: 'half',
+    } as RequestInit)
+    expect(await readJsonBody(request, 1024)).toEqual({ kind: 'ok', body: {} })
+  })
+
+  test('declared content-length is rejected before streaming', async () => {
     expect(await readJsonBody(req('{}', { 'content-length': '999999' }), 2048)).toEqual({ kind: 'too-large' })
   })
 })

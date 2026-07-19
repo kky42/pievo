@@ -17,7 +17,8 @@ import type { AddressInfo } from "node:net";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { addCost, buildAgentSpawn, buildResumeTask, buildWorkflowFallbackTask, classifyFailure, costFromResult, dateStamp, foldEscalation, makeStreamConsumer, runDelivery, type Delivery } from "./runner.js";
+import { buildAgentSpawn, buildWorkflowFallbackTask, dateStamp, foldEscalation, runDelivery, type Delivery } from "./runner.js";
+import { makeTerminalCollector } from "./telemetry.js";
 
 describe("dateStamp", () => {
   test("formats YYYY-MM-DD (UTC)", () => {
@@ -116,108 +117,81 @@ describe("foldEscalation", () => {
   });
 });
 
-describe("makeStreamConsumer", () => {
-  test("flushes a final UNTERMINATED line at result() (no trailing newline)", () => {
-    const c = makeStreamConsumer(() => {});
-    c.feed('{"type":"result","is_error":false,"subtype":"success","result":"done","session_id":"sess-1"}'); // no \n
-    const final = c.result();
-    expect(final.json?.result).toBe("done");
-    expect(final.sessionId).toBe("sess-1");
+describe("terminal JSONL collectors", () => {
+  test("Claude reads init session, result text/usage, ignores dollar cost, and flushes an unterminated line", () => {
+    const c = makeTerminalCollector("claude-code");
+    c.feed('{"type":"system","subtype":"init","session_id":"sess-1"}\n');
+    c.feed('{"type":"assistant","message":{"content":[{"type":"text","text":"draft"}],"usage":{"input_tokens":10,"output_tokens":2}}}\n');
+    c.feed('{"type":"result","is_error":false,"subtype":"success","result":"done","total_cost_usd":99,"usage":{"input_tokens":120,"output_tokens":950,"cache_read_input_tokens":48000,"cache_creation_input_tokens":900}}');
+    expect(c.result()).toEqual({
+      sessionId: "sess-1",
+      finalText: "done",
+      usage: { inputTokens: 120, outputTokens: 950, cacheReadTokens: 48000, cacheCreationTokens: 900 },
+      isError: false,
+      errorType: "success",
+    });
+    expect(c.result()).not.toHaveProperty("cost");
   });
 
-  test("newline-terminated lines still parse (and result() is a no-op flush)", () => {
-    const c = makeStreamConsumer(() => {});
-    c.feed('{"type":"result","is_error":false,"result":"ok","session_id":"sess-2"}\n');
-    expect(c.result().json?.result).toBe("ok");
-    expect(c.result().sessionId).toBe("sess-2"); // idempotent
-  });
-
-  test("the terminal result event's cost/usage fields survive into the final json", () => {
-    const c = makeStreamConsumer(() => {});
-    c.feed(
-      '{"type":"result","is_error":false,"result":"done","session_id":"s","total_cost_usd":0.4235,"num_turns":12,"usage":{"input_tokens":120,"output_tokens":950,"cache_read_input_tokens":48000,"cache_creation_input_tokens":900}}\n',
-    );
-    const cost = costFromResult(c.result().json!);
-    expect(cost).toEqual({
-      usd: 0.4235,
-      inputTokens: 120,
-      outputTokens: 950,
-      cacheReadTokens: 48000,
-      cacheCreationTokens: 900,
-      numTurns: 12,
+  test("Claude falls back to assistant final text and usage without a result", () => {
+    const c = makeTerminalCollector("claude-code");
+    c.feed('{"type":"assistant","message":{"content":[{"type":"text","text":"assistant final"}],"usage":{"input_tokens":3,"output_tokens":4,"cache_read_input_tokens":5}}}\n');
+    expect(c.result()).toMatchObject({
+      finalText: "assistant final",
+      usage: { inputTokens: 3, outputTokens: 4, cacheReadTokens: 5, cacheCreationTokens: 0 },
     });
   });
-});
 
-describe("costFromResult", () => {
-  test("returns undefined when the result event carried no cost fields (older claude)", () => {
-    expect(costFromResult({ is_error: false, result: "ok" })).toBeUndefined();
+  test("Claude result modelUsage aggregates models and takes precedence over usage", () => {
+    const c = makeTerminalCollector("claude-code");
+    c.feed('{"type":"result","is_error":false,"result":"done","modelUsage":{"opus":{"inputTokens":10,"outputTokens":2,"cacheReadInputTokens":4,"cacheCreationInputTokens":1},"haiku":{"inputTokens":3,"outputTokens":5,"cacheReadInputTokens":6,"cacheCreationInputTokens":7}},"usage":{"input_tokens":999,"output_tokens":999}}\n');
+    expect(c.result().usage).toEqual({ inputTokens: 13, outputTokens: 7, cacheReadTokens: 10, cacheCreationTokens: 8 });
   });
 
-  test("drops non-numeric / negative values instead of forwarding garbage", () => {
-    const cost = costFromResult({
-      total_cost_usd: -1,
-      num_turns: 3,
-      usage: { input_tokens: "lots" as unknown as number, output_tokens: 10 },
+  test("Codex reads thread, terminal usage/text, and subtracts resumed history from token_count fallback", () => {
+    const c = makeTerminalCollector("codex");
+    c.feed('{"type":"thread.started","thread_id":"thread-1"}\n');
+    c.feed('{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":110,"cached_input_tokens":30,"output_tokens":55},"last_token_usage":{"input_tokens":10,"cached_input_tokens":5,"output_tokens":5}}}}\n');
+    c.feed('{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":125,"cached_input_tokens":37,"output_tokens":61},"last_token_usage":{"input_tokens":15,"cached_input_tokens":7,"output_tokens":6}}}}\n');
+    c.feed('{"type":"item.completed","item":{"type":"agent_message","text":"codex final"}}\n');
+    expect(c.result()).toMatchObject({
+      sessionId: "thread-1",
+      finalText: "codex final",
+      // Raw resumed delta is input=25 including cached=12, so normalized
+      // uncached input is 13 rather than double-counting cached tokens.
+      usage: { inputTokens: 13, outputTokens: 11, cacheReadTokens: 12, cacheCreationTokens: 0 },
+      isError: false,
     });
-    expect(cost).toEqual({
-      usd: undefined,
-      inputTokens: undefined,
-      outputTokens: 10,
-      cacheReadTokens: undefined,
-      cacheCreationTokens: undefined,
-      numTurns: 3,
-    });
   });
-});
 
-describe("classifyFailure", () => {
-  test("transient: provider/network blips that a session resume can recover", () => {
-    for (const t of [
-      "API Error: Connection closed mid-response. The response above may be incomplete.",
-      "read ECONNRESET",
-      "socket hang up",
-      "fetch failed",
-      "stream closed before response completed",
-      "Overloaded (529)",
-      "rate limit exceeded, retry later",
-      "HTTP 503 service unavailable",
-      "Request timed out talking to the API",
-    ]) {
-      expect(classifyFailure(t), t).toBe("transient");
-    }
+  test("Codex turn.completed usage is authoritative and splits cached from uncached input", () => {
+    const c = makeTerminalCollector("codex");
+    c.feed('{"type":"turn.completed","usage":{"input_tokens":7,"cached_input_tokens":2,"output_tokens":9}}\n');
+    expect(c.result().usage).toEqual({ inputTokens: 5, outputTokens: 9, cacheReadTokens: 2, cacheCreationTokens: 0 });
   });
-  test("auth/quota outranks transient — never spin on a dead credential or spent budget", () => {
-    for (const t of [
-      "API Error: 401 unauthorized",
-      "authentication_error: invalid api key",
-      "usage limit reached — resets at 5pm",
-      "Your credit balance is too low",
-    ]) {
-      expect(classifyFailure(t), t).toBe("auth");
-    }
-  });
-  test("poisoned outranks transient — a resume would deterministically re-fail", () => {
-    for (const t of [
-      'API Error: 400 {"type":"invalid_request_error","message":"prompt is too long"}',
-      "prompt is too long: 250000 tokens > context window",
-    ]) {
-      expect(classifyFailure(t), t).toBe("poisoned");
-    }
-  });
-  test("anything unrecognized is a plain task failure — no retry", () => {
-    expect(classifyFailure("error_max_turns")).toBe("task");
-    expect(classifyFailure("claude exited with code 1")).toBe("task");
-    expect(classifyFailure("")).toBe("task");
-  });
-});
 
-describe("buildResumeTask", () => {
-  test("names the interruption, trusts prior progress, re-pins the one-report contract", () => {
-    const t = buildResumeTask("API Error: Connection closed mid-response");
-    expect(t).toContain("Connection closed mid-response");
-    expect(t).toContain("do not redo completed work");
-    expect(t).toContain("exactly ONE `pievo report");
+  test("Codex generic errors are diagnostic when a later turn completes", () => {
+    const c = makeTerminalCollector("codex");
+    c.feed('{"type":"error","message":"temporary stream diagnostic"}\n');
+    c.feed('{"type":"turn.completed","usage":{"input_tokens":4,"cached_input_tokens":1,"output_tokens":2}}\n');
+    expect(c.result()).toMatchObject({ isError: false });
+    expect(c.result().errorType).toBeUndefined();
+  });
+
+  test("Codex generic error is the fallback when no successful terminal event arrives", () => {
+    const c = makeTerminalCollector("codex");
+    c.feed('{"type":"error","message":"connection dropped"}\n');
+    expect(c.result()).toMatchObject({ isError: true, errorType: "connection dropped" });
+  });
+
+  test("Codex final text accepts nested content and structured_content shapes", () => {
+    const nested = makeTerminalCollector("codex");
+    nested.feed('{"type":"item.completed","item":{"type":"agent_message","content":[{"type":"text","content":"nested "},{"message":{"text":"text"}}]}}\n');
+    expect(nested.result().finalText).toBe("nested text");
+
+    const structured = makeTerminalCollector("codex");
+    structured.feed('{"type":"item.completed","item":{"type":"agent_message","structured_content":{"answer":42}}}\n');
+    expect(structured.result().finalText).toBe('{"answer":42}');
   });
 });
 
@@ -240,11 +214,12 @@ describe("buildAgentSpawn", () => {
     ]);
   });
 
-  test("claude-code: PIEVO_CLAUDE_BIN escape hatch + resume + model, sys file omitted when absent", () => {
+  test("claude-code: PIEVO_CLAUDE_BIN escape hatch + model, with no resume surface", () => {
     process.env.PIEVO_CLAUDE_BIN = "/opt/claude";
-    const { bin, args } = buildAgentSpawn({ agent: "claude-code", prompt: "p", resumeSessionId: "sess-9", model: "opus" });
+    const { bin, args } = buildAgentSpawn({ agent: "claude-code", prompt: "p", model: "opus" });
     expect(bin).toBe("/opt/claude");
-    expect(args.slice(0, 4)).toEqual(["-p", "p", "--resume", "sess-9"]);
+    expect(args.slice(0, 2)).toEqual(["-p", "p"]);
+    expect(args).not.toContain("--resume");
     expect(args).not.toContain("--append-system-prompt-file");
     expect(args.slice(-2)).toEqual(["--model", "opus"]);
   });
@@ -269,37 +244,23 @@ describe("buildAgentSpawn", () => {
     expect(args).not.toContain("--disallowed-tools");
   });
 
-  test("codex: PIEVO_CODEX_BIN escape hatch + exec resume + model", () => {
+  test("codex: PIEVO_CODEX_BIN escape hatch + model, with no resume subcommand", () => {
     process.env.PIEVO_CODEX_BIN = "/opt/codex";
     const { bin, args } = buildAgentSpawn({
       agent: "codex",
-      prompt: "continue",
-      resumeSessionId: "sess-codex-1",
+      prompt: "run once",
       model: "o3",
     });
     expect(bin).toBe("/opt/codex");
     expect(args).toEqual([
       "exec",
-      "resume",
-      "sess-codex-1",
       "--json",
       "--dangerously-bypass-approvals-and-sandbox",
       "--skip-git-repo-check",
       "-m", "o3",
-      "continue",
+      "run once",
     ]);
-  });
-});
-
-describe("addCost", () => {
-  test("sums per-attempt spend, treating an absent side as identity", () => {
-    expect(addCost(undefined, { usd: 1 })).toEqual({ usd: 1 });
-    expect(addCost({ usd: 1, inputTokens: 10 }, undefined)).toEqual({ usd: 1, inputTokens: 10 });
-    expect(addCost({ usd: 1, inputTokens: 10 }, { usd: 0.5, outputTokens: 5 })).toEqual({
-      usd: 1.5,
-      inputTokens: 10,
-      outputTokens: 5,
-    });
+    expect(args).not.toContain("resume");
   });
 });
 
@@ -345,6 +306,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   delete process.env.PIEVO_CLAUDE_BIN;
+  delete process.env.PIEVO_CODEX_BIN;
   delete process.env.PIEVO_MCP_BRIDGE;
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -409,7 +371,7 @@ describe("runDelivery — a timed-out run keeps its session pointer", () => {
 
     // A fake claude that streams its session id early, then hangs past the timeout.
     const bin = path.join(root, "slow-claude.sh");
-    fs.writeFileSync(bin, ["#!/bin/sh", `echo '{"type":"system","session_id":"sess-slow"}'`, "sleep 30", ""].join("\n"), "utf8");
+    fs.writeFileSync(bin, ["#!/bin/sh", `echo '{"type":"system","subtype":"init","session_id":"sess-slow"}'`, "sleep 30", ""].join("\n"), "utf8");
     fs.chmodSync(bin, 0o755);
     process.env.PIEVO_CLAUDE_BIN = bin;
 
@@ -508,90 +470,43 @@ function writeArgvClaude(): string {
   return p;
 }
 
-describe("runDelivery — transient failure resumes the session (bounded retry)", () => {
-  test("an API-error crash retries with --resume, sums the spend, and reports one success", async () => {
-    // Fresh import so a tiny PIEVO_TRANSIENT_RETRY_BASE_MS (module-load const) applies.
-    vi.resetModules();
-    process.env.PIEVO_TRANSIENT_RETRY_BASE_MS = "10";
-    const { runDelivery: run } = await import("./runner.js");
-
-    // Fake claude: attempt 1 dies with the canonical mid-response API error;
-    // attempt 2 (the resume) records its argv and succeeds under a FORKED
-    // session id (what a real `--resume` does).
-    const bin = path.join(root, "flaky-claude.sh");
+describe("runDelivery — provider execution is always single-shot", () => {
+  test.each([
+    {
+      agent: "claude-code" as const,
+      envKey: "PIEVO_CLAUDE_BIN" as const,
+      events: [
+        `echo '{"type":"system","subtype":"init","session_id":"session-once"}'`,
+        `echo '{"type":"result","is_error":true,"subtype":"error_during_execution","result":"API Error: Connection closed mid-response","usage":{"input_tokens":10,"output_tokens":2}}'`,
+      ],
+    },
+    {
+      agent: "codex" as const,
+      envKey: "PIEVO_CODEX_BIN" as const,
+      events: [
+        `echo '{"type":"thread.started","thread_id":"session-once"}'`,
+        `echo '{"type":"turn.failed","error":{"message":"API Error: Connection closed mid-response"}}'`,
+      ],
+    },
+  ])("$agent invokes once and never resumes after a transient-looking failure", async ({ agent, envKey, events }) => {
+    const bin = path.join(root, `single-shot-${agent}.sh`);
     fs.writeFileSync(
       bin,
       [
         "#!/bin/sh",
-        "if [ ! -f attempted ]; then",
-        "  touch attempted",
-        `  echo '{"type":"result","is_error":true,"subtype":"error_during_execution","result":"API Error: Connection closed mid-response. The response above may be incomplete.","session_id":"sess-1","total_cost_usd":0.5}'`,
-        "  exit 1",
-        "fi",
-        'printf "%s" "$*" > resume-args.txt',
-        `echo '{"type":"result","is_error":false,"subtype":"success","result":"delivered","session_id":"sess-2","total_cost_usd":0.25}'`,
-        "exit 0",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    fs.chmodSync(bin, 0o755);
-    process.env.PIEVO_CLAUDE_BIN = bin;
-
-    const reports: any[] = [];
-    const srv = http.createServer((req, res) => {
-      let body = "";
-      req.on("data", (c) => (body += c));
-      req.on("end", () => {
-        reports.push(JSON.parse(body));
-        res.end("{}");
-      });
-    });
-    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
-    try {
-      const port = (srv.address() as AddressInfo).port;
-      await run(delivery({ loop: { ...delivery().loop, workflow: null } }), `http://127.0.0.1:${port}`, []);
-    } finally {
-      srv.close();
-      delete process.env.PIEVO_TRANSIENT_RETRY_BASE_MS;
-    }
-
-    // The resume invocation targeted the FIRST session and carried the
-    // continuation prompt, not the original task.
-    const args = fs.readFileSync(path.join(workdir, "resume-args.txt"), "utf8");
-    expect(args).toContain("--resume sess-1");
-    expect(args).toContain("interrupted by a transient infrastructure error");
-    expect(args).not.toContain("ORIGINAL TASK");
-
-    const rep = reports.find((r) => r.runId === "run-1");
-    expect(rep).toBeTruthy();
-    expect(rep.ok).toBe(true);
-    expect(rep.attempts).toBe(2); // one resume — surfaced for observability
-    expect(rep.sessionId).toBe("sess-2"); // the fork is the live transcript pointer
-    expect(rep.cost.usd).toBeCloseTo(0.75); // both attempts' spend, summed
-  }, 30000);
-
-  test("a NON-transient failure does not retry (task-level errors are final)", async () => {
-    vi.resetModules();
-    process.env.PIEVO_TRANSIENT_RETRY_BASE_MS = "10";
-    const { runDelivery: run } = await import("./runner.js");
-
-    // Fails every time with a task-level subtype; a retry would leave a marker.
-    const bin = path.join(root, "maxturns-claude.sh");
-    fs.writeFileSync(
-      bin,
-      [
-        "#!/bin/sh",
-        "if [ -f attempted ]; then touch retried; fi",
-        "touch attempted",
-        `echo '{"type":"result","is_error":true,"subtype":"error_max_turns","result":"ran out of turns","session_id":"sess-x"}'`,
+        "count=0",
+        "[ -f invocations.txt ] && count=$(cat invocations.txt)",
+        "count=$((count + 1))",
+        'printf "%s" "$count" > invocations.txt',
+        'printf "%s\\n" "$@" > provider-argv.txt',
+        ...events,
         "exit 1",
         "",
       ].join("\n"),
       "utf8",
     );
     fs.chmodSync(bin, 0o755);
-    process.env.PIEVO_CLAUDE_BIN = bin;
+    process.env[envKey] = bin;
 
     const reports: any[] = [];
     const srv = http.createServer((req, res) => {
@@ -602,20 +517,25 @@ describe("runDelivery — transient failure resumes the session (bounded retry)"
         res.end("{}");
       });
     });
-    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
     try {
       const port = (srv.address() as AddressInfo).port;
-      await run(delivery({ loop: { ...delivery().loop, workflow: null } }), `http://127.0.0.1:${port}`, []);
+      await runDelivery(
+        delivery({ loop: { ...delivery().loop, workflow: null, agent } }),
+        `http://127.0.0.1:${port}`,
+        [],
+      );
     } finally {
       srv.close();
-      delete process.env.PIEVO_TRANSIENT_RETRY_BASE_MS;
     }
 
-    expect(fs.existsSync(path.join(workdir, "retried"))).toBe(false);
+    expect(fs.readFileSync(path.join(workdir, "invocations.txt"), "utf8")).toBe("1");
+    const argv = fs.readFileSync(path.join(workdir, "provider-argv.txt"), "utf8").split("\n");
+    expect(argv).not.toContain("--resume");
+    expect(argv).not.toContain("resume");
     const rep = reports.find((r) => r.runId === "run-1");
-    expect(rep.ok).toBe(false);
-    expect(rep.error).toBe("error_max_turns");
-    expect(rep.attempts).toBeUndefined(); // no resume happened — no noise field
+    expect(rep).toMatchObject({ ok: false, exitCode: 1, sessionId: "session-once" });
+    expect(rep.error).toMatch(/error_during_execution|Connection closed mid-response/);
   }, 30000);
 });
 
@@ -688,6 +608,29 @@ function reportCapture(): { reports: any[]; start: () => Promise<string>; close:
     close: () => srv.close(),
   };
 }
+
+describe("runDelivery — workflow-only reports preserve their message", () => {
+  test("direct workflow message is included with exitCode 0", async () => {
+    const cap = reportCapture();
+    const url = await cap.start();
+    try {
+      await runDelivery(
+        delivery({ loop: { ...delivery().loop, workflow: `return { message: "workflow delivered", state: { cursor: 1 } };` } }),
+        url,
+        [],
+      );
+    } finally {
+      cap.close();
+    }
+    expect(cap.reports.find((r) => r.runId === "run-1")).toMatchObject({
+      ok: true,
+      exitCode: 0,
+      outcome: "direct",
+      message: "workflow delivered",
+      cursor: { cursor: 1 },
+    });
+  }, 20000);
+});
 
 describe("runDelivery — an evolve run's finalText reaches the report", () => {
   test("finalText rides along for role=evolve (the server's message fallback needs it)", async () => {
@@ -777,5 +720,46 @@ describe("runDelivery — a non-zero exit with a clean result never records 'suc
     expect(rep).toBeTruthy();
     expect(rep.ok).toBe(false);
     expect(rep.error).toBe("error_max_turns");
+  }, 20000);
+});
+
+describe("runDelivery — Codex terminal telemetry report", () => {
+  test("reports Codex session/text/normalized usage/exitCode with no transcript-derived fields", async () => {
+    const bin = path.join(root, "fake-codex.sh");
+    fs.writeFileSync(
+      bin,
+      [
+        "#!/bin/sh",
+        `echo '{"type":"thread.started","thread_id":"thread-codex"}'`,
+        `echo '{"type":"error","message":"recoverable diagnostic"}'`,
+        `echo '{"type":"item.completed","item":{"type":"agent_message","text":"codex delivered"}}'`,
+        `echo '{"type":"turn.completed","usage":{"input_tokens":21,"cached_input_tokens":8,"output_tokens":13}}'`,
+        "exit 0",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.chmodSync(bin, 0o755);
+    process.env.PIEVO_CODEX_BIN = bin;
+
+    const cap = reportCapture();
+    const url = await cap.start();
+    try {
+      await runDelivery(delivery({ loop: { ...delivery().loop, workflow: null, agent: "codex" } }), url, []);
+    } finally {
+      cap.close();
+    }
+    const rep = cap.reports.find((r) => r.runId === "run-1");
+    expect(rep).toMatchObject({
+      ok: true,
+      exitCode: 0,
+      sessionId: "thread-codex",
+      finalText: "codex delivered",
+      usage: { inputTokens: 13, outputTokens: 13, cacheReadTokens: 8, cacheCreationTokens: 0 },
+    });
+    expect(rep.durationMs).toEqual(expect.any(Number));
+    expect(rep).not.toHaveProperty("cost");
+    expect(rep).not.toHaveProperty("transcript");
+    expect(rep).not.toHaveProperty("artifacts");
   }, 20000);
 });

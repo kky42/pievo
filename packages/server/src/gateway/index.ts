@@ -19,7 +19,7 @@ import { Cron } from "croner";
 
 import { logger } from "../logger.js";
 import * as store from "../db/store.js";
-import type { CodingAgent, Loop, NewLoop, Run, RunArtifact, RunRole, RunUsage, TranscriptStep } from "../db/schema.js";
+import type { CodingAgent, Loop, NewLoop, NewRun, Run, RunRole, RunUsage } from "../db/schema.js";
 import { CODING_AGENTS, coerceCodingAgent } from "../types.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
@@ -76,11 +76,12 @@ const AUTOPAUSE_STREAK = Math.max(0, Number(process.env.PIEVO_FAILURE_AUTOPAUSE_
  *  before it retires as `skipped`. Same-role fires coalesce in place; this horizon
  *  bounds the durable slot when a machine never returns. */
 const DEFERRED_MAX_MS = 7 * 86_400_000;
-/** Progress label stamped on a deferred pending run — doubles as the one-shot
- *  dedup marker for the offline note and as a "waiting" hint in the UI. */
-const DEFERRED_LABEL = "deferred - machine offline";
+/** Offline deferred notifications use `runs.deferredAt` as their dedicated marker. */
 /** A claimed run that never reports within this window is reclaimed as timed out. */
-const RUN_TIMEOUT_MS = Number(process.env.PIEVO_RUN_TIMEOUT_MS || 20 * 60_000);
+const configuredRunTimeoutMs = Number(process.env.PIEVO_RUN_TIMEOUT_MS || 20 * 60_000);
+const RUN_TIMEOUT_MS = Number.isFinite(configuredRunTimeoutMs) && configuredRunTimeoutMs > 0
+  ? configuredRunTimeoutMs
+  : 20 * 60_000;
 /** `runAt`/`reschedule` horizon - shared by the owner edit path here and the
  *  run-token reschedule path in `cli.ts`. */
 export const MAX_NEXT_MS = 30 * 86_400_000;
@@ -108,9 +109,6 @@ export const EDITABLE_LOOP_FIELDS = new Set([
   "agent",
 ]);
 const MIN_INTERVAL_MS = 60_000;
-const MAX_ARTIFACTS = 200;
-const MAX_TRANSCRIPT_STEPS = 200;
-const STEP_FIELD_MAX = 4000;
 /** A workflow cursor bigger than this (serialized) is ignored rather than persisted
  *  onto the loop row — the run itself still records normally. */
 const CURSOR_CAP = 256 * 1024;
@@ -123,13 +121,15 @@ const SESSION_ID_CAP = 200;
 /** A loop's goal (setpoint) is a one-line, checkable statement — clip generously
  *  but keep it a single line's worth (not a document). Shared by createLoop/editLoop. */
 const GOAL_CAP = 2000;
-/** A poll heartbeat legitimately carries one progress entry per in-flight run on the
- *  machine; anything past a generous cap is garbage — process at most this many. */
-const MAX_PROGRESS_ENTRIES = 32;
-/** How often the persisted progress freshness stamp (`at`) refreshes while the
- *  step/label signal itself hasn't moved — throttled so the ~3s poll hot path isn't
- *  a per-heartbeat UPDATE, but the sweep still sees minute-fresh activity. */
-const PROGRESS_STAMP_REFRESH_MS = 60_000;
+/** The 2MB machine-body cap is the primary bound; this generous secondary cap
+ * covers machines running thousands of independent loops without query abuse. */
+const MAX_ACTIVE_RUN_IDS = 5_000;
+/** Keep heartbeat throttling safely inside custom short timeout windows. */
+export function heartbeatRefreshMs(runTimeoutMs: number): number {
+  if (!Number.isFinite(runTimeoutMs) || runTimeoutMs <= 0) return 1;
+  return Math.max(1, Math.min(60_000, runTimeoutMs / 3));
+}
+const HEARTBEAT_STAMP_REFRESH_MS = heartbeatRefreshMs(RUN_TIMEOUT_MS);
 /** How often the poll hot path re-stamps `machines.lastSeen`. Only the sweep
  *  (ONLINE_TTL_MS granularity) and presence reads consume the stamp, so an
  *  every-poll UPDATE is pure write amplification on Postgres — refresh at 10s
@@ -138,19 +138,18 @@ const PROGRESS_STAMP_REFRESH_MS = 60_000;
 const LAST_SEEN_REFRESH_MS = 10_000;
 
 interface MachineReportBody {
+  runId?: string;
   ok?: boolean;
+  exitCode?: number;
   durationMs?: number;
+  outcome?: "direct" | "silent" | "exec" | "evolve";
   sessionId?: string;
-  artifacts?: Array<{ path?: unknown; kind?: unknown }>;
-  transcript?: unknown;
+  usage?: unknown;
   taskFileContent?: unknown;
+  message?: string;
   error?: string;
   finalText?: string;
-  outcome?: "direct" | "silent" | "exec" | "evolve";
-  message?: string;
   cursor?: unknown;
-  cost?: unknown;
-  attempts?: unknown;
 }
 /** How long an opted-in poll (`wait:true`) is held open for work before returning
  *  empty. Bounded under the daemon's 30s fetch timeout AND under ONLINE_TTL_MS
@@ -166,79 +165,41 @@ const WATCH_CACHE_TTL_MS = 15_000;
  *  only the server assigns. */
 const RUN_OUTCOMES = new Set(["direct", "silent", "exec", "evolve"]);
 
-/** `pievo log`: how many recent runs to return, and the per-run transcript cap.
- *  The on-machine agent wants recent history before editing/evolving — not an
- *  unbounded dump — so default to a handful of runs and clip each transcript.
- *  LOG_RUNS_DEFAULT is exported for `cli.ts` (`describe`'s recent-run window). */
+/** `pievo log` recent-history window. */
 export const LOG_RUNS_DEFAULT = 8;
 const LOG_RUNS_MAX = 20;
-const LOG_TRANSCRIPT_CAP = 8000;
+const USAGE_MAX = 1e12;
 
-/** Validate the daemon-reported artifact list (untrusted wire input). */
-function coerceArtifacts(raw: unknown): RunArtifact[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  const out: RunArtifact[] = [];
-  for (const a of raw) {
-    const p = (a as { path?: unknown })?.path;
-    const k = (a as { kind?: unknown })?.kind;
-    if (typeof p === "string" && p.trim() && (k === "created" || k === "edited")) {
-      out.push({ path: clipText(p, 1024), kind: k });
-      if (out.length >= MAX_ARTIFACTS) break;
-    }
-  }
-  return out.length ? out : undefined;
+/** Resolve the user-facing run summary across both execution paths. A pure
+ * workflow returns `body.message`; an agent may already have persisted its message
+ * through `pievo report`; provider final text is only the last-resort fallback. */
+function reportMessage(body: MachineReportBody, run: Run | undefined): string | undefined {
+  const raw = typeof body.message === "string"
+    ? body.message
+    : run?.message
+      ? run.message
+      : typeof body.finalText === "string"
+        ? body.finalText
+        : undefined;
+  return raw === undefined ? undefined : clipText(raw, MESSAGE_CAP);
 }
 
-/** Sanity ceilings on the daemon-reported cost figures (untrusted wire input) —
- *  a single run costing more than this is a lie or a parser bug, not a bill. */
-const COST_USD_MAX = 10_000;
-const COST_TOKENS_MAX = 1e12;
-
-/** Validate the daemon-reported cost/usage (untrusted wire input): finite
- *  non-negative numbers only, capped. Returns the run-row patch fields. */
-function coerceCost(raw: unknown): { costUsd?: number; usage?: RunUsage } {
-  if (!raw || typeof raw !== "object") return {};
-  const c = raw as Record<string, unknown>;
-  const num = (v: unknown, max: number): number | undefined =>
-    typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= max ? v : undefined;
+function coerceTelemetry(body: MachineReportBody): Partial<Pick<NewRun, "durationMs" | "exitCode" | "sessionId" | "finalText" | "usage">> {
+  const whole = (v: unknown, max: number): number | undefined =>
+    typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= max ? v : undefined;
+  const usageRaw = body.usage && typeof body.usage === "object" ? body.usage as Record<string, unknown> : {};
   const usage: RunUsage = {};
-  const tok = (k: keyof RunUsage, v: unknown) => {
-    const n = num(v, COST_TOKENS_MAX);
-    if (n !== undefined) usage[k] = n;
-  };
-  tok("inputTokens", c.inputTokens);
-  tok("outputTokens", c.outputTokens);
-  tok("cacheReadTokens", c.cacheReadTokens);
-  tok("cacheCreationTokens", c.cacheCreationTokens);
-  tok("numTurns", c.numTurns);
-  // Resume-recovery attempt count (daemon batch: transient-failure resume). Rides
-  // the wire OUTSIDE `cost` (a body-level field), so callers pass it explicitly.
-  tok("attempts", c.attempts);
-  const costUsd = num(c.usd, COST_USD_MAX);
+  for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"] as const) {
+    const value = whole(usageRaw[key], USAGE_MAX);
+    if (value !== undefined) usage[key] = value;
+  }
   return {
-    ...(costUsd !== undefined ? { costUsd } : {}),
+    ...(whole(body.durationMs, 2_147_483_647) !== undefined ? { durationMs: body.durationMs } : {}),
+    ...(whole(body.exitCode, 2_147_483_647) !== undefined ? { exitCode: body.exitCode } : {}),
+    ...(typeof body.sessionId === "string" ? { sessionId: clipText(body.sessionId, SESSION_ID_CAP) } : {}),
+    ...(typeof body.finalText === "string" ? { finalText: clipText(body.finalText, WIRE_TEXT_CAP) } : {}),
     ...(Object.keys(usage).length ? { usage } : {}),
   };
-}
-
-/** Validate the daemon-reported execution trace (untrusted wire input; re-clip defensively). */
-function coerceTranscript(raw: unknown): TranscriptStep[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  const out: TranscriptStep[] = [];
-  for (const s of raw) {
-    const kind = (s as { kind?: unknown })?.kind;
-    if (kind !== "text" && kind !== "tool" && kind !== "result") continue;
-    const step: TranscriptStep = { kind };
-    const text = (s as { text?: unknown })?.text;
-    const name = (s as { name?: unknown })?.name;
-    const input = (s as { input?: unknown })?.input;
-    if (typeof text === "string") step.text = clipText(text, STEP_FIELD_MAX);
-    if (typeof name === "string") step.name = clipText(name, 200);
-    if (typeof input === "string") step.input = clipText(input, STEP_FIELD_MAX);
-    out.push(step);
-    if (out.length >= MAX_TRANSCRIPT_STEPS) break;
-  }
-  return out.length ? out : undefined;
 }
 
 /** One entry of the poll response's watch set (the daemon resolves the folder). */
@@ -412,29 +373,22 @@ export class MachineGateway {
           // triggers coalesce, so this role stays depth-1.
           // Alarm policy mirrors presence: asleep (<6h) is the common calm case
           // and stays fully silent; a genuinely OFFLINE machine gets ONE calm
-          // note per deferred exec run (the progress label doubles as the
-          // dedup stamp and as a "waiting" hint in the UI).
+          // note per deferred exec run (`deferredAt` is the dedicated dedup marker).
           const presence = machinePresence(machine?.online ?? false, machine?.lastSeen ?? null, now);
-          if (presence === "offline" && run.role === "exec" && run.requestedBy === "system" && run.progress?.label !== DEFERRED_LABEL) {
+          if (presence === "offline" && run.role === "exec" && run.requestedBy === "system" && !run.deferredAt) {
             const loop = await store.markPendingRunDeferred(
               run.id,
               { requestedBy: run.requestedBy, updatedAt: run.updatedAt },
               nowIso(),
-              DEFERRED_LABEL,
             );
             if (loop && loop.notify !== "never") this.pushNotify(loop, deferredMessage());
           }
         }
       } else if (run.phase === "running") {
-        // INACTIVITY-based timeout, not since-claim: a healthy run keeps its
-        // progress freshness stamp (`at`) alive via the daemon's poll heartbeat,
-        // so a legitimate >20min run is never falsely failed (then push-alerted,
-        // then flipped back to done by its real report). Only when NOTHING has
-        // been heard for the full window — no progress stamp since the claim —
-        // is the machine considered gone. Runs from older daemons (no stamp)
-        // degrade to the previous claim-age behavior.
-        const at = run.progress?.at;
-        const heardAt = Math.max(Date.parse(run.ts), at ? Date.parse(at) || 0 : 0);
+        // INACTIVITY-based timeout. `heartbeatAt` is refreshed only when the daemon
+        // explicitly lists this run in `activeRunIds`; claim time is the fallback
+        // until the first heartbeat arrives.
+        const heardAt = Math.max(Date.parse(run.ts), run.heartbeatAt ? Date.parse(run.heartbeatAt) || 0 : 0);
         if (now - heardAt > RUN_TIMEOUT_MS) {
           await this.reclaimRun(run, "machine timed out / disconnected");
         }
@@ -512,7 +466,7 @@ export class MachineGateway {
   async poll(
     deviceToken: string,
     info?: { host?: string; platform?: string; arch?: string; version?: string },
-    progress?: Array<{ runId: string; step: number; label: string }>,
+    activeRunIds?: string[],
     /** The daemon's echo of the last watch digest it applied — matching ⇒ the
      *  watch array is omitted from the response (an old daemon never echoes). */
     watchDigest?: string,
@@ -587,27 +541,22 @@ export class MachineGateway {
       if (Object.keys(patch).length) await store.updateMachine(machineId, patch);
     }
 
-    // Live progress for in-flight runs (slim activity line, not the transcript).
-    // Scope to this machine's own running rows; a finalized row is left alone.
-    // Untrusted wire input: one entry per in-flight run is the legitimate shape,
-    // so anything past the cap is garbage — process at most MAX_PROGRESS_ENTRIES.
-    if (progress?.length) {
-      for (const p of progress.slice(0, MAX_PROGRESS_ENTRIES)) {
-        if (typeof p?.runId !== "string" || typeof p.label !== "string") continue;
-        const run = await store.getRun(p.runId);
-        if (run?.machineId !== machineId || run.phase !== "running") continue;
-        const step = Number(p.step) || 0;
-        const label = clipText(p.label, 200);
-        // Skip the write when the signal hasn't moved — claude can sit inside one
-        // long tool_use across several 3s heartbeats, so most polls repeat it. The
-        // freshness stamp (`at`, the sweep's inactivity signal) still refreshes,
-        // throttled to once a minute so the hot path isn't a per-poll UPDATE.
-        const cur = run.progress;
-        const moved = cur?.step !== step || cur?.label !== label;
-        const stampStale = !cur?.at || Date.now() - Date.parse(cur.at) > PROGRESS_STAMP_REFRESH_MS;
-        if (moved || stampStale) {
-          await store.updateRun(p.runId, { progress: { step, label, at: nowIso() } });
-        }
+    // Provider-neutral liveness: dedupe body-bounded ids, then refresh all stale
+    // rows in one UPDATE scoped to this machine + running phase.
+    if (Array.isArray(activeRunIds)) {
+      const ids = new Set<string>();
+      for (const value of activeRunIds) {
+        if (typeof value === "string") ids.add(value);
+        if (ids.size >= MAX_ACTIVE_RUN_IDS) break;
+      }
+      if (ids.size) {
+        const now = Date.now();
+        await store.refreshRunHeartbeats(
+          machineId,
+          [...ids],
+          new Date(now).toISOString(),
+          new Date(now - HEARTBEAT_STAMP_REFRESH_MS).toISOString(),
+        );
       }
     }
 
@@ -667,15 +616,15 @@ export class MachineGateway {
   async pollWait(
     deviceToken: string,
     info?: { host?: string; platform?: string; arch?: string; version?: string },
-    progress?: Array<{ runId: string; step: number; label: string }>,
+    activeRunIds?: string[],
     opts?: { wait?: boolean; watchDigest?: string; waitMs?: number },
   ): Promise<HttpResult> {
-    if (!opts?.wait) return this.poll(deviceToken, info, progress, opts?.watchDigest);
+    if (!opts?.wait) return this.poll(deviceToken, info, activeRunIds, opts?.watchDigest);
     const machineId = machineIdFromToken(deviceToken);
     const waitMs = Math.min(Math.max(opts.waitMs ?? LONG_POLL_WAIT_MS, 0), LONG_POLL_WAIT_MS);
     const waiter = this.armPollWaiter(machineId, waitMs);
     try {
-      const first = await this.poll(deviceToken, info, progress, opts.watchDigest);
+      const first = await this.poll(deviceToken, info, activeRunIds, opts.watchDigest);
       if (first.status !== 200) return first;
       if ((first.body as { deliveries: Delivery[] }).deliveries.length) return first;
       const woken = await waiter.promise;
@@ -685,7 +634,7 @@ export class MachineGateway {
         await store.setMachineOnline(machineId, true);
         return first;
       }
-      // Woken: re-run the claim pass (identity/progress were already applied).
+      // Woken: re-run the claim pass (identity/heartbeats were already applied).
       return await this.poll(deviceToken, undefined, undefined, opts.watchDigest);
     } finally {
       waiter.cancel();
@@ -1031,17 +980,7 @@ export class MachineGateway {
     return { status: 200, body: { ok: true, loops, text } };
   }
 
-  /**
-   * Recent run execution logs (transcripts) for a loop, for the on-machine agent
-   * (`pievo log`). The device-facing twin of the web-only `getTranscript`:
-   * authed by the SAME device token the daemon already uses, and scoped strictly
-   * to a loop bound to THAT machine (`loop.machineId === machineId`, exactly like
-   * `editLoop`/`sync`) — a token can never read another loop's or another device's
-   * runs. Read-only. Returns the most recent N runs newest-first with each run's
-   * outcome, its claude-code `sessionId`, its reported metrics (`state`),
-   * and a clipped transcript so the create/update/evolve flows can see how past runs
-   * actually went before reshaping the loop.
-   */
+  /** Recent provider-neutral run history for `pievo log`, machine scoped. */
   async loopLog(deviceToken: string, loopId: unknown, limit?: unknown): Promise<HttpResult> {
     const machineId = machineIdFromToken(deviceToken);
     if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
@@ -1067,37 +1006,29 @@ export class MachineGateway {
     // listRuns returns the newest n runs oldest-first; reverse to newest-first so
     // the agent reads the most recent history at the top.
     const rows = (await store.listRuns(loopId, n)).slice().reverse();
-    const runs = rows.map((r) => {
-      const { text, truncated } = renderTranscript(r.transcript as TranscriptStep[] | null);
-      return {
-        id: r.id,
-        ts: r.ts,
-        role: r.role,
-        phase: r.phase,
-        outcome: r.outcome ?? null,
-        status: r.status ?? null,
-        durationMs: r.durationMs ?? null,
-        /** Claude-reported spend (USD estimate) so `pievo log` surfaces run cost. */
-        costUsd: r.costUsd ?? null,
-        error: r.error ?? null,
-        message: r.message ?? null,
-        // The claude-code session id lets the agent jump from this survey straight
-        // to the run's on-disk `<session>.jsonl` for a deep dive (see evolve.md).
-        sessionId: r.sessionId ?? null,
-        // The metrics the run reported (the `state` object), so `pievo log`
-        // surfaces them alongside the transcript (matches what buildEvolveTask
-        // feeds the evolve agent).
-        state: r.state ?? null,
-        transcript: text,
-        transcriptTruncated: truncated,
-      };
-    });
-    // The TOON survey is the default render (`text`, prints in-run — the F2 fix); the
-    // structured `runs` rides ALONGSIDE it as a RETAINED data channel (`CLI_RETAINED_KEYS`)
-    // — the `log --json` escape hatch and the `log --transcript` inline render read it,
-    // since the survey `text` stays concise. `ok`/`loopId`/`name` are render-only and
-    // stripped at the cli boundary; the LEGACY `/api/machine/log` route (not finalized)
-    // still carries them for a pre-0.12 daemon on the postCli 404-fallback.
+    const runs = rows.map((r) => ({
+      id: r.id,
+      ts: r.ts,
+      role: r.role,
+      phase: r.phase,
+      outcome: r.outcome ?? null,
+      status: r.status ?? null,
+      durationMs: r.durationMs ?? null,
+      exitCode: r.exitCode ?? null,
+      finalText: r.finalText ?? null,
+      usage: r.usage
+        ? {
+            inputTokens: r.usage.inputTokens,
+            outputTokens: r.usage.outputTokens,
+            cacheReadTokens: r.usage.cacheReadTokens,
+            cacheCreationTokens: r.usage.cacheCreationTokens,
+          }
+        : null,
+      error: r.error ?? null,
+      message: r.message ?? null,
+      sessionId: r.sessionId ?? null,
+      state: r.state ?? null,
+    }));
     const survey = renderLogText(loop.name ?? loop.id, loop.id, runs, await store.countRuns(loopId));
     return { status: 200, body: { ok: true, loopId: loop.id, name: loop.name ?? loop.id, runs, text: survey } };
   }
@@ -1362,21 +1293,18 @@ export class MachineGateway {
     return { status: 200, body: { ok: true } };
   }
 
-  /** Finish already won. Enrich only run-local telemetry; a losing report must
+  /** Finish already won. Enrich only run-local report data; a losing report must
    * never write loop cursor/task state or repeat terminal side effects. */
   private async enrichFinishedReport(
     runToken: string,
     lease: RunLease,
     body: MachineReportBody,
   ): Promise<HttpResult> {
-    const artifacts = coerceArtifacts(body.artifacts);
-    const transcript = coerceTranscript(body.transcript);
-    const patch = {
-      ...(typeof body.durationMs === "number" ? { durationMs: body.durationMs } : {}),
-      ...(typeof body.sessionId === "string" ? { sessionId: clipText(body.sessionId, SESSION_ID_CAP) } : {}),
-      ...(artifacts ? { artifacts } : {}),
-      ...(transcript ? { transcript } : {}),
-      ...coerceCost({ ...(typeof body.cost === "object" && body.cost ? body.cost : {}), attempts: body.attempts }),
+    const run = await store.getRun(lease.runId);
+    const message = reportMessage(body, run);
+    const patch: Partial<NewRun> = {
+      ...coerceTelemetry(body),
+      ...(message !== undefined ? { message } : {}),
     };
     const enriched = await store.enrichFinishedRun(
       lease.loopId,
@@ -1399,10 +1327,7 @@ export class MachineGateway {
     body: MachineReportBody,
   ): Promise<HttpResult> {
     const ok = !!body.ok;
-    const artifacts = coerceArtifacts(body.artifacts);
-    const transcript = coerceTranscript(body.transcript);
-    const rawMessage = body.message !== undefined ? body.message : body.finalText;
-    const message = typeof rawMessage === "string" ? clipText(rawMessage, MESSAGE_CAP) : undefined;
+    const message = reportMessage(body, run);
     const claimedOutcome = RUN_OUTCOMES.has(body.outcome as string) ? body.outcome : undefined;
     let cursor = ok ? body.cursor : undefined;
     if (cursor !== undefined) {
@@ -1431,17 +1356,12 @@ export class MachineGateway {
       {
         phase: ok ? "done" : "error",
         outcome: ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
-        ...(typeof body.durationMs === "number" ? { durationMs: body.durationMs } : {}),
-        ...(typeof body.sessionId === "string" ? { sessionId: clipText(body.sessionId, SESSION_ID_CAP) } : {}),
-        ...(artifacts ? { artifacts } : {}),
-        ...(transcript ? { transcript } : {}),
-        ...coerceCost({ ...(typeof body.cost === "object" && body.cost ? body.cost : {}), attempts: body.attempts }),
+        ...coerceTelemetry(body),
         ...(runState ? { state: runState } : {}),
         ...(message !== undefined ? { message } : {}),
         ...(ok
           ? { error: null }
           : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : run.error }),
-        progress: null,
         ts: nowIso(),
       },
       loopPatch,
@@ -1487,6 +1407,9 @@ export class MachineGateway {
   async report(runToken: string, body: MachineReportBody): Promise<HttpResult> {
     const lease = await resolveLease(runToken);
     if (!lease) return { status: 401, body: { error: "invalid or expired token" } };
+    if (typeof body.runId === "string" && body.runId !== lease.runId) {
+      return { status: 403, body: { error: "report runId does not match this run lease" } };
+    }
     const ok = !!body.ok;
 
     const run = await store.getRun(lease.runId);
@@ -1522,15 +1445,9 @@ export class MachineGateway {
         : {}),
     };
 
-    // Message: a workflow reports it here; a claude run already set it via the
-    // agent-api `pievo report` — fall back to claude's final text only if blank.
-    // Clipped to the same cap the agent-api report verb enforces.
-    const rawMessage =
-      body.message !== undefined ? body.message : !run?.message && body.finalText ? body.finalText : undefined;
-    const message = typeof rawMessage === "string" ? clipText(rawMessage, MESSAGE_CAP) : rawMessage;
-
-    const artifacts = coerceArtifacts(body.artifacts);
-    const transcript = coerceTranscript(body.transcript);
+    // A pure workflow reports its message in this body; an agent run normally
+    // persisted one through `pievo report`. Provider final text is only fallback.
+    const message = reportMessage(body, run);
 
     // Mirror the workflow's returned cursor scalars onto THIS run, so the
     // generative UI's {{latest.*}} + the trend chart bind. A pure workflow has no
@@ -1548,16 +1465,10 @@ export class MachineGateway {
       {
         phase: ok ? "done" : "error",
         outcome: ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
-        durationMs: body.durationMs ?? null,
-        // Untrusted wire input - clip like every other free-text field.
-        sessionId: typeof body.sessionId === "string" ? clipText(body.sessionId, SESSION_ID_CAP) : null,
-        ...(artifacts ? { artifacts } : {}),
-        ...(transcript ? { transcript } : {}),
-        ...coerceCost({ ...(typeof body.cost === "object" && body.cost ? body.cost : {}), attempts: body.attempts }),
+        ...coerceTelemetry(body),
         ...(runState ? { state: runState } : {}),
         ...(message !== undefined ? { message } : {}),
         ...(ok ? {} : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : "run failed on machine" }),
-        progress: null,
         ts: nowIso(),
       },
       loopPatch,
@@ -1711,24 +1622,6 @@ export interface Applied {
   status?: number;
 }
 
-/** Flatten a run's slimmed transcript steps into plain text for `pievo log`,
- *  clipped to LOG_TRANSCRIPT_CAP (the agent wants recent history, not a dump).
- *  Tool steps render as `$ <name> <input>`; text/result steps as their text. */
-function renderTranscript(steps: TranscriptStep[] | null | undefined): { text: string; truncated: boolean } {
-  if (!Array.isArray(steps) || steps.length === 0) return { text: "", truncated: false };
-  const lines: string[] = [];
-  for (const s of steps) {
-    if (s.kind === "tool") {
-      lines.push(`$ ${s.name ?? "tool"}${s.input ? ` ${s.input}` : ""}`);
-    } else if (typeof s.text === "string" && s.text) {
-      lines.push(s.text);
-    }
-  }
-  const joined = lines.join("\n\n");
-  if (joined.length > LOG_TRANSCRIPT_CAP) return { text: joined.slice(0, LOG_TRANSCRIPT_CAP), truncated: true };
-  return { text: joined, truncated: false };
-}
-
 // ---- TOON render helpers (batch 1: the axi-conformance spine) ----------------
 // Each builds the `text` a CLI verb carries; the CLI-only renders live with their
 // verbs in `cli.ts` (whose `finalizeCli` strips the superset fields at the
@@ -1870,7 +1763,6 @@ interface LogRun {
   phase: string;
   outcome: string | null;
   status: string | null;
-  costUsd: number | null;
   sessionId: string | null;
   state: Record<string, unknown> | null;
   message: string | null;
@@ -1892,10 +1784,9 @@ function renderLogText(name: string, loopId: string, runs: LogRun[], total: numb
     fmtTime(r.ts),
     r.role,
     runOutcomeToken(r),
-    r.costUsd != null ? `$${r.costUsd.toFixed(2)}` : null,
     runMetricsToken(r.state),
     r.sessionId,
-    r.message ? truncate(r.message, LOG_MESSAGE_CELL_CAP, "use --full").value : null,
+    r.message ? truncate(r.message, LOG_MESSAGE_CELL_CAP, "use --json").value : null,
   ]);
   const ok = runs.filter((r) => r.phase === "done").length;
   const failed = runs.filter((r) => r.phase === "error").length;
@@ -1909,12 +1800,9 @@ function renderLogText(name: string, loopId: string, runs: LogRun[], total: numb
   return doc(
     head,
     countLine(runs.length, { total }),
-    listBlock("runs", ["ts", "role", "outcome", "cost", "metrics", "session", "message"], rows),
+    listBlock("runs", ["ts", "role", "outcome", "metrics", "session", "message"], rows),
     `summary: ${summary}`,
-    helpBlock([
-      `Run \`pievo log ${loopId} --full\` to inline each run's transcript`,
-      "Run `find ~/.claude/projects -name '<session>.jsonl'` to deep-dive a run's session",
-    ]),
+    helpBlock(["Run `pievo log --json` for normalized run fields and token usage"]),
   );
 }
 

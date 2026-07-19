@@ -10,14 +10,15 @@ const run = (id: string, ts: string, over: Partial<RunSummary> = {}): RunSummary
   status: null,
   message: null,
   durationMs: null,
-  costUsd: null,
+  exitCode: null,
+  finalText: null,
   usage: null,
   error: null,
   state: null,
   control: null,
   sessionId: null,
-  artifacts: null,
   ...over,
+  agent: over.agent ?? null,
 })
 
 describe('mergeRuns', () => {

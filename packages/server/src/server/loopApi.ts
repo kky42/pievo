@@ -22,8 +22,6 @@ import type {
   RunSummary,
   TeamsView,
   TemplateInfo,
-  TranscriptResult,
-  TranscriptStep,
 } from '../types'
 import { coerceCodingAgent } from '../types'
 import * as store from '../db/store.js'
@@ -172,20 +170,7 @@ export const loadOlderRuns = createServerFn({ method: 'GET' })
     return (await store.listRunsBefore(data.loopId, data.beforeTs, limit)).map(toRunSummary)
   })
 
-/** GET — a run's slimmed execution trace. Parsed on the machine and pushed up
- *  with the run report; here we just read it off the run row by id. */
-export const getTranscript = createServerFn({ method: 'GET' })
-  .validator((d: { runId: string }) => d)
-  .handler(async ({ data }): Promise<TranscriptResult> => {
-    await backend()
-    const run = await store.getRun(data.runId)
-    if (!run) return { error: 'run not found' }
-    if (!(await ownedLoop(run.loopId))) return { error: 'run not found' }
-    return { steps: (run.transcript as TranscriptStep[] | null) ?? [] }
-  })
-
-/** GET — the loop's current live-synced files (metadata only; path-sorted).
- *  Lazy by loopId like getTranscript so the loop-detail payload stays small. */
+/** GET — the loop's current live-synced files (metadata only; path-sorted). */
 export const getArtifacts = createServerFn({ method: 'GET' })
   .validator((d: { loopId: string }) => d)
   .handler(async ({ data }): Promise<ArtifactSummary[]> => {
@@ -207,7 +192,7 @@ export const getArtifact = createServerFn({ method: 'GET' })
   })
 
 /** GET — a run's per-file diff vs the previous run (Phase 3). Lazy by runId like
- *  getTranscript; computed on the server at read time (no stored diffs). Old runs
+ *  computed on the server at read time (no stored diffs). Old runs
  *  with no snapshot return `hasSnapshot: false` for the degrade copy. */
 export const getRunDiff = createServerFn({ method: 'GET' })
   .validator((d: { runId: string }) => d)

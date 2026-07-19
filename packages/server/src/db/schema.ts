@@ -9,11 +9,10 @@
  *
  * Timestamps are ISO strings (`text`) for portability + to match the carried-over
  * c0 types (no db-side defaults). JSON columns use `jsonb().$type<>()` for typed
- * (de)serialization. Booleans use native `boolean()`. The per-run USD figure is a
- * `doublePrecision` column so per-loop totals are one SUM.
+ * (de)serialization. Booleans use native `boolean()`.
  */
 import { sql } from "drizzle-orm";
-import { pgTable, text, integer, doublePrecision, boolean, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, boolean, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 
 import type { ArtifactMeta } from "../server/frontmatter.js";
 // The coding-agent enum's SINGLE SOURCE lives in `../types` (client-safe, no db
@@ -43,35 +42,12 @@ export interface ControlAction {
   detail?: string;
 }
 
-/** A file this run's claude session created or edited (transcript-derived, path relative to workdir). */
-export interface RunArtifact {
-  path: string;
-  kind: "created" | "edited";
-}
-
-/** Token-usage breakdown reported alongside a run's cost (all optional — an
- *  older daemon / a timed-out run reports none). Rides in a JSON column; the
- *  aggregable USD figure gets its own real column (`runs.costUsd`). */
+/** Provider-neutral token usage reported by the daemon. */
 export interface RunUsage {
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
-  numTurns?: number;
-  /** Total claude invocations for the run — present only when > 1 (the daemon's
-   *  transient-failure recovery resumed the session; cost/tokens are the sum). */
-  attempts?: number;
-}
-
-/** One slimmed step of a claude run's execution trace (daemon parses it from the
- *  machine's transcript and pushes it up; the run-detail view renders the list). */
-export interface TranscriptStep {
-  kind: "text" | "tool" | "result";
-  text?: string;
-  /** Tool name (kind === "tool"). */
-  name?: string;
-  /** Compact JSON of the tool input (kind === "tool"). */
-  input?: string;
 }
 
 export type NotifyPolicy = "always" | "auto" | "never";
@@ -253,6 +229,8 @@ export const runs = pgTable(
     loopId: text("loop_id").notNull(),
     userId: text("user_id").notNull(),
     machineId: text("machine_id").notNull(),
+    /** Execution agent captured atomically at claim. Pending and pre-migration rows are null. */
+    agent: text("agent", { enum: CODING_AGENTS }),
     phase: text("phase", { enum: ["pending", "running", "done", "error", "canceled"] }).notNull(),
     role: text("role", { enum: ["exec", "evolve", "edit"] }).notNull(),
     /** Durable queue authority. It only promotes system→owner; diagnostic trigger
@@ -271,31 +249,22 @@ export const runs = pgTable(
     status: text("status", { enum: ["new", "resolved", "nothing-new"] }),
     message: text("message"),
     durationMs: integer("duration_ms"),
+    exitCode: integer("exit_code"),
+    finalText: text("final_text"),
     error: text("error"),
     /** This run's observation snapshot — numeric metrics (chart points) plus scalar
      *  values the generative UI binds via {{latest.*}} (strings ok; chart ignores them). */
     state: jsonb("state").$type<Record<string, number | string>>(),
     /** Control actions this run issued (audit). */
     control: jsonb("control").$type<ControlAction[]>(),
-    /** claude session id on the machine (locates the transcript; MVP doesn't read it). */
+    /** Provider session id on the machine, retained for owner-side continuation. */
     sessionId: text("session_id"),
-    /** Claude's own USD estimate for this run (the CLI's `total_cost_usd`). A real
-     *  column (not JSON) so per-loop totals are one SUM. Null: workflow-only run,
-     *  older daemon, or the run never reached a terminal result event. */
-    costUsd: doublePrecision("cost_usd"),
-    /** Token-count breakdown reported with the cost (display-only detail). */
+    /** Provider-neutral token usage. Dollar cost is deliberately not stored. */
     usage: jsonb("usage").$type<RunUsage>(),
-    /** Files the run's claude session created/edited (parsed from its transcript). */
-    artifacts: jsonb("artifacts").$type<RunArtifact[]>(),
-    /** Slimmed execution trace (text/tool/result steps the daemon parsed from the
-     *  machine's claude transcript). Null for workflow-only runs (no claude). */
-    transcript: jsonb("transcript").$type<TranscriptStep[]>(),
-    /** Live "what's it doing" signal while running — a slim current-activity line
-     *  the daemon pushes on its poll heartbeat (NOT the full transcript). Cleared
-     *  when the run finalizes (the complete transcript supersedes it). `at` is the
-     *  freshness stamp the sweep reads as last-heard-from (optional: rows written
-     *  by older daemons lack it). TS-only shape; no migration. */
-    progress: jsonb("progress").$type<{ step: number; label: string; at?: string }>(),
+    /** Last poll where this machine declared the run active. Timeout authority. */
+    heartbeatAt: text("heartbeat_at"),
+    /** One-shot marker for the offline deferred notification; separate from heartbeat. */
+    deferredAt: text("deferred_at"),
   },
   (t) => [
     index("runs_loop_idx").on(t.loopId),

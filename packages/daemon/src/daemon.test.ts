@@ -62,13 +62,13 @@ describe("poll transport helpers", () => {
     const idle = buildPollBody(info, [], true, undefined);
     expect(idle).toEqual({ host: "mac", platform: "darwin", wait: true });
 
-    // A run in flight: no wait flag (progress heartbeat needs the short cadence),
-    // progress rides along, and the last-seen digest is echoed.
-    const busy = buildPollBody(info, [{ runId: "r1", step: 2, label: "editing" }], false, "d1");
+    // A run in flight: no wait flag; only provider-neutral in-flight ids ride
+    // along with the last-seen digest (never provider tool/text progress).
+    const busy = buildPollBody(info, ["r1"], false, "d1");
     expect(busy).toEqual({
       host: "mac",
       platform: "darwin",
-      progress: [{ runId: "r1", step: 2, label: "editing" }],
+      activeRunIds: ["r1"],
       watchDigest: "d1",
     });
   });

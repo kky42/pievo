@@ -140,7 +140,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   `selfFinish`/`selfSchedule` show keys (batch 2 #75 did that); batch 5 only adds the
   "`--run-at` is canonical; `--next` is a back-compat alias" note to the reschedule
   lever (F4). `evolve.md`'s "reading the log" survey now names the shipped
-  `renderLogText` header verbatim — `runs[N]{ts,role,outcome,cost,metrics,session,message}`
+  `renderLogText` header verbatim — `runs[N]{ts,role,outcome,metrics,session,message}`
   + the `summary:` tally — and clarifies that `pievo log`'s `metrics` column shows
   `key=value` while the task-message inline table is metric-KEYS-only. `exec-core.md`
   and `run/edit.md` were verified conformant and left untouched.
@@ -180,9 +180,8 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   retired that fallback** — `printTextOrTooOld` now prints a definitive `SERVER_TOO_OLD`
   error instead (the render-only `printLoops`/`printEditDryRun`/`printCreateDryRun`/
   `formatRun`-fallback were deleted; `home` prints a definitive `tooOldHome` exit 0). See
-  the batch-7 section below. `--json` (log/show) stays the escape hatch; `pievo log
-  --transcript` keeps its client render from the RETAINED `runs` channel (the server
-  survey is concise, no `--full` inline yet). Converged on
+  the batch-7 section below. `--json` (log/show) stays the structured-data escape hatch.
+  Converged on
   `callback`/`interactive`/`log`/`create`/`show`/`home`.
 - **Routing lives in the pure `route.ts` `classify(argv, env)`** (unit-tested; `cli.ts`
   maps a `Route` to its lazily-imported handler). The Batch-6 behavior change (OQ1): bare
@@ -289,7 +288,7 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   after filling `text`/`exitCode` — dropping the render-only `ok`/`id`/`name`/`loop`/
   `loopId`/`changes`/`rejections`/`applied`/`config`/`nextRuns`/`classification`/`ui`/
   `warning`/`idempotent`/`dryRun`. `loops` (client-side cwd→loop resolution) and `runs`
-  (`log --json` + `--transcript` escape hatch) are RETAINED data channels, not scaffolding
+  (`log --json` normalized-data escape hatch) are RETAINED data channels, not scaffolding
   — the daemon reads them as data, and the server's `log`/`show` dispatch needs an explicit
   id (design §3), so resolution must stay client-side. The verb HANDLERS still construct the
   full structured bodies (createLoop/editLoop/listLoops/renderLoopLog) because the LEGACY
@@ -302,15 +301,18 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   `formatRun` fallback: when `text` is ABSENT (a pre-0.12 server) it prints a definitive
   `error:`/`code: SERVER_TOO_OLD` to stdout, exit 1, never blank. `home` is the ONE
   exception — it stays never-empty/never-alarm on the SessionStart hot path, rendering a
-  definitive `tooOldHome` (exit 0). `log --transcript` KEEPS its client render from the
-  retained `runs` (+ the loop name from `resolveLoopId`, now `{id,name}`); `log --json`
-  keeps `JSON.stringify(runs)`.
+  definitive `tooOldHome` (exit 0). `log --json` reads the retained normalized `runs`.
 - **Compat:** the 0.12 daemon (already a text sink) keeps working — it reads `text`/
   `exitCode` + the retained `loops`/`runs`. Daemons **≤ 0.11** (which render the structured
   fields) get EMPTY device-verb output against the new server; mitigation: `npx @latest`
   users auto-upgrade, global installs run `pievo update`. The in-run path keeps working on
   ≤ 0.11 (it prints `text`, which stays). The postCli 404-fallback + legacy endpoint aliases
   are OUT of scope here (separate `rexp-b7`, its own upgrade-window gate).
+
+## Run telemetry
+
+- Poll liveness is provider-neutral: daemons send deduped `activeRunIds` (up to 5000); one machine/phase-scoped bulk update refreshes stale `runs.heartbeatAt`, with its throttle derived below `RUN_TIMEOUT_MS` (claim `ts` is the pre-first-heartbeat fallback). Offline pending notification dedup uses separate `runs.deferredAt`.
+- Claim atomically copies `loops.agent` to nullable `runs.agent`, preserving the actual executor as run history even after an owner edits the loop agent. Final reports store normalized `exitCode`, `durationMs`, `sessionId`, `finalText`, `error`, and provider-neutral token `usage`; each run has exactly one provider invocation. `sessionId` is metadata for future use — there is no current resume UI or command generation. Dollar cost, provider activity/progress, slim transcripts, and transcript-derived run artifacts are not stored or rendered. Live artifact sync + `artifact_files`/`blobs`/`run_snapshots` remain the file/diff authority.
 
 ## Poll transport (long-poll + hot-path budget)
 
@@ -327,7 +329,7 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   never send `wait` and keep the classic instant response; `main.ts` still calls
   bare `poll()`.
 - Daemon side (`daemon.ts`): `buildPollBody` opts into `wait:true` ONLY while
-  `inFlight` is empty (a running run needs the ~3s progress-heartbeat cadence);
+  `inFlight` is empty (a running run needs the ~3s activeRunIds heartbeat cadence);
   the sleep is `nextPollDelayMs(elapsed)` - a response that consumed the interval
   was a server hold => re-poll after a 250ms breather, a fast answer sleeps out
   POLL_MS. Zero protocol coupling: against an old server this degrades to the

@@ -64,7 +64,7 @@ Pievo has no default hosted server. Start your own instance using the local, Nod
 | --- | --- |
 | `up` / `up --foreground` | connect & start the poll loop (detached / foreground) |
 | `status` / `down` | is the daemon running + connection state / stop it |
-| `log` | survey a loop's recent runs (`--transcript` for full text) |
+| `log` | survey a loop's recent runs (`--json` for structured output) |
 | `new` / `edit` | create or patch a loop (JSON config) |
 | `@latest update` | upgrade the daemon in place |
 

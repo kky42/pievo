@@ -25,24 +25,31 @@ export function toRunSummary(r: Run): RunSummary {
     requestedBy: r.requestedBy,
     canceled: r.phase === "canceled",
     role: r.role,
+    agent: r.agent ?? null,
     outcome: r.outcome ?? "silent",
     status: r.status ?? null,
     message: r.message ?? null,
     durationMs: r.durationMs ?? null,
-    costUsd: r.costUsd ?? null,
-    usage: r.usage ?? null,
+    exitCode: r.exitCode ?? null,
+    finalText: r.finalText ?? null,
+    usage: r.usage
+      ? {
+          inputTokens: r.usage.inputTokens,
+          outputTokens: r.usage.outputTokens,
+          cacheReadTokens: r.usage.cacheReadTokens,
+          cacheCreationTokens: r.usage.cacheCreationTokens,
+        }
+      : null,
     error: r.error ?? null,
     state: (r.state as RunSummary["state"]) ?? null,
     control: (r.control as RunSummary["control"]) ?? null,
     sessionId: r.sessionId ?? null,
-    artifacts: r.artifacts ?? null,
-    progress: (r.progress as RunSummary["progress"]) ?? null,
   };
 }
 
 /** One live artifact_files row (with its blob meta joined) → the compact UI shape
  *  (metadata only; the bytes are fetched lazily by getArtifact / the download
- *  route, mirroring getTranscript). The front-matter `meta` rides along so the
+ *  route. The front-matter `meta` rides along so the
  *  Files list + calendar can surface type/title/date without a byte fetch. */
 export function toArtifactSummary(row: ArtifactFileWithMeta): ArtifactSummary {
   return {
@@ -77,7 +84,6 @@ export async function toJobSummary(loop: Loop): Promise<JobSummary> {
     completionReason: loop.completionReason ?? null,
     runs,
     runCount: await store.countRuns(loop.id),
-    totalCostUsd: await store.sumRunCost(loop.id),
   };
 }
 

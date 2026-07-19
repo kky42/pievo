@@ -4,8 +4,8 @@ import { marked } from 'marked'
 /**
  * Shared markdown → sanitized HTML pipeline: marked (GFM) → DOMPurify (an
  * allowlisted prose subset, NO script/handlers). ONE sanitizer config for every
- * markdown surface (the Files viewer's `TaskFileView`, the run-detail Execution
- * transcript) so the allowlist can't drift between them. Render the output under
+ * markdown surface (including the Files viewer's `TaskFileView`) so the allowlist
+ * can't drift between them. Render the output under
  * the `.taskmd` styles.
  */
 export const MD_SANITIZE: Config = {

@@ -59,7 +59,8 @@ computes pure functions. Run instructions: `README.md`.
   in that SAME transaction. IDLE daemons opt into a ~20s server-held long-poll;
   timers/Dispatcher wakeups are latency hints, while DB facts + poll advancement are
   authoritative. Different loops still deliver in parallel; the final `report()`
-  persists transcript/metrics/artifacts and retires the lease.
+  persists normalized terminal metadata/task state and retires the lease; synced
+  files + run snapshots remain the artifact/diff authority.
 - Run roles: `exec` (scheduled/manual work), `evolve` (self-improvement pass),
   `edit` (owner-requested change). There is at most one running run per loop and
   one pending row per loop+role; same-role requests coalesce (latest edit text
@@ -104,10 +105,9 @@ computes pure functions. Run instructions: `README.md`.
   untrusted-data guard rides along in that prose (evolve reads run messages; edit reads
   the loop's current config - both untrusted). `buildEvolveTask` no longer dumps up to
   12 runs as pretty-printed JSON; it emits a COMPACT one-line-per-run survey
-  (`renderRecentRuns`: ts / role / outcome-status / cost as `$x.xx` / state KEYS only,
-  not values / FULL session id so the `find … <session>.jsonl` deep-dive resolves /
-  message collapsed + clipped to ~100 chars), headed by on-demand pointers
-  (`pievo log [--transcript]`, now reachable in-run, + the local session JSONL).
+  (`renderRecentRuns`: ts / role / outcome-status / state KEYS only, not values /
+  full provider session id / message collapsed + clipped to ~100 chars), headed by
+  the on-demand `pievo log` pointer (reachable in-run).
   `buildEditTask` KEEPS its inlined current ui/workflow/schema - that is current CONFIG,
   not history, and is useful for a surgical edit.
 - `allowControl` defaults TRUE; `false` means the owner pins the schedule. A run's
@@ -353,8 +353,8 @@ computes pure functions. Run instructions: `README.md`.
   as a **superset body** (TOON ALONGSIDE the structured JSON) so the 0.11 daemon could keep
   rendering structured server-first; **batch 7 retired that scaffolding** — `finalizeCli`
   (wraps `cli()`) now STRIPS the body to `{text, exitCode}` plus the retained data channels
-  `{loops, runs}` (client-side loop resolution + the `log --json`/`--transcript` escape
-  hatch), and the daemon dropped its structured-render fallback (a `text`-less server →
+  `{loops, runs}` (client-side loop resolution + the `log --json` escape hatch), and the
+  daemon dropped its structured-render fallback (a `text`-less server →
   `SERVER_TOO_OLD`). The LEGACY endpoints (`/api/machine/loop|log`, `/agent-api/loop`) call
   the gateway methods DIRECTLY, not through `finalizeCli`, so their full structured bodies
   are unchanged. The axi-conformance spine lives in `gateway/toon.ts`; details +
@@ -419,9 +419,9 @@ computes pure functions. Run instructions: `README.md`.
   subprocess gets extra keys only via `PIEVO_WORKFLOW_ENV=KEY1,KEY2`. All daemon
   fetches go through `boundedFetch`; kills take the whole process group.
 - Exec timeout is OPT-IN (`PIEVO_EXEC_TIMEOUT_MS`; default unlimited). The guard
-  against a vanished machine is the SERVER's inactivity-based sweep: poll writes a
-  freshness stamp into run progress; a run is reclaimed only after `RUN_TIMEOUT_MS`
-  of silence. A canceled run's late `report()`
+  against a vanished machine is the SERVER's inactivity-based sweep: daemon polls
+  carry provider-neutral `activeRunIds`, refreshing each run's `heartbeatAt`; a run
+  is reclaimed only after `RUN_TIMEOUT_MS` of silence. A canceled run's late `report()`
   is ignored BEFORE any loop-level write (never advances cursor/taskFileContent).
 - **The run credential is a RUN LEASE (`tokens.ts`, Batch 6)**, not a mint→revoke
   token: the per-run caps (`runId/loopId/machineId/role/allowControl/canSet*/canFinish`
@@ -615,10 +615,8 @@ computes pure functions. Run instructions: `README.md`.
   is JSON-only (`--json '<obj>'`) plus the content-file trio (`--workflow-file`,
   `--ui-file`, `--schema-file`). Unknown flags reject loudly. The server is the sole
   validator.
-- `pievo log [<loop>]` - concise run survey (session ids + metrics; `--transcript`/
-  `--full` for full text; `--json` structured). Backed by `GET /api/machine/log` (device
-  token). `--json`/`--transcript` keep the structured render (the text-sink server survey
-  is concise, no `--full` inline yet).
+- `pievo log [<loop>]` - concise run survey (session ids + metrics; `--json`
+  structured). Backed by `GET /api/machine/log` (device token).
 - `pievo update` hands the running daemon over to the invoking (new) CLI version:
   `down` then `runEnsure({force:true})` - force skips the still-reported-online
   short-circuit (server `ONLINE_TTL` 30s outlives the local pidfile clear).
@@ -632,19 +630,20 @@ computes pure functions. Run instructions: `README.md`.
   - `claude-code` → `claude` (`PIEVO_CLAUDE_BIN`) with stream-json + bypassPermissions
   - `codex` → `codex exec` (`PIEVO_CODEX_BIN`): `--json`,
     `--dangerously-bypass-approvals-and-sandbox`, `--skip-git-repo-check`, optional
-    `-m`; resume is `codex exec resume <sessionId> …`; `execEnv("codex")` forwards
-    `OPENAI_API_KEY`/`CODEX_API_KEY`/`CODEX_HOME` (session/config under `~/.codex`
-    free via `HOME`)
-  **Non-Claude telemetry is DEGRADED**: codex `--json` is not Claude stream-json,
-  so the Claude-shaped `makeStreamConsumer` parses nothing — a run still marks ok
-  on exit 0 and the agent's own `pievo report` persists the result; daemon-side
-  live-progress/cost/transcript awaits a Codex stream adapter. The enum's single source
-  is `CODING_AGENTS` in `packages/server/src/types.ts`
+    `-m`; `execEnv("codex")` forwards `OPENAI_API_KEY`/`CODEX_API_KEY`/`CODEX_HOME`
+    (session/config under `~/.codex` free via `HOME`)
+  Both structured-output streams feed provider-specific TERMINAL collectors only:
+  session id, final assistant text, and normalized token usage. Events are consumed
+  locally and discarded—there is no transcript/tool-activity transport or dollar-cost
+  calculation. The enum's single source is `CODING_AGENTS` in `packages/server/src/types.ts`
   (the schema type/column enum + the `coerceCodingAgent` validator + the web select all
   derive from it; widening the set is a one-line edit there). Migration `0004`
   moves retired Grok loops to `claude-code` and clears their incompatible model.
-- External touches (process/network/fs) are injectable seams throughout; tests never
-  need a real process or network.
+- External touches (process/network/fs) are injectable seams throughout. The ordinary
+  suites remain hermetic; provider telemetry schema validation is the explicit,
+  spend-bearing exception: run `PIEVO_REAL_LLM_TESTS=1 pnpm --filter @kky42/pievo test
+  src/telemetry.real.test.ts` against real Claude/Codex CLIs—fixtures alone are not
+  acceptance evidence for provider JSONL.
 - **Unified CLI transport `cli-client.ts` `postCli(argv, legacy, deps)`** (batch 5):
   the ONE client behind BOTH CLI worlds. It selects the credential by env (run token
   from `PIEVO_RUN_TOKEN` wins, else the persisted device token), inlines the file
@@ -665,20 +664,10 @@ computes pure functions. Run instructions: `README.md`.
   This ships in the npm daemon package, so it needs a coordinated `@kky42/pievo`
   release. (The daemon still forwards whatever token its env carries — the `rk_` run
   lease is batch 6, not here.)
-- **Transient-failure resume (`runner.ts`)**: a claude crash is CLASSIFIED
-  (`classifyFailure`, precedence auth/quota > poisoned > transient > task) and only
-  `transient` (API error / connection closed / ECONNRESET / stream closed /
-  overloaded / rate limit / 5xx) retries - `claude --resume <sessionId>` with a
-  short continuation prompt (`buildResumeTask`: trust prior progress, end with
-  exactly ONE report/finish), up to `PIEVO_TRANSIENT_RETRIES` (default 2) with
-  `PIEVO_TRANSIENT_RETRY_BASE_MS` backoff (15s, x4, jitter; consts read at
-  module load - tests re-import). `--resume` FORKS the session id: track the
-  latest for the next resume + transcript recovery. Timeouts never retry (our
-  wall-clock guard, not a provider blip); no captured session = nothing to
-  resume; abort stops immediately. Spend is SUMMED across attempts (`addCost`);
-  the report carries `attempts` only when > 1, and the server folds it into
-  `runs.usage.attempts` (TS-only jsonb field, no migration). A progress label
-  keeps the sweep fed during the backoff window.
+- A run launches its selected provider EXACTLY ONCE. There is no provider retry or
+  resume path today; captured session ids are terminal metadata reserved for future
+  use. Each invocation produces one normalized token-usage result. Poll
+  `activeRunIds` independently keeps the server's `heartbeatAt` fresh during execution.
 - **`runner.ts` skips the sys file + `--append-system-prompt-file` when the delivery's
   `systemPrompt` is empty** (batches 1-2 make it empty; an OLD server that still
   populates it keeps working — the flag path is preserved when the string is non-empty).
@@ -703,14 +692,10 @@ computes pure functions. Run instructions: `README.md`.
   trailing `_` un-nests it). Never render Base UI `Dialog.*` parts (e.g. `ModalHead`)
   without a `Dialog.Root` ancestor - it throws at runtime; bare-page edit modes use
   `EditHead`.
-- **Run detail live Activity card** (`RunView.tsx` `LiveActivity`): rendered ONLY when
-  `run.running`, it mirrors the loop page's Runs-list live line (pulsing dot via the
-  shared `runPulseStyle` + `step N` + `run.progress.label`) plus a ticking elapsed
-  clock (a local 1s timer, since `durationMs` is null mid-flight). It refreshes off the
-  page's existing 3s self-poll (`getJobDetail`, no new realtime mechanism); missing
-  `run.progress` falls back to a "waiting for the first heartbeat" line. Gated on
-  `run.running` so terminal runs (ok/failed/skipped) never mount it and their pages stay
-  byte-identical. Guarded by `runDetailLiveActivity.test.ts`.
+- Run detail self-polls every 3s while a run is queued/running, but provider event/tool
+  activity is deliberately not exposed. Liveness is the daemon's provider-neutral
+  `activeRunIds` poll fact persisted as `runs.heartbeatAt`; the server's inactivity
+  sweep uses it instead of output events.
 - **Loop-detail Edit composer (`editVia`)** offers TWO paths: (1) **Dispatch** -
   `requestEdit({id, instruction})` runs ONE agent pass on the owner's machine
   (spends credits, no conversation); (2) **Copy prompt** - `copyEditPrompt` copies a

@@ -772,8 +772,7 @@ function derr(code: number, message: string, slug?: string): { code: number; tex
  *  render:
  *   - `loops`: the daemon resolves cwd→loop CLIENT-side (`log`/`show`/`home`) from this
  *     list — the server's `log`/`show` dispatch needs an explicit id (design §3).
- *   - `runs`: the `log --json` escape hatch (OQ4, permanent) and the `log --transcript`
- *     inline render read the structured runs — the server survey `text` stays concise.
+ *   - `runs`: the `log --json` normalized-data escape hatch.
  *  The LEGACY endpoints (`/api/machine/loop|log`, `/agent-api/loop`) do NOT pass through
  *  `finalizeCli`, so their full structured bodies are unchanged (a pre-0.12 daemon on the
  *  postCli 404-fallback still renders — retired separately, its own upgrade-window gate). */
@@ -881,10 +880,10 @@ const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
     help: ["Run `pievo log` to see this loop's recent runs"],
   },
   log: {
-    syntax: "log [--limit <n>] [--transcript] [--json]",
+    syntax: "log [--limit <n>] [--json]",
     summary: "recent run survey for this loop (session ids + metrics)",
     avail: alwaysAvail,
-    help: ["Run `pievo log --transcript` to inline each run's transcript"],
+    help: ["Run `pievo log --json` for normalized run fields and token usage"],
   },
   reschedule: {
     syntax: "reschedule --run-at <30m|2h|ISO>",
@@ -991,9 +990,9 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
     help: ["Run `pievo loops` to list loops on this machine", "Run `pievo log <id>` to see the loop's recent runs"],
   },
   log: {
-    syntax: "log [<id>] [--limit <n>] [--transcript] [--json]",
+    syntax: "log [<id>] [--limit <n>] [--json]",
     summary: "recent run survey for a loop (session ids + metrics)",
-    help: ["Run `pievo log <id> --transcript` to inline each run's transcript", "Run `pievo log <id> --json` for the structured run rows"],
+    help: ["Run `pievo log <id> --json` for normalized run fields and token usage"],
   },
 };
 

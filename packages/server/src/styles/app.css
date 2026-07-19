@@ -17,7 +17,7 @@
  *      color never signals alone (a dot always has a text label beside it).
  *   2. LIQUID GLASS is the floating layer ONLY - the sticky header, Dialog/Menu
  *      popups and status pills get `.glass`; content surfaces (cards, files
- *      panel, diff, transcript) stay opaque for reading density.
+ *      panel and diff) stay opaque for reading density.
  *   3. RUBIK SEMANTIC HUES - the six cube colors each own ONE meaning:
  *      green = success/resolved/completed, red = error/destructive,
  *      orange = warning/failure streak, yellow = running/pending,

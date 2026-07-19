@@ -162,7 +162,7 @@ async function cancelPendingTx(
 ): Promise<void> {
   await tx
     .update(runs)
-    .set({ phase: "canceled", outcome: "skipped", message, progress: null, ts: at, updatedAt: at })
+    .set({ phase: "canceled", outcome: "skipped", message, ts: at, updatedAt: at })
     .where(where);
 }
 
@@ -490,6 +490,28 @@ export async function updateRun(id: string, patch: Partial<NewRun>): Promise<Run
   return getRun(id);
 }
 
+/** Refresh provider-neutral liveness in one machine-scoped UPDATE. Untrusted ids
+ * cannot stamp another machine or a non-running row; fresh stamps stay untouched. */
+export async function refreshRunHeartbeats(
+  machineId: string,
+  runIds: string[],
+  at: string,
+  staleBefore: string,
+): Promise<number> {
+  if (!runIds.length) return 0;
+  const refreshed = await db
+    .update(runs)
+    .set({ heartbeatAt: at, updatedAt: at })
+    .where(and(
+      eq(runs.machineId, machineId),
+      eq(runs.phase, "running"),
+      inArray(runs.id, runIds),
+      or(isNull(runs.heartbeatAt), lt(runs.heartbeatAt, staleBefore)),
+    ))
+    .returning({ id: runs.id });
+  return refreshed.length;
+}
+
 type RunMutationCapability = "always" | "control" | "set-ui" | "set-schema" | "set-workflow" | "finish";
 type ActiveRunCheck =
   | { state: "active"; run: Run }
@@ -757,7 +779,6 @@ export async function cancelRun(loopId: string, runId: string): Promise<Run | un
         .set({
           phase: "canceled",
           error: "stopped by user",
-          progress: null,
           ts: at,
           updatedAt: at,
         })
@@ -796,7 +817,7 @@ export async function reclaimRun(
     const reclaimed = (
       await tx
         .update(runs)
-        .set({ phase: "error", outcome: "error", error: reason, progress: null, ts: at, updatedAt: at })
+        .set({ phase: "error", outcome: "error", error: reason, ts: at, updatedAt: at })
         .where(and(eq(runs.id, runId), eq(runs.phase, expected)))
         .returning()
     )[0];
@@ -895,7 +916,6 @@ export async function finishLoopRun(
           ...(input.message !== undefined ? { message: input.message } : {}),
           ...(input.state !== undefined ? { state: input.state } : {}),
           ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {}),
-          progress: null,
           ts: input.ts,
           updatedAt: input.ts,
         })
@@ -1090,10 +1110,12 @@ export async function claimReadyRunsForMachine(machineId: string, at = nowIso())
           .limit(1)
       )[0];
       if (!next) return undefined;
+      // Capture the actual execution choice under the same loop lock as claim +
+      // lease mint. A later owner edit changes only future runs.
       const run = (
         await tx
           .update(runs)
-          .set({ phase: "running", ts: at, updatedAt: at })
+          .set({ phase: "running", agent: loop.agent, heartbeatAt: null, ts: at, updatedAt: at })
           .where(and(eq(runs.id, next.id), eq(runs.phase, "pending")))
           .returning()
       )[0];
@@ -1189,21 +1211,6 @@ export async function countRuns(loopId: string): Promise<number> {
   return Number(r?.n ?? 0);
 }
 
-/** Total claude-reported spend across ALL of a loop's runs (one SUM over the
- *  real cost column). Null ⇒ no run has reported a cost yet. */
-export async function sumRunCost(loopId: string): Promise<number | null> {
-  const r = (
-    await db
-      .select({ total: sql<number | null>`sum(${runs.costUsd})` })
-      .from(runs)
-      .where(eq(runs.loopId, loopId))
-  )[0];
-  // Preserve the real-null (no rows / all null) vs 0 distinction: an empty-set sum
-  // is null under pg, which must NOT collapse to 0.
-  const total = r?.total ?? null;
-  return total == null ? null : Number(total);
-}
-
 /**
  * Count consecutive FAILED exec runs ending at the loop's most recent finalized
  * exec run. Drives the failure-alert anti-spam cadence (`shouldNotifyFailure`)
@@ -1242,7 +1249,6 @@ export async function markPendingRunDeferred(
   runId: string,
   expected: Pick<Run, "requestedBy" | "updatedAt">,
   at: string,
-  label: string,
 ): Promise<Loop | undefined> {
   if (expected.requestedBy !== "system") return undefined;
   return db.transaction(async (tx) => {
@@ -1265,7 +1271,7 @@ export async function markPendingRunDeferred(
         .limit(1)
         .for("update")
     )[0];
-    if (!current || current.progress?.label === label) return undefined;
+    if (!current || current.deferredAt) return undefined;
     const machine = (
       await tx
         .select({ online: machines.online })
@@ -1278,7 +1284,7 @@ export async function markPendingRunDeferred(
     const stamped = (
       await tx
         .update(runs)
-        .set({ progress: { step: 0, label, at }, updatedAt: at })
+        .set({ deferredAt: at, updatedAt: at })
         .where(and(
           eq(runs.id, runId),
           eq(runs.phase, "pending"),
@@ -1364,7 +1370,7 @@ export async function reclaimUnclaimedPendingRun(
     const reclaimed = (
       await tx
         .update(runs)
-        .set({ phase: "error", outcome: "error", error: reason, progress: null, ts: at, updatedAt: at })
+        .set({ phase: "error", outcome: "error", error: reason, ts: at, updatedAt: at })
         .where(and(
           eq(runs.id, runId),
           eq(runs.phase, "pending"),
@@ -1413,7 +1419,7 @@ export async function expirePendingRun(
     if (machine?.online) return false;
     const canceled = await tx
       .update(runs)
-      .set({ phase: "canceled", outcome: "skipped", message, progress: null, ts: at, updatedAt: at })
+      .set({ phase: "canceled", outcome: "skipped", message, ts: at, updatedAt: at })
       .where(and(
         eq(runs.id, runId),
         eq(runs.phase, "pending"),

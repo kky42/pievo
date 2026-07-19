@@ -66,7 +66,6 @@ const detailWithTeam = (team: JobDetail['team']): JobDetail =>
       goal: null,
       runs: [],
       runCount: 0,
-      totalCostUsd: null,
     },
     taskFileContent: null,
     taskFileSyncedAt: null,

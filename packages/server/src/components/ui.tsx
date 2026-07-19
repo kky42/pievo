@@ -102,7 +102,7 @@ export function ErrorBanner({
   )
 }
 
-/** A read-only mono code block (task file / transcript / control dump). */
+/** A read-only mono code block (task file / control dump). */
 export function Pre({ children }: { children: ReactNode }) {
   return (
     <pre className="max-h-[300px] overflow-auto whitespace-pre-wrap rounded-control border border-hairline bg-raised px-4 py-3.5 font-mono text-meta leading-relaxed text-secondary">
@@ -111,32 +111,7 @@ export function Pre({ children }: { children: ReactNode }) {
   )
 }
 
-/** A run's created/edited files — shared by the run detail + the edit-watch panel.
- *  Paths stay mono (they are code); the kind tag is a quiet sans chip. */
-export function ArtifactList({ artifacts }: { artifacts: NonNullable<RunSummary['artifacts']> }) {
-  return (
-    <ul className="space-y-1">
-      {artifacts.map((a) => (
-        <li key={a.path} className="flex items-baseline gap-2">
-          <span
-            className={`shrink-0 text-caption font-medium ${a.kind === 'created' ? 'text-success' : 'text-secondary'}`}
-          >
-            {a.kind === 'created' ? 'new' : 'edit'}
-          </span>
-          <span className="break-all font-mono text-meta text-primary">{a.path}</span>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-/**
- * The status/role chip - ONE recipe for every soft rounded pill in the app
- * (loop cards, detail header, run chips, kanban/type chips at their own sizes
- * stay separate). Tones map to the semantic -soft pairs; `ink` is the neutral
- * pill with primary text (e.g. a duration), `outline` the quiet bordered chip
- * (e.g. the recorded agent).
- */
+/** Shared semantic chip tones. */
 const PILL_TONES = {
   neutral: 'bg-raised text-secondary',
   ink: 'bg-raised text-primary',

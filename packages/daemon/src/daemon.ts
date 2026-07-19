@@ -4,7 +4,7 @@
  * each locally (workflow gate + claude) and report back. While idle the poll
  * opts into a server-held LONG-poll (`wait:true`, ~20s hold, near-zero dispatch
  * latency); with a run in flight it stays the classic ~3s short poll so the
- * progress heartbeat keeps flowing. Either way plain stateless HTTP — a deploy
+ * active-run heartbeat keeps flowing. Either way plain stateless HTTP — a deploy
  * or dropped request just re-polls. Foreground, no keep-alive (BYOA §6); Ctrl-C
  * stops cleanly.
  *
@@ -19,7 +19,6 @@ import { logger } from "./logger.js";
 import { runDelivery, type Delivery } from "./runner.js";
 import { DEVICE_FILE, SERVER_FILE, persist, readStored } from "./config.js";
 import { ensureCallbackBin } from "./callback-bin.js";
-import { snapshotProgress } from "./progress.js";
 import { WatchManager, type WatchSpec } from "./watcher.js";
 import { writePidFile, clearPidFile, verifiedRunningPid } from "./pidfile.js";
 import { daemonVersion, writeRunningVersion } from "./version.js";
@@ -42,18 +41,17 @@ function flag(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
-/** Poll request body: machine identity + optional progress + long-poll opt-in
- *  (idle only — with a run in flight the short cadence keeps the progress
- *  heartbeat fresh) + the last watch digest echo (absent until a server sent one). */
+/** Poll request body: machine identity + provider-neutral active run ids +
+ * long-poll opt-in (idle only) + the last watch digest echo. */
 export function buildPollBody(
   info: Record<string, unknown>,
-  progress: Array<{ runId: string; step: number; label: string }>,
+  activeRunIds: string[],
   idle: boolean,
   watchDigest: string | undefined,
 ): Record<string, unknown> {
   return {
     ...info,
-    ...(progress.length ? { progress } : {}),
+    ...(activeRunIds.length ? { activeRunIds } : {}),
     ...(idle ? { wait: true } : {}),
     ...(watchDigest ? { watchDigest } : {}),
   };
@@ -149,14 +147,14 @@ export async function runDaemon(): Promise<number> {
   while (!ac.signal.aborted) {
     const started = Date.now();
     try {
-      // Heartbeat carries live progress for any in-flight run (slim activity line,
-      // not the transcript) so the dashboard shows "what's it doing" without WS.
-      const progress = snapshotProgress();
+      // Heartbeat carries only provider-neutral daemon in-flight identities.
+      // No provider tool/text stream is exposed on the poll protocol.
+      const activeRunIds = [...inFlight];
       // ac.signal rides along so SIGTERM/`down` aborts an in-flight poll too.
       const res = await boundedFetch(`${server}/api/machine/poll`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(buildPollBody(info, progress, inFlight.size === 0, watchDigest)),
+        body: JSON.stringify(buildPollBody(info, activeRunIds, inFlight.size === 0, watchDigest)),
       }, POLL_TIMEOUT_MS, ac.signal);
       if (res.ok) {
         const data = (await res.json()) as { deliveries?: Delivery[]; watch?: WatchSpec[]; watchDigest?: string };

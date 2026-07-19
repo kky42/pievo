@@ -73,10 +73,10 @@ test("evolve task turn keeps every lever + smoke-test discipline + protocol pros
   // Workflow elevated to §2, dashboard demoted to §3.
   expect(t).toContain("## 2. Workflow");
   expect(t).toContain("## 3. Dashboard");
-  // The two-lens log reading: survey (pievo log, with session id) + deep dive (session JSONL).
+  // Provider-neutral log survey + normalized JSON fields, with no transcript deep-dive prose.
   expect(t).toContain("pievo log");
-  expect(t).toMatch(/session/i);
-  expect(t).toMatch(/\.jsonl/i);
+  expect(t).toContain("--json");
+  expect(t).not.toMatch(/\.jsonl/i);
   // No unfilled placeholders leak into the evolve turn (it takes no `{{token}}` vars;
   // the `{{latest.*}}` binding syntax in the prose is the only legitimate exception).
   expect(t).not.toMatch(/\{\{(?!latest\.)\w+\}\}/);
@@ -91,7 +91,6 @@ test("evolve task inlines a COMPACT run survey: keys not values, clipped message
       status: "new",
       state: { drift: 3, prs: 1 },
       message: "Detected drift " + "x".repeat(200), // long enough to force truncation
-      costUsd: 0.4231,
       sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     },
     {
@@ -101,28 +100,21 @@ test("evolve task inlines a COMPACT run survey: keys not values, clipped message
       status: "nothing-new",
       state: null,
       message: "no drift since last sweep",
-      costUsd: null,
       sessionId: null,
     },
   ] as unknown as Run[];
   const t = buildEvolveTask(loop(), runs);
 
-  // On-demand pointers head the survey: pievo log (works in-run now) + session JSONL.
-  expect(t).toContain("pievo log");
-  expect(t).toContain("--transcript");
-  expect(t).toMatch(/find ~\/\.claude\/projects -name '<session>\.jsonl'/);
-
-  // Cost is rendered compactly (`$x.xx`) — the survey row carries `$0.42`, not the
-  // raw 4-decimal number. (The prose still names the `costUsd` field it explains.)
-  expect(t).toContain("$0.42");
-  expect(t).not.toContain("0.4231");
+  expect(t).toContain("pievo log --json");
+  expect(t).not.toContain("--transcript");
+  expect(t).not.toMatch(/\$\d/);
 
   // State appears as KEYS only — the values (3, 1) are dropped from the inline payload.
   expect(t).toContain("drift,prs");
   expect(t).not.toMatch(/"drift":\s*3/);
   expect(t).not.toContain('"prs": 1');
 
-  // The full session id is preserved (so the deep-dive `find` resolves).
+  // The full session id remains available as concise correlation/continuation metadata.
   expect(t).toContain("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
   // The message is clipped to ~100 chars with an ellipsis; the full body never lands.
   const clipped = ("Detected drift " + "x".repeat(200)).slice(0, 100) + "…";

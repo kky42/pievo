@@ -68,8 +68,8 @@ Management
   down                    Stop the detached daemon started with `up`.
   show [<id>]             Show a loop's full editable config + recent state (the
                           device credential inspects any loop on this machine).
-  log [<loop>]            Show a loop's recent runs (status, metrics, session id).
-                          --transcript/--full inlines transcripts; --json for machines.
+  log [<loop>]            Show a loop's recent runs (status, metrics, session id;
+                          --json for machines).
 
 Interactive
   loops [--fields a,b]    List your loops (default columns id/name/cron/enabled/
@@ -87,7 +87,7 @@ inspect foot-guns like `update` or `down`).
 
 The daemon polls the server over HTTPS - no inbound ports, no websockets. While
 idle it opts into a bounded server-held long-poll so a due run dispatches almost
-instantly; with a run in flight it keeps a short poll so progress keeps flowing.
+instantly; with a run in flight it keeps a short poll carrying the active run ids.
 When a run is due it executes the loop's coding agent in the loop's own folder, live-syncs
 that folder's files back to the server (secrets and junk like `.env*`,
 `node_modules`, `.git`, `.worktrees`, and build/tool caches are never sent), and
@@ -97,6 +97,22 @@ repo clone, a git worktree, build output) belong outside it, and the daemon
 defensively caps how much it syncs per loop (`PIEVO_SYNC_MAX_FILES` /
 `PIEVO_SYNC_MAX_BYTES`) so a stray checkout can never flood the sync. Your code
 and credentials stay on your machine.
+
+## Provider telemetry schema validation
+
+Fixture tests cover collector edge cases, but they are **not sufficient** to
+validate provider telemetry schemas: Claude Code and Codex can change their
+JSONL event shapes independently of Pievo. Any collector/schema validation must
+run the opt-in real-provider test against both installed CLIs:
+
+```bash
+PIEVO_REAL_LLM_TESTS=1 pnpm --filter @kky42/pievo test src/telemetry.real.test.ts
+```
+
+This spends real provider credits. It runs Claude Haiku with high effort and
+Codex `gpt-5.6-luna` with high reasoning in temporary directories, and is skipped
+unless `PIEVO_REAL_LLM_TESTS=1`. It validates terminal session id, exact final
+text, and positive normalized token usage. It never resumes a provider session.
 
 The package also bundles the **pievo agent skill**, which teaches a coding
 agent how to author and evolve loops; `pievo up` (and `pievo new`) install

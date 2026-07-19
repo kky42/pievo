@@ -44,9 +44,8 @@ Management
   show [<id>]             Show a loop's full editable config + recent state (the
                           device credential inspects any loop on this machine).
   log [<loop>]            Show a loop's recent runs (concise: status + metrics +
-    [--transcript]        session id; --transcript/--full adds the transcript).
-                          Defaults to the loop for the current directory (--json,
-                          --limit N).
+                          session id). Defaults to the loop for the current
+                          directory (--json, --limit N).
 
 Interactive (edit loops from your own agent session, using the stored device token)
   loops [--fields a,b]    List your loops (--json emits the raw JSON array).
@@ -76,7 +75,7 @@ const VERB_USAGE: Record<string, string> = {
   update: "pievo update\n  Hand this machine's daemon over to the (newer) CLI you invoked: stop the running\n  daemon, start the new one, refresh the skill/hook/shim.",
   status: "pievo status\n  Report whether this machine's daemon is running (local pid) + its connection state.",
   down: "pievo down\n  Stop the detached daemon this machine started with `up`.",
-  log: "pievo log [<loop>] [--transcript|--full] [--json] [--limit N]\n  Show a loop's recent runs (concise: status + metrics + session id). Defaults to the\n  loop for the current directory.",
+  log: "pievo log [<loop>] [--json] [--limit N]\n  Show a loop's recent runs (concise: status + metrics + session id). Defaults to the\n  loop for the current directory.",
   show: "pievo show [<id>] [--full] [--json]\n  Show a loop's full editable config + recent state (the device credential inspects\n  any loop on this machine).",
   loops: "pievo loops [--fields a,b] [--json]\n  List your loops (--json emits the raw JSON array). Default columns are\n  id/name/cron/enabled/nextFire.",
   edit: "pievo edit <id> --json '<obj>' [--dry-run] [--workflow-file|--ui-file|--schema-file <path>]\n  Edit a loop (JSON-only + content-file trio). --dry-run previews before/after.",

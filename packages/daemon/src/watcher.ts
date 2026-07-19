@@ -85,7 +85,7 @@ export interface WatchSpec {
 /** The network seam (injectable for tests): boundedFetch-shaped. */
 export type SyncFetch = (url: string, init: RequestInit, timeoutMs: number) => Promise<Response>;
 
-// ---- active-run attribution (mirrors progress.ts) ----
+// ---- active-run artifact attribution ----
 // The runner marks a loop's run in-flight so syncs during a run carry its runId
 // (Phase 3 attribution seam). Idle-time edits sync with runId = null.
 const activeRuns = new Map<string, string>();

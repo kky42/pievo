@@ -63,6 +63,18 @@ test("a claude-code loop maps to exec:claude-code (no longer the hardcoded \"cla
   expect(detail.summary.kind).toBe("exec:claude-code");
 });
 
+test("a claimed run keeps its actual agent after the loop agent changes", async () => {
+  const loop = await seed("codex");
+  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "owner" });
+  const [claimed] = await store.claimReadyRunsForMachine(loop.machineId);
+  expect(claimed?.run.agent).toBe("codex");
+
+  await store.updateLoop(loop.id, { agent: "claude-code" });
+  const detail = await adapters.toJobDetail((await store.getLoop(loop.id))!);
+  expect(detail.job.agent).toBe("claude-code");
+  expect(detail.runs.find((run) => run.id === claimed!.run.id)?.agent).toBe("codex");
+});
+
 test("goal / completion stamps surface on JobSummary and JobFull (+ isCompleted split)", async () => {
   const { isCompleted, isClosed } = await import("../lib/format.js");
   await store.createMachine({ id: "m-a", userId: "u1", name: "M", tokenHash: "h", online: true });

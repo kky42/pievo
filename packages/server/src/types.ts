@@ -61,29 +61,25 @@ export interface RunSummary {
   canceled?: boolean
   /** Delivery role — lets the UI tint an in-flight evolve pass (blue) vs a normal run. */
   role?: 'exec' | 'evolve' | 'edit' | string
+  /** Agent captured when this run was claimed; null for pending/legacy rows. */
+  agent: CodingAgent | null
   outcome: RunOutcome
   status: RunStatus | null
   message: string | null
   durationMs: number | null
-  /** Claude-reported spend for this run (USD estimate); null for workflow-only
-   *  runs, older daemons, or runs that never reached a terminal result. */
-  costUsd: number | null
-  /** Token-count breakdown reported with the cost (display-only detail). */
+  exitCode: number | null
+  finalText: string | null
+  /** Provider-neutral token usage. Dollar cost is deliberately not stored. */
   usage: {
     inputTokens?: number
     outputTokens?: number
     cacheReadTokens?: number
     cacheCreationTokens?: number
-    numTurns?: number
   } | null
   error: string | null
   state: Record<string, Json> | null
   control: Array<{ command: string; args: Json; result: string; detail?: string }> | null
   sessionId: string | null
-  /** Files this run's claude session created/edited (transcript-derived, path rel. to workdir). */
-  artifacts: Array<{ path: string; kind: 'created' | 'edited' }> | null
-  /** Live "what's it doing" signal while running (slim, not the transcript). Null once done. */
-  progress?: { step: number; label: string } | null
 }
 
 /** A push channel for the Notifications panel + the loop channel picker. Secrets
@@ -152,9 +148,6 @@ export interface JobSummary {
   /** Total runs for this loop. The timeline's "+N" pager and the "N runs" label
    *  reflect this, not just the loaded page length. */
   runCount: number
-  /** Lifetime claude-reported spend across all runs (USD estimate, SUM over the
-   *  run rows); null when no run has reported a cost yet. */
-  totalCostUsd: number | null
 }
 
 /** Per-round observed metric declared on a job, used to label the trend chart. */
@@ -228,13 +221,6 @@ export interface JobDetail {
   runs: RunSummary[]
 }
 
-export interface TranscriptStep {
-  kind: 'text' | 'tool' | 'result'
-  text?: string
-  name?: string
-  input?: string
-}
-
 // ---- artifacts: the loop's live-synced files (Phase 2) ----
 
 /** One live file in a loop's current artifact set (metadata only; bytes are
@@ -286,10 +272,6 @@ export interface RunDiffResult {
   hasSnapshot: boolean
   files: RunDiffFile[]
 }
-
-export type TranscriptResult =
-  | { query?: string; system?: string; steps: TranscriptStep[] }
-  | { error: string }
 
 // ---- writes: form / template ----
 
