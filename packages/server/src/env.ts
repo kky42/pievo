@@ -67,9 +67,8 @@ export function directDatabaseUrl(): string | undefined {
 }
 
 /**
- * Cloudflare R2 (S3-compatible) credentials for the artifact blob store. Read
- * from env so credentials are never hardcoded; absent ⇒ the blob store falls
- * back to durable local storage at `<PIEVO_DATA_DIR>/blobs`. The endpoint
+ * Cloudflare R2 (S3-compatible) credentials for the explicitly selected R2
+ * artifact store. Read from env so credentials are never hardcoded. The endpoint
  * defaults to R2's account-scoped host when only the account id is set.
  */
 export interface R2Config {
@@ -98,7 +97,7 @@ export function r2Config(): R2Config | null {
     !endpoint && "PIEVO_R2_ACCOUNT_ID or PIEVO_R2_ENDPOINT",
   ].filter(Boolean);
   if (missing.length) {
-    throw new Error(`incomplete R2 configuration — missing ${missing.join(", ")}; remove all PIEVO_R2_* variables to use local blob storage`);
+    throw new Error(`incomplete R2 configuration — missing ${missing.join(", ")}`);
   }
   return { bucket: bucket!, endpoint: endpoint!, accessKeyId: accessKeyId!, secretAccessKey: secretAccessKey!, region: region || "auto" };
 }

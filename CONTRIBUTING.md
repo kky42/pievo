@@ -7,7 +7,7 @@ getting set up and landing a change.
 
 Pievo is a pnpm monorepo with two packages:
 
-- **`packages/server`** (`@kky42/pievo-server`, private) — the TanStack Start web app:
+- **`packages/server`** (`@kky42/pievo-server`, public on npm) — the TanStack Start web app:
   UI + server functions + the in-process scheduler + machine/agent routes + Better
   Auth + artifact storage. Drizzle over Postgres: embedded PGlite when
   `DATABASE_URL` is unset, or postgres-js against an external Postgres when set.
@@ -67,11 +67,15 @@ Please keep tests and `typecheck` green before opening a PR.
 
 ## Releases
 
-- **Server** — no deployment target is configured. Both Fly workflows are
-  manual-only examples and fail before `flyctl` unless their explicit app/origin
-  GitHub vars and token secrets are set. `fly.toml` is the embedded-PGlite example;
-  `fly.prod.toml` is the external-Postgres/object-store example. Migrations remain
-  forward-only: an image rollback does not roll back schema.
+- **Server** (`@kky42/pievo-server`) — publishes the built Nitro server and global
+  `pievo-server` launcher through `.github/workflows/publish-server.yml` using npm
+  OIDC trusted publishing. Use a `server-vX.Y.Z` tag matching
+  `packages/server/package.json`; the workflow runs workspace typecheck/tests, a
+  strict publish build, and packed-tarball assertions before publishing. The package
+  must retain its repository provenance metadata and include `.output`, public assets,
+  pglite runtime assets, and both source/bundled migrations. Server
+  deployment remains separate: no target is configured, and both Fly workflows are
+  manual-only examples. Migrations remain forward-only.
 - **Daemon** (`@kky42/pievo`) — publishes to npm on a `vX.Y.Z` git tag
   (`.github/workflows/publish-daemon.yml`, via npm OIDC trusted publishing). The
   tag must match `packages/daemon/package.json`. During this takeover, publish the

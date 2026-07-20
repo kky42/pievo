@@ -91,7 +91,37 @@ A scheduler tick creates a *pending run*; your bound machine's next poll claims 
 
 ## Run your own server
 
-### Prerequisites
+### Global npm install (local self-host)
+
+```bash
+npm install -g @kky42/pievo-server
+pievo-server start              # detached; http://127.0.0.1:3000
+pievo-server status
+pievo-server restart            # uses the currently installed version
+pievo-server stop
+```
+
+The launcher defaults to embedded pglite and stores its database, local blobs,
+`server.pid`, and detached `server.log` under `~/.pievo`. `start` is idempotent.
+Use `--data-dir`, `--host`, or `--port` (or `PIEVO_DATA_DIR`, `HOST`/`NITRO_HOST`,
+and `PORT`/`NITRO_PORT`) to override those defaults. For `restart`, `--data-dir`
+selects the instance; its recorded host and port are preserved unless bind flags
+or bind environment variables explicitly override them. `pievo-server start
+--foreground` is available for Docker, systemd, and debugging. The default host
+is deliberately local-only; before binding to `0.0.0.0`, configure authentication
+and network controls.
+
+Upgrade explicitly, then restart onto the newly installed package:
+
+```bash
+npm update -g @kky42/pievo-server
+pievo-server restart
+```
+
+The launcher runs the packaged migration prestart and Nitro production output;
+it does not use PM2 or the legacy source server.
+
+### Prerequisites for source development
 
 - Node.js >= 22
 - pnpm 8.15 (pinned via the root `packageManager` field; `corepack enable` picks it up automatically)
@@ -121,7 +151,7 @@ For a real deployment, set at minimum:
 
 - **Database** - either point `DATABASE_URL` at a Postgres (e.g. Supabase; set it to the transaction pooler `:6543`, plus `DIRECT_DATABASE_URL` at the direct `:5432` URL for migrations), or leave both unset and set **`PIEVO_DB=pglite`** plus a persistent `PIEVO_DATA_DIR` - the embedded pglite database lives at `<dir>/pgdata`. The built server treats a missing `DATABASE_URL` as a config error unless `PIEVO_DB=pglite` explicitly opts into the embedded tier (so a lost database secret fails the deploy loudly instead of silently booting an empty ephemeral DB); only `pnpm dev` runs pglite without the opt-in. `pnpm start` applies pending migrations before serving (over the direct URL for the hosted tier; in-process for the pglite tier).
 - `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` + `PIEVO_AUTH_SECRET` (a long random value) + `PIEVO_BASE_URL` + `PIEVO_ALLOWED_LOGINS` - gate sign-in behind GitHub. Leaving these unset runs the app **open, with no auth** - fine locally, not on the public internet.
-- `PIEVO_R2_*` - optional S3-compatible object storage (e.g. Cloudflare R2) for artifact bytes. When unset, bytes persist locally under `<PIEVO_DATA_DIR>/blobs`; keep that directory on durable storage.
+- **Artifact bytes** default to the fixed `<PIEVO_DATA_DIR>/blobs`; keep that directory on durable storage. A complete `PIEVO_R2_*` S3-compatible configuration selects R2 (or set `PIEVO_BLOB_STORE=r2` explicitly); partial configuration fails startup. `PIEVO_BLOB_STORE=local` explicitly overrides R2 variables. `PIEVO_BLOB_STORE=memory` is an explicit opt-in even under the production launcher, but startup emits a loud warning because every artifact byte is lost on restart. Memory is never a fallback.
 
 > **Exposing a server publicly? Set the auth vars.** With `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` / `PIEVO_AUTH_SECRET` / `PIEVO_BASE_URL` / `PIEVO_ALLOWED_LOGINS` unset the app runs **open, with no sign-in** - anyone who can reach it is in. This applies equally to a bare Node host and the Docker image below.
 

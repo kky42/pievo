@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
 
-import { createBlobStore, LocalBlobStore } from "./blobstore.js";
+import { createBlobStore, LocalBlobStore, MemoryBlobStore, R2BlobStore } from "./blobstore.js";
 
 const roots: string[] = [];
 const R2_KEYS = [
@@ -80,18 +80,24 @@ test("concurrent writes of the same content-addressed blob are safe", async () =
   expect((await store.get(key))?.toString()).toBe(content);
 });
 
-test("the default blob store is local when R2 is not configured", () => {
+test("the default blob store is local at PIEVO_DATA_DIR/blobs", () => {
   const root = tempRoot();
   const previousDataDir = process.env.PIEVO_DATA_DIR;
+  const previousSelection = process.env.PIEVO_BLOB_STORE;
   const previousR2 = Object.fromEntries(R2_KEYS.map((key) => [key, process.env[key]]));
   process.env.PIEVO_DATA_DIR = root;
+  delete process.env.PIEVO_BLOB_STORE;
   for (const key of R2_KEYS) delete process.env[key];
 
   try {
-    expect(createBlobStore()).toBeInstanceOf(LocalBlobStore);
+    const store = createBlobStore();
+    expect(store).toBeInstanceOf(LocalBlobStore);
+    expect((store as LocalBlobStore).root).toBe(path.join(root, "blobs"));
   } finally {
     if (previousDataDir === undefined) delete process.env.PIEVO_DATA_DIR;
     else process.env.PIEVO_DATA_DIR = previousDataDir;
+    if (previousSelection === undefined) delete process.env.PIEVO_BLOB_STORE;
+    else process.env.PIEVO_BLOB_STORE = previousSelection;
     for (const key of R2_KEYS) {
       const value = previousR2[key];
       if (value === undefined) delete process.env[key];
@@ -100,14 +106,83 @@ test("the default blob store is local when R2 is not configured", () => {
   }
 });
 
-test("partial R2 configuration fails instead of silently falling back to local storage", () => {
+test("complete R2 credentials preserve the existing R2 selection behavior", () => {
+  const root = tempRoot();
+  const previousDataDir = process.env.PIEVO_DATA_DIR;
+  const previousSelection = process.env.PIEVO_BLOB_STORE;
   const previousR2 = Object.fromEntries(R2_KEYS.map((key) => [key, process.env[key]]));
+  process.env.PIEVO_DATA_DIR = root;
+  delete process.env.PIEVO_BLOB_STORE;
+  process.env.PIEVO_R2_ENDPOINT = "https://example.invalid";
+  process.env.PIEVO_R2_BUCKET = "bucket";
+  process.env.PIEVO_R2_ACCESS_KEY_ID = "key";
+  process.env.PIEVO_R2_SECRET_ACCESS_KEY = "secret";
+
+  try {
+    expect(createBlobStore()).toBeInstanceOf(R2BlobStore);
+  } finally {
+    if (previousDataDir === undefined) delete process.env.PIEVO_DATA_DIR;
+    else process.env.PIEVO_DATA_DIR = previousDataDir;
+    if (previousSelection === undefined) delete process.env.PIEVO_BLOB_STORE;
+    else process.env.PIEVO_BLOB_STORE = previousSelection;
+    for (const key of R2_KEYS) {
+      const value = previousR2[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("memory storage is an explicit opt-in even in production", () => {
+  const previousSelection = process.env.PIEVO_BLOB_STORE;
+  const previousNodeEnv = process.env.NODE_ENV;
+  try {
+    process.env.PIEVO_BLOB_STORE = "memory";
+    process.env.NODE_ENV = "production";
+    expect(createBlobStore()).toBeInstanceOf(MemoryBlobStore);
+  } finally {
+    if (previousSelection === undefined) delete process.env.PIEVO_BLOB_STORE;
+    else process.env.PIEVO_BLOB_STORE = previousSelection;
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+  }
+});
+
+test("explicit R2 selection requires complete credentials", () => {
+  const previousSelection = process.env.PIEVO_BLOB_STORE;
+  const previousR2 = Object.fromEntries(R2_KEYS.map((key) => [key, process.env[key]]));
+  try {
+    process.env.PIEVO_BLOB_STORE = "r2";
+    for (const key of R2_KEYS) delete process.env[key];
+    expect(() => createBlobStore()).toThrow(/requires complete/i);
+    process.env.PIEVO_R2_ENDPOINT = "https://example.invalid";
+    process.env.PIEVO_R2_BUCKET = "bucket";
+    process.env.PIEVO_R2_ACCESS_KEY_ID = "key";
+    process.env.PIEVO_R2_SECRET_ACCESS_KEY = "secret";
+    expect(createBlobStore()).toBeInstanceOf(R2BlobStore);
+  } finally {
+    if (previousSelection === undefined) delete process.env.PIEVO_BLOB_STORE;
+    else process.env.PIEVO_BLOB_STORE = previousSelection;
+    for (const key of R2_KEYS) {
+      const value = previousR2[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("explicit partial R2 configuration fails instead of falling back to local", () => {
+  const previousSelection = process.env.PIEVO_BLOB_STORE;
+  const previousR2 = Object.fromEntries(R2_KEYS.map((key) => [key, process.env[key]]));
+  process.env.PIEVO_BLOB_STORE = "r2";
   for (const key of R2_KEYS) delete process.env[key];
   process.env.PIEVO_R2_BUCKET = "configured-without-credentials";
 
   try {
     expect(() => createBlobStore()).toThrow(/incomplete R2 configuration/i);
   } finally {
+    if (previousSelection === undefined) delete process.env.PIEVO_BLOB_STORE;
+    else process.env.PIEVO_BLOB_STORE = previousSelection;
     for (const key of R2_KEYS) {
       const value = previousR2[key];
       if (value === undefined) delete process.env[key];

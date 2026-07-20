@@ -41,9 +41,16 @@ computes pure functions. Run instructions: `README.md`.
   vitest; single file: append the path; single test: `vitest run -t "<name>"`.
 - `pnpm --filter @kky42/pievo-server db:generate` / `db:migrate` - Drizzle migrations.
 - `bash scripts/demo-cookie-unified.sh` - e2e demo loop through the unified server.
-- Prod: nitro build, then `pnpm start` = `scripts/prestart.mjs` +
-  `node .output/server/index.mjs`. prestart applies pending migrations via the
-  postgres-js migrator over `DIRECT_DATABASE_URL` for the hosted Supabase tier
+- Prod from source: nitro build, then `pnpm start` = `scripts/prestart.mjs` +
+  `node .output/server/index.mjs`. The publishable `@kky42/pievo-server` exposes
+  `pievo-server start|status|restart|stop` (`start --foreground`; detached by default),
+  using the same prestart + packaged Nitro output with safe `server.pid` identity and
+  `server.log` under `PIEVO_DATA_DIR`. It records `starting` before an async, signalable
+  prestart child; readiness awaits `ensureServer()` and verifies a per-launch nonce;
+  stop only clears after proving the exact pid+start-time process gone. `restart` keeps
+  the recorded bind unless flags/env override it (`--data-dir` selects the instance).
+  prestart applies pending migrations via the postgres-js migrator over
+  `DIRECT_DATABASE_URL` for the hosted Supabase tier
   (when `DATABASE_URL` is set; fails loud if that would route DDL over the :6543
   pooler); the embedded pglite tier migrates in-process at boot - prestart just
   gates it (no `DATABASE_URL` requires the explicit `PIEVO_DB=pglite` opt-in,
@@ -264,11 +271,12 @@ computes pure functions. Run instructions: `README.md`.
   (a burst must never 413 the server's 32MB `SYNC_BODY_CAP`; overflow takes the
   PUT path), and the FIRST flush after watcher start inlines nothing
   (post-restart the server already has almost everything). Bytes live in the
-  local `<PIEVO_DATA_DIR>/blobs` by default (R2 with `PIEVO_R2_*`), metadata in
+  local `<PIEVO_DATA_DIR>/blobs` by default (complete `PIEVO_R2_*` selects R2;
+  `PIEVO_BLOB_STORE=r2` can require it explicitly), metadata in
   `blobs`/`artifact_files`. Adapter roles: `LocalBlobStore` is the production/server
   default; `R2BlobStore` is the explicitly configured production option;
-  `MemoryBlobStore` is explicitly injected for tests/development and is never a
-  boot fallback. Sync verifies metadata-backed bytes still exist and requests a
+  `MemoryBlobStore` is injectable for tests or selected only by explicit
+  `PIEVO_BLOB_STORE=memory` (loud ephemeral/data-loss warning, never a fallback). Sync verifies metadata-backed bytes still exist and requests a
   re-upload when the byte object is missing. The **never-syncable dir** list
   (`.git`, `node_modules`, `.worktrees`, common build/tool caches, `.pievo`) +
   `.env*`/key files is enforced on BOTH daemon (`watcher.ts` `IGNORE_DIRS`) and
@@ -770,6 +778,11 @@ computes pure functions. Run instructions: `README.md`.
   pushed SHA. `fly.toml` is the embedded-PGlite/volume example; `fly.prod.toml` is the
   stateless external-Postgres/object-store example. Migrations apply on container boot
   and are forward-only.
+- `publish-server.yml`: tag `server-v*` -> `npm publish` of the server ONLY via npm
+  OIDC. The tag must match `packages/server/package.json`; it runs workspace typecheck/
+  tests, a strict publish build, and `verify:package`. Missing pglite assets/migrations
+  are fatal; build output, Nitro public files, copied pglite assets, and both migration
+  locations ship in the tarball. Keep its provenance metadata and `bin`/`files` intact.
 - `publish-daemon.yml`: tag `v*` -> `npm publish` of the daemon ONLY, via **npm OIDC
   trusted publishing** - no `NPM_TOKEN`, and `setup-node` deliberately omits
   `registry-url` (setting it writes a dummy-token `.npmrc` that breaks OIDC; that was

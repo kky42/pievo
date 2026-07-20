@@ -1,0 +1,54 @@
+# Publish @kky42/pievo-server to npm via OIDC Trusted Publishing.
+# Configure npm's trusted publisher for this exact workflow file. No NPM_TOKEN.
+name: Publish server (npm)
+
+on:
+  push:
+    tags: ['server-v*']       # e.g. server-v1.0.0
+  workflow_dispatch: {}
+
+jobs:
+  publish:
+    name: npm publish @kky42/pievo-server
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      # Deliberately omit registry-url: a token-based .npmrc prevents npm's OIDC path.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@11
+
+      - name: Install (workspace, frozen)
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/server-v')
+        run: |
+          PKG=$(node -p "require('./packages/server/package.json').version")
+          TAG="${GITHUB_REF_NAME#server-v}"
+          test "$PKG" = "$TAG" || { echo "tag $TAG != package.json $PKG"; exit 1; }
+
+      - name: Typecheck workspace
+        run: pnpm -r typecheck
+
+      - name: Test workspace
+        run: pnpm test
+
+      - name: Build publishable server (strict runtime assets)
+        run: pnpm --filter @kky42/pievo-server build:publish
+
+      - name: Pack and verify required runtime contents
+        run: pnpm --filter @kky42/pievo-server verify:package
+
+      - name: Publish
+        working-directory: packages/server
+        # Build already ran above; avoid running prepublishOnly a second time.
+        run: npm publish --access public --ignore-scripts

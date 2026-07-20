@@ -4,6 +4,29 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 - Add durable project-specific notes here as they are discovered through real work.
 
+## Published server launcher
+
+- `@kky42/pievo-server` ships `.output`, source and bundled migrations, copied pglite
+  assets, and `scripts/{pievo-server,server-cli-lib,prestart}.mjs`. The global binary
+  resolves all runtime paths from its installed package root, never cwd, and launches
+  Nitro `.output/server/index.mjs` only. `start` is detached/idempotent;
+  `start --foreground` is the supervisor/container path; `restart` never updates npm.
+- CLI-local defaults are `127.0.0.1:3000`, `<PIEVO_DATA_DIR>/server.pid`, and
+  `<PIEVO_DATA_DIR>/server.log`. With no `DATABASE_URL`, the CLI injects
+  `PIEVO_DB=pglite`, then always runs `scripts/prestart.mjs`. The starting process is
+  recorded before the async prestart child runs; PID authority requires pid + process
+  start time, and uncertain identity is never signaled/cleared. One per-data-dir
+  lifecycle lock spans detached readiness. `/api/ready` awaits `ensureServer()` and
+  echoes a random launch nonce, so shallow health or another port owner cannot satisfy
+  startup. Signal cleanup aborts Pievo internals but leaves HTTP draining to Nitro.
+  `restart --data-dir` selects the instance and preserves its recorded host/port unless
+  a bind flag/env overrides them. Existing `pnpm start` and Docker startup are unchanged.
+- Blob selection remains one adapter instance from `boot.ts`: absent selector uses
+  complete R2 config when present, otherwise fixed `<PIEVO_DATA_DIR>/blobs`; partial
+  R2 config fails loud. `local|r2|memory` are explicit selectors. Memory is accepted
+  by the production launcher only as an explicit ephemeral opt-in, emits a loud
+  data-loss warning, and is never selected as fallback.
+
 ## axi-conformance CLI (`gateway/toon.ts` — the TOON spine, batch 1)
 
 - `gateway/toon.ts` is a PURE, dependency-free TOON serializer (no I/O, no clock):

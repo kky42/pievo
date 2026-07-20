@@ -16,11 +16,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
+const strict = process.argv.includes("--strict");
+const failOrWarn = (message) => {
+  if (strict) throw new Error(message);
+  console.warn(`[copy-pglite-assets] ${message}`);
+};
 const here = path.dirname(fileURLToPath(import.meta.url));
 const serverRoot = path.resolve(here, "..");
 const outputRoot = path.join(serverRoot, ".output", "server");
 
 if (!fs.existsSync(outputRoot)) {
+  if (strict) throw new Error(`no build output at ${outputRoot}`);
   console.log(`[copy-pglite-assets] no build output at ${outputRoot} — skipping`);
   process.exit(0);
 }
@@ -36,8 +42,7 @@ const assets = fs
   .filter((f) => f.endsWith(".wasm") || f.endsWith(".data"));
 
 if (assets.length === 0) {
-  console.warn(`[copy-pglite-assets] no *.wasm/*.data assets found in ${pgliteDist}`);
-  process.exit(0);
+  failOrWarn(`no *.wasm/*.data assets found in ${pgliteDist}`);
 }
 
 // Land the assets in the SAME directory as the bundled pglite module — the runtime
@@ -51,7 +56,10 @@ walk(outputRoot, (file) => {
     targets.add(path.dirname(file));
   }
 });
-if (targets.size === 0) targets.add(libsDir);
+if (targets.size === 0) {
+  if (strict) throw new Error(`built pglite module is missing under ${outputRoot}`);
+  targets.add(libsDir);
+}
 
 for (const dir of targets) {
   fs.mkdirSync(dir, { recursive: true });
@@ -69,10 +77,29 @@ for (const dir of targets) {
 const migrationsSrc = path.join(serverRoot, "drizzle");
 const migrationsDest = path.join(outputRoot, "drizzle");
 if (fs.existsSync(migrationsSrc)) {
+  const migrationFiles = fs.readdirSync(migrationsSrc).filter((name) => name.endsWith(".sql"));
+  const journal = path.join(migrationsSrc, "meta", "_journal.json");
+  if (migrationFiles.length === 0 || !fs.existsSync(journal)) {
+    failOrWarn(`drizzle migrations are incomplete at ${migrationsSrc}`);
+  }
   fs.cpSync(migrationsSrc, migrationsDest, { recursive: true });
   console.log(`[copy-pglite-assets] drizzle/ → ${path.relative(serverRoot, migrationsDest)}`);
 } else {
-  console.warn(`[copy-pglite-assets] no drizzle/ migrations at ${migrationsSrc} — pglite tier will boot unmigrated`);
+  failOrWarn(`no drizzle/ migrations at ${migrationsSrc} — pglite tier will boot unmigrated`);
+}
+
+if (strict) {
+  const copiedAssets = [];
+  walk(outputRoot, (file) => {
+    if (file.endsWith(".wasm") || file.endsWith(".data")) copiedAssets.push(file);
+  });
+  const copiedSql = fs.existsSync(migrationsDest)
+    ? fs.readdirSync(migrationsDest).filter((name) => name.endsWith(".sql"))
+    : [];
+  if (copiedAssets.length === 0) throw new Error("publish build has no copied pglite runtime assets");
+  if (copiedSql.length === 0 || !fs.existsSync(path.join(migrationsDest, "meta", "_journal.json"))) {
+    throw new Error("publish build has no complete bundled drizzle migrations");
+  }
 }
 
 function walk(dir, onFile) {

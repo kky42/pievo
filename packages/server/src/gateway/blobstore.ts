@@ -8,7 +8,7 @@
  * Three implementations behind one small interface:
  *   • LocalBlobStore — durable filesystem default under PIEVO_DATA_DIR/blobs.
  *   • R2BlobStore — Cloudflare R2 (S3-compatible) when credentials are configured.
- *   • MemoryBlobStore — explicit injectable fake for tests.
+ *   • MemoryBlobStore — explicit ephemeral selection or injected test fake.
  *
  * The S3 client is dynamic-imported inside R2BlobStore so tests (and any deploy
  * without R2 creds) never load the AWS SDK, and it stays out of the client bundle.
@@ -245,12 +245,32 @@ function isNotFound(err: unknown): boolean {
 }
 
 /**
- * The configured blob store: R2 when credentials are present, otherwise the
- * durable local filesystem under PIEVO_DATA_DIR. Constructed once and shared by
- * every gateway so writes, reads, and GC use the same adapter.
+ * The configured blob store: durable local filesystem under PIEVO_DATA_DIR by
+ * default; complete R2 credentials preserve the existing R2 selection behavior,
+ * while memory requires an explicit selector. Constructed once and shared by every
+ * gateway so writes, reads, and GC use the same adapter.
  */
 export function createBlobStore(): BlobStore {
+  const selection = process.env.PIEVO_BLOB_STORE?.trim().toLowerCase();
+  if (selection && !["local", "r2", "memory"].includes(selection)) {
+    throw new Error("PIEVO_BLOB_STORE must be local, r2, or memory");
+  }
+  if (selection === "memory") {
+    log.warn(
+      "blob store: EPHEMERAL MEMORY explicitly selected; all artifact bytes are lost on restart",
+    );
+    return new MemoryBlobStore();
+  }
+  if (selection === "local") {
+    const local = new LocalBlobStore();
+    log.info({ root: local.root }, "blob store: local filesystem (explicit)");
+    return local;
+  }
+
   const cfg = r2Config();
+  if (selection === "r2" && !cfg) {
+    throw new Error("PIEVO_BLOB_STORE=r2 requires complete PIEVO_R2_* configuration");
+  }
   if (cfg) {
     log.info({ bucket: cfg.bucket, endpoint: cfg.endpoint }, "blob store: Cloudflare R2");
     return new R2BlobStore(cfg);

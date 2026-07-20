@@ -1,19 +1,43 @@
 {
   "name": "@kky42/pievo-server",
   "version": "1.0.0",
-  "private": true,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kky42/pievo.git",
+    "directory": "packages/server"
+  },
   "type": "module",
-  "description": "Pievo server — TanStack Start UI + in-process scheduler + machine WS gateway + agent-api + Better Auth. Zero code-exec, zero LLM (execution is BYOA on user machines).",
+  "description": "Pievo server — a self-hostable zero-exec control plane for scheduled agent loops.",
+  "bin": {
+    "pievo-server": "scripts/pievo-server.mjs"
+  },
+  "files": [
+    ".output",
+    "drizzle",
+    "scripts/pievo-server.mjs",
+    "scripts/server-cli-lib.mjs",
+    "scripts/prestart.mjs",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "dev": "vite dev",
     "build": "vite build && node scripts/copy-pglite-assets.mjs",
+    "build:publish": "vite build && node scripts/copy-pglite-assets.mjs --strict",
     "start": "node scripts/prestart.mjs && node .output/server/index.mjs",
     "routes:generate": "tsr generate",
     "typecheck": "tsr generate && tsc --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "verify:package": "node scripts/verify-package.mjs",
+    "prepublishOnly": "pnpm build:publish"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1075.0",

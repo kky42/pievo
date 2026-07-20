@@ -31,6 +31,8 @@ interface Booted {
   artifactSync: ArtifactSync;
   cliGateway: CliGateway;
   abort: AbortController;
+  /** Stop schedulers and wait for the runtime DB client to drain. */
+  shutdown: () => Promise<void>;
 }
 
 // Cache the in-flight boot PROMISE (not the resolved value): async migrations +
@@ -57,8 +59,15 @@ async function boot(): Promise<Booted> {
 
   const abort = new AbortController();
   // Drain the runtime postgres pool on clean shutdown (main.ts aborts on
-  // SIGINT/SIGTERM); no-op for the pglite tier.
-  abort.signal.addEventListener("abort", () => void closeClient(), { once: true });
+  // SIGINT/SIGTERM); no-op for the pglite tier. The managed npm launcher awaits
+  // `shutdown`; legacy abort-only callers retain the existing best-effort path.
+  let closePromise: Promise<void> | undefined;
+  const close = () => closePromise ??= closeClient();
+  abort.signal.addEventListener("abort", () => void close(), { once: true });
+  const shutdown = async () => {
+    abort.abort();
+    await close();
+  };
   // Break the scheduler↔gateway cycle: the scheduler holds a thin dispatcher
   // that delegates to the gateway (assigned before any tick can fire).
   let gateway: MachineGateway;
@@ -119,7 +128,7 @@ async function boot(): Promise<Booted> {
   }
 
   logger.info("pievo server booted");
-  return { scheduler, gateway, artifactSync, cliGateway, abort };
+  return { scheduler, gateway, artifactSync, cliGateway, abort, shutdown };
 }
 
 export async function getGateway(): Promise<MachineGateway> {
