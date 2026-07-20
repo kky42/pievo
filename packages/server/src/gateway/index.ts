@@ -769,7 +769,6 @@ export class MachineGateway {
     const fresh = !!machine.lastSeen && Date.now() - Date.parse(machine.lastSeen) < ONLINE_TTL_MS;
     const online = !!machine.online && fresh;
     const running = await store.runningRunForMachine(machineId);
-    const [leaseCounts, reportReceipts] = await Promise.all([store.countRunLeasesByState(), store.countReportReceipts()]);
     return {
       status: 200,
       body: {
@@ -777,7 +776,6 @@ export class MachineGateway {
         name: machine.name || null,
         lastSeen: machine.lastSeen ?? null,
         daemonProtocol: machine.daemonProtocol ?? null,
-        reliability: { terminalGraceLeases: leaseCounts.terminalGrace, retiredLeases: leaseCounts.retired, reportReceipts },
         ...(running ? {
           ...(online ? { currentRun: { runId: running.id, stage: "executing", cancelPending: running.cancelRequestedAt != null } } : { blockedRunId: running.id }),
           ...(running.cancelRequestedAt ? { cancelPending: true } : {}),
@@ -1597,16 +1595,16 @@ export class MachineGateway {
     if (typeof body.runId !== "string" || !body.runId) {
       return { status: 422, body: { error: "invalid terminal report", code: "REPORT_INVALID", reportId: body.reportId, issues: ["runId is required"] } };
     }
+    const reportId = body.reportId;
+    const expected = receiptFor(body, body.runId)!;
+    // A committed fact wins over validators introduced by a later deployment.
+    // Replays need only the id/digest binding; semantic validation gates NEW writes.
+    const replay = receiptResponse(await store.getReportReceipt(reportId), expected);
+    if (replay) return replay;
     const issues = validateTerminalReport(body);
     if (issues.length) {
       return { status: 422, body: { error: "invalid terminal report", code: "REPORT_INVALID", reportId: body.reportId, issues } };
     }
-    const reportId = body.reportId;
-    const expected = receiptFor(body, body.runId)!;
-    const digest = expected.payloadDigest;
-    const existing = await store.getReportReceipt(reportId);
-    const replay = receiptResponse(existing, expected);
-    if (replay) return replay;
 
     const lease = await resolveLease(runToken);
     if (!lease) return { status: 401, body: { error: "invalid or expired token" } };
@@ -1763,16 +1761,11 @@ export class MachineGateway {
    * "completedAt != null implies goal != null". So re-read the loop and refuse with
    * a clear error when it's no longer a closed loop. Nothing is stamped.
    *
-   * The run lease is NOT terminalized here: finish can't know the run's precise
-   * durationMs / sessionId mid-run, so it leaves the lease ACTIVE for exactly ONE
-   * enriching post-run report (see report()'s phase==="done" branch), which records
-   * those and retires it. Leaving the lease active (rather than flipping it to
-   * terminal-grace) is deliberate: the run may still `show` or issue a second
-   * `finish` — because the lease stays active, a second `finish` on the same run is
-   * possible, so this ALSO refuses when the loop is already completed
-   * (completedAt != null), keeping finish single-shot (no re-stamp, no re-snapshot,
-   * no re-notify). Double-notify/double-finalize stay impossible — both this guard
-   * and report()'s phase==="done" branch never re-stamp or re-notify.
+   * The store atomically moves the lease to a fixed 10-minute terminal-grace:
+   * mutation authority ends with the Run, while exactly one daemon report may add
+   * precise duration/session telemetry. Grace expiry becomes durable retired
+   * evidence and unblocks the machine; a later report receives 410. The completedAt
+   * guard keeps finish single-shot, and enrichment never re-stamps or re-notifies.
    *
    * Public (not private): `CliGateway`'s `finish`/`complete` dispatch case is the
    * second consumer - the verb routing moved to `gateway/cli.ts`, the core

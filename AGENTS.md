@@ -310,7 +310,8 @@ computes pure functions. Run instructions: `README.md`.
   data loss). Per-loop 500MB cap enforced at `sync()` AND authoritatively at
   `putBlob` (real byte length; also handshake-gated - only accepts hashes the sync
   asked THIS machine for, so a device token is not an uncapped write channel).
-  `store.deleteLoop` cascades runs/run_leases/artifact_files/run_snapshots.
+  `store.deleteLoop` deletes runs/artifact_files/run_snapshots and every non-retired
+  lease; retired late-report evidence survives until its matching 410 receipt.
 
 ## Security / hardening invariants
 
@@ -441,14 +442,13 @@ computes pure functions. Run instructions: `README.md`.
   DURABLE (`run_leases` table, keyed by sha256(wire token) — hash only, a DB leak never
   hands out live credentials): a deploy
   is invisible to an in-flight run, and a long-sleep wake-report survives a
-  restart inside its grace window. `store.deleteLoop` cascades the loop's leases
-  (active ones have no expiry, so the prune alone would never collect them).
+  restart inside its grace window. Loop deletion preserves retired tombstones.
 - **The old revoke/reclaim scatter collapses to ONE terminalize transition +
   retire + prune.** Normal poll delivery uses `store.claimReadyRunsForMachine` to
-  claim + insert an `active` lease atomically. `store.reclaimRun` flips that lease to
-  `terminal-grace` with a 24h expiry in the SAME loop-lock transaction as the
-  provisional error/cadence write, so `terminal-grace` uniquely marks a swept run
-  and a stale sweep observation cannot mutate the winning report's lease.
+  claim + insert an `active` lease atomically. `terminal-grace` is report-only:
+  `store.reclaimRun` uses a 24h window for wake reconciliation, while `finish` uses
+  10 minutes for telemetry enrichment; both transitions share the loop lock, so a
+  stale observation cannot mutate the winning report's lease.
   Normal finalize, finish-enrich, and the ONE terminal-grace reconcile consume the
   lease in the SAME store transaction as their run/loop writes (so concurrent normal
   reports and error→error reconcile are single-shot); reconcile rechecks grace
@@ -462,6 +462,8 @@ computes pure functions. Run instructions: `README.md`.
   `finish` atomically moves its lease to a fixed 10-minute terminal grace: only the
   daemon's enriching report is accepted; expiry restores machine liveness and a later
   report receives durable 410. Startup idempotently repairs terminal-run active leases.
+  ALL loop deletion paths preserve retired tombstones; only the matching report→410
+  receipt transaction consumes them (ordinary Delete and Force-delete cannot differ).
 - **Sweep-reclaimed runs are NOT retired immediately** - the usual cause is a laptop
   that merely fell ASLEEP mid-run, and on wake the daemon delivers the real (often
   successful) result. `reclaimRun` TERMINALIZES the run's lease (grace) instead of
@@ -596,7 +598,10 @@ computes pure functions. Run instructions: `README.md`.
 - Pidfile `~/.pievo/daemon.pid` records `<pid>:<startTime>` so a pid reused after
   an unclean crash is never mistaken for the daemon (or SIGTERMed by `down`).
   `pievo up` consults the pidfile first (never spawns a second daemon); the device
-  token passes to the child via ENV, never argv (`ps`-visible).
+  token passes to the child via ENV, never argv (`ps`-visible). `down`/`update`
+  default to an unbounded correctness-first wait for report persistence; explicit
+  `--force` warns, allows a bounded TERM drain, then SIGKILLs as an operator escape
+  hatch that may lose the terminal result and leave side effects uncertain.
 - `pievo new` takes `--json '<inline>'` (or `--json -` for stdin); `pievo edit`
   is JSON-only (`--json '<obj>'`) plus the content-file trio (`--workflow-file`,
   `--ui-file`, `--schema-file`). Unknown flags reject loudly. The server is the sole

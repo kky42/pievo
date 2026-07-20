@@ -58,8 +58,23 @@ describe("runUpdate", () => {
     expect(cap.downCalls()).toBe(1);
     expect(cap.ensureCalls()).toEqual([{ force: true }]);
     expect(cap.stdout()).toContain("updating v0.8.0 → v0.9.0 (pid 4242)");
-    expect(cap.stdout()).toContain("any run in flight is drained");
+    expect(cap.stdout()).toContain("terminal-report persistence is awaited");
     expect(cap.stdout()).toContain("updated: v0.8.0 → v0.9.0");
+  });
+
+  test("--force forwards the explicit data-loss escape hatch to down", async () => {
+    let downArgs: string[] | undefined;
+    const cap = seams({ down: async (args) => { downArgs = args; return 0; } });
+    expect(await runUpdate(["--force"], cap)).toBe(0);
+    expect(downArgs).toEqual(["--force"]);
+  });
+
+  test("rejects unknown update flags without stopping or starting", async () => {
+    const cap = seams();
+    expect(await runUpdate(["--wat"], cap)).toBe(2);
+    expect(cap.downCalls()).toBe(0);
+    expect(cap.ensureCalls()).toHaveLength(0);
+    expect(cap.stderr()).toContain("pievo update [--force]");
   });
 
   test("replacement starts only after down has verified the old daemon exited", async () => {

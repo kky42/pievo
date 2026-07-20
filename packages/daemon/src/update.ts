@@ -12,10 +12,10 @@
  *     passing + skill refresh), and print an old→new summary when the old
  *     version is knowable (from the running-version file the daemon writes).
  *
- * On a stop, in-flight runs matter: the daemon drains them (its SIGTERM handler
- * gives claude children a bounded window) before exiting, but there's no local
- * record another process can read to know whether a run is mid-flight, so we say
- * so honestly rather than pretend to check. We warn, then proceed.
+ * On a stop, in-flight runs matter: SIGTERM gives provider children a bounded
+ * shutdown window, then the daemon waits without limit for local report durability.
+ * `--force` is the explicit escape hatch when that persistence boundary is wedged;
+ * it warns that the terminal result and side-effect certainty may be lost.
  *
  * Every external touch (pid check, stop, start, version reads, output) is an
  * injectable seam so tests need no real process/network.
@@ -39,6 +39,11 @@ export type UpdateDeps = {
 };
 
 export async function runUpdate(args: string[], injected: UpdateDeps = {}): Promise<number> {
+  const force = args.length === 1 && args[0] === "--force";
+  if (args.length > 0 && !force) {
+    (injected.err ?? ((s: string) => process.stderr.write(s)))("pievo: usage: pievo update [--force]\n");
+    return 2;
+  }
   const d = {
     localPid: injected.localPid ?? (() => verifiedRunningPid()),
     readServer: injected.readServer ?? (() => resolveServerUrl(undefined)),
@@ -68,15 +73,15 @@ export async function runUpdate(args: string[], injected: UpdateDeps = {}): Prom
     return d.ensure([]);
   }
 
-  // A daemon is running. We can't see run state locally from another process, so
-  // be honest: stopping it will end any run currently in flight (the daemon
-  // drains briefly before exit) rather than pretending we checked.
+  // A daemon is running. Update does not preflight its runtime-status file; be
+  // honest that SIGTERM ends any provider run, then report persistence may delay
+  // handoff indefinitely unless the operator explicitly chose --force.
   const oldVer = d.runningVersion();
   const oldLabel = oldVer ? `v${oldVer}` : "the running daemon";
   d.out(`updating ${oldLabel} → ${newLabel} (pid ${pid})…\n`);
-  d.out("note: this stops the running daemon — any run in flight is drained briefly, then ended.\n");
+  d.out(`note: this stops the running daemon — provider work is ended, then terminal-report persistence ${force ? "gets a bounded force window" : "is awaited"}.\n`);
 
-  const stopCode = await d.down([]);
+  const stopCode = await d.down(force ? ["--force"] : []);
   if (stopCode !== 0) {
     d.err("pievo: could not stop the running daemon — update aborted\n");
     return stopCode;

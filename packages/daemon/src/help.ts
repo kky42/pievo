@@ -32,9 +32,9 @@ Setup
     [--dry-run]           stdin). --dry-run validates + previews, creates nothing.
   skill [status|install]  Manage the pievo agent skill install (user scope by
     [--project]           default; --project installs into the current directory).
-  update                  Update this machine's daemon to the version you invoked
-                          (run via npx @kky42/pievo@latest update): stops the
-                          running daemon, starts the new one, refreshes the skill/shim.
+  update [--force]        Update this machine's daemon to the version you invoked.
+                          --force may abandon a terminal result that cannot be
+                          persisted; use only as an explicit recovery action.
 
 Management
   pause <loop>            Pause future runs. The current run will continue.
@@ -49,7 +49,8 @@ Management
   status                  Show actionable daemon, protocol, connectivity, current-run,
                           cancellation, blocked-run, and report diagnostics.
   doctor                  Run the same actionable diagnostics as status.
-  down                    Stop the detached daemon this machine started with up.
+  down [--force]          Stop the detached daemon. Default waits for report durability;
+                          --force may abandon an unpersisted terminal result.
   show [<id>]             Show a loop's full editable config + recent state (the
                           device credential inspects any loop on this machine).
   log [<loop>]            Show a loop's recent runs (concise: status + metrics +
@@ -80,7 +81,7 @@ const VERB_USAGE: Record<string, string> = {
   up: "pievo up [--foreground]\n  Connect this machine / ensure its daemon is running (idempotent; refreshes the\n  pievo skill and PATH shim). --foreground runs the poll loop attached in this\n  terminal instead of detached.",
   new: "pievo new --json '<config>' [--dry-run]\n  Create a loop from an inline JSON config (--json - reads stdin). --dry-run\n  validates + previews, creating nothing.",
   skill: "pievo skill [status|install] [--project]\n  Manage the pievo agent skill install (user scope by default; --project installs\n  into the current directory).",
-  update: "pievo update\n  Hand this machine's daemon over to the (newer) CLI you invoked: stop the running\n  daemon, start the new one, refresh the skill/shim.",
+  update: "pievo update [--force]\n  Hand this machine's daemon over to the newer CLI. Default waits for terminal-report\n  durability; --force may abandon an unpersisted result and uncertain side effects.",
   pause: "pievo pause <loop>\n  Pause future runs. The current run will continue.",
   start: "pievo start <loop>\n  Start a paused loop and re-arm its existing cadence.",
   stop: "pievo stop <loop>\n  Pause this loop, cancel queued work, and stop the current run if it is still running?\n  A running process requires daemon protocol 2; otherwise update is required.",
@@ -88,7 +89,7 @@ const VERB_USAGE: Record<string, string> = {
   run: "pievo run stop <run>\n  Stop one pending or running run without pausing its loop. Canceled is reported only\n  after daemon confirmation for a running process.",
   status: "pievo status\n  Show actionable daemon protocol, server connectivity, current run/stage, cancel\n  pending, terminal report, blocked prior run, and last report error diagnostics.",
   doctor: "pievo doctor\n  Run the same actionable local/server diagnostics as `pievo status`.",
-  down: "pievo down\n  Stop the detached daemon this machine started with `up`.",
+  down: "pievo down [--force]\n  Stop the detached daemon. Default waits for terminal-report durability; --force\n  waits briefly for process cleanup, then may abandon an unpersisted result.",
   log: "pievo log [<loop>] [--json] [--limit N]\n  Show a loop's recent runs (concise: status + metrics + session id). Defaults to the\n  loop for the current directory.",
   show: "pievo show [<id>] [--full] [--json]\n  Show a loop's full editable config + recent state (the device credential inspects\n  any loop on this machine).",
   loops: "pievo loops [--fields a,b] [--json]\n  List your loops (--json emits the raw JSON array). Default columns are\n  id/name/cron/enabled/nextFire.",

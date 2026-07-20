@@ -302,5 +302,5 @@ test("agent-api verbs are refused for a reclaimed run (only the final report rec
   // The CLI verbs live on CliGateway (over the same core instance, like boot).
   const out = (await new cliMod.CliGateway(gw).agentApi(rt, ["reschedule", "1h"]));
   expect(out.status).toBe(409);
-  expect(String((out.body as any).text)).toMatch(/reclaimed/i);
+  expect(String((out.body as any).text)).toMatch(/terminal|no longer accepts/i);
 });

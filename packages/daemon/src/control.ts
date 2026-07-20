@@ -31,7 +31,6 @@ export type MachineStatus = {
   cancelPending?: boolean;
   blockedRunId?: string | null;
   runConflict?: { daemonRunId: string; serverRunId: string };
-  reliability?: { terminalGraceLeases: number; retiredLeases: number; reportReceipts: number };
 };
 
 /** Best-effort server view of this machine (`/api/machine/status`) — shared by
@@ -139,7 +138,6 @@ export async function runStatus(args: string[], injected: ControlDeps = {}): Pro
       if (!runtime?.cancelPending && (view.cancelPending || view.currentRun?.cancelPending)) d.out("  cancel pending: stop requested; waiting for daemon confirmation\n");
       if (!runtime?.blockedRunId && view.blockedRunId) d.out(`  blocked prior run: ${view.blockedRunId} — previous run state is unknown; no new work will start\n`);
       if (!runtime?.runConflict && view.runConflict) d.out(`  run conflict: daemon ${view.runConflict.daemonRunId}, server ${view.runConflict.serverRunId} — operator decision required; no new work will start\n`);
-      if (view.reliability) d.out(`  server lifecycle: ${view.reliability.terminalGraceLeases} terminal-grace, ${view.reliability.retiredLeases} retired, ${view.reliability.reportReceipts} report receipts\n`);
     } else {
       d.out("  server connectivity: unknown — server unreachable\n");
       d.out("  daemon protocol: 2 locally; server support unknown\n");
@@ -150,7 +148,15 @@ export async function runStatus(args: string[], injected: ControlDeps = {}): Pro
   return 0;
 }
 
+const FORCE_DOWN_WAIT_STEPS = 100;
+const DOWN_WAIT_MS = 100;
+
 export async function runDown(args: string[], injected: ControlDeps = {}): Promise<number> {
+  const force = args.length === 1 && args[0] === "--force";
+  if (args.length > 0 && !force) {
+    (injected.err ?? ((s: string) => process.stderr.write(s)))("pievo: usage: pievo down [--force]\n");
+    return 2;
+  }
   const d = deps(injected);
   const record = d.readPid();
   const pid = verifiedRunningPid({ ...d, readPid: () => record });
@@ -158,6 +164,18 @@ export async function runDown(args: string[], injected: ControlDeps = {}): Promi
   if (pid === undefined) {
     d.out("no daemon running for this machine\n");
     return 0;
+  }
+  // Never signal a merely-live numeric PID. Current pidfiles always carry the
+  // process start time; a legacy/corrupt file or failed identity lookup requires
+  // manual inspection rather than risking an unrelated reused process.
+  const confirmedStart = record?.startTime ? d.startTime(pid) : undefined;
+  if (!record?.startTime || confirmedStart !== record.startTime) {
+    d.err(`pievo: refusing to stop pid ${pid} because process identity cannot be confirmed\n`);
+    return 1;
+  }
+
+  if (force) {
+    d.err("pievo: WARNING: --force may discard a terminal result that is not durable yet and may leave local/external side effects uncertain\n");
   }
 
   try {
@@ -183,11 +201,40 @@ export async function runDown(args: string[], injected: ControlDeps = {}): Promi
     const current = d.startTime(pid);
     return current === undefined || current === record.startTime;
   };
-  // Do not impose a SIGKILL deadline here. The daemon may still be terminating
-  // a provider tree or retrying the local SQLite write that makes its terminal
-  // report durable. Handoff must wait for that exact process to exit; killing it
-  // to make update faster would violate persist-before-restart.
-  while (sameProcessAlive()) await d.sleep(100);
+  // Default is correctness-first and waits forever for the report durability
+  // boundary. --force is the explicit operator escape hatch: allow TERM enough
+  // time to stop the provider process group, then abandon a stuck local write.
+  let waits = 0;
+  while (sameProcessAlive() && (!force || waits < FORCE_DOWN_WAIT_STEPS)) {
+    waits += 1;
+    await d.sleep(DOWN_WAIT_MS);
+  }
+  if (force && sameProcessAlive()) {
+    // A delayed SIGKILL requires positive identity, not merely a live numeric PID:
+    // the daemon may have exited and the OS may have reused its pid during TERM.
+    const currentStart = record?.startTime ? d.startTime(pid) : undefined;
+    if (!record?.startTime || currentStart !== record.startTime) {
+      d.err(`pievo: refusing delayed SIGKILL for pid ${pid} because process identity cannot be confirmed\n`);
+      return 1;
+    }
+    try {
+      d.kill(pid, "SIGKILL");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ESRCH") {
+        d.err(`pievo: could not force-stop daemon (pid ${pid}): ${err instanceof Error ? err.message : String(err)}\n`);
+        return 1;
+      }
+    }
+    let killWaits = 0;
+    while (sameProcessAlive() && killWaits < FORCE_DOWN_WAIT_STEPS) {
+      killWaits += 1;
+      await d.sleep(DOWN_WAIT_MS);
+    }
+    if (sameProcessAlive()) {
+      d.err(`pievo: daemon pid ${pid} did not exit after SIGKILL\n`);
+      return 1;
+    }
+  }
   d.clearPid();
   d.out(`stopped daemon (pid ${pid})\n`);
   return 0;

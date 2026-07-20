@@ -181,6 +181,24 @@ test("protocol-v2 terminal reports require valid reportId and matching runId bef
   expect(await store.countReportReceipts()).toBe(0);
 });
 
+test("a committed receipt replays before newer semantic validation", async () => {
+  const reportId = "018f47a2-9c2b-7d11-8f52-123456789aaf";
+  const runId = "run-from-older-server";
+  const payload = { reportId, runId, result: "legacy-result" };
+  const payloadDigest = tokens.sha256(JSON.stringify({ reportId, result: "legacy-result", runId }));
+  await store.insertReportReceipt({
+    reportId,
+    runId,
+    payloadDigest,
+    ackStatus: 200,
+    ackBody: { ok: true, reportId },
+    createdAt: new Date().toISOString(),
+  });
+
+  expect(await gateway().report("rk_no-longer-needed", payload as any)).toEqual({ status: 200, body: { ok: true, reportId } });
+  expect(await gateway().report("rk_no-longer-needed", { ...payload, result: "different" } as any)).toMatchObject({ status: 409, body: { code: "REPORT_CONFLICT", reportId } });
+});
+
 test("terminal reports are idempotent, conflict-safe, and preserve actual post-cancel result", async () => {
   const machine = await seedMachine();
   const loop = await seedLoop(machine.id);
@@ -303,6 +321,86 @@ test("finish crash leaves bounded grace, then unblocks the machine and rejects l
   const reportId = "018f47a2-9c2b-7d11-8f52-123456789aab";
   expect(await gateway().report(token, { reportId, runId: run.id, result: "success", durationMs: 99 })).toMatchObject({ status: 410, body: { code: "RETIRED", reportId } });
   expect((await store.getRun(run.id))?.durationMs).not.toBe(99);
+});
+
+test("ordinary delete preserves expired finish authority until late report receives durable 410", async () => {
+  const machine = await seedMachine();
+  const loop = await store.createLoop({ userId: "u1", machineId: machine.id, name: "closed", cron: "0 0 1 1 *", enabled: true, goal: "done" });
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false, canFinish: true });
+  const at = Date.now();
+  expect((await store.finishLoopRun(loop.id, run.id, tokens.sha256(token), { ts: new Date(at).toISOString(), reason: "met" })).state).toBe("finished");
+  await store.requestDeleteLoop(loop.id);
+  expect(await store.tryDeleteLoop(loop.id)).toBe(false);
+
+  await tokens.pruneExpiredLeases(at + store.FINISH_REPORT_GRACE_MS + 1);
+  expect((await tokens.resolveLease(token))?.state).toBe("retired");
+  expect(await store.tryDeleteLoop(loop.id)).toBe(true);
+  expect(await store.getLoop(loop.id)).toBeUndefined();
+  expect((await tokens.resolveLease(token))?.state).toBe("retired");
+
+  const reportId = "018f47a2-9c2b-7d11-8f52-123456789aac";
+  const payload = { reportId, runId: run.id, result: "success" as const, durationMs: 99 };
+  const first = await gateway().report(token, payload);
+  expect(first).toMatchObject({ status: 410, body: { code: "RETIRED", reportId } });
+  expect(await tokens.resolveLease(token)).toBeUndefined();
+  expect((await store.getReportReceipt(reportId))?.ackStatus).toBe(410);
+  expect(await gateway().report(token, payload)).toEqual(first);
+});
+
+test("ordinary delete and retired report remain definitive in both concurrent winner orders", async () => {
+  async function seeded(suffix: string) {
+    const machine = await seedMachine(`m-delete-race-${suffix}`);
+    const loop = await store.createLoop({ userId: "u1", machineId: machine.id, name: "closed", cron: "0 0 1 1 *", enabled: true, goal: "done" });
+    const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
+    const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false, canFinish: true });
+    const at = Date.now();
+    await store.finishLoopRun(loop.id, run.id, tokens.sha256(token), { ts: new Date(at).toISOString(), reason: "met" });
+    await store.requestDeleteLoop(loop.id);
+    await tokens.pruneExpiredLeases(at + store.FINISH_REPORT_GRACE_MS + 1);
+    return { loop, run, token };
+  }
+
+  // Delete commits while report is paused immediately before its 410 transaction.
+  const deleteFirst = await seeded("delete-first");
+  const originalAck = store.acknowledgeRetiredReport;
+  let releaseAck!: () => void;
+  const ackHeld = new Promise<void>((resolve) => { releaseAck = resolve; });
+  const ackEntered = new Promise<void>((resolve) => {
+    vi.spyOn(store, "acknowledgeRetiredReport").mockImplementationOnce(async (...args: Parameters<typeof originalAck>) => {
+      resolve();
+      await ackHeld;
+      return originalAck(...args);
+    });
+  });
+  const reporting = gateway().report(deleteFirst.token, { reportId: "018f47a2-9c2b-7d11-8f52-123456789aad", runId: deleteFirst.run.id, result: "success" });
+  await ackEntered;
+  expect(await store.tryDeleteLoop(deleteFirst.loop.id)).toBe(true);
+  releaseAck();
+  expect((await reporting).status).toBe(410);
+  vi.restoreAllMocks();
+
+  // Report commits its receipt/consume while delete is paused before its txn.
+  const reportFirst = await seeded("report-first");
+  const originalDelete = store.tryDeleteLoop;
+  let releaseDelete!: () => void;
+  const deleteHeld = new Promise<void>((resolve) => { releaseDelete = resolve; });
+  const deleteEntered = new Promise<void>((resolve) => {
+    vi.spyOn(store, "tryDeleteLoop").mockImplementationOnce(async (...args: Parameters<typeof originalDelete>) => {
+      resolve();
+      await deleteHeld;
+      return originalDelete(...args);
+    });
+  });
+  const deleting = store.tryDeleteLoop(reportFirst.loop.id);
+  await deleteEntered;
+  const response = await gateway().report(reportFirst.token, { reportId: "018f47a2-9c2b-7d11-8f52-123456789aae", runId: reportFirst.run.id, result: "success" });
+  expect(response.status).toBe(410);
+  releaseDelete();
+  expect(await deleting).toBe(true);
+  expect(await store.getLoop(reportFirst.loop.id)).toBeUndefined();
+  expect(await store.getReportReceipt("018f47a2-9c2b-7d11-8f52-123456789aae")).toBeDefined();
+  vi.restoreAllMocks();
 });
 
 test("startup repair terminalizes terminal-run active leases idempotently", async () => {

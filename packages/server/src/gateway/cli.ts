@@ -90,12 +90,10 @@ export class CliGateway {
   async agentApi(runToken: string, argv: string[]): Promise<HttpResult> {
     const lease = await resolveLease(runToken);
     if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
-    // The run was already reclaimed by the server (the machine was likely asleep).
-    // Its lease is terminal-grace: it lives on only to accept ONE reconciling
-    // wake-report via /machine/report — never further agent-api mutations
-    // (reschedule/set-*/finish).
+    // A terminal-grace lease (finished or sweep-reclaimed) accepts only its ONE
+    // final report/enrichment — never further agent-api mutations.
     if (lease.state === "terminal-grace") {
-      return { status: 409, body: { text: errorBlock(RECLAIMED_MSG, "CONFLICT"), exitCode: 1 } };
+      return { status: 409, body: { text: errorBlock(TERMINAL_GRACE_MSG, "CONFLICT"), exitCode: 1 } };
     }
     const out = await this.dispatch(lease, createHash("sha256").update(runToken).digest("hex"), argv);
     return { status: out.code, body: { text: out.text, exitCode: out.code === 200 ? 0 : 1 } };
@@ -315,10 +313,10 @@ export class CliGateway {
   private async runCli(runToken: string, argv: string[]): Promise<HttpResult> {
     const lease = await resolveLease(runToken);
     if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
-    // Reclaimed (machine likely asleep) — terminal-grace accepts only the reconciling
-    // /machine/report, never further CLI mutations. Same rule agentApi enforces.
+    // Finished or sweep-reclaimed: terminal-grace accepts only the final report,
+    // never further CLI commands. Same rule agentApi enforces.
     if (lease.state === "terminal-grace") {
-      return { status: 409, body: { text: errorBlock(RECLAIMED_MSG, "CONFLICT"), exitCode: 1 } };
+      return { status: 409, body: { text: errorBlock(TERMINAL_GRACE_MSG, "CONFLICT"), exitCode: 1 } };
     }
     const verb = argv[0] ?? "";
     const flags = parseFlags(argv.slice(1));
@@ -864,10 +862,9 @@ type Flags = Record<string, string | boolean>;
 
 const MUTATION_VERBS = new Set(["reschedule", "set-cron", "set-schedule", "pause", "resume", "notify", "set-name", "set-tz", "set-model"]);
 
-/** The one message for a reclaimed (terminal-grace) run's refused CLI mutation —
- *  shared by `agentApi` + `runCli` so the two transports can't drift. */
-const RECLAIMED_MSG =
-  "this run was reclaimed by the server (the machine was likely asleep); its result is delivered via the final report";
+/** Shared refusal for terminal-report-only grace (successful finish or reclaim). */
+const TERMINAL_GRACE_MSG =
+  "this run is terminal and no longer accepts commands; its final result is delivered via the terminal report";
 
 /** Verbs that require OWNER (device) authority — a run credential is 403'd on these
  *  in the unified `cli` dispatch (§4.1). `report`/`finish` are the mirror image

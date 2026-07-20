@@ -279,11 +279,14 @@ export async function updateLoop(id: string, patch: Partial<NewLoop>): Promise<L
   });
 }
 
-async function deleteLoopDataTx(tx: StoreTx, id: string, keepRetiredLeases = false): Promise<boolean> {
+/** Delete loop-owned history/content without erasing durable late-report evidence.
+ * A retired lease is non-authorizing and never blocks deletion; only the matching
+ * report→410 receipt transaction may consume it. */
+async function deleteLoopDataTx(tx: StoreTx, id: string): Promise<boolean> {
   const deleted = await tx.delete(loops).where(eq(loops.id, id)).returning({ id: loops.id });
   if (!deleted.length) return false;
   await tx.delete(runs).where(eq(runs.loopId, id));
-  await tx.delete(runLeases).where(and(eq(runLeases.loopId, id), keepRetiredLeases ? ne(runLeases.state, "retired") : undefined));
+  await tx.delete(runLeases).where(and(eq(runLeases.loopId, id), ne(runLeases.state, "retired")));
   await tx.delete(artifactFiles).where(eq(artifactFiles.loopId, id));
   await tx.delete(runSnapshots).where(eq(runSnapshots.loopId, id));
   return true;
@@ -391,7 +394,7 @@ export async function forceDeleteLoop(id: string): Promise<boolean> {
     // Retired is durable acknowledgement evidence, not execution authority. It
     // never blocks claims and has no wall-clock expiry.
     await tx.update(runLeases).set({ state: "retired", expiresAt: null }).where(and(eq(runLeases.loopId, id), inArray(runLeases.state, ["active", "terminal-grace", "retired"])));
-    return deleteLoopDataTx(tx, id, true);
+    return deleteLoopDataTx(tx, id);
   });
 }
 
@@ -609,12 +612,6 @@ export async function putReportReceiptIfAbsent(input: typeof runReportReceipts.$
 export async function countReportReceipts(): Promise<number> {
   const row = (await db.select({ n: sql<number>`count(*)` }).from(runReportReceipts))[0];
   return Number(row?.n ?? 0);
-}
-
-export async function countRunLeasesByState(): Promise<{ terminalGrace: number; retired: number }> {
-  const rows = await db.select({ state: runLeases.state, n: sql<number>`count(*)` }).from(runLeases).groupBy(runLeases.state);
-  const count = (state: "terminal-grace" | "retired") => Number(rows.find((row) => row.state === state)?.n ?? 0);
-  return { terminalGrace: count("terminal-grace"), retired: count("retired") };
 }
 
 /** Idempotent startup repair for lifecycle rows left by an older server or a

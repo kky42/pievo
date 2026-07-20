@@ -18,10 +18,16 @@ const POLL_MS = Number(process.env.PIEVO_POLL_MS || 3000);
 const POLL_TIMEOUT_MS = 30_000;
 const REPOLL_MS = 250;
 const SHUTDOWN_REASON = "pievo:daemon-shutdown";
+const PERSIST_RETRY_MS = [250, 1_000, 5_000, 30_000] as const;
+const PERSIST_LOG_INTERVAL_MS = 60_000;
 export type RunStage = "executing" | "reporting";
 export type CurrentRun = { runId: string; stage: RunStage };
 
 type Execute = (delivery: Delivery, serverUrl: string, roots: string[], signal: AbortSignal) => Promise<TerminalReport>;
+
+export function persistenceRetryDelayMs(attempt: number): number {
+  return PERSIST_RETRY_MS[Math.min(Math.max(1, attempt) - 1, PERSIST_RETRY_MS.length - 1)]!;
+}
 
 /** Owns the daemon's sole execution/report slot. The slot remains occupied after
  * execution until its durable report receives a definitive acknowledgement. */
@@ -65,16 +71,28 @@ export class SingleFlightRuntime {
       // slot cannot be released—or graceful shutdown complete—until the exact
       // payload is durable. A transient local lock/I/O error must not turn a
       // terminal result into process exit and data loss.
+      let persistenceAttempts = 0;
+      let lastLoggedError: string | undefined;
+      let lastLoggedAt = 0;
       for (;;) {
         try {
           this.outbox.put(delivery.runToken, terminal);
           this.persistenceError = undefined;
           break;
         } catch (err) {
-          this.persistenceError = err instanceof Error ? err.message : String(err);
-          this.emitState();
-          logger.error({ runId: delivery.runId, err: this.persistenceError }, "terminal report persistence failed; retrying before exit");
-          await new Promise((resolve) => setTimeout(resolve, 250));
+          persistenceAttempts += 1;
+          const message = err instanceof Error ? err.message : String(err);
+          if (this.persistenceError !== message) {
+            this.persistenceError = message;
+            this.emitState();
+          }
+          const now = Date.now();
+          if (message !== lastLoggedError || now - lastLoggedAt >= PERSIST_LOG_INTERVAL_MS) {
+            logger.error({ runId: delivery.runId, err: message, persistenceAttempts }, "terminal report persistence failed; new work remains blocked while retrying");
+            lastLoggedError = message;
+            lastLoggedAt = now;
+          }
+          await new Promise((resolve) => setTimeout(resolve, persistenceRetryDelayMs(persistenceAttempts)));
         }
       }
       if (this.active?.runId === delivery.runId) this.active.stage = "reporting";

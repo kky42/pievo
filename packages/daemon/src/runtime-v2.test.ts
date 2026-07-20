@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
-import { buildPollBody, nextRunConflict, SingleFlightRuntime } from "./daemon.js";
+import { buildPollBody, nextRunConflict, persistenceRetryDelayMs, SingleFlightRuntime } from "./daemon.js";
 import { RUN_CANCEL_REASON, executeDelivery, type Delivery } from "./runner.js";
 import { PendingReportOutbox } from "./report-outbox.js";
 import { isAlive } from "./pidfile.js";
@@ -117,6 +117,9 @@ describe("run-scoped cancellation", () => {
 });
 
 describe("single-flight persistence boundary", () => {
+  test("permanent local persistence failures back off to a fixed 30s ceiling", () => {
+    expect([1, 2, 3, 4, 5, 99].map(persistenceRetryDelayMs)).toEqual([250, 1_000, 5_000, 30_000, 30_000, 30_000]);
+  });
   test("persists before releasing the slot and replays reporting before accepting delivery", async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-v2-"));
     const box = new PendingReportOutbox(path.join(root, "outbox.sqlite"));

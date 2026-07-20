@@ -138,10 +138,9 @@ export interface RunLeaseCaps {
  *      └────[sweep reclaim]───▶ terminal-grace ──[reconcile]─────▶ deleted
  *                                      └──[expiry]──▶ retired ──[410 receipt]──▶ deleted
  *
- * `terminal-grace` uniquely marks a SWEPT run (the machine went unreachable
- * mid-run, so the sweep finalized a false failure but kept the lease alive). While
- * terminal-grace, agent-api mutations are refused (409); ONLY the single
- * reconciling wake-report is honored, and it retires the lease single-shot. A
+ * `terminal-grace` marks terminal-report-only authority: either a swept run awaiting
+ * reconciliation or a successful finish awaiting telemetry enrichment. Agent-api
+ * mutations are refused (409); ONLY the single final report is honored. A
  * lease past `expiresAt` loses reconciliation authority and becomes durable
  * `retired`; it is deleted only when a matching 410 receipt commits. `finish`
  * uses a separate short grace set by the store so a terminal Run is never active.

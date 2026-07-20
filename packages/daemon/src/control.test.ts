@@ -217,6 +217,45 @@ describe("runDown", () => {
     expect(waits).toBe(105);
   });
 
+  test("--force gives TERM a bounded drain window, then warns and SIGKILLs", async () => {
+    const signals: NodeJS.Signals[] = [];
+    let running = true;
+    let waits = 0;
+    const cap = capture({
+      readPid: () => ({ pid: 4242, startTime: "old-start" }),
+      alive: () => running,
+      startTime: () => "old-start",
+      kill: (_pid, signal) => { signals.push(signal); if (signal === "SIGKILL") running = false; },
+      sleep: async () => { waits += 1; },
+    });
+    expect(await runDown(["--force"], cap)).toBe(0);
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(waits).toBe(100);
+    expect(cap.stderr()).toContain("may discard a terminal result");
+  });
+
+  test("--force refuses every signal without positive process identity", async () => {
+    const signals: NodeJS.Signals[] = [];
+    const cap = capture({
+      readPid: () => ({ pid: 4242 }),
+      alive: () => true,
+      startTime: () => undefined,
+      kill: (_pid, signal) => { signals.push(signal); },
+      sleep: async () => {},
+    });
+    expect(await runDown(["--force"], cap)).toBe(1);
+    expect(signals).toEqual([]);
+    expect(cap.stderr()).toContain("identity cannot be confirmed");
+  });
+
+  test("rejects unknown down flags without signaling", async () => {
+    let killed = false;
+    const cap = capture({ readPid: () => ({ pid: 4242 }), kill: () => { killed = true; } });
+    expect(await runDown(["--wat"], cap)).toBe(2);
+    expect(killed).toBe(false);
+    expect(cap.stderr()).toContain("pievo down [--force]");
+  });
+
   test("no daemon → clean no-op, never signals", async () => {
     let killed = false;
     const cap = capture({ readPid: () => undefined, kill: () => { killed = true; } });
@@ -246,8 +285,9 @@ describe("runDown", () => {
   test("race: pid dies between probe and signal (ESRCH) → clean no-op", async () => {
     let cleared = false;
     const cap = capture({
-      readPid: () => ({ pid: 4242 }),
+      readPid: () => ({ pid: 4242, startTime: "old-start" }),
       alive: () => true,
+      startTime: () => "old-start",
       clearPid: () => { cleared = true; },
       kill: () => { const e = new Error("no such process") as NodeJS.ErrnoException; e.code = "ESRCH"; throw e; },
     });
@@ -259,8 +299,9 @@ describe("runDown", () => {
 
   test("kill fails (EPERM) → reports error, exits non-zero", async () => {
     const cap = capture({
-      readPid: () => ({ pid: 4242 }),
+      readPid: () => ({ pid: 4242, startTime: "old-start" }),
       alive: () => true,
+      startTime: () => "old-start",
       kill: () => { const e = new Error("operation not permitted") as NodeJS.ErrnoException; e.code = "EPERM"; throw e; },
     });
     const code = await runDown([], cap);

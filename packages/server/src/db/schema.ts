@@ -295,8 +295,9 @@ export const runs = pgTable(
 // running run. Only the sha256 of the wire token is stored — a DB leak must not
 // hand out live run credentials (unlike `machines.token`, there is no re-show
 // need). Lifecycle: `active` (expiresAt null = no expiry; the inactivity sweep
-// is the vanished-machine guard) → `terminal-grace` (bounded expiry, exactly one
-// reconciling wake-report) → deleted.
+// is the vanished-machine guard) → `terminal-grace` (bounded final-report window
+// for finish enrichment or wake reconciliation) → deleted on report, or `retired`
+// on expiry. Retired is non-authorizing durable 410 evidence until that report.
 
 export const runLeases = pgTable(
   "run_leases",
@@ -313,11 +314,11 @@ export const runLeases = pgTable(
     canSetWorkflow: boolean("can_set_workflow").notNull().default(false),
     canFinish: boolean("can_finish").notNull().default(false),
     state: text("state", { enum: ["active", "terminal-grace", "retired"] }).notNull().default("active"),
-    /** Null while active (never expires); ISO once terminalized (grace window). */
+    /** Null while active/retired; ISO only during terminal-grace. */
     expiresAt: text("expires_at"),
     createdAt: text("created_at").notNull(),
   },
-  // terminalizeLease targets by runId; the loop cascade deletes by loopId.
+  // terminalizeLease targets by runId; loop deletion preserves retired rows.
   (t) => [index("run_leases_run_idx").on(t.runId), index("run_leases_loop_idx").on(t.loopId)],
 );
 
