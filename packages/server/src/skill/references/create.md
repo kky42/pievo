@@ -1,8 +1,8 @@
 # Create a loop
 
-This machine is already connected — `pievo up` on first capture (see `bootstrap.md`)
+This machine is already connected — `pievo daemon start` on first capture (see `bootstrap.md`)
 or the daemon that's been running since. Decide what to build, author it, create it.
-Use the **pievo-cli** prefix the user pasted (default `npx @kky42/pievo@latest`)
+Use the **pievo-cli** prefix the user pasted (default `pievo`)
 and, on the first-capture path, the **connect-key** from the capture snippet.
 
 ## 1 · Decide what to build

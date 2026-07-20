@@ -185,7 +185,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - **Server `home` verb** (`gateway/cli.ts`): bare `pievo` posts `["home", …ctx]`.
   DEVICE branch (`homeDevice`) is handled in `deviceCli` BEFORE the unknown-machine 401
   guard, so an unregistered machine renders the DEFINITIVE `machine: not connected — run
-  \`pievo up\`` state (never a 401/empty, P5/P8). A registered machine → `machinePresence`
+  \`pievo daemon start\`` state (never a 401/empty, P5/P8). A registered machine → `machinePresence`
   (`lib/machinePresence.ts`) line + cwd-scoped loop list + `recentMachineRuns` across the
   machine + help. RUN branch (`homeRun`, in `runCli` before the read branch) → the lease's
   OWN loop context (`renderRunHomeText`: identity + role + goal + recent), scoped to
@@ -209,31 +209,29 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - **Routing lives in the pure `route.ts` `classify(argv, env)`** (unit-tested; `cli.ts`
   maps a `Route` to its lazily-imported handler). The Batch-6 behavior change (OQ1): bare
   `pievo` = the content-first HOME (device out-of-run; in-run bare posts `home` on the
-  run cred — fixes the old `argv.length > 0` guard). The foreground poll loop moved to
-  `pievo up --foreground`; the `--server-url`/`--api-key` detached re-exec path is
-  PRESERVED (still `{kind:"daemon"}`). `report`/`finish`/`complete` OUT of a run are
+  run cred). Lifecycle exists only under `pievo daemon start|stop|restart|status`;
+  detached re-exec uses `daemon start --foreground` and keeps the token env-only.
+  Top-level `up|down|status|doctor|update`, raw lifecycle flags, and `--api-key` are unknown. `report`/`finish`/`complete` OUT of a run are
   FORWARDED to the server (device cred → the crafted run-only 403, F3), never a generic
   unknown-command. `pievo show` out-of-run (F1) resolves the loop client-side (like
   `log`, reusing `log.ts` `resolveLoopId`) then forwards.
 - **No coding-agent SessionStart hook.** Pievo does not inject home into unrelated
   Claude Code/Codex sessions. Ordinary sessions discover it through the user-scope skill
   or explicit `pievo`; daemon edit/evolve/exec runs use the self-sufficient server-delivered
-  first user turn. `up`/`update` refresh only the skill + PATH shim. Home still uses a
+  first user turn. `daemon start` and `new` refresh the skill + PATH shim. Home still uses a
   bounded fetch (`HOME_TIMEOUT_MS`) so explicit interactive use degrades quickly.
-- **PATH shim** (`bin-shim.ts`, feedback #4): `pievo up`/`update` write a `pievo`
+- **PATH shim** (`bin-shim.ts`, feedback #4): `pievo daemon start`/`new` write a `pievo`
   re-exec wrapper (same launcher-replay as `callback-bin.ts`) to the npm global bin
   (`npm_config_prefix`) else `~/.local/bin`, with one-line PATH guidance when the dir
   isn't on PATH. `home` reports the shim as `bin:` via `existingBinShim`. HARDENED so
   the durable shim is never fragile/destructive: it lands ONLY from a durable install
   (`isEphemeralEntry` skips an npx/npm-cache `/_npx/`,`/_cacache/` re-exec entry, with
-  `npm i -g` guidance) and NEVER clobbers a foreign `pievo` (only refreshes our own
+  `npm install -g @kky42/pievo@latest` guidance) and NEVER clobbers a foreign `pievo` (only refreshes our own
   shim, detected by the `SHIM_MARKER` prefix); `ensureBinShim` returns
   `{path,onPath,written}` so callers/tests can assert skipped-vs-written.
 - **TEST HAZARD**: `ensureBinShim` writes the REAL `~/.local/bin` if not injected.
-  `ensure.test.ts`'s `seams()` MUST no-op it (it does); bin-shim tests inject fs/env
-  seams and never touch the real home. Batch 6 is the one behavior-changing daemon
-  batch — ships in the next `@kky42/pievo` npm release (release note: bare `pievo` =
-  home, foreground → `up --foreground`).
+  `daemon-lifecycle.test.ts`'s `seams()` MUST no-op it (it does); bin-shim tests inject
+  fs/env seams and never touch the real home.
 
 ## axi-conformance CLI (prod-E2E fixes — gate for batch 7)
 
@@ -259,7 +257,7 @@ server (deploys) vs daemon (rides the NEXT `@kky42/pievo` npm release):
 - **`bin:` line always (F7, P8)**: the home MUST lead with `bin:`. The daemon `home.ts`
   now resolves the durable bin via `resolveDurableBinPath` (shim OR non-ephemeral PATH
   global, real path) and passes `--bin` when known; the server `renderHomeText` renders
-  the honest `bin: (not on PATH — run \`npm i -g @kky42/pievo\`)` fallback when
+  the honest `bin: (not on PATH — run \`npm install -g @kky42/pievo@latest\`)` fallback when
   `--bin` is absent (both the connected and not-connected branches). The daemon-local
   homes (`notConnectedHome`/`degradedHome`/`fallbackHome`) lead with the same
   `binLine(bin)`.
@@ -299,12 +297,6 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   `error:`/`code: SERVER_TOO_OLD` to stdout, exit 1, never blank. `home` is the ONE
   exception — it stays never-empty/never-alarm for interactive use, rendering a
   definitive `tooOldHome` (exit 0). `log --json` reads the retained normalized `runs`.
-- **Compat:** the 0.12 daemon (already a text sink) keeps working — it reads `text`/
-  `exitCode` + the retained `loops`/`runs`. Daemons **≤ 0.11** (which render the structured
-  fields) get EMPTY device-verb output against the new server; mitigation: `npx @latest`
-  users auto-upgrade, global installs run `pievo update`. The in-run path keeps working on
-  ≤ 0.11 (it prints `text`, which stays). The postCli 404-fallback + legacy endpoint aliases
-  are OUT of scope here (separate `rexp-b7`, its own upgrade-window gate).
 
 ## Run telemetry
 

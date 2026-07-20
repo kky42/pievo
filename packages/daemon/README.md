@@ -19,57 +19,50 @@ and reports the results back.
 
 ## Install
 
-> **Package cutover:** `@kky42/pievo` is the final package identity. Until this
-> repository's first Pievo daemon release is published, npm's `@latest` may still
-> resolve the legacy project being taken over; do not use these install commands
-> before that release.
-
 ```bash
-npm install -g @kky42/pievo
-# or run ad-hoc:
-npx @kky42/pievo --help
+npm install -g @kky42/pievo@latest
+pievo --help
 ```
 
 ## Connect your machine
 
 ```bash
-pievo up --server-url <url> --connect-key <dk_…>
+pievo daemon start --server-url <url> --connect-key <dk_…>
 ```
 
-`up` is idempotent: it registers this machine (first time), stores the
-credentials under `~/.pievo/`, and spawns a detached daemon if none is
-running. It also refreshes the user-scope pievo skill and the `pievo` PATH
-shim. After that, `pievo up` alone reconnects.
+`daemon start` is detached and idempotent by default: it registers this machine
+(first time), stores configuration under `~/.pievo/`, and starts one daemon.
+Use `--foreground` to run attached; first connection flags work there too.
 
 ## Commands
 
 ```
-pievo                 Show the content-first HOME: this machine's live loops +
-                        recent runs (the poll loop moved to `up --foreground`).
+pievo                 Show this machine's live loops and recent runs.
 
-Setup
-  up [--foreground]       Connect this machine / ensure its daemon is running
-                          (idempotent; refreshes the pievo skill and the `pievo`
-                          PATH shim). --foreground runs the poll loop attached in
-                          this terminal instead of detached.
+Daemon lifecycle
+  daemon start [--foreground] [--server-url <url>] [--connect-key <dk_…>]
+                          Start detached by default; idempotent.
+  daemon stop [--force]   Stop; --force bounds the durability wait.
+  daemon restart [--force]
+                          Stop then start the currently installed version.
+  daemon status           Show pid, connection, run, and report diagnostics.
+
+Setup and management
   new --json '<config>'   Create a loop from an inline JSON config (--json - reads
                           stdin). --dry-run validates + previews, creates nothing.
   skill [status|install]  Manage the pievo agent skill install (user scope by
                           default; --project installs into the current directory).
-  update                  Update this machine's daemon to the version you invoked
-                          (run via npx @kky42/pievo@latest update): stops the
-                          running daemon, starts the new one, refreshes the
-                          skill/shim.
-
-Management
-  status                  Is the daemon running? Show pid + server connection.
-  down                    Stop the detached daemon started with `up`.
   show [<id>]             Show a loop's full editable config + recent state (the
                           device credential inspects any loop on this machine).
   log [<loop>]            Show a loop's recent runs (status, metrics, session id;
                           --json for machines).
 
 Interactive
+  pause <loop>            Pause future runs; current work continues.
+  start <loop>            Start a paused loop with its existing cadence.
+  stop <loop>             Pause, cancel queued work, and request run termination.
+  delete <loop> [--force] Stop then delete server history and synced metadata.
+  run stop <run>          Stop one run without pausing its loop.
   loops [--fields a,b]    List your loops (default columns id/name/cron/enabled/
                           nextFire; --fields adds timezone/notify/model/goal/
                           taskFile/runs/lastOutcome; --json for machines).
@@ -77,9 +70,15 @@ Interactive
                           --schema-file; --dry-run previews before/after).
 ```
 
-Run `pievo --help` for the full usage text, or `pievo <verb> --help` for a
-single verb's concise usage (prints and exits, running no side effect - safe to
-inspect foot-guns like `update` or `down`).
+Run `pievo --help` for the full usage text. Nested lifecycle help such as
+`pievo daemon restart --help` prints and exits without side effects.
+
+Upgrade explicitly:
+
+```bash
+npm install -g @kky42/pievo@latest
+pievo daemon restart
+```
 
 ## How it works
 
@@ -113,7 +112,7 @@ unless `PIEVO_REAL_LLM_TESTS=1`. It validates terminal session id, exact final
 text, and positive normalized token usage. It never resumes a provider session.
 
 The package also bundles the **pievo agent skill**, which teaches a coding
-agent how to author and evolve loops; `pievo up` (and `pievo new`) install
+agent how to author and evolve loops; `pievo daemon start` (and `pievo new`) install
 it at user scope for every coding agent pievo knows about (Claude Code
 `~/.claude/skills/pievo/` and Codex `~/.agents/skills/pievo/` today)
 automatically, so any loop on this machine can discover it. Run `pievo skill

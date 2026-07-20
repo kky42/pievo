@@ -1,6 +1,7 @@
 import type { JobDetail, JobSummary } from '../types'
 
 export const DASHBOARD_PROTOCOL = 2
+export const DAEMON_UPGRADE_REQUIRED = 'Daemon upgrade required to stop a running process. Run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.'
 
 export type LoopLifecycle = 'completed' | 'deleting' | 'stopping' | 'paused-finishing' | 'paused' | 'active'
 
@@ -18,7 +19,7 @@ export function deriveLoopLifecycle(job: JobSummary): LoopLifecycle {
 export function daemonStopSupport(protocol: number | null | undefined): { supported: boolean; label: string } {
   return protocol === DASHBOARD_PROTOCOL
     ? { supported: true, label: `Daemon protocol ${DASHBOARD_PROTOCOL} · Stop supported` }
-    : { supported: false, label: `Daemon protocol ${protocol ?? 'unknown'} · update required` }
+    : { supported: false, label: `Daemon protocol ${protocol ?? 'unknown'} · upgrade required` }
 }
 
 /** Exact user-facing lifecycle wording, including uncertainty boundaries. */
@@ -26,7 +27,7 @@ export function lifecycleDisplay(detail: JobDetail): string {
   const state = deriveLoopLifecycle(detail.summary)
   const running = detail.summary.runs.find((run) => run.running)
   if (running && detail.machine.daemonProtocol !== DASHBOARD_PROTOCOL) {
-    return 'Daemon update required to stop a running process'
+    return DAEMON_UPGRADE_REQUIRED
   }
   if (state === 'stopping' && running && !detail.machine.online) {
     return `Stopping · waiting for ${detail.machine.name || 'machine'}`

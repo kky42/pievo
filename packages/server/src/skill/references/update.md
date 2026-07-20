@@ -1,7 +1,7 @@
 # Edit an existing loop
 
 A loop lives in two places, and you change each where it lives. Use the same
-**pievo-cli** prefix as for create (default `npx @kky42/pievo@latest`); it
+**pievo-cli** prefix as for create (default `pievo`); it
 reuses this machine's persisted device token, so no `--server-url`/`--connect-key`
 or other auth is needed.
 

@@ -8,7 +8,7 @@ import { createFileRoute } from '@tanstack/react-router'
 // This serves the BOOTSTRAP doc (skill/bootstrap.md) — the onboarding an agent
 // follows on the very first capture, before the pievo skill is installed locally.
 // bootstrap.md carries the first-contact-only content (interpret the pasted
-// server-url/connect-key, `pievo up`, read the session to decide what loop to build,
+// server-url/connect-key, `pievo daemon start`, read the session to decide what loop to build,
 // fetch references over HTTP because the skill isn't on disk yet) and has NO
 // frontmatter — it's fetched-and-followed, not installed. It is server-only: the
 // daemon bundles/installs the clean SKILL.md instead (see sync-skill.mjs), so the

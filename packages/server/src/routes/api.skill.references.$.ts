@@ -3,7 +3,7 @@ import { createFileRoute } from '@tanstack/react-router'
 // The pievo skill's reference files, inlined at build time (Vite ?raw) so they
 // ship in the nitro bundle — same source of truth as /api/skill (packages/server/
 // src/skill/). Served as the BOOTSTRAP FALLBACK: normally the agent reads these
-// from the local install (`pievo up` installs the skill via `npx skills` into
+// from the local install (`pievo daemon start` installs the skill via `npx skills` into
 // ./.claude/skills/pievo/references/), but when that install was skipped (no
 // network/npx) the bootstrap doc (skill/bootstrap.md, served at /api/skill) tells
 // the agent to fetch them here instead.

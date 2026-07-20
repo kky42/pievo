@@ -11,7 +11,7 @@ import { DEVICE_FILE, PIEVO_DIR, SERVER_FILE, persist, readStored } from "./conf
 import { ensureCallbackBin } from "./callback-bin.js";
 import { WatchManager, type WatchSpec } from "./watcher.js";
 import { writePidFile, clearPidFile, verifiedRunningPid } from "./pidfile.js";
-import { daemonVersion, writeRunningVersion } from "./version.js";
+import { daemonVersion } from "./version.js";
 import { writeRuntimeDiagnostics } from "./runtime-diagnostics.js";
 
 const POLL_MS = Number(process.env.PIEVO_POLL_MS || 3000);
@@ -139,9 +139,9 @@ export class SingleFlightRuntime {
   }
 }
 
-function flag(name: string): string | undefined {
-  const i = process.argv.indexOf(name);
-  return i >= 0 ? process.argv[i + 1] : undefined;
+function flag(args: string[], name: string): string | undefined {
+  const i = args.indexOf(name);
+  return i >= 0 ? args[i + 1] : undefined;
 }
 
 export function buildPollBody(info: Record<string, unknown>, currentRun: CurrentRun | null, watchDigest: string | undefined): Record<string, unknown> {
@@ -165,18 +165,17 @@ function resolveStored(file: string, explicit: string | undefined): string | und
   return readStored(file);
 }
 
-export async function runDaemon(): Promise<number> {
-  const token = resolveStored(DEVICE_FILE, flag("--api-key") || process.env.PIEVO_TOKEN);
-  const server = resolveStored(SERVER_FILE, (flag("--server-url") || process.env.PIEVO_SERVER_URL)?.replace(/\/$/, ""));
-  if (!token || !server) { logger.error("pass --server-url <url> --api-key <token> (or set PIEVO_SERVER_URL / PIEVO_TOKEN)"); return 1; }
+export async function runDaemon(args: string[] = []): Promise<number> {
+  const token = resolveStored(DEVICE_FILE, process.env.PIEVO_TOKEN);
+  const server = resolveStored(SERVER_FILE, (flag(args, "--server-url") || process.env.PIEVO_SERVER_URL)?.replace(/\/$/, ""));
+  if (!token || !server) { logger.error("run `pievo daemon start --server-url <url> --connect-key <dk_…>` first"); return 1; }
   const roots = (process.env.PIEVO_ROOTS || "").split(",").map((s) => s.trim()).filter(Boolean);
   const info = { host: os.hostname(), platform: process.platform, arch: process.arch, version: daemonVersion() };
   const existing = verifiedRunningPid();
-  if (existing !== undefined) { logger.error({ pid: existing }, "daemon already running — use `pievo down` first"); return 1; }
+  if (existing !== undefined) { logger.error({ pid: existing }, "daemon already running — use `pievo daemon stop` first"); return 1; }
 
   ensureCallbackBin();
   writePidFile();
-  writeRunningVersion();
   const pollAbort = new AbortController();
   let stopping = false;
   const outbox = new PendingReportOutbox(path.join(PIEVO_DIR, "pending-reports.sqlite"));
@@ -218,7 +217,7 @@ export async function runDaemon(): Promise<number> {
         method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify(buildPollBody(info, runtime.currentRun(), watchDigest)),
       }, POLL_TIMEOUT_MS, pollAbort.signal);
-      if (res.status === 426) logger.error("daemon protocol rejected; update Pievo daemon (protocol 2 required)");
+      if (res.status === 426) logger.error("daemon protocol rejected; run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart` (protocol 2 required)");
       else if (!res.ok) logger.warn({ status: res.status, statusText: res.statusText }, "poll non-ok");
       else {
         const data = await res.json() as { delivery?: Delivery | null; cancelRunId?: string; blockedRunId?: string | null; runConflict?: { daemonRunId: string; serverRunId: string }; watch?: WatchSpec[]; watchDigest?: string };

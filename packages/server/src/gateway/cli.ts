@@ -112,7 +112,7 @@ export class CliGateway {
    *     pre-Batch-6 mint over a deploy) → the least-privilege per-run `dispatch()`
    *     verbs, PLUS a read branch (`log`/`show`) scoped strictly to the lease's OWN
    *     loop — this closes the in-run `pievo log` 400 seam. Owner-only verbs
-   *     (`new`/`edit`/`loops`/`status`) are 403 for a run credential.
+   *     (`new`/`edit`/`loops`) are 403 for a run credential.
    * The branch keys on the `dk_` device prefix, NOT an `rk_` run prefix, so a
    * bare-UUID run token still routes to the run path (it just isn't a device token).
    * Floors, `allowControl`, `canFinish`, and the shared content validators all flow
@@ -129,7 +129,7 @@ export class CliGateway {
     const verb = argv[0] ?? "";
     // The content-first home (P8): bare `pievo` posts `["home"]`. It renders a
     // DEFINITIVE state for an unregistered machine ("not connected — run `pievo
-    // up`") rather than a 401, so the ambient dashboard is never an error/empty —
+    // daemon start`") rather than a 401, so the ambient dashboard is never an error/empty —
     // handled BEFORE the unknown-machine guard the other verbs sit behind.
     if (verb === "home") return { status: 200, body: { ok: true, text: await this.homeDevice(machineId, parseFlags(argv.slice(1))) } };
     if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
@@ -169,9 +169,6 @@ export class CliGateway {
         );
       case "run":
         return this.stopOwnerRun(machineId, argv);
-      case "status":
-      case "doctor":
-        return this.ownerStatus(machineId);
       case "edit": {
         const parsed = parseJsonFlag(flags["json"]);
         if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
@@ -199,7 +196,7 @@ export class CliGateway {
         // Per §4.1: there is no run to attribute a device-credential report/finish to.
         return { status: 403, body: { error: `pievo: "${verb}" is a run-only verb — a run reports/finishes itself; the owner edits via "edit"` } };
       default:
-        return { status: 400, body: { error: `pievo: unknown command "${verb}" for the device credential (try: new, loops, pause, start, stop, delete, run stop, edit, log, show, status, doctor)` } };
+        return { status: 400, body: { error: `pievo: unknown command "${verb}" for the device credential (try: new, loops, pause, start, stop, delete, run stop, edit, log, show)` } };
     }
   }
 
@@ -233,7 +230,7 @@ export class CliGateway {
     if (!running) return undefined;
     const machine = await store.getMachine(machineId);
     if (machine?.daemonProtocol === 2) return undefined;
-    return { status: 426, body: { text: STOP_UPDATE_REQUIRED, exitCode: 1 } };
+    return { status: 426, body: { text: STOP_UPGRADE_REQUIRED, exitCode: 1 } };
   }
 
   private async stopOwnerLoop(machineId: string, loopId: string): Promise<HttpResult> {
@@ -296,18 +293,6 @@ export class CliGateway {
     return { status: 200, body: { text: `run already finished: ${runOutcomeToken(stopped)}` } };
   }
 
-  private async ownerStatus(machineId: string): Promise<HttpResult> {
-    const machine = await store.getMachine(machineId);
-    if (!machine) return { status: 404, body: { error: "machine not found" } };
-    const running = await store.runningRunForMachine(machineId);
-    const lines = [
-      machine.daemonProtocol === 2 ? "daemon protocol: 2" : `daemon update required: protocol ${machine.daemonProtocol ?? "unknown"} -> 2`,
-      `server connectivity: connected (${machine.name || machine.id})`,
-      ...(running ? [`current run: ${running.id} (stage unknown to server)`, ...(running.cancelRequestedAt ? ["cancel pending"] : [])] : []),
-    ];
-    return { status: 200, body: { text: lines.join("\n") } };
-  }
-
   /** RUN-credential branch of the unified CLI: the existing per-run `dispatch()`
    *  verbs, plus the read branch (`log`/`show`) scoped to the lease's own loop. */
   private async runCli(runToken: string, argv: string[]): Promise<HttpResult> {
@@ -322,7 +307,7 @@ export class CliGateway {
     const flags = parseFlags(argv.slice(1));
 
     // Owner-only verbs are never reachable with a run credential (least-privilege):
-    // a run has no create/edit/cross-loop-list/machine-status need. Explicit 403 so
+    // a run has no create/edit/cross-loop-list need. Explicit 403 so
     // the denial is legible (not a generic "unknown command").
     if (DEVICE_ONLY_VERBS.has(verb)) {
       return { status: 403, body: { text: errorBlock(`"${verb}" needs the device credential (owner authority); a run may only act on its own loop`, "FORBIDDEN"), exitCode: 1 } };
@@ -869,10 +854,10 @@ const TERMINAL_GRACE_MSG =
 /** Verbs that require OWNER (device) authority — a run credential is 403'd on these
  *  in the unified `cli` dispatch (§4.1). `report`/`finish` are the mirror image
  *  (run-only, 403 for a device credential) and are handled inline in `deviceCli`. */
-const DEVICE_ONLY_VERBS = new Set(["new", "edit", "loops", "start", "stop", "delete", "run", "status", "doctor"]);
+const DEVICE_ONLY_VERBS = new Set(["new", "edit", "loops", "start", "stop", "delete", "run"]);
 
 const PAUSED_FINISHING = "loop paused; current run is finishing";
-const STOP_UPDATE_REQUIRED = "Daemon update required to stop a running process";
+const STOP_UPGRADE_REQUIRED = "Daemon upgrade required to stop a running process. Run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.";
 const FORCE_DELETE_CONFIRMATION = "delete-server-data-anyway";
 
 function forceDeleteWarning(reachability: MachinePresence): string {
@@ -1160,16 +1145,6 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
     summary: "stop one pending or running run without pausing its loop",
     help: ["A running run remains running until the daemon confirms cancellation"],
   },
-  status: {
-    syntax: "status",
-    summary: "show actionable server-side protocol and run diagnostics",
-    help: ["Run `pievo doctor` for the same diagnostics plus local daemon/report state"],
-  },
-  doctor: {
-    syntax: "doctor",
-    summary: "show actionable protocol, connectivity, run, and report diagnostics",
-    help: ["Update the daemon when protocol support is below 2"],
-  },
   log: {
     syntax: "log [<id>] [--limit <n>] [--json]",
     summary: "recent run survey for a loop (session ids + metrics)",
@@ -1415,12 +1390,12 @@ function renderHomeText(
 ): string {
   const machineLine =
     presence === null
-      ? "machine: not connected — run `pievo up`"
+      ? "machine: not connected — run `pievo daemon start`"
       : `machine: ${[presence, ctx.pid ? `daemon pid ${ctx.pid}` : null, ctx.server].filter(Boolean).join(" · ")}`;
   // P8 requires the home to LEAD with `bin:` (every reference axi tool does). The daemon
   // sends the durable path via `--bin` when it has one; absent (npx-without-global), we
   // render the honest fallback so the line is NEVER missing (F7).
-  const binLineText = ctx.bin ? kvLine("bin", ctx.bin) : "bin: (not on PATH — run `npm i -g @kky42/pievo`)";
+  const binLineText = ctx.bin ? kvLine("bin", ctx.bin) : "bin: (not on PATH — run `npm install -g @kky42/pievo@latest`)";
   // Not connected: the header + the definitive state + how to connect. No loop/run
   // blocks (there's nothing to show), but never empty output (P5/P8).
   if (presence === null) {
@@ -1429,7 +1404,7 @@ function renderHomeText(
       kvLine("description", HOME_DESCRIPTION),
       machineLine,
       helpBlock([
-        "Run `pievo up --server-url <url> --connect-key <dk_…>` to connect this machine",
+        "Run `pievo daemon start --server-url <url> --connect-key <dk_…>` to connect this machine",
         "Run `pievo --help` to see every command",
       ]),
     );

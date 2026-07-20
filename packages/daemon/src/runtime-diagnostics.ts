@@ -11,7 +11,7 @@ export type RuntimeDiagnostics = {
   outboxPath?: string;
 };
 
-/** Small owner-only status file used by a separate `pievo status` process. It carries
+/** Small owner-only status file used by a separate `pievo daemon status` process. It carries
  * no credentials and is outside watched loop roots. Atomic rename avoids partial reads. */
 export function writeRuntimeDiagnostics(file: string, value: RuntimeDiagnostics): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });

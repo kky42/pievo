@@ -111,7 +111,7 @@ export interface MachineSummary {
   daemonProtocol: number | null
   /** Latest published daemon version (cached npm dist-tag `latest`); null when
    *  npm is unreachable. Same for every machine — the web compares it against
-   *  `daemonVersion` to show an "update available" hint. */
+   *  `daemonVersion` to show an "upgrade available" hint. */
   latestDaemonVersion: string | null
   /** Plaintext device token (so the UI can re-show the connect command). Under
    *  the auth gate it is serialized ONLY to the machine's owner — null for

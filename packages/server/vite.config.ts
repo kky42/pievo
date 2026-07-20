@@ -8,7 +8,7 @@ import viteReact from '@vitejs/plugin-react'
 // loaded here reach the server functions via process.env (Vite never injects
 // non-VITE_ vars into process.env on its own). Use it to point PIEVO_CLI at the
 // in-repo daemon so the New-loop paste tells Claude Code to run your local code
-// instead of the published `npx @kky42/pievo@latest`. Prod ignores it (the
+// instead of the globally installed `pievo`. Prod ignores it (the
 // file isn't shipped). `.env.local` overrides `.env`; both are optional.
 for (const f of ['.env', '.env.local']) {
   try {

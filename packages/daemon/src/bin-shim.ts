@@ -1,25 +1,22 @@
 /**
- * The durable `pievo` PATH shim (feedback #4). Users today run
- * `npx @kky42/pievo@latest …`, paying npx startup per call — and the reference
- * axi tools all live at a real bin (`bin: ~/.local/share/.../bin/gh-axi`). `pievo
- * up` (and `pievo update`) write a tiny exec wrapper named `pievo` into a user
- * bin dir on PATH so subsequent calls resolve to a real binary with no npx
- * overhead.
+ * The durable `pievo` PATH shim for source/custom launches. `pievo
+ * daemon start` (and `pievo new`) write a tiny exec wrapper named `pievo` into a user
+ * bin dir on PATH so subsequent calls resolve to a durable binary.
  *
  * The wrapper RE-EXECS this daemon's own launcher (execPath + execArgv + entry),
  * exactly like `callback-bin.ts` — so it stays version-consistent with whatever
- * `pievo up`/`update` was invoked as (`npx @kky42/pievo@X`, `node dist/cli.js`,
+ * `pievo daemon start`/`new` was invoked as (`node dist/cli.js`,
  * `tsx src/cli.ts`). Writing the shim is BEST-EFFORT: any failure degrades to the
- * npx path and never fails `up`.
+ * source launcher and never fails daemon start.
  *
  * Because a durable on-PATH shim outlives the process that wrote it, it is hardened
  * two ways so it can never be fragile or destructive (feedback #4 follow-up):
  *   1. It ONLY lands from a DURABLE install — when the re-exec entry lives inside an
  *      npx / npm cache (`/_npx/`, `/_cacache/`), the shim would re-exec a prunable
- *      path, so we SKIP it and print one line of guidance (`npm i -g @kky42/pievo`).
+ *      path, so we SKIP it and print one line of guidance (`npm install -g @kky42/pievo@latest`).
  *   2. It NEVER clobbers a foreign `pievo` — before writing a candidate we read any
  *      existing `pievo` there and skip it unless it is our OWN prior shim (starts
- *      with the re-exec marker); a real `npm i -g` binary is left untouched. Refreshing
+ *      with the re-exec marker); a real global npm binary is left untouched. Refreshing
  *      our own shim is idempotent.
  *
  * Every external touch (write, mkdir, read, homedir, PATH, entry) is an injectable
@@ -131,13 +128,13 @@ export function ensureBinShim(injected: BinShimDeps = {}): BinShimResult {
   // A shim re-execing an npx/npm cache path breaks once that cache is pruned; don't
   // write a durable shim from an ephemeral install — point at a global install instead.
   if (isEphemeralEntry(entry)) {
-    out("pievo: skipped the PATH shim (running from an npx cache); install globally for a stable bin: npm i -g @kky42/pievo\n");
+    out("pievo: skipped the PATH shim (running from an npx cache); install globally for a stable bin: npm install -g @kky42/pievo@latest\n");
     return { path: null, onPath: false, written: false };
   }
 
   for (const dir of binDirCandidates(env, homedir)) {
     const shimPath = path.join(dir, "pievo");
-    // Never clobber a foreign `pievo` (e.g. a real `npm i -g` binary); only refresh
+    // Never clobber a foreign `pievo` (e.g. a real global npm binary); only refresh
     // our OWN prior shim. A missing file (null) is free to write.
     const existing = readShim(shimPath);
     if (existing !== null && !existing.startsWith(SHIM_MARKER)) continue;
@@ -152,7 +149,7 @@ export function ensureBinShim(injected: BinShimDeps = {}): BinShimResult {
     }
     return { path: shimPath, onPath, written: true };
   }
-  out("pievo: could not write a `pievo` PATH shim (keep using `npx @kky42/pievo`)\n");
+  out("pievo: could not write a `pievo` PATH shim (install globally with `npm install -g @kky42/pievo@latest`)\n");
   return { path: null, onPath: false, written: false };
 }
 

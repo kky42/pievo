@@ -274,6 +274,16 @@ describe("runInteractive — lifecycle commands", () => {
     ]);
   });
 
+  test("an old server gives the actionable upgrade flow, never stale update wording", async () => {
+    const { fetchFn } = stub(() => ({ ok: false, status: 404, body: {} }));
+    const cap = capture({ fetchImpl: fetchFn });
+    expect(await runInteractive(["stop", "loop-1"], cap)).toBe(1);
+    expect(cap.stdout()).toContain("Daemon/server upgrade required");
+    expect(cap.stdout()).toContain("npm install -g @kky42/pievo@latest");
+    expect(cap.stdout()).toContain("pievo daemon restart");
+    expect(cap.stdout()).not.toMatch(/update\s+required/i);
+  });
+
   test("force delete requires interactive double-confirmation before network mutation", async () => {
     let fetched = false;
     const cap = capture({

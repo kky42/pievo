@@ -6,7 +6,7 @@
  * whole TOON render (`renderHomeText`). The daemon just prints `body.text`.
  *
  * Never empty (P5/P8): when this machine has no stored credential/server the post
- * short-circuits to a DEFINITIVE local "not connected — run `pievo up`" view; on a
+ * short-circuits to a DEFINITIVE local "not connected — run `pievo daemon start`" view; on a
  * too-old server (no `home` verb → no rendered `text`) a DEFINITIVE "server too old"
  * home is rendered (no structured-render fallback anymore). The in-run bare `pievo`
  * is handled separately (cli.ts routes it to the callback as `home` on the run cred).
@@ -112,7 +112,7 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
  *  else the honest "not on PATH" fallback with the fix. Mirrors the server's
  *  `renderHomeText` so the local and server-rendered homes agree. */
 export function binLine(bin: string | null): string {
-  return bin ? `bin: ${bin}` : "bin: (not on PATH — run `npm i -g @kky42/pievo`)";
+  return bin ? `bin: ${bin}` : "bin: (not on PATH — run `npm install -g @kky42/pievo@latest`)";
 }
 
 /** The definitive not-connected home rendered locally (no server round-trip possible
@@ -121,9 +121,9 @@ function notConnectedHome(bin: string | null): string {
   return (
     `${binLine(bin)}\n` +
     "description: Run your scheduled Pievo agent loops on this machine with your own coding agent.\n" +
-    "machine: not connected — run `pievo up`\n" +
+    "machine: not connected — run `pievo daemon start`\n" +
     "help[2]:\n" +
-    "  Run `pievo up --server-url <url> --connect-key <dk_…>` to connect this machine\n" +
+    "  Run `pievo daemon start --server-url <url> --connect-key <dk_…>` to connect this machine\n" +
     "  Run `pievo --help` to see every command\n"
   );
 }

@@ -76,7 +76,7 @@ const BOOL_FLAGS = new Set(["json"]);
 
 /** The flags `pievo log` accepts (plus the global daemon flags consumed separately).
  *  `help` is allowlisted so it never trips the unknown-flag guard. */
-const LOG_FLAGS = new Set(["json", "limit", "help", "server-url", "api-key"]);
+const LOG_FLAGS = new Set(["json", "limit", "help", "server-url"]);
 
 /** `--k v` / `--k=v` pairs, bare/boolean `--flag` → true; everything else is positional. */
 function parseArgs(args: string[]): { positional: string[]; flags: Record<string, string | boolean> } {
@@ -182,7 +182,7 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   const limit = typeof flags["limit"] === "string" ? flags["limit"] : undefined;
 
   const notConnected = () =>
-    d.err("pievo: this machine isn't connected yet — start the daemon once with --server-url … --api-key … (or set PIEVO_SERVER_URL / PIEVO_TOKEN)\n");
+    d.err("pievo: this machine isn't connected yet — run `pievo daemon start --server-url … --connect-key …` first\n");
 
   // 1. List the machine's loops so we can resolve which one this directory belongs
   //    to (client-side — the server's unified `log` needs an explicit loop id).

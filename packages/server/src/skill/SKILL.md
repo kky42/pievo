@@ -31,5 +31,5 @@ Read the reference for the job (they live on disk next to this file, under
 
 The machine is already connected — this skill was installed at user scope for each
 coding agent pievo knows about (Claude Code `~/.claude/skills/pievo/`, Codex
-`~/.agents/skills/pievo/`) when it connected via `pievo up`. Just author the
+`~/.agents/skills/pievo/`) when it connected via `pievo daemon start`. Just author the
 loop and run the `pievo` CLI; the references cover the exact commands.

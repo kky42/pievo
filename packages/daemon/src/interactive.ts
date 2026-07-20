@@ -65,13 +65,13 @@ function readFileFlag(flags: Flags, flag: string): string | undefined {
  *  --pause/--resume/--run-at/--task-file) and --json-file are GONE: reshape a loop
  *  with a single `--json '<obj>'` patch, and push development-artifact content
  *  (workflow JS / UI HTML / schema JSON) via the file flags. `dry-run` is a mode,
- *  `server-url`/`api-key` are global daemon flags — allowed here, not patch keys. */
-const EDIT_FLAGS = new Set(["json", "workflow-file", "ui-file", "schema-file", "dry-run", "server-url", "api-key"]);
+ *  `server-url` is an optional request target override, not a patch key. */
+const EDIT_FLAGS = new Set(["json", "workflow-file", "ui-file", "schema-file", "dry-run", "server-url"]);
 
 /** The flags `pievo loops` accepts: `--fields <set>`, the `--json` escape hatch,
- *  `--help`, plus the global daemon flags (consumed separately). An unknown flag is a
+ *  `--help`, plus the optional server target override (consumed separately). An unknown flag is a
  *  usage error (exit 2) — the server validates unknown `--fields` VALUES separately. */
-const LOOPS_FLAGS = new Set(["fields", "json", "help", "server-url", "api-key"]);
+const LOOPS_FLAGS = new Set(["fields", "json", "help", "server-url"]);
 const LIFECYCLE_VERBS = new Set(["pause", "start", "stop", "delete", "run"]);
 const FORCE_DELETE_CONFIRMATION = "delete-server-data-anyway";
 
@@ -156,7 +156,7 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
   const { positional, flags } = parseFlags(argv.slice(1));
 
   const notConnected = () =>
-    err("pievo: this machine isn't connected yet — start the daemon once with --server-url … --api-key … (or set PIEVO_SERVER_URL / PIEVO_TOKEN)\n");
+    err("pievo: this machine isn't connected yet — run `pievo daemon start --server-url … --connect-key …` first\n");
 
   if (verb === "loops") {
     // Forward the user's flags so the server can honor `--fields`/`--json` and reject
@@ -189,7 +189,7 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     const id = isRunStop ? positional[1] : positional[0];
     const validRunShape = !isRunStop || positional[0] === "stop";
     const force = flags["force"] === true || flags["force"] === "true";
-    const allowedFlags = verb === "delete" ? new Set(["force", "server-url", "api-key"]) : new Set(["server-url", "api-key"]);
+    const allowedFlags = verb === "delete" ? new Set(["force", "server-url"]) : new Set(["server-url"]);
     const unknown = Object.keys(flags).filter((k) => !allowedFlags.has(k));
     if (!id || !validRunShape || unknown.length || (force && verb !== "delete")) {
       const syntax = isRunStop ? "pievo run stop <run>" : `pievo ${verb} <loop>${verb === "delete" ? " [--force]" : ""}`;
@@ -204,10 +204,10 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
       : [verb!, id, ...(force ? ["--force", "--confirmation", FORCE_DELETE_CONFIRMATION] : [])];
     // Lifecycle verbs require protocol-v2 semantics. A server without the unified
     // endpoint cannot safely implement Stop/Delete, so the 404 fallback is an explicit
-    // update-required response, never a legacy edit call or a false success.
+    // upgrade-required response, never a legacy edit call or a false success.
     const legacy: LegacyFallback = async () => ({
       status: 426,
-      body: { text: "Daemon/server update required for reliable lifecycle control", exitCode: 1 },
+      body: { text: "Daemon/server upgrade required for reliable lifecycle control. Run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.", exitCode: 1 },
     });
     const r = await postCli(cliArgv, legacy, cliDeps);
     if (r.kind === "not-configured") return notConnected(), 2;

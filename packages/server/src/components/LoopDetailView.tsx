@@ -5,7 +5,7 @@ import type { ChannelSummary, CodingAgent, JobDetail, RunSummary } from '../type
 import { buildEditPrompt, loopDir } from '../lib/editPrompt'
 import { cronText, dotColor, dotLabel, dur, fmt, isClosed, isCompleted, rel, tsShort, until } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
-import { daemonStopSupport, deriveLoopLifecycle, lifecycleDisplay } from '../lib/lifecycleUi'
+import { DAEMON_UPGRADE_REQUIRED, daemonStopSupport, deriveLoopLifecycle, lifecycleDisplay } from '../lib/lifecycleUi'
 import { setActiveTeamCookie } from '../lib/teamCookie'
 import { deleteJob, evolveJob, forceDeleteJob, getJobDetail, loadOlderRuns, patchJob, pauseJob, requestEdit, runJob, startJob, stopJob } from '../server/loopApi'
 import { listChannels } from '../server/notifyFns'
@@ -522,7 +522,7 @@ export function LoopDetailView({ id }: { id: string }) {
                 <Menu.Item
                   className={menuItemDanger}
                   disabled={!!s.running && !protocolSupport.supported}
-                  title={s.running && !protocolSupport.supported ? 'Daemon update required to stop a running process' : undefined}
+                  title={s.running && !protocolSupport.supported ? DAEMON_UPGRADE_REQUIRED : undefined}
                   onClick={() => setConfirming('stop')}
                 >
                   Stop
@@ -532,7 +532,7 @@ export function LoopDetailView({ id }: { id: string }) {
               <Menu.Item
                 className={menuItemDanger}
                 disabled={!!s.running && !protocolSupport.supported}
-                title={s.running && !protocolSupport.supported ? 'Daemon update required to stop a running process' : undefined}
+                title={s.running && !protocolSupport.supported ? DAEMON_UPGRADE_REQUIRED : undefined}
                 onClick={() => setConfirming('delete')}
               >
                 Delete

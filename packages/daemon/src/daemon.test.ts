@@ -1,8 +1,8 @@
 /**
  * runDaemon boot guard — a second daemon must REFUSE to start while a live,
  * verified daemon owns the pidfile: it would otherwise overwrite the file, and
- * its exit would delete it while daemon #1 still runs (invisible to `status`,
- * unkillable by `down`, double-polling the server).
+ * its exit would delete it while daemon #1 still runs (invisible to `daemon status`,
+ * unkillable by `daemon stop`, double-polling the server).
  *
  * Uses a temp PIEVO_HOME and records THIS test process's pid as "the running
  * daemon" — it's alive and its `ps` start-time matches, so the verified check

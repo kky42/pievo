@@ -13,21 +13,13 @@ import {
 } from '../server/machineFns'
 import { getConfig } from '../server/loopApi'
 import { isOutdated } from '../lib/semver'
+import { daemonConnectCommand, daemonUpgradeCommand } from '../lib/daemonCommands'
 import type { MachineSummary } from '../types'
 
-/** The daemon connect command (origin known client-side; CLI prefix from server
- *  config). Uses the MANAGED `up` form: it spawns a detached daemon that survives
- *  the terminal (the old bare-flags foreground form died with the shell) and
- *  waits for a readiness probe. The device token rides as `--connect-key` — `up`
- *  adopts it as this machine's stored identity on first run. */
-function connectCmd(token: string, cli: string): string {
+function connectCmd(token: string, cli: string, customCli: boolean): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:3000'
-  return `${cli} up --server-url ${origin} --connect-key ${token}`
+  return daemonConnectCommand(origin, token, cli, customCli)
 }
-
-/** The one-liner that updates an outdated daemon (the invoked CLI is the new
- *  version; `update` hands the running daemon over). Same for every machine. */
-const UPDATE_CMD = 'npx @kky42/pievo@latest update'
 
 function CopyButton({ text }: { text: string }) {
   const [done, setDone] = useState(false)
@@ -62,11 +54,21 @@ export function MachinesModal({
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [delErr, setDelErr] = useState<string | null>(null)
-  const [cliCmd, setCliCmd] = useState('npx @kky42/pievo@latest')
+  const [cliConfig, setCliConfig] = useState<{ pievoCli: string; customCli: boolean } | null>(null)
+  const [configErr, setConfigErr] = useState(false)
 
   useEffect(() => {
-    if (open) void getConfig().then((c) => setCliCmd(c.pievoCli))
-    else setDelErr(null) // don't carry a stale delete error into the next open
+    if (!open) {
+      setDelErr(null) // don't carry a stale delete error into the next open
+      return
+    }
+    let active = true
+    setCliConfig(null)
+    setConfigErr(false)
+    void getConfig()
+      .then((config) => { if (active) setCliConfig(config) })
+      .catch(() => { if (active) setConfigErr(true) })
+    return () => { active = false }
   }, [open])
 
   const load = useCallback(async () => {
@@ -163,12 +165,18 @@ export function MachinesModal({
             <div className="mt-5 text-body font-medium text-display">
               Run this command on your computer to connect:
             </div>
-            <div className="mt-2 flex items-start gap-2">
-              <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-control bg-display p-4 font-mono text-label leading-relaxed text-paper">
-                {connectCmd(pending.token, cliCmd)}
-              </pre>
-              <CopyButton text={connectCmd(pending.token, cliCmd)} />
-            </div>
+            {cliConfig ? (
+              <div className="mt-2 flex items-start gap-2">
+                <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-control bg-display p-4 font-mono text-label leading-relaxed text-paper">
+                  {connectCmd(pending.token, cliConfig.pievoCli, cliConfig.customCli)}
+                </pre>
+                <CopyButton text={connectCmd(pending.token, cliConfig.pievoCli, cliConfig.customCli)} />
+              </div>
+            ) : (
+              <div className="mt-2 text-body text-secondary">
+                {configErr ? 'Could not load the connection command. Close and try again.' : 'Loading connection command…'}
+              </div>
+            )}
             <div className="mt-4 flex items-center gap-2.5 rounded-control border border-hairline bg-warn-soft px-4 py-3">
               <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-rubik-orange" />
               <span className="text-[14px] font-medium text-warn">Waiting for computer to connect…</span>
@@ -253,7 +261,7 @@ export function MachinesModal({
             </div>
             <div className="text-label text-secondary">{daemonStopSupport(m.daemonProtocol).label}</div>
             {m.daemonProtocol !== 2 && (
-              <div className="text-label text-accent">Daemon update required to stop a running process</div>
+              <div className="text-label text-accent">Daemon upgrade required to stop a running process</div>
             )}
             {/* Offline → offer the exact command to bring this machine back (same token).
                 The token is serialized only to the machine's OWNER (never a teammate),
@@ -261,16 +269,21 @@ export function MachinesModal({
             {!m.online && !m.token && (
               <div className="text-label text-secondary">Reconnect command available from the machine owner's account.</div>
             )}
-            {!m.online && m.token && (
+            {!m.online && m.token && !cliConfig && (
+              <div className="text-label text-secondary">
+                {configErr ? 'Could not load the reconnect command. Close and try again.' : 'Loading reconnect command…'}
+              </div>
+            )}
+            {!m.online && m.token && cliConfig && (
               <details>
                 <summary className="cursor-pointer select-none text-label font-medium text-secondary marker:content-[''] hover:text-display">
                   Reconnect command
                 </summary>
                 <div className="mt-2 flex items-start gap-2">
                   <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-control bg-display p-3 font-mono text-caption leading-relaxed text-paper">
-                    {connectCmd(m.token, cliCmd)}
+                    {connectCmd(m.token, cliConfig.pievoCli, cliConfig.customCli)}
                   </pre>
-                  <CopyButton text={connectCmd(m.token, cliCmd)} />
+                  <CopyButton text={connectCmd(m.token, cliConfig.pievoCli, cliConfig.customCli)} />
                 </div>
               </details>
             )}
@@ -279,14 +292,20 @@ export function MachinesModal({
             {isOutdated(m.daemonVersion, m.latestDaemonVersion) && (
               <div className="flex flex-col gap-1.5">
                 <div className="text-label text-secondary">
-                  daemon v{m.daemonVersion} · update available (v{m.latestDaemonVersion})
+                  daemon v{m.daemonVersion} · upgrade available (v{m.latestDaemonVersion})
                 </div>
-                <div className="flex items-start gap-2">
-                  <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-control bg-display p-3 font-mono text-caption leading-relaxed text-paper">
-                    {UPDATE_CMD}
-                  </pre>
-                  <CopyButton text={UPDATE_CMD} />
-                </div>
+                {cliConfig ? (
+                  <div className="flex items-start gap-2">
+                    <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-control bg-display p-3 font-mono text-caption leading-relaxed text-paper">
+                      {daemonUpgradeCommand(cliConfig.pievoCli, cliConfig.customCli)}
+                    </pre>
+                    <CopyButton text={daemonUpgradeCommand(cliConfig.pievoCli, cliConfig.customCli)} />
+                  </div>
+                ) : (
+                  <div className="text-label text-secondary">
+                    {configErr ? 'Could not load the upgrade command. Close and try again.' : 'Loading upgrade command…'}
+                  </div>
+                )}
               </div>
             )}
           </li>

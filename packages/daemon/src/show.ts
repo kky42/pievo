@@ -27,7 +27,7 @@ export type ShowDeps = {
 
 /** The value-taking flags `pievo show` tolerates (consumed separately) — anything
  *  else that isn't a bare `--json`/`--full` is an unknown flag (exit 2). */
-const SHOW_VALUE_FLAGS = new Set(["server-url", "api-key"]);
+const SHOW_VALUE_FLAGS = new Set(["server-url"]);
 
 /** Bare boolean `--json`/`--full` → true; the known value-taking flags (e.g.
  *  `--server-url <url>`) CONSUME their following token so it is never mistaken for the
@@ -71,7 +71,7 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
   const { positional, json, full, unknown } = parseArgs(argv);
   if (unknown.length) return err(`pievo: unknown flag --${unknown[0]} — try \`pievo show --help\`\n`), 2;
   const notConnected = () =>
-    err("pievo: this machine isn't connected yet — start the daemon once with `pievo up`\n");
+    err("pievo: this machine isn't connected yet — run `pievo daemon start`\n");
 
   // 1. List the machine's loops so the target can be resolved (client-side — the
   //    server's `show` needs an explicit id, just like `log`).

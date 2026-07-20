@@ -98,6 +98,7 @@ export function ComposeModal({
   const [copied, setCopied] = useState(false)
   const [slow, setSlow] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [configError, setConfigError] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // Hold the callback in a ref so the poll effect doesn't re-subscribe (and
   // restart the slow-wait timer) every time the parent passes a fresh onCreated.
@@ -113,7 +114,7 @@ export function ComposeModal({
   // The machine config lines stay fixed and read-only — never user-editable. No
   // `agent:` line: `pievo new` resolves the agent from the host env fingerprint
   // (Claude Code or Codex), so the snippet never declares one to override it.
-  const configLines = token
+  const configLines = token && config
     ? [
         `server-url: ${origin}`,
         `connect-key: ${token}`,
@@ -123,7 +124,7 @@ export function ComposeModal({
 
   // A template appends its canned task description under the config (the INTENT).
   const description = template?.description?.trim() ?? ''
-  const snippet = token
+  const snippet = token && config
     ? [instruction, '', configLines, ...(description ? ['', description] : [])].join('\n')
     : ''
 
@@ -131,8 +132,10 @@ export function ComposeModal({
   useEffect(() => {
     if (!open) return
     setToken(null)
+    setConfig(null)
     setCreated(null)
     setError(null)
+    setConfigError(false)
     setCopied(false)
     setSlow(false)
   }, [open, template])
@@ -140,10 +143,14 @@ export function ComposeModal({
   // Mint a claim + load config for the connected-machine flow.
   useEffect(() => {
     if (!open) return
-    void getConfig().then(setConfig)
+    let active = true
+    void getConfig()
+      .then((value) => { if (active) setConfig(value) })
+      .catch(() => { if (active) setConfigError(true) })
     void mintClaim({ data: teamId })
-      .then((r) => ('token' in r ? setToken(r.token) : setError(r.error)))
-      .catch(() => setError('could not mint a connect key'))
+      .then((r) => { if (active) ('token' in r ? setToken(r.token) : setError(r.error)) })
+      .catch(() => { if (active) setError('could not mint a connect key') })
+    return () => { active = false }
   }, [open, teamId])
 
   // Wait on the claim: Claude Code POSTs the loop with this token as `claim`.
@@ -208,7 +215,11 @@ export function ComposeModal({
           </pre>
         ) : (
           <div className="mt-3 border-t border-hairline pt-3 leading-relaxed text-secondary">
-            minting a connect key…
+            {configError
+              ? 'Could not load the CLI configuration. Close and try again.'
+              : token
+                ? 'Loading CLI configuration…'
+                : 'Minting a connect key…'}
           </div>
         )}
         {/* Template intent - the canned task description, appended below the config. */}

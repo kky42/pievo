@@ -9,7 +9,7 @@
  *   - the run's workdir stays clean (nothing is written into it).
  *
  * The wrapper is launch-agnostic: it replays exactly how the daemon was started
- * (`execPath` + `execArgv` + entry script), so `npx @kky42/pievo`,
+ * (`execPath` + `execArgv` + entry script), so the global install,
  * `node dist/cli.js`, and `tsx src/cli.ts` all resolve `pievo report …` back
  * to runCallback (execArgv carries the tsx loader in dev, so the .ts entry runs).
  */

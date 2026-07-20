@@ -135,7 +135,7 @@ computes pure functions. Run instructions: `README.md`.
      `~/.agents/skills/pievo` today), via `npx skills add ... -a claude-code -a codex -g`
      (repeated `-a` flags per agent; the comma form `-a a,b` is an invalid single
      name, and `-a '*'` is deliberately avoided since it litters all ~72 supported
-     agents regardless of presence) on `pievo up`/`new`; best-effort, never blocks.
+     agents regardless of presence) on `pievo daemon start`/`new`; best-effort, never blocks.
      `installArgs` + `pievo skill status` both derive from `SKILL_TARGET_AGENTS`, so
      adding an agent is a one-line list edit.
   3. `skill/run/{exec-core,edit}.md` - INTERNAL run prompts, imported `?raw` by
@@ -579,17 +579,13 @@ computes pure functions. Run instructions: `README.md`.
   handler. The in-run callback (`PIEVO_RUN_TOKEN`+args) still wins FIRST; `-v`/`--version`
   (like `--help`/`-h`/`help`) is a light fast-path that prints just the version (`help.ts`
   `printVersion`, reusing `daemonVersion()`) and never launches a daemon (the usage screen
-  also leads with that version). **`<verb> --help`/`-h` short-circuits to that verb's
-  concise usage (`help.ts` `printVerbHelp`) BEFORE its handler runs** - parsed ahead of the
-  `up`→daemon branch so `up --foreground --help` shows help, never the poll loop. This is
-  the no-side-effect guarantee for foot-guns (`update` hands the daemon over immediately).
-  Structural: a NEW verb inherits it by joining `route.ts` `COMMAND_VERBS` (add a matching
-  `VERB_USAGE` entry; a missing one degrades to the full screen). **Bare `pievo` is now the content-first HOME**, not the
-  foreground daemon: device out-of-run posts `home` on the device credential, in-run bare
-  posts `home` on the run credential (fixes the old `argv.length > 0` guard). The
-  foreground poll loop MOVED to `pievo up --foreground`; the `--server-url`/`--api-key`
-  detached re-exec path is PRESERVED (still classifies as a `daemon` launch). An unknown
-  leading verb still errors exit 2, never silently backgrounds a daemon.
+  also leads with that version). Nested `daemon <subcommand> --help` short-circuits before
+  every handler. **Bare `pievo` is the content-first HOME**; device out-of-run posts `home`
+  on the device credential and in-run bare posts `home` on the run credential. Daemon
+  lifecycle exists ONLY as `daemon start|stop|restart|status`; start is detached/idempotent
+  by default and `--foreground` also accepts first-connection flags. Detached re-exec uses
+  `daemon start --foreground`, with the device token in env only. Top-level
+  `up|down|status|doctor|update`, raw leading lifecycle flags, and `--api-key` are unknown.
   `report`/`finish`/`complete` typed OUT of a run are FORWARDED to the server so its
   crafted run-only 403 reaches the agent (F3); `pievo show` out-of-run (F1) resolves the
   loop client-side (like `log`, reusing `log.ts` `resolveLoopId`) then forwards.
@@ -597,32 +593,30 @@ computes pure functions. Run instructions: `README.md`.
   view into every Claude Code/Codex session. Ordinary sessions discover Pievo through
   the user-scope skill or an explicit `pievo`; daemon edit/evolve/exec runs get their
   complete context from the server-delivered first user turn. Keep skill installation
-  separate from agent hooks; `up`/`update` refresh only the skill + PATH shim.
-- **PATH shim** (`bin-shim.ts`): `up`/`update` write a version-consistent `pievo`
+  separate from agent hooks; `daemon start` and `new` refresh the skill + PATH shim.
+- **PATH shim** (`bin-shim.ts`): `daemon start`/`new` write a version-consistent `pievo`
   re-exec wrapper (same launcher-replay as `callback-bin.ts`) to the npm global bin
   (`npm_config_prefix`) else `~/.local/bin`, with one-line PATH guidance. It lands ONLY
   from a durable install (`isEphemeralEntry` skips an npx/npm-cache re-exec) and NEVER
   clobbers a foreign `pievo` (refreshes only our own shim, detected by `SHIM_MARKER`).
   `ensureBinShim` returns `{path,onPath,written}` so callers/tests assert skipped-vs-written.
   **TEST HAZARD**: `ensureBinShim` writes the REAL `~/.local/bin` unless injected —
-  `ensure.test.ts`'s `seams()` no-ops it, and bin-shim tests inject fs/env seams. See
+  `daemon-lifecycle.test.ts`'s `seams()` no-ops it, and bin-shim tests inject fs/env seams. See
   `packages/server/AGENTS.md` for the server `home` verb + full text-sink notes.
 - Pidfile `~/.pievo/daemon.pid` records `<pid>:<startTime>` so a pid reused after
-  an unclean crash is never mistaken for the daemon (or SIGTERMed by `down`).
-  `pievo up` consults the pidfile first (never spawns a second daemon); the device
-  token passes to the child via ENV, never argv (`ps`-visible). `down`/`update`
-  default to an unbounded correctness-first wait for report persistence; explicit
-  `--force` warns, allows a bounded TERM drain, then SIGKILLs as an operator escape
-  hatch that may lose the terminal result and leave side effects uncertain.
+  an unclean crash is never mistaken for the daemon (or SIGTERMed by `daemon stop`).
+  `pievo daemon start` consults the pidfile first; the detached child's device token
+  passes via ENV, never argv. `daemon stop` defaults to an unbounded correctness-first
+  report-persistence wait; `--force` bounds TERM drain then may SIGKILL. `daemon restart`
+  is stop + start of the currently installed package, preserves stored configuration,
+  and applies `--force` only to stop. npm exclusively owns upgrades; no running-version
+  file exists.
 - `pievo new` takes `--json '<inline>'` (or `--json -` for stdin); `pievo edit`
   is JSON-only (`--json '<obj>'`) plus the content-file trio (`--workflow-file`,
   `--ui-file`, `--schema-file`). Unknown flags reject loudly. The server is the sole
   validator.
 - `pievo log [<loop>]` - concise run survey (session ids + metrics; `--json`
   structured). Backed by `GET /api/machine/log` (device token).
-- `pievo update` hands the running daemon over to the invoking (new) CLI version:
-  `down` then `runEnsure({force:true})` - force skips the still-reported-online
-  short-circuit (server `ONLINE_TTL` 30s outlives the local pidfile clear).
 - `loops.agent` (`CodingAgent` enum: `claude-code|codex`) records the loop's host
   coding agent AND selects the executor (at create: measured env fingerprint >
   `--agent` > server default; detection markers in `create.ts detectAgentFromEnv`).
@@ -664,8 +658,8 @@ computes pure functions. Run instructions: `README.md`.
   `body.text`+`exitCode` via `cli-client.ts` `printTextOrTooOld` — batch 7 retired the
   one-release structured-render fallback, so a `text`-less pre-0.12 server surfaces a
   definitive `SERVER_TOO_OLD` error, `home` a `tooOldHome`); the LOCAL verbs
-  (up/down/update/skill/status/setup/help/version + the `--foreground`/detached daemon
-  launch) keep their own fast-paths and never touch the server. `log`'s cwd→loop resolution stays CLIENT-side (lists loops,
+  (`daemon start|stop|restart|status`, skill, help, version) keep their own fast-paths
+  and never touch the server. `log`'s cwd→loop resolution stays CLIENT-side (lists loops,
   then posts `log <id>`) because the server's `log` dispatch needs an explicit id.
   This ships in the npm daemon package, so it needs a coordinated `@kky42/pievo`
   release. (The daemon still forwards whatever token its env carries — the `rk_` run
@@ -794,9 +788,8 @@ computes pure functions. Run instructions: `README.md`.
   resolves to this source repo (`git+https://github.com/kky42/pievo.git`,
   `directory: packages/daemon`) or npm rejects the publish with a 422 (an empty/
   absent `repository.url` fails provenance validation). Do not strip that field.
-  Cutover order: publish the first Pievo daemon to `@kky42/pievo` BEFORE deploying
-  a server whose generated snippets invoke `@latest`; until then the taken-over npm
-  name may still resolve its legacy project. Source/dev servers use `PIEVO_CLI`.
+  Public server snippets install `@latest` globally then invoke `pievo`; source/dev
+  servers use `PIEVO_CLI` verbatim and must not add the global-install step.
 
 ## Maintaining this file
 

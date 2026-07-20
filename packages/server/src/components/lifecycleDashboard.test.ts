@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { JobDetail, RunSummary } from '../types'
 import { LoopDetailView } from './LoopDetailView'
+import { RunDetailView } from './RunView'
 
 const h = vi.hoisted(() => ({ detail: null as JobDetail | null }))
 vi.mock('../server/loopApi', () => ({
@@ -11,6 +12,7 @@ vi.mock('../server/loopApi', () => ({
   deleteJob: vi.fn(async () => ({ ok: true, waiting: true })), forceDeleteJob: vi.fn(async () => ({ ok: true, deleted: true })),
   pauseJob: vi.fn(async () => ({ ok: true })), startJob: vi.fn(async () => ({ ok: true })), stopJob: vi.fn(async () => ({ ok: true, waiting: true })),
   evolveJob: vi.fn(async () => ({})), patchJob: vi.fn(async () => ({})), requestEdit: vi.fn(async () => ({})), runJob: vi.fn(async () => ({})),
+  getRunDiff: vi.fn(async () => null), stopRun: vi.fn(async () => ({ ok: true, waiting: true })),
 }))
 vi.mock('../server/notifyFns', () => ({ listChannels: vi.fn(async () => []) }))
 vi.mock('@tanstack/react-router', () => ({ Link: ({ children }: { children: React.ReactNode }) => createElement('span', null, children), useNavigate: () => () => {} }))
@@ -67,8 +69,10 @@ describe('Dashboard lifecycle reliability wording', () => {
 
   it.each([1, null])('gates both Stop and Delete for an active run on incompatible protocol %s', async (protocol) => {
     await mount(makeDetail({ protocol, cancelRequested: false }))
-    expect(host!.textContent).toContain('Daemon update required to stop a running process')
-    expect(host!.textContent).toContain(`Daemon protocol ${protocol ?? 'unknown'} · update required`)
+    expect(host!.textContent).toContain('Daemon upgrade required to stop a running process')
+    expect(host!.textContent).toContain('npm install -g @kky42/pievo@latest')
+    expect(host!.textContent).toContain('pievo daemon restart')
+    expect(host!.textContent).toContain(`Daemon protocol ${protocol ?? 'unknown'} · upgrade required`)
 
     const more = host!.querySelector('button[aria-label="More actions"]') as HTMLButtonElement
     await act(async () => { more.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
@@ -76,8 +80,20 @@ describe('Dashboard lifecycle reliability wording', () => {
       const item = ([...document.body.querySelectorAll('[role="menuitem"]')] as HTMLElement[]).find((el) => el.textContent === label)
       expect(item, `${label} menu item`).toBeTruthy()
       expect(item!.getAttribute('data-disabled')).not.toBeNull()
-      expect(item!.getAttribute('title')).toBe('Daemon update required to stop a running process')
+      expect(item!.getAttribute('title')).toBe('Daemon upgrade required to stop a running process. Run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.')
     }
+  })
+
+  it('RunView uses the same actionable daemon upgrade flow', async () => {
+    const d = makeDetail({ protocol: 1 })
+    h.detail = d
+    host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host)
+    await act(async () => { root!.render(createElement(RunDetailView, { loopId: 'l1', runId: 'r1' })) })
+    await act(async () => { await Promise.resolve() })
+    const stop = [...host!.querySelectorAll('button')].find((button) => button.textContent === 'Stop run')
+    expect(stop?.getAttribute('title')).toContain('Daemon upgrade required')
+    expect(stop?.getAttribute('title')).toContain('npm install -g @kky42/pievo@latest')
+    expect(stop?.getAttribute('title')).toContain('pievo daemon restart')
   })
 
   it('renders the exact Pause, Stop, and Delete confirmation copy', async () => {

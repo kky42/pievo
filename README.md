@@ -50,23 +50,25 @@ Pievo has no default hosted server. Start your own instance using the local, Nod
 2. **Create a loop.** The *New loop* dialog hands you a short **connect snippet** containing that instance's server URL and a one-time connect-key.
 3. **Connect your machine.** Paste the whole snippet into your local coding agent - it connects the machine to that explicit server and builds the loop with you.
 
-> **Package cutover:** `@kky42/pievo` is the final daemon identity, but until this
-> repository's first Pievo daemon release is published, npm's `@latest` may still
-> resolve the legacy project being taken over. Publish the daemon before deploying a
-> server whose generated snippets use `@latest`. For source development, build the
-> daemon locally and set server-side `PIEVO_CLI` to its explicit command instead.
+Install the daemon globally. For source development, build it locally and set
+server-side `PIEVO_CLI` to its explicit command instead.
 
 ### Daemon cheatsheet
 
-`npx @kky42/pievo --help` for everything:
+```bash
+npm install -g @kky42/pievo@latest
+pievo --help
+```
 
 | Command | What it does |
 | --- | --- |
-| `up` / `up --foreground` | connect & start the poll loop (detached / foreground) |
-| `status` / `down` | is the daemon running + connection state / stop it |
+| `daemon start [--foreground]` | connect/start detached (default) or attached |
+| `daemon status` / `daemon stop` | inspect or stop the daemon |
+| `daemon restart` | restart the currently installed version |
 | `log` | survey a loop's recent runs (`--json` for structured output) |
 | `new` / `edit` | create or patch a loop (JSON config) |
-| `@latest update` | upgrade the daemon in place |
+
+Upgrade with `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.
 
 ---
 

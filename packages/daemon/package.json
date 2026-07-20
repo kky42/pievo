@@ -1,6 +1,6 @@
 {
   "name": "@kky42/pievo",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Pievo daemon — runs on your machine, connects to a Pievo server, and executes scheduled loops via your local coding agent (Claude Code or Codex). One binary, two roles (daemon / loop callback).",
   "license": "MIT",
   "repository": {
@@ -24,11 +24,11 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "build": "node scripts/sync-skill.mjs && node scripts/copy-runtime-assets.mjs && tsc",
+    "build": "node scripts/clean-dist.mjs && node scripts/sync-skill.mjs && node scripts/copy-runtime-assets.mjs && tsc",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "node scripts/sync-skill.mjs && node scripts/copy-runtime-assets.mjs && tsc"
+    "prepublishOnly": "node scripts/clean-dist.mjs && node scripts/sync-skill.mjs && node scripts/copy-runtime-assets.mjs && tsc"
   },
   "dependencies": {
     "chokidar": "^4.0.3",

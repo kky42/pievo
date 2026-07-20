@@ -42,7 +42,7 @@ describe("runHome", () => {
     const cap = capture({ fetchImpl: fetchFn, server: "", token: undefined });
     expect(await runHome(cap.deps)).toBe(0);
     expect(calls).toHaveLength(0);
-    expect(cap.stdout()).toContain("machine: not connected — run `pievo up`");
+    expect(cap.stdout()).toContain("machine: not connected — run `pievo daemon start`");
     expect(cap.stdout()).toContain("description:");
   });
 
@@ -57,7 +57,7 @@ describe("runHome", () => {
     const { fetchFn } = stub(() => ({ ok: true, body: {} }));
     const cap = capture({ fetchImpl: fetchFn, server: "", token: undefined, binPath: () => null });
     await runHome(cap.deps);
-    expect(cap.stdout().split("\n")[0]).toBe("bin: (not on PATH — run `npm i -g @kky42/pievo`)");
+    expect(cap.stdout().split("\n")[0]).toBe("bin: (not on PATH — run `npm install -g @kky42/pievo@latest`)");
   });
 
   test("posts `home` with the daemon-supplied context and prints the server `text` verbatim", async () => {

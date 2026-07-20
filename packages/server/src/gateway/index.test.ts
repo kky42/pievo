@@ -77,6 +77,15 @@ function gateway(
   });
 }
 
+test("protocol rejection uses upgrade terminology and gives the restart flow", async () => {
+  const res = await gateway().pollV2("not-a-device-token", { protocolVersion: 1 });
+  expect(res.status).toBe(426);
+  expect((res.body as any).error).toContain("daemon upgrade required");
+  expect((res.body as any).error).toContain("npm install -g @kky42/pievo@latest");
+  expect((res.body as any).error).toContain("pievo daemon restart");
+  expect((res.body as any).error).not.toMatch(/update\s+required/i);
+});
+
 /** A recording notifier: captures (loopId, message) instead of pushing to a channel. */
 function recordingNotify() {
   const sent: Array<{ loopId: string; message: string }> = [];
@@ -2275,10 +2284,21 @@ test("cli run credential: show is scoped to the run's own loop with its caps", a
 test("cli run credential: owner-only verbs are 403, not unknown-command", async () => {
   const { runToken } = (await seededCli());
   const gw = gateway();
-  for (const argv of [["new"], ["edit"], ["loops"], ["start"], ["stop"], ["delete"], ["run", "stop", "r"], ["status"], ["doctor"]]) {
+  for (const argv of [["new"], ["edit"], ["loops"], ["start"], ["stop"], ["delete"], ["run", "stop", "r"]]) {
     const res = (await gw.cli(runToken, argv));
     expect(res.status).toBe(403);
     expect((res.body as { text: string }).text).toMatch(/device credential|own loop/);
+  }
+});
+
+test("cli server dispatch has no removed status/doctor command aliases", async () => {
+  const { deviceToken, runToken } = await seededCli();
+  for (const token of [deviceToken, runToken]) {
+    for (const verb of ["status", "doctor"]) {
+      const res = await gateway().cli(token, [verb]);
+      expect(res.status).toBe(400);
+      expect(textOf(res)).toContain("unknown command");
+    }
   }
 });
 
@@ -2312,7 +2332,7 @@ test("cli device stop is update-gated before mutation and never falsely advertis
   const gw = gateway();
   const rejected = await gw.cli(deviceToken, ["stop", loop.id]);
   expect(rejected.status).toBe(426);
-  expect(textOf(rejected)).toContain("Daemon update required to stop a running process");
+  expect(textOf(rejected)).toContain("Daemon upgrade required to stop a running process");
   expect((await store.getLoop(loop.id))?.enabled).toBe(true);
   expect((await store.getRun(run.id))?.cancelRequestedAt).toBeNull();
 
@@ -2329,7 +2349,7 @@ test("cli delete is protocol-gated before requesting deletion when a run is acti
   const { deviceToken, loop } = await seededCli();
   const rejected = await gateway().cli(deviceToken, ["delete", loop.id]);
   expect(rejected.status).toBe(426);
-  expect(textOf(rejected)).toContain("Daemon update required to stop a running process");
+  expect(textOf(rejected)).toContain("Daemon upgrade required to stop a running process");
   expect((await store.getLoop(loop.id))?.deleteRequestedAt).toBeNull();
   expect((await store.getLoop(loop.id))?.enabled).toBe(true);
 });
@@ -3223,7 +3243,7 @@ test("cli home [device]: an unregistered machine renders the DEFINITIVE not-conn
   expect(res.status).toBe(200);
   const body = res.body as { ok: boolean; text: string; exitCode: number };
   expect(body.exitCode).toBe(0);
-  expect(body.text).toContain("machine: not connected — run `pievo up`");
+  expect(body.text).toContain("machine: not connected — run `pievo daemon start`");
   expect(body.text).toContain("description:");
   expect(body.text).toContain("help[");
   // No loops/recent blocks when not connected, but never empty output.
@@ -3288,14 +3308,14 @@ test("F7: cli home [device] ALWAYS leads with a `bin:` line — the durable path
   expect(withBin.split("\n")[0]).toBe("bin: /Users/x/.local/bin/pievo");
   // Non-durable (npx-without-global): no --bin ⇒ the fallback line still leads (P8), never missing.
   const noBin = ((await gateway().cli(deviceToken, ["home"])).body as { text: string }).text;
-  expect(noBin.split("\n")[0]).toBe("bin: (not on PATH — run `npm i -g @kky42/pievo`)");
+  expect(noBin.split("\n")[0]).toBe("bin: (not on PATH — run `npm install -g @kky42/pievo@latest`)");
 });
 
 test("F7: the not-connected home also leads with the `bin:` fallback line", async () => {
   const deviceToken = tokens.mintDeviceToken(); // unregistered → not-connected branch
   const text = ((await gateway().cli(deviceToken, ["home"])).body as { text: string }).text;
-  expect(text.split("\n")[0]).toBe("bin: (not on PATH — run `npm i -g @kky42/pievo`)");
-  expect(text).toContain("machine: not connected — run `pievo up`");
+  expect(text.split("\n")[0]).toBe("bin: (not on PATH — run `npm install -g @kky42/pievo@latest`)");
+  expect(text).toContain("machine: not connected — run `pievo daemon start`");
 });
 
 test("cli home [run]: renders the run's OWN loop context (role + goal + recent) scoped to the lease's loop", async () => {

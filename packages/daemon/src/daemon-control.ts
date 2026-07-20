@@ -1,9 +1,8 @@
-/**
- * `pievo status` and `pievo down` — the owner-outside-a-run commands that
- * inspect and stop THIS machine's detached daemon (the one `pievo up` started).
+/** `pievo daemon status` and `pievo daemon stop` inspect and stop this
+ * machine's detached daemon.
  *
  * Both are built on the local pidfile (`pidfile.ts`): the daemon records its pid
- * on boot, so `status` can say "running (pid N)" and `down` can signal it — no
+ * on boot, so status can report it and stop can signal it — no
  * round-trip to the server required. `status` ALSO reports what's locally
  * knowable about identity (the configured server URL, whether a device token is
  * stored) and, best-effort, the server's view (online + machine name) when both
@@ -34,7 +33,7 @@ export type MachineStatus = {
 };
 
 /** Best-effort server view of this machine (`/api/machine/status`) — shared by
- *  `status`'s connection line and `pievo up`'s readiness probe. Bounded (3s)
+ *  status's connection line and `pievo daemon start`'s readiness probe. Bounded (3s)
  *  and swallow-all: an unreachable/hung server degrades to undefined, never a
  *  crash or a long stall. */
 export async function fetchMachineStatus(server: string, token: string): Promise<MachineStatus | undefined> {
@@ -51,7 +50,7 @@ export async function fetchMachineStatus(server: string, token: string): Promise
   }
 }
 
-export type ControlDeps = {
+export type DaemonControlDeps = {
   readPid?: () => PidRecord | undefined;
   alive?: (pid: number) => boolean;
   startTime?: (pid: number) => string | undefined;
@@ -69,9 +68,9 @@ export type ControlDeps = {
   token?: string;
 };
 
-type Seams = Required<Omit<ControlDeps, "server" | "token">>;
+type Seams = Required<Omit<DaemonControlDeps, "server" | "token">>;
 
-function deps(d: ControlDeps): Seams {
+function deps(d: DaemonControlDeps): Seams {
   return {
     readPid: d.readPid ?? readPidFile,
     alive: d.alive ?? isAlive,
@@ -87,21 +86,25 @@ function deps(d: ControlDeps): Seams {
   };
 }
 
-export async function runStatus(args: string[], injected: ControlDeps = {}): Promise<number> {
+export async function runDaemonStatus(args: string[], injected: DaemonControlDeps = {}): Promise<number> {
+  if (args.length > 0) {
+    (injected.err ?? ((s: string) => process.stderr.write(s)))("pievo: usage: pievo daemon status\n");
+    return 2;
+  }
   const d = deps(injected);
   const server = "server" in injected ? (injected.server ?? "") : resolveServerUrl(undefined);
   const token = "token" in injected ? injected.token : readStored(DEVICE_FILE);
   // The shared pidfile.verifiedRunningPid check (reused-pid safe), fed our seams.
   const pid = verifiedRunningPid(d);
 
-  d.out("pievo status:\n");
+  d.out("pievo daemon status:\n");
   d.out(
     pid !== undefined
       ? `  daemon:    running (pid ${pid})\n`
-      : "  daemon:    not running — run `pievo up` to start it\n",
+      : "  daemon:    not running — run `pievo daemon start` to start it\n",
   );
-  d.out(`  server:    ${server || "not configured — run `pievo up --server-url <url>`"}\n`);
-  if (!token) d.out("  identity:  no device token — run `pievo up`\n");
+  d.out(`  server:    ${server || "not configured — run `pievo daemon start --server-url <url>`"}\n`);
+  if (!token) d.out("  identity:  no device token — run `pievo daemon start`\n");
   const report = d.reportDiagnostics();
   // The runtime file is a live-process handoff, not durable execution authority.
   // Ignore stale contents when the verified daemon pid is absent.
@@ -131,7 +134,7 @@ export async function runStatus(args: string[], injected: ControlDeps = {}): Pro
     if (view) {
       d.out(`  server connectivity: ${view.online ? "online" : "offline"}${view.name ? ` (${view.name})` : ""}\n`);
       if (view.daemonProtocol === 2) d.out("  daemon protocol: 2\n");
-      else d.out(`  daemon update required: protocol ${view.daemonProtocol ?? "unknown"} -> 2\n`);
+      else d.out(`  daemon upgrade required: protocol ${view.daemonProtocol ?? "unknown"} -> 2; run \`npm install -g @kky42/pievo@latest\`, then \`pievo daemon restart\`\n`);
       if (!runtime?.currentRun && view.currentRun && view.currentRun.runId !== report.pendingRunId) {
         d.out(`  current run: ${view.currentRun.runId} (${view.currentRun.stage})\n`);
       }
@@ -151,10 +154,10 @@ export async function runStatus(args: string[], injected: ControlDeps = {}): Pro
 const FORCE_DOWN_WAIT_STEPS = 100;
 const DOWN_WAIT_MS = 100;
 
-export async function runDown(args: string[], injected: ControlDeps = {}): Promise<number> {
+export async function runDaemonStop(args: string[], injected: DaemonControlDeps = {}): Promise<number> {
   const force = args.length === 1 && args[0] === "--force";
   if (args.length > 0 && !force) {
-    (injected.err ?? ((s: string) => process.stderr.write(s)))("pievo: usage: pievo down [--force]\n");
+    (injected.err ?? ((s: string) => process.stderr.write(s)))("pievo: usage: pievo daemon stop [--force]\n");
     return 2;
   }
   const d = deps(injected);
@@ -166,7 +169,7 @@ export async function runDown(args: string[], injected: ControlDeps = {}): Promi
     return 0;
   }
   // Never signal a merely-live numeric PID. Current pidfiles always carry the
-  // process start time; a legacy/corrupt file or failed identity lookup requires
+  // process start time; a malformed file or failed identity lookup requires
   // manual inspection rather than risking an unrelated reused process.
   const confirmedStart = record?.startTime ? d.startTime(pid) : undefined;
   if (!record?.startTime || confirmedStart !== record.startTime) {
@@ -193,7 +196,7 @@ export async function runDown(args: string[], injected: ControlDeps = {}): Promi
   }
 
   // Keep the old pidfile authoritative until that exact process is gone. This
-  // is the handoff fence that prevents `update` from starting daemon #2 while
+  // is the handoff fence that prevents `restart` from starting daemon #2 while
   // daemon #1 is still persisting its terminal report.
   const sameProcessAlive = () => {
     if (!d.alive(pid)) return false;

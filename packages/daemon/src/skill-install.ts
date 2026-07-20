@@ -3,7 +3,7 @@
  * (vercel-labs/skills). Installed at USER scope to match the daemon's per-machine
  * scope: coding agents discover user-level skills from ANY workdir, so a loop agent
  * still triggers the create/update/evolve references no matter where it runs — no
- * per-workdir copies scattering. It's fired at `pievo up` (refreshing the install
+ * per-workdir copies scattering. It's fired at `pievo daemon start` (refreshing the install
  * to whatever daemon version just launched) and again after a successful
  * `pievo new`, and it NEVER blocks: any failure (no network, no npx, no write
  * permission, bundled skill absent) degrades silently to the always-working
@@ -20,9 +20,8 @@
  * NOTE: the comma form `-a claude-code,codex` is INVALID (the CLI parses it as a
  * single agent name); the list must be passed as repeated `-a <agent>` flags.
  *
- * (History: 0.4.0 deliberately kept skill logic OUT of `up` because project scope
- * would pollute an arbitrary cwd; the flip to user scope removes that hazard, so
- * `up` is now the natural refresh point — version-locked to the daemon it launches.)
+ * Installs are explicitly user-scoped, so `daemon start` is the natural refresh
+ * point, version-locked to the daemon it launches.
  *
  * We install from the skill BUNDLED INTO THIS PACKAGE (synced from
  * packages/server/src/skill/ by scripts/sync-skill.mjs at build/prepublish) — a

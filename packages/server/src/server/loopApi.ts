@@ -61,8 +61,8 @@ export const getAuthState = createServerFn({ method: 'GET' }).handler(async () =
 
 /**
  * Client config. `pievoCli` is the CLI invocation prefix the skill + connect
- * dialog use for every verb (`up`, `new`, …) — defaults to the published `npx`
- * form. Set PIEVO_CLI locally to a runnable command that points at the in-repo
+ * dialog use for every verb (`daemon start`, `new`, …) — defaults to the globally
+ * installed `pievo`. Set PIEVO_CLI locally to a runnable command that points at the in-repo
  * daemon, e.g. `tsx /abs/packages/daemon/src/cli.ts` or
  * `node /abs/packages/daemon/dist/cli.js`, so loops created from THIS server tell
  * Claude Code to run your local code instead of the registry build.
@@ -70,7 +70,7 @@ export const getAuthState = createServerFn({ method: 'GET' }).handler(async () =
 export const getConfig = createServerFn({ method: 'GET' }).handler(() => {
   const custom = process.env.PIEVO_CLI?.trim()
   return {
-    pievoCli: custom || 'npx @kky42/pievo@latest',
+    pievoCli: custom || 'pievo',
     /** True when a non-default (dev) CLI is configured — the New-loop paste then
      *  carries an explicit `pievo-cli:` line so Claude Code uses it verbatim. */
     customCli: !!custom,
@@ -302,7 +302,7 @@ export const stopJob = createServerFn({ method: 'POST' })
     if (!owned) return { error: 'not found' }
     if (await store.hasRunningRun(id)) {
       const machine = await store.getMachine(owned.loop.machineId)
-      if (machine?.daemonProtocol !== 2) return { error: 'Daemon update required to stop a running process' }
+      if (machine?.daemonProtocol !== 2) return { error: 'Daemon upgrade required to stop a running process' }
     }
     const stopped = await store.stopLoop(id)
     if (!stopped) return { error: 'not found' }
@@ -320,7 +320,7 @@ export const deleteJob = createServerFn({ method: 'POST' })
     if (!owned) return { error: 'not found' }
     if (await store.hasRunningRun(id)) {
       const machine = await store.getMachine(owned.loop.machineId)
-      if (machine?.daemonProtocol !== 2) return { error: 'Daemon update required to stop a running process' }
+      if (machine?.daemonProtocol !== 2) return { error: 'Daemon upgrade required to stop a running process' }
     }
     scheduler.removeLoop(id)
     const requested = await store.requestDeleteLoop(id)
@@ -405,7 +405,7 @@ export const stopRun = createServerFn({ method: 'POST' })
     const owned = run ? await ownedLoop(run.loopId) : undefined
     if (!run || !owned) return { error: 'run not found' }
     if (run.phase === 'running' && (await store.getMachine(owned.loop.machineId))?.daemonProtocol !== 2) {
-      return { error: 'Daemon update required to stop a running process' }
+      return { error: 'Daemon upgrade required to stop a running process' }
     }
     const result = await store.requestRunCancel(run.loopId, id)
     return result ? { ok: true, waiting: result.phase === 'running' } : { error: 'run not found' }

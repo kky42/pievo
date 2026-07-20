@@ -40,7 +40,7 @@ describe('/api/bootstrap', () => {
     const body = flat(await (await GET()).text())
     // Interpret the pasted values and connect the machine.
     expect(body).toContain('connect-key')
-    expect(body).toContain('pievo up')
+    expect(body).toContain('pievo daemon start')
     // The skill isn't on disk yet, so the references are fetched over HTTP.
     expect(body).toContain('/api/skill/references/create.md')
     // Still a quick check-in, not a full interview.

@@ -1,6 +1,6 @@
 /**
  * `pievo skill {status,install}` — a thin verb wrapping the same best-effort
- * install path `pievo up` / `pievo new` run. The manual escape hatch: lets a
+ * install path `pievo daemon start` / `pievo new` run. The manual escape hatch: lets a
  * user (re)install the pievo agent skill on demand, or check where it's installed.
  *
  * User (global) scope is THE scope now — your coding agent(s) discover it from any

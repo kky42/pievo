@@ -160,7 +160,7 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   const server = resolveServerUrl(flag(args, "server-url"));
   const token = readStored(DEVICE_FILE) || process.env.PIEVO_TOKEN;
   if (!server || !token) {
-    process.stderr.write("pievo: this machine isn't connected yet — run `pievo up --server-url … --connect-key …` first\n");
+    process.stderr.write("pievo: this machine isn't connected yet — run `pievo daemon start --server-url … --connect-key …` first\n");
     return 2;
   }
 
@@ -256,8 +256,8 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     // USER scope (`~/.claude/skills/pievo`), so the coding agent discovers the
     // references from ANY loop workdir. Announced, never blocks — any failure
     // degrades to the always-working /api/skill/references path. Only runs after a
-    // confirmed create. (`pievo up` also refreshes it; this keeps a create made
-    // without a fresh `up` current too.)
+    // confirmed create. (`pievo daemon start` also refreshes it; this keeps a create made
+    // without a fresh daemon start current too.)
     await announceSkillInstall(installer, write);
     return 0;
   } catch (err) {

@@ -78,10 +78,9 @@ Please keep tests and `typecheck` green before opening a PR.
   manual-only examples. Migrations remain forward-only.
 - **Daemon** (`@kky42/pievo`) — publishes to npm on a `vX.Y.Z` git tag
   (`.github/workflows/publish-daemon.yml`, via npm OIDC trusted publishing). The
-  tag must match `packages/daemon/package.json`. During this takeover, publish the
-  first Pievo daemon before deploying a server whose generated snippets invoke
-  `npx @kky42/pievo@latest`; until then that registry tag may still be the legacy
-  project, so development servers should set `PIEVO_CLI` to the local daemon.
+  tag must match `packages/daemon/package.json`. Public snippets install globally with
+  `npm install -g @kky42/pievo@latest` and then invoke `pievo`; development servers
+  should set `PIEVO_CLI` to the local daemon command, which suppresses global install.
 
 ## Licensing
 

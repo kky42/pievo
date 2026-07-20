@@ -667,7 +667,7 @@ export class MachineGateway {
           await store.updateMachine(machineId, { daemonProtocol: reported });
         }
       }
-      return { status: 426, body: { error: "daemon update required", code: "UPGRADE_REQUIRED", requiredProtocol: 2 } };
+      return { status: 426, body: { error: "daemon upgrade required; run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`", code: "UPGRADE_REQUIRED", requiredProtocol: 2 } };
     }
     const current = request.currentRun;
     if (current && (typeof current.runId !== "string" || !["executing", "reporting"].includes(current.stage))) {
@@ -1935,7 +1935,7 @@ function renderLoopsText(loops: LoopListRecord[], fields: string[]): string {
       emptyList("loops"),
       helpBlock([
         "Run `pievo new --json '{\"cron\":\"0 8 * * *\",\"taskFile\":\"<path>\"}'` to create your first loop",
-        "Run `pievo up` if this machine isn't connected yet",
+        "Run `pievo daemon start` if this machine isn't connected yet",
       ]),
     );
   }

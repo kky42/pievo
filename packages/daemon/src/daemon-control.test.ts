@@ -1,14 +1,14 @@
 /**
- * `pievo status` / `pievo down`, exercised with every external touch INJECTED
+ * `pievo daemon status` / `pievo daemon stop`, exercised with every external touch INJECTED
  * (pidfile read, liveness probe, start-time lookup, kill, server fetch, output) so
  * nothing reads a real ~/.pievo, signals a real process, or hits the network.
  */
 import { describe, expect, test } from "vitest";
 
-import { runStatus, runDown, type ControlDeps } from "./control.js";
+import { runDaemonStatus, runDaemonStop, type DaemonControlDeps } from "./daemon-control.js";
 
 /** Capture stdout/stderr into strings for assertions. */
-function capture(extra: ControlDeps = {}): ControlDeps & { stdout: () => string; stderr: () => string } {
+function capture(extra: DaemonControlDeps = {}): DaemonControlDeps & { stdout: () => string; stderr: () => string } {
   let out = "";
   let err = "";
   return {
@@ -20,10 +20,18 @@ function capture(extra: ControlDeps = {}): ControlDeps & { stdout: () => string;
   };
 }
 
-describe("runStatus", () => {
+describe("runDaemonStatus", () => {
+  test("rejects arguments without reading or signaling the daemon", async () => {
+    let read = false;
+    const cap = capture({ readPid: () => { read = true; return undefined; } });
+    expect(await runDaemonStatus(["--force"], cap)).toBe(2);
+    expect(read).toBe(false);
+    expect(cap.stderr()).toContain("pievo daemon status");
+  });
+
   test("daemon running → reports pid", async () => {
     const cap = capture({ readPid: () => ({ pid: 4242 }), alive: () => true, server: "", token: undefined });
-    const code = await runStatus([], cap);
+    const code = await runDaemonStatus([], cap);
     expect(code).toBe(0);
     expect(cap.stdout()).toContain("running (pid 4242)");
     expect(cap.stdout()).not.toContain("not running");
@@ -31,9 +39,9 @@ describe("runStatus", () => {
 
   test("no pidfile → not running + hint", async () => {
     const cap = capture({ readPid: () => undefined, server: "", token: undefined });
-    await runStatus([], cap);
+    await runDaemonStatus([], cap);
     expect(cap.stdout()).toContain("not running");
-    expect(cap.stdout()).toContain("pievo up");
+    expect(cap.stdout()).toContain("pievo daemon start");
   });
 
   test("stale pidfile (pid dead) → not running, clears the stale file", async () => {
@@ -45,7 +53,7 @@ describe("runStatus", () => {
       server: "",
       token: undefined,
     });
-    await runStatus([], cap);
+    await runDaemonStatus([], cap);
     expect(cleared).toBe(true);
     expect(cap.stdout()).toContain("not running");
   });
@@ -60,7 +68,7 @@ describe("runStatus", () => {
       server: "",
       token: undefined,
     });
-    await runStatus([], cap);
+    await runDaemonStatus([], cap);
     expect(cleared).toBe(true);
     expect(cap.stdout()).toContain("not running");
   });
@@ -73,7 +81,7 @@ describe("runStatus", () => {
       server: "",
       token: undefined,
     });
-    await runStatus([], cap);
+    await runDaemonStatus([], cap);
     expect(cap.stdout()).toContain("running (pid 4242)");
   });
 
@@ -86,7 +94,7 @@ describe("runStatus", () => {
       token: "dk_secret_abcdef",
       fetchOnline: async (s, t) => { asked = [s, t]; return { online: true, name: "MacBook" }; },
     });
-    await runStatus([], cap);
+    await runDaemonStatus([], cap);
     expect(asked).toEqual(["https://srv.example", "dk_secret_abcdef"]);
     expect(cap.stdout()).toContain("online (MacBook)");
     expect(cap.stdout()).toContain("https://srv.example");
@@ -102,7 +110,7 @@ describe("runStatus", () => {
       token: "dk_x",
       fetchOnline: async () => undefined,
     });
-    await runStatus([], cap);
+    await runDaemonStatus([], cap);
     expect(cap.stdout()).toContain("unknown — server unreachable");
   });
 
@@ -114,7 +122,7 @@ describe("runStatus", () => {
       token: undefined,
       fetchOnline: async () => { called = true; return undefined; },
     });
-    await runStatus([], cap);
+    await runDaemonStatus([], cap);
     expect(called).toBe(false);
     expect(cap.stdout()).toContain("no device token");
   });
@@ -124,7 +132,7 @@ describe("runStatus", () => {
       readPid: () => undefined, server: "", token: undefined,
       reportDiagnostics: () => ({ pendingRunId: "run-7", poisoned: true, lastError: "REPORT_CONFLICT: payload differs" }),
     });
-    await runStatus([], cap);
+    await runDaemonStatus([], cap);
     expect(cap.stdout()).toContain("terminal report: needs attention (run-7)");
     expect(cap.stdout()).toContain("REPORT_CONFLICT");
     expect(cap.stdout()).toContain("new work is blocked");
@@ -137,7 +145,7 @@ describe("runStatus", () => {
       runtimeDiagnostics: () => ({ currentRun: { runId: "run-local", stage: "reporting" }, cancelPending: true, blockedRunId: "run-old" }),
       fetchOnline: async () => ({ online: true, name: "MacBook", daemonProtocol: 2, currentRun: { runId: "run-local", stage: "executing" } }),
     });
-    await runStatus([], cap);
+    await runDaemonStatus([], cap);
     expect(cap.stdout()).toContain("current run: run-local (reporting)");
     expect(cap.stdout()).not.toContain("run-local (executing)");
     expect(cap.stdout()).toContain("cancel pending");
@@ -156,7 +164,7 @@ describe("runStatus", () => {
         outboxPath: "/home/me/.pievo/pending-reports.sqlite",
       }),
     });
-    await runStatus([], cap);
+    await runDaemonStatus([], cap);
     expect(cap.stdout()).toContain("run conflict: daemon run-local, server run-server");
     expect(cap.stdout()).toContain("SQLITE_FULL");
     expect(cap.stdout()).toContain("/home/me/.pievo/pending-reports.sqlite");
@@ -173,8 +181,8 @@ describe("runStatus", () => {
         blockedRunId: "run-old",
       }),
     });
-    await runStatus([], cap);
-    expect(cap.stdout()).toContain("daemon update required: protocol 1 -> 2");
+    await runDaemonStatus([], cap);
+    expect(cap.stdout()).toContain("daemon upgrade required: protocol 1 -> 2");
     expect(cap.stdout()).toContain("current run: run-9 (executing)");
     expect(cap.stdout()).toContain("cancel pending");
     expect(cap.stdout()).toContain("previous run state is unknown");
@@ -182,7 +190,7 @@ describe("runStatus", () => {
   });
 });
 
-describe("runDown", () => {
+describe("runDaemonStop", () => {
   test("running daemon → waits for verified old pid exit before clearing pidfile", async () => {
     const events: string[] = [];
     let running = true;
@@ -194,7 +202,7 @@ describe("runDown", () => {
       sleep: async () => { events.push("wait"); running = false; },
       clearPid: () => { events.push("clear"); },
     });
-    const code = await runDown([], cap);
+    const code = await runDaemonStop([], cap);
     expect(code).toBe(0);
     expect(events).toEqual(["SIGTERM", "wait", "clear"]);
     expect(cap.stdout()).toContain("stopped daemon (pid 4242)");
@@ -212,7 +220,7 @@ describe("runDown", () => {
       sleep: async () => { waits += 1; if (waits === 105) running = false; },
       clearPid: () => { events.push("clear"); },
     });
-    expect(await runDown([], cap)).toBe(0);
+    expect(await runDaemonStop([], cap)).toBe(0);
     expect(events).toEqual(["SIGTERM", "clear"]);
     expect(waits).toBe(105);
   });
@@ -228,7 +236,7 @@ describe("runDown", () => {
       kill: (_pid, signal) => { signals.push(signal); if (signal === "SIGKILL") running = false; },
       sleep: async () => { waits += 1; },
     });
-    expect(await runDown(["--force"], cap)).toBe(0);
+    expect(await runDaemonStop(["--force"], cap)).toBe(0);
     expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
     expect(waits).toBe(100);
     expect(cap.stderr()).toContain("may discard a terminal result");
@@ -243,23 +251,23 @@ describe("runDown", () => {
       kill: (_pid, signal) => { signals.push(signal); },
       sleep: async () => {},
     });
-    expect(await runDown(["--force"], cap)).toBe(1);
+    expect(await runDaemonStop(["--force"], cap)).toBe(1);
     expect(signals).toEqual([]);
     expect(cap.stderr()).toContain("identity cannot be confirmed");
   });
 
-  test("rejects unknown down flags without signaling", async () => {
+  test("rejects unknown stop flags without signaling", async () => {
     let killed = false;
     const cap = capture({ readPid: () => ({ pid: 4242 }), kill: () => { killed = true; } });
-    expect(await runDown(["--wat"], cap)).toBe(2);
+    expect(await runDaemonStop(["--wat"], cap)).toBe(2);
     expect(killed).toBe(false);
-    expect(cap.stderr()).toContain("pievo down [--force]");
+    expect(cap.stderr()).toContain("pievo daemon stop [--force]");
   });
 
   test("no daemon → clean no-op, never signals", async () => {
     let killed = false;
     const cap = capture({ readPid: () => undefined, kill: () => { killed = true; } });
-    const code = await runDown([], cap);
+    const code = await runDaemonStop([], cap);
     expect(code).toBe(0);
     expect(killed).toBe(false);
     expect(cap.stdout()).toContain("no daemon running");
@@ -275,7 +283,7 @@ describe("runDown", () => {
       clearPid: () => { cleared = true; },
       kill: () => { killed = true; },
     });
-    const code = await runDown([], cap);
+    const code = await runDaemonStop([], cap);
     expect(code).toBe(0);
     expect(killed).toBe(false);
     expect(cleared).toBe(true);
@@ -291,7 +299,7 @@ describe("runDown", () => {
       clearPid: () => { cleared = true; },
       kill: () => { const e = new Error("no such process") as NodeJS.ErrnoException; e.code = "ESRCH"; throw e; },
     });
-    const code = await runDown([], cap);
+    const code = await runDaemonStop([], cap);
     expect(code).toBe(0);
     expect(cleared).toBe(true);
     expect(cap.stdout()).toContain("no daemon running");
@@ -304,7 +312,7 @@ describe("runDown", () => {
       startTime: () => "old-start",
       kill: () => { const e = new Error("operation not permitted") as NodeJS.ErrnoException; e.code = "EPERM"; throw e; },
     });
-    const code = await runDown([], cap);
+    const code = await runDaemonStop([], cap);
     expect(code).toBe(1);
     expect(cap.stderr()).toContain("could not stop daemon");
   });

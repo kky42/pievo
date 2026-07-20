@@ -8,10 +8,10 @@ and keep questions to quick check-ins — don't run a full interview.
 
 This bootstrap doc is served over HTTP on first contact, before the pievo skill is
 installed on disk. Do the two steps below, then hand off to the create reference,
-which owns everything from "what should this loop be?" onward. (`pievo up`
+which owns everything from "what should this loop be?" onward. (`pievo daemon start`
 installs the skill at USER scope for each coding agent pievo knows about (Claude
-Code `~/.claude/skills/pievo/`, Codex `~/.agents/skills/pievo/`) and `pievo
-new` refreshes it, so a later session in ANY folder on this machine auto-triggers the
+Code `~/.claude/skills/pievo/`, Codex `~/.agents/skills/pievo/`) and `pievo new`
+refreshes it, so a later session in ANY folder on this machine auto-triggers the
 installed skill and reads the same references from disk.)
 
 ## The pasted values
@@ -22,8 +22,8 @@ The user pasted these along with the capture link — use them verbatim:
 - **connect-key** — a one-time token (starts with `dk_`). It both authorizes a NEW
   machine and tags the loop back to the web dialog (its `claim`).
 - **pievo-cli** *(optional)* — the command prefix for every `pievo` invocation.
-  **If it's not pasted, use `npx @kky42/pievo@latest`.** (A dev server may paste
-  a local command instead.)
+  If it is pasted, use it verbatim (a dev server may provide a local command).
+  Otherwise install once with `npm install -g @kky42/pievo@latest` and use `pievo`.
 
 The paste may also carry a short **task description** below those values — the user
 started from a template card on the dashboard. That description is the loop to build;
@@ -31,14 +31,19 @@ the create reference (step 2) treats it as the intent.
 
 ## 1 · Connect this machine
 
-One idempotent command does the whole thing — run it verbatim (substitute
-**pievo-cli**):
+If no custom **pievo-cli** was pasted, install the CLI globally first:
 
 ```bash
-<pievo-cli> up --server-url <server-url> --connect-key <connect-key>
+npm install -g @kky42/pievo@latest
 ```
 
-`pievo up` resolves this machine's stable identity (reuses the stored device
+Then run the idempotent start command (substitute **pievo-cli**, default `pievo`):
+
+```bash
+<pievo-cli> daemon start --server-url <server-url> --connect-key <connect-key>
+```
+
+`pievo daemon start` resolves this machine's stable identity (reuses the stored device
 token, else adopts the connect-key), starts a single detached daemon if none is live
 — it survives this session and never doubles up — and waits until the server reports
 the machine online. Once connected it also best-effort refreshes the pievo skill

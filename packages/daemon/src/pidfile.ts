@@ -1,16 +1,16 @@
 /**
- * Daemon pidfile — the local liveness/identity record `pievo status` and
- * `pievo down` need to find THIS machine's detached daemon.
+ * Daemon pidfile — the local liveness/identity record `pievo daemon status` and
+ * `pievo daemon stop` need to find THIS machine's detached daemon.
  *
- * `up` spawns the daemon detached (it outlives the launching session) and relies
+ * `daemon start` spawns detached (it outlives the launching session) and relies
  * on the server's `/api/machine/status` for online-ness, but that says nothing
- * about the LOCAL process — you can't `down` a pid the server never sees. So the
+ * about the LOCAL process — `daemon stop` needs local process identity. So the
  * daemon itself writes its pid here on boot (`daemon.pid` under the same
  * `~/.pievo` state dir as the device token / server URL) and removes it on a
- * clean exit. `status`/`down` read it back and probe the pid with signal 0.
+ * clean exit. `daemon status`/`daemon stop` read it back and probe the pid with signal 0.
  *
- * All writes are best-effort: a missing/unwritable pidfile degrades `status` to
- * "can't tell locally" and `down` to a clean no-op — never a crash.
+ * All writes are best-effort: a missing/unwritable pidfile degrades `daemon status`
+ * to "can't tell locally" and `daemon stop` to a clean no-op — never a crash.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -51,7 +51,7 @@ export function writePidFile(pid: number = process.pid): void {
     const body = startTime ? `${pid}:${startTime}` : `${pid}`;
     fs.writeFileSync(PID_FILE, `${body}\n`, { mode: 0o600 });
   } catch {
-    /* best-effort — status/down just won't see a local pid */
+    /* best-effort — daemon status/stop just won't see a local pid */
   }
 }
 

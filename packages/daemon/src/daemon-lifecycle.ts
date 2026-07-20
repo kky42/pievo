@@ -1,57 +1,36 @@
-/**
- * `pievo up` — idempotent "make sure a daemon is running for THIS machine".
- *
- * Folds SKILL.md §1 (the token/daemon dance the agent used to hand-run) into one
- * command: resolve this machine's device token (reuse the stored one, else adopt
- * the connect-key), check whether its daemon is already live, and if not spawn a
- * single detached daemon that survives this session, then wait until the server
- * reports a fresh heartbeat. Safe to call every time — it never starts a second
- * daemon when one is already polling: the LOCAL pidfile is consulted FIRST, so an
- * unreachable server can't make repeated `up`s leak a new daemon per attempt.
- *
- * On a successful up (daemon confirmed live or already running) it also best-effort
- * REFRESHES the pievo agent skill at USER scope (`~/.claude/skills/pievo`), so
- * the on-disk skill stays version-locked to the daemon `up` just launched. This is a
- * deliberate reintroduction of skill logic into `up`: 0.4.0 removed it because the
- * old PROJECT-scope install would pollute an arbitrary cwd `up` might run from; user
- * scope has no such hazard (it targets the home dir regardless of cwd), so `up` is
- * the natural refresh point. It's announced in one line and NEVER fails up (it is
- * awaited, so on a cold `npx` it can delay up's return up to the install timeout,
- * but it can never change up's outcome).
- *
- * Every external touch (status fetch, spawn, kill, sleep, pidfile check, skill
- * refresh, persistence, output) is an injectable seam so tests need no process/network.
- */
+/** Daemon start/restart lifecycle. `start` is detached and idempotent by default;
+ * `--foreground` runs the same poller attached. `restart` stops this installed
+ * version's daemon and starts it again from persisted configuration. */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
 import { ensureBinShim } from "./bin-shim.js";
 import { DEVICE_FILE, PIEVO_DIR, SERVER_FILE, flag, persist, readStored, resolveServerUrl } from "./config.js";
-import { fetchMachineStatus, type MachineStatus } from "./control.js";
+import { fetchMachineStatus, runDaemonStop } from "./daemon-control.js";
 import { verifiedRunningPid } from "./pidfile.js";
 import { type InstallOpts, type InstallOutcome, installSkill } from "./skill-install.js";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/** Private re-entry marker for the detached child. Not a CLI flag or route. */
+const INTERNAL_DAEMON_CHILD = "PIEVO_INTERNAL_DAEMON_CHILD";
+
 /**
  * The argv/env plan for the detached daemon spawn (pure, exported for tests).
  * The device token travels via ENV (PIEVO_TOKEN — runDaemon reads it), NEVER
  * argv: argv is visible in `ps` for the daemon's whole lifetime while the token
- * file is carefully 0600. Only `--server-url` stays in argv — it's non-secret,
- * and cli.ts's DAEMON_FLAGS fallback keys on the LEADING flag, so a
- * `--server-url …` invocation still routes to daemon mode.
+ * file is carefully 0600. The child re-enters through the public nested command;
+ * a private environment marker prevents it duplicating the parent's refresh.
  */
 export function buildDaemonSpawn(server: string, token: string): { args: string[]; env: NodeJS.ProcessEnv } {
-  const args = [...process.execArgv, process.argv[1] ?? "", "--server-url", server];
-  return { args, env: { ...process.env, PIEVO_TOKEN: token } };
+  const args = [...process.execArgv, process.argv[1] ?? "", "daemon", "start", "--foreground", "--server-url", server];
+  return { args, env: { ...process.env, PIEVO_TOKEN: token, [INTERNAL_DAEMON_CHILD]: "1" } };
 }
 
 /**
- * Spawn the daemon detached so it outlives this `pievo up` process (and the
- * Claude Code session that called it). Re-execs THIS CLI, replaying the exact
- * launcher (execPath + execArgv + entry) the same way callback-bin does, so
- * `npx`, `node dist/cli.js`, and `tsx src/cli.ts` all resolve to runDaemon().
+ * Spawn the daemon detached so it outlives `pievo daemon start`. Re-execs THIS
+ * CLI through `daemon start --foreground`, replaying the exact launcher.
  * stdio is redirected to ~/.pievo/daemon.log. Returns the child pid so a
  * readiness timeout can kill exactly what it started.
  */
@@ -77,8 +56,8 @@ function heartbeatTime(value: unknown): number | null | undefined {
   return Number.isFinite(at) ? at : undefined;
 }
 
-export type EnsureDeps = {
-  fetchStatus?: (server: string, token: string) => Promise<MachineStatus | undefined>;
+export type DaemonStartDeps = {
+  fetchStatus?: (server: string, token: string) => Promise<import("./daemon-control.js").MachineStatus | undefined>;
   spawnDaemon?: (server: string, token: string, logFile: string) => number | undefined;
   kill?: (pid: number, signal: NodeJS.Signals) => void;
   sleep?: (ms: number) => Promise<void>;
@@ -88,19 +67,30 @@ export type EnsureDeps = {
   readToken?: () => string | undefined;
   /** Refresh the user-scope skill (best-effort, announced). Injected in tests. */
   installSkill?: (opts: InstallOpts) => Promise<InstallOutcome>;
-  /** Install/refresh the `pievo` PATH shim (best-effort, feedback #4). Injected in tests. */
+  /** Install/refresh the `pievo` PATH shim (best-effort). Injected in tests. */
   ensureBinShim?: () => void;
+  /** Override the private detached-child marker in tests. */
+  internalChild?: boolean;
+  foreground?: (args: string[]) => Promise<number>;
   out?: (s: string) => void;
   err?: (s: string) => void;
 };
 
-export type EnsureOpts = {
-  /** Skip the local-pid guard and start a fresh daemon unconditionally.
-   *  `pievo update` sets this after stopping the old daemon. */
-  force?: boolean;
-};
+function validStartArgs(args: string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--foreground") continue;
+    if (arg === "--server-url" || arg === "--connect-key") {
+      if (!args[i + 1] || args[i + 1]!.startsWith("--")) return false;
+      i += 1;
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
 
-export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts: EnsureOpts = {}): Promise<number> {
+export async function runDaemonStart(args: string[], injected: DaemonStartDeps = {}): Promise<number> {
   const d = {
     fetchStatus: injected.fetchStatus ?? fetchMachineStatus,
     spawnDaemon: injected.spawnDaemon ?? spawnDaemonDefault,
@@ -111,34 +101,37 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
     readToken: injected.readToken ?? (() => readStored(DEVICE_FILE)),
     installSkill: injected.installSkill ?? installSkill,
     ensureBinShim: injected.ensureBinShim ?? (() => void ensureBinShim()),
+    internalChild: injected.internalChild ?? process.env[INTERNAL_DAEMON_CHILD] === "1",
+    foreground: injected.foreground ?? ((daemonArgs: string[]) => import("./daemon.js").then((m) => m.runDaemon(daemonArgs))),
     out: injected.out ?? ((s: string) => process.stdout.write(s)),
     err: injected.err ?? ((s: string) => process.stderr.write(s)),
   };
 
-  /** Best-effort integration refresh — the user-scope skill and the `pievo` PATH
-   *  shim (feedback #4), each announced in one line and neither ever throwing/failing
-   *  `up`. Called on every success path. Mirrors how the skill install has always been
-   *  best-effort + awaited (may delay `up` on a cold npx, but never changes the outcome). */
+  /** Best-effort user-scope skill and PATH refresh. */
   const refreshSkill = async (): Promise<void> => {
     try {
       const r = await d.installSkill({ global: true });
       d.out(r.line + "\n");
     } catch {
-      /* never let a skill refresh fail `up` */
+      /* never let a skill refresh fail daemon start */
     }
     try {
       d.ensureBinShim();
     } catch {
-      /* never let the PATH shim fail `up` */
+      /* never let the PATH shim fail daemon start */
     }
   };
 
+  if (!validStartArgs(args)) {
+    d.err("pievo: usage: pievo daemon start [--foreground] [--server-url <url>] [--connect-key <dk_…>]\n");
+    return 2;
+  }
   const server = resolveServerUrl(flag(args, "server-url"));
   // Reuse this machine's stored identity first (so we stay the SAME machine across
   // runs); only adopt the connect-key the first time, when nothing is stored yet.
   const token = d.readToken() || flag(args, "connect-key") || process.env.PIEVO_TOKEN;
   if (!server || !token) {
-    d.err("pievo: usage: pievo up --server-url <url> --connect-key <dk_…>\n");
+    d.err("pievo: usage: pievo daemon start [--foreground] [--server-url <url>] [--connect-key <dk_…>]\n");
     return 2;
   }
 
@@ -147,24 +140,25 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
   d.persist(SERVER_FILE, server);
   d.persist(DEVICE_FILE, token);
 
-  const logFile = path.join(PIEVO_DIR, "daemon.log");
+  if (args.includes("--foreground")) {
+    // Start polling before any potentially 90s skill install. A detached child does
+    // no refresh at all: its parent owns the single post-readiness refresh.
+    const running = d.foreground(["--server-url", server]);
+    if (!d.internalChild) void refreshSkill();
+    return running;
+  }
 
-  // Local pidfile FIRST: a live verified daemon means never spawn a second one —
-  // deciding purely from the server status endpoint meant an unreachable server
-  // spawned a NEW detached daemon on every retry (leaking daemons). `force` skips
-  // this guard because update has just stopped the old daemon.
-  if (!opts.force) {
-    const localPid = d.localPid();
-    if (localPid !== undefined) {
-      const st = await d.fetchStatus(server, token);
-      if (st?.online) {
-        d.out(`daemon already running for this machine${st.name ? ` (${st.name})` : ""}\n`);
-      } else {
-        d.out(`daemon already running locally (pid ${localPid}) — server unreachable or machine still connecting; check ${logFile}\n`);
-      }
-      await refreshSkill();
-      return 0;
+  const logFile = path.join(PIEVO_DIR, "daemon.log");
+  const localPid = d.localPid();
+  if (localPid !== undefined) {
+    const st = await d.fetchStatus(server, token);
+    if (st?.online) {
+      d.out(`daemon already running for this machine${st.name ? ` (${st.name})` : ""}\n`);
+    } else {
+      d.out(`daemon already running locally (pid ${localPid}) — server unreachable or machine still connecting; check ${logFile}\n`);
     }
+    await refreshSkill();
+    return 0;
   }
 
   // Server presence lingers after a daemon exits. Capture its heartbeat, but never
@@ -209,4 +203,25 @@ export async function runEnsure(args: string[], injected: EnsureDeps = {}, opts:
   }
   d.err(`pievo: daemon did not come online within ${READY_TIMEOUT_MS / 1000}s — check ${logFile}\n`);
   return 1;
+}
+
+export type DaemonRestartDeps = {
+  stop?: (args: string[]) => Promise<number>;
+  start?: (args: string[]) => Promise<number>;
+  err?: (s: string) => void;
+};
+
+/** Restart never installs or downloads anything. npm owns upgrades; this command
+ * stops and starts the currently installed CLI, preserving stored configuration. */
+export async function runDaemonRestart(args: string[], injected: DaemonRestartDeps = {}): Promise<number> {
+  const force = args.length === 1 && args[0] === "--force";
+  if (args.length > 0 && !force) {
+    (injected.err ?? ((s) => process.stderr.write(s)))("pievo: usage: pievo daemon restart [--force]\n");
+    return 2;
+  }
+  const stop = injected.stop ?? ((stopArgs) => runDaemonStop(stopArgs));
+  const start = injected.start ?? ((startArgs) => runDaemonStart(startArgs));
+  const stopped = await stop(force ? ["--force"] : []);
+  if (stopped !== 0) return stopped;
+  return start([]);
 }

@@ -1,15 +1,11 @@
 /**
- * version — robust package-version resolution (works from both src/ and dist/
- * via `../package.json`) and the best-effort running-version file that
- * `pievo update` reads. The fs-touching tests relocate ~/.pievo via
- * PIEVO_HOME and re-import the module so VERSION_FILE (computed at load)
- * points at a temp dir.
+ * Version resolution from both src/ and dist/ via `../package.json`.
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import { daemonVersion } from "./version.js";
 
@@ -47,36 +43,5 @@ describe("daemonVersion", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
-  });
-});
-
-describe("running-version file", () => {
-  const prevHome = process.env.PIEVO_HOME;
-  let home: string | undefined;
-
-  afterEach(() => {
-    if (prevHome === undefined) delete process.env.PIEVO_HOME;
-    else process.env.PIEVO_HOME = prevHome;
-    if (home) fs.rmSync(home, { recursive: true, force: true });
-    home = undefined;
-    vi.resetModules();
-  });
-
-  test("write then read round-trips; absent file → undefined", async () => {
-    home = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-verfile-"));
-    vi.resetModules();
-    process.env.PIEVO_HOME = home;
-    const mod = await import("./version.js");
-
-    expect(mod.readRunningVersion()).toBeUndefined();
-    mod.writeRunningVersion("0.8.0");
-    expect(mod.readRunningVersion()).toBe("0.8.0");
-
-    // A falsy version is a no-op (nothing to record). Passing `undefined`
-    // re-triggers the `= daemonVersion()` default parameter, so use `""` to
-    // exercise the `if (!version) return` guard without coupling to this
-    // package's real version.
-    mod.writeRunningVersion("");
-    expect(mod.readRunningVersion()).toBe("0.8.0");
   });
 });

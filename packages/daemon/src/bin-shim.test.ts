@@ -117,7 +117,7 @@ describe("ensureBinShim", () => {
     expect(wrote).toEqual([]); // never wrote
     expect(r).toEqual({ path: null, onPath: false, written: false });
     expect(out.join("")).toContain("npx cache");
-    expect(out.join("")).toContain("npm i -g @kky42/pievo");
+    expect(out.join("")).toContain("npm install -g @kky42/pievo@latest");
   });
 
   test("refuses to overwrite a FOREIGN `pievo`, falling through to the next candidate", () => {
