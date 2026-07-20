@@ -1971,7 +1971,7 @@ export async function deleteChannel(id: string): Promise<boolean> {
   });
 }
 
-// ---- blobs (content-addressed artifact bytes; metadata only — bytes live in R2) ----
+// ---- blobs (content-addressed metadata; bytes live in the configured BlobStore) ----
 
 /** Does the server already have metadata for this blob hash? (drives needHashes). */
 export async function blobExists(hash: string): Promise<boolean> {
@@ -1989,7 +1989,7 @@ export async function recordBlob(hash: string, size: number, binary: boolean, me
 /** Does any LIVE artifact_files row on a loop bound to `machineId` point at `hash`?
  *  Gates putBlob: a device may only upload bytes the sync handshake actually asked
  *  it for (a row a prior sync wrote for one of ITS loops), never arbitrary
- *  self-hashed blobs — otherwise any device token is an uncapped R2 write channel. */
+ *  self-hashed blobs — otherwise any device token is an uncapped blob write channel. */
 export async function machineReferencesBlob(machineId: string, hash: string): Promise<boolean> {
   return !!(
     await db

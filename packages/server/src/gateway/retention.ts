@@ -1,11 +1,11 @@
 /**
- * Artifact-storage retention + garbage collection — the policy that keeps R2
- * (and the in-memory dev/test store) from growing monotonically.
+ * Artifact-storage retention + garbage collection — the policy that keeps the
+ * local/R2 byte store from growing monotonically.
  *
  * The artifact pipeline is content-addressed: blob BYTES are keyed by sha256 and
  * deduped across every loop/run. When a path is deleted or its content changes,
  * the OLD blob is no longer pointed at by the current file row — but nothing was
- * reclaiming it, so R2 grew forever. This module closes that gap with two pieces:
+ * reclaiming it, so the byte store grew forever. This module closes that gap with two pieces:
  *
  *   1. pruneSnapshots() — bound the per-loop run-snapshot history to a window, so
  *      old snapshots stop pinning the blobs they referenced for diffs.

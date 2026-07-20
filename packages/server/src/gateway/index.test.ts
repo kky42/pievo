@@ -65,7 +65,7 @@ function gateway(
       removeLoop(): void {},
       runNow(): void {},
     } as any,
-    undefined, // default in-memory blobstore
+    undefined, // default local blobstore under the test PIEVO_DATA_DIR
     notify,
   );
   const rawReport = core.report.bind(core);

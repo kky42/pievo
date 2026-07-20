@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 
-import { MemoryBlobStore } from "./blobstore.js";
+import { LocalBlobStore, MemoryBlobStore } from "./blobstore.js";
 
 let tmp: string;
 let db: typeof import("../db/index.js");
@@ -94,6 +94,26 @@ test("negotiated upload: manifest → needHashes → PUT blob lands bytes in the
     manifest: [{ path: "report.md", hash, size: content.length }],
   });
   expect((r2.body as any).needHashes).toEqual([]);
+});
+
+test("a missing local byte object is requested and restored even when its database metadata remains", async () => {
+  const { token, loop } = await seed();
+  const blobRoot = path.join(tmp, "missing-byte-recovery");
+  const blobs = new LocalBlobStore(blobRoot);
+  const art = new syncMod.ArtifactSync(blobs);
+  const content = "restore after byte-store loss";
+  const hash = sha256(content);
+  const manifest = [{ path: "report.md", hash, size: content.length }];
+
+  await art.sync(token, { loopId: loop.id, manifest });
+  expect((await art.putBlob(token, hash, Buffer.from(content))).status).toBe(200);
+  expect(await store.blobExists(hash)).toBe(true);
+  await blobs.delete(hash); // simulate external loss while DB metadata survives
+
+  const replay = await art.sync(token, { loopId: loop.id, manifest });
+  expect((replay.body as any).needHashes).toEqual([hash]);
+  expect((await art.putBlob(token, hash, Buffer.from(content))).status).toBe(200);
+  expect((await blobs.get(hash))?.toString()).toBe(content);
 });
 
 test("inline small text blobs are stored in one round-trip (no needHashes)", async () => {

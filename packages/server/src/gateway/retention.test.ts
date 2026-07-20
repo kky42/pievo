@@ -4,8 +4,8 @@
  * NEVER be reclaimed, while a blob no live row needs IS reclaimed once nothing
  * pins it. Plus snapshot-window pruning and the per-loop storage cap.
  *
- * Runs entirely on the in-memory blob store + a throwaway SQLite DB (no R2, no
- * network), matching how prod's MemoryBlobStore fallback behaves.
+ * Runs on an injected in-memory blob store + throwaway PGlite DB (no filesystem
+ * artifact writes or network); the same BlobStore interface backs local/R2 prod.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";

@@ -4,7 +4,7 @@ import { safeDecode } from '../lib/url'
 /**
  * PUT /api/machine/blob/:hash — upload one content-addressed blob's raw bytes
  * (Bearer DEVICE token). The server recomputes sha256(body) and rejects a
- * mismatch before storing in R2. The hash is read from the URL (the daemon PUTs
+ * mismatch before storing in the byte store. The hash is read from the URL (the daemon PUTs
  * exactly the hashes the sync handshake returned in needHashes).
  *
  * This byte-ingress route is deliberately NOT rate limited: it requires a valid

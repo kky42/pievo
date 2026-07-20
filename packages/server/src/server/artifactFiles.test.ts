@@ -1,5 +1,5 @@
 /**
- * Phase 2 — web artifact reads. Drives the booted in-memory blob store
+ * Phase 2 — web artifact reads. Drives the booted local blob store
  * (no R2/creds) through `getArtifactSync()` so the read helpers resolve the same
  * bytes the sync wrote. Covers the list/text/binary/oversize/not-found server-fn
  * core, the download route's byte resolver (path-safety + 404s), and the shared

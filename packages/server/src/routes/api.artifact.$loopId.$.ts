@@ -19,7 +19,7 @@ import { imageMime } from '../lib/artifactKind'
  * mirroring the server fns' `ownedLoop` gate. Path-safe: the relative path is
  * normalized + traversal-rejected before it ever reaches a blob, and blob keys
  * are content hashes, never the user path. Reads stream from the BlobStore
- * (in-memory in dev/tests, R2 in prod); the route never writes.
+ * (local by default, R2 when configured); the route never writes.
  */
 const PREFIX = '/api/artifact/'
 

@@ -383,8 +383,8 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
 - **Boot constructs ONE `createBlobStore()` and hands the SAME instance to
   `MachineGateway` and `ArtifactSync`** (`boot.ts`; accessors `getGateway()` /
   `getArtifactSync()` / `getCliGateway()`). This is load-bearing with the
-  in-memory store: two instances would mean retention/GC deleting bytes
-  ArtifactSync never wrote (and vice versa). Tests mirror the sharing
+  injected adapters and keeps all writes/reads/retention on one store instance;
+  two in-memory test adapters would otherwise observe different bytes. Tests mirror the sharing
   (`retention.test.ts` `gatewayWithStore`).
 - Import direction: the generic wire plumbing (`HttpResult`, `WIRE_TEXT_CAP`,
   `clipText`/`stripNul`, `nowIso`) lives in the leaf module `gateway/http.ts`,

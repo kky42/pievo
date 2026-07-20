@@ -4,8 +4,8 @@ import path from "node:path";
 /**
  * Pievo server data directory — server-side file state, and (for the embedded
  * pglite tier) the on-disk Postgres data dir at `<dataDir>/pgdata`. Locally it
- * defaults to `~/.pievo`. Override with `PIEVO_DATA_DIR`. The HOSTED tier
- * (DATABASE_URL set) is stateless and never touches this.
+ * defaults to `~/.pievo`. Override with `PIEVO_DATA_DIR`. A hosted-Postgres tier
+ * still uses `<dataDir>/blobs` unless R2 is configured.
  */
 export function dataDir(): string {
   return process.env.PIEVO_DATA_DIR?.trim() || path.join(os.homedir(), ".pievo");
@@ -69,8 +69,8 @@ export function directDatabaseUrl(): string | undefined {
 /**
  * Cloudflare R2 (S3-compatible) credentials for the artifact blob store. Read
  * from env so credentials are never hardcoded; absent ⇒ the blob store falls
- * back to an in-memory implementation (dev/test — no network, no creds). The
- * endpoint defaults to R2's account-scoped host when only the account id is set.
+ * back to durable local storage at `<PIEVO_DATA_DIR>/blobs`. The endpoint
+ * defaults to R2's account-scoped host when only the account id is set.
  */
 export interface R2Config {
   bucket: string;
@@ -86,10 +86,21 @@ export function r2Config(): R2Config | null {
   const bucket = process.env.PIEVO_R2_BUCKET?.trim();
   const accessKeyId = process.env.PIEVO_R2_ACCESS_KEY_ID?.trim();
   const secretAccessKey = process.env.PIEVO_R2_SECRET_ACCESS_KEY?.trim();
-  const endpoint =
-    process.env.PIEVO_R2_ENDPOINT?.trim() || (accountId ? `https://${accountId}.r2.cloudflarestorage.com` : undefined);
-  if (!bucket || !accessKeyId || !secretAccessKey || !endpoint) return null;
-  return { bucket, endpoint, accessKeyId, secretAccessKey, region: process.env.PIEVO_R2_REGION?.trim() || "auto" };
+  const explicitEndpoint = process.env.PIEVO_R2_ENDPOINT?.trim();
+  const region = process.env.PIEVO_R2_REGION?.trim();
+  const endpoint = explicitEndpoint || (accountId ? `https://${accountId}.r2.cloudflarestorage.com` : undefined);
+  const anyConfigured = !!(accountId || bucket || accessKeyId || secretAccessKey || explicitEndpoint || region);
+  if (!anyConfigured) return null;
+  const missing = [
+    !bucket && "PIEVO_R2_BUCKET",
+    !accessKeyId && "PIEVO_R2_ACCESS_KEY_ID",
+    !secretAccessKey && "PIEVO_R2_SECRET_ACCESS_KEY",
+    !endpoint && "PIEVO_R2_ACCOUNT_ID or PIEVO_R2_ENDPOINT",
+  ].filter(Boolean);
+  if (missing.length) {
+    throw new Error(`incomplete R2 configuration — missing ${missing.join(", ")}; remove all PIEVO_R2_* variables to use local blob storage`);
+  }
+  return { bucket: bucket!, endpoint: endpoint!, accessKeyId: accessKeyId!, secretAccessKey: secretAccessKey!, region: region || "auto" };
 }
 
 /**

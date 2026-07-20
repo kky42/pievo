@@ -433,17 +433,17 @@ export const notificationChannels = pgTable(
 // ---- artifacts: content-addressed live-synced loop files (Phase 1 foundation) ----
 //
 // The daemon watches each loop's folder and live-syncs changed files. Blob BYTES
-// live in external object storage (Cloudflare R2), keyed by sha256 content hash —
+// live in the local filesystem or configured object storage, keyed by sha256 —
 // NOT in the DB (no `content` column), keeping the business DB lean and preserving
 // the server's zero-exec invariant (it only stores/reads bytes, never interprets
 // them). These two tables hold only metadata.
 
 /**
  * One content-addressed blob (deduped across every loop/run). The bytes live in
- * R2 under the hash; this row records that the server has them + their shape.
+ * the byte store under the hash; this row records that the server has them + their shape.
  */
 export const blobs = pgTable("blobs", {
-  /** sha256 hex of the bytes (the R2 object key). */
+  /** sha256 hex of the bytes (the byte-store key). */
   hash: text("hash").primaryKey(),
   size: integer("size").notNull(),
   /** Heuristic: the bytes contain a NUL (download-only; no inline text render). */

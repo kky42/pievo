@@ -21,7 +21,7 @@ computes pure functions. Run instructions: `README.md`.
     /agent-api/loop; `validate.ts`: the ONE ui/workflow/schema validator module
     both write surfaces import; `sync.ts`: `ArtifactSync`, the sync/blob byte
     ingress - boot shares ONE blob store between the classes), run tokens,
-    delivery, prompt, notify, blobstore (R2/in-memory), artifacts.
+    delivery, prompt, notify, blobstore (local filesystem default/R2/in-memory test adapter), artifacts.
   - `src/db/` - Drizzle schema
     (machines/loops/runs/blobs/artifact_files/run_snapshots/run_leases/connect_keys)
     + store + auth-schema.
@@ -263,9 +263,13 @@ computes pure functions. Run instructions: `README.md`.
   network entirely. Inline blobs (≤64KB each) are budgeted 1MB aggregate per POST
   (a burst must never 413 the server's 32MB `SYNC_BODY_CAP`; overflow takes the
   PUT path), and the FIRST flush after watcher start inlines nothing
-  (post-restart the server already has almost everything). Bytes live in R2
-  (`PIEVO_R2_*`; in-memory store when unset - the test/dev
-  default), metadata in `blobs`/`artifact_files`. The **never-syncable dir** list
+  (post-restart the server already has almost everything). Bytes live in the
+  local `<PIEVO_DATA_DIR>/blobs` by default (R2 with `PIEVO_R2_*`), metadata in
+  `blobs`/`artifact_files`. Adapter roles: `LocalBlobStore` is the production/server
+  default; `R2BlobStore` is the explicitly configured production option;
+  `MemoryBlobStore` is explicitly injected for tests/development and is never a
+  boot fallback. Sync verifies metadata-backed bytes still exist and requests a
+  re-upload when the byte object is missing. The **never-syncable dir** list
   (`.git`, `node_modules`, `.worktrees`, common build/tool caches, `.pievo`) +
   `.env*`/key files is enforced on BOTH daemon (`watcher.ts` `IGNORE_DIRS`) and
   server (`gateway/artifacts.ts` `IGNORE_DIRS`) - keep the two in sync. Per-file

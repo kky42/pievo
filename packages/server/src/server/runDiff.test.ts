@@ -2,7 +2,7 @@
  * Phase 3 — per-run snapshot + diff. Runs the real path: gateway sync (stores
  * blobs + reconciles artifact_files) → gateway report (writes the run snapshot at
  * finalize) → computeRunDiff (lazily diffs run N vs N-1 with a pure-string text
- * diff). All against the booted gateway's in-memory blob store (no R2/creds).
+ * diff). All against the booted gateway's local blob store (no R2/creds).
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";

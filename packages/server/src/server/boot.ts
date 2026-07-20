@@ -87,8 +87,8 @@ async function boot(): Promise<Booted> {
   abort.signal.addEventListener("abort", () => clearInterval(sweep), { once: true });
 
   // Storage maintenance (prune snapshots → GC unreferenced blob bytes) on its own
-  // slower cadence — keeps R2 from growing monotonically. Async + best-effort, so a
-  // slow R2 delete can't block the loop; catch the promise (same unhandled-rejection
+  // slower cadence — keeps blob storage from growing monotonically. Async +
+  // best-effort, so a slow byte delete can't block the loop; catch the promise (same unhandled-rejection
   // guard as sweep — the method is not supposed to throw, but a timer must never let
   // one escape).
   const gc = setInterval(

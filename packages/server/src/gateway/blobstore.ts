@@ -5,14 +5,18 @@
  * loop/run). The store ONLY writes/reads bytes — it never executes or interprets
  * them — preserving the server's zero-exec invariant.
  *
- * Two implementations behind one small interface:
- *   • R2BlobStore   — Cloudflare R2 (S3-compatible) for prod; creds via env.
- *   • MemoryBlobStore — in-process map for dev/tests (no network, no creds).
+ * Three implementations behind one small interface:
+ *   • LocalBlobStore — durable filesystem default under PIEVO_DATA_DIR/blobs.
+ *   • R2BlobStore — Cloudflare R2 (S3-compatible) when credentials are configured.
+ *   • MemoryBlobStore — explicit injectable fake for tests.
  *
  * The S3 client is dynamic-imported inside R2BlobStore so tests (and any deploy
  * without R2 creds) never load the AWS SDK, and it stays out of the client bundle.
  */
-import { r2Config, type R2Config } from "../env.js";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { dataDir, r2Config, type R2Config } from "../env.js";
 import { logger } from "../logger.js";
 
 const log = logger.child({ mod: "blobstore" });
@@ -28,7 +32,129 @@ export interface BlobStore {
   delete(hash: string): Promise<void>;
 }
 
-/** In-memory blob store — dev/test default (no network, no credentials). */
+const SHA256_HEX = /^[a-f0-9]{64}$/;
+
+/** Durable filesystem adapter. Hash sharding bounds entries per directory; atomic
+ * temp-file renames ensure readers see either complete bytes or no object. */
+export class LocalBlobStore implements BlobStore {
+  private initialized?: Promise<void>;
+
+  constructor(readonly root: string = path.join(dataDir(), "blobs")) {}
+
+  private file(hash: string): string {
+    if (!SHA256_HEX.test(hash)) throw new Error("invalid sha256 blob key");
+    return path.join(this.root, hash.slice(0, 2), hash);
+  }
+
+  async has(hash: string): Promise<boolean> {
+    const target = this.file(hash);
+    await this.ensureInitialized();
+    try {
+      return (await fs.stat(target)).isFile();
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw err;
+    }
+  }
+
+  private async syncDir(dir: string): Promise<void> {
+    let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+    try {
+      handle = await fs.open(dir, "r");
+      await handle.sync();
+    } catch (err) {
+      // Directory fsync is unsupported on Windows and some filesystems. Atomic
+      // rename still holds there; POSIX filesystems get the stronger durability.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (!(["EINVAL", "ENOTSUP", "EBADF", "EPERM", "ENOENT"] as Array<string | undefined>).includes(code)) throw err;
+    } finally {
+      await handle?.close().catch(() => {});
+    }
+  }
+
+  private ensureInitialized(): Promise<void> {
+    return this.initialized ??= (async () => {
+      await fs.mkdir(this.root, { recursive: true });
+      // Persist every possibly-new directory entry in the root chain. This matters
+      // with external Postgres: its metadata must never outlive a newly-created
+      // PIEVO_DATA_DIR that vanished after an acknowledged first write.
+      await this.syncDir(path.dirname(path.dirname(this.root)));
+      await this.syncDir(path.dirname(this.root));
+      await this.syncDir(this.root);
+
+      // A killed process can strand synced temp files. Single-server ownership
+      // means no live writer exists while a new adapter initializes, so reclaim
+      // only our exact temp-name format before serving reads/writes.
+      for (const shard of await fs.readdir(this.root, { withFileTypes: true })) {
+        if (!shard.isDirectory() || !/^[a-f0-9]{2}$/.test(shard.name)) continue;
+        const dir = path.join(this.root, shard.name);
+        let removed = false;
+        for (const name of await fs.readdir(dir)) {
+          if (!/^\.[a-f0-9]{64}\.\d+\.[0-9a-f-]+\.tmp$/.test(name)) continue;
+          await fs.rm(path.join(dir, name), { force: true });
+          removed = true;
+        }
+        if (removed) await this.syncDir(dir);
+      }
+    })();
+  }
+
+  async put(hash: string, bytes: Buffer): Promise<void> {
+    const target = this.file(hash);
+    await this.ensureInitialized();
+    const dir = path.dirname(target);
+    await fs.mkdir(dir, { recursive: true });
+    // Persist a newly-created shard directory before the file.
+    await this.syncDir(this.root);
+    const temp = path.join(dir, `.${hash}.${process.pid}.${randomUUID()}.tmp`);
+    let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+    try {
+      handle = await fs.open(temp, "wx", 0o600);
+      await handle.writeFile(bytes);
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+      try {
+        await fs.rename(temp, target);
+        await this.syncDir(dir);
+      } catch (err) {
+        // Windows may refuse replacing a target another same-hash writer just
+        // committed. That winner is equivalent because keys are content hashes.
+        if (["EEXIST", "EACCES", "EPERM"].includes((err as NodeJS.ErrnoException).code ?? "") && await this.has(hash)) {
+          await fs.rm(temp, { force: true });
+          return;
+        }
+        throw err;
+      }
+    } catch (err) {
+      await handle?.close().catch(() => {});
+      await fs.rm(temp, { force: true }).catch(() => {});
+      throw err;
+    }
+  }
+
+  async get(hash: string): Promise<Buffer | null> {
+    const target = this.file(hash);
+    await this.ensureInitialized();
+    try {
+      return await fs.readFile(target);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw err;
+    }
+  }
+
+  async delete(hash: string): Promise<void> {
+    const target = this.file(hash);
+    await this.ensureInitialized();
+    await fs.rm(target, { force: true });
+    // GC drops metadata after this resolves; persist the byte deletion first so a
+    // crash cannot resurrect an untracked file after its DB row is gone.
+    await this.syncDir(path.dirname(target));
+  }
+}
+
+/** In-memory blob store — injectable test adapter. */
 export class MemoryBlobStore implements BlobStore {
   private readonly map = new Map<string, Buffer>();
   async has(hash: string): Promise<boolean> {
@@ -119,9 +245,9 @@ function isNotFound(err: unknown): boolean {
 }
 
 /**
- * The configured blob store: R2 when creds are present, else an in-memory store
- * (dev/test). Constructed once and reused — the gateway accepts an injected store
- * for tests, so this factory's default only runs in real boots.
+ * The configured blob store: R2 when credentials are present, otherwise the
+ * durable local filesystem under PIEVO_DATA_DIR. Constructed once and shared by
+ * every gateway so writes, reads, and GC use the same adapter.
  */
 export function createBlobStore(): BlobStore {
   const cfg = r2Config();
@@ -129,6 +255,7 @@ export function createBlobStore(): BlobStore {
     log.info({ bucket: cfg.bucket, endpoint: cfg.endpoint }, "blob store: Cloudflare R2");
     return new R2BlobStore(cfg);
   }
-  log.warn("blob store: in-memory (no R2 credentials configured — set PIEVO_R2_* for durable storage)");
-  return new MemoryBlobStore();
+  const local = new LocalBlobStore();
+  log.info({ root: local.root }, "blob store: local filesystem");
+  return local;
 }

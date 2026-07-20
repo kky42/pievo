@@ -1,7 +1,7 @@
 # Pievo server (TanStack Start + in-process scheduler + machine gateway).
-# Single always-on container on Fly. Postgres store: with DATABASE_URL set it's
-# stateless (Supabase); to run the embedded pglite DB at /data (volume) instead,
-# opt in with PIEVO_DB=pglite - without either, prestart refuses to boot (exit 1)
+# Single always-on container on Fly. External Postgres is fully stateless only
+# with R2; otherwise local artifact bytes use /data. To run embedded pglite there,
+# opt in with PIEVO_DB=pglite - without either DB, prestart refuses to boot (exit 1)
 # so a lost DATABASE_URL secret can't silently start an empty ephemeral database.
 FROM node:22-slim AS base
 # Build tools kept for any transitive native dep; postgres-js + pglite are pure JS.

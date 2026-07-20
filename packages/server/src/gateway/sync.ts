@@ -24,10 +24,21 @@ import { clipText, nowIso, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
 
 // Same `mod` tag as the rest of the gateway - these log lines predate the split.
 const log = logger.child({ mod: "gateway" });
+const BLOB_PRESENCE_CONCURRENCY = 16;
+
+async function mapConcurrent<T>(items: T[], limit: number, visit: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const item = items[next++]!;
+      await visit(item);
+    }
+  }));
+}
 
 export class ArtifactSync {
   constructor(
-    /** Artifact blob byte store (R2 in prod; injectable in-memory store for tests). */
+    /** Artifact bytes (local filesystem by default, R2 when configured; injectable in tests). */
     private readonly blobStore: BlobStore = createBlobStore(),
   ) {}
 
@@ -38,7 +49,7 @@ export class ArtifactSync {
    * the run lease which is retired at run end; live sync runs continuously,
    * including between runs and on idle-time human edits). The daemon posts the
    * FULL current manifest of a loop's folder plus optional inline bytes for small
-   * files; the server stores verified blobs in R2, reconciles `artifact_files`
+   * files; the server stores verified blobs in its byte store, reconciles `artifact_files`
    * (vanished paths become tombstones), and replies with the hashes it still
    * needs — content-addressed dedupe means an unchanged folder uploads nothing.
    */
@@ -94,6 +105,32 @@ export class ArtifactSync {
     const seenPaths = new Set<string>();
     const needHashes = new Set<string>();
     const toStore = new Map<string, Buffer>();
+    // Metadata and byte storage are separate durability facts. Cache their joined
+    // state per hash so a manifest that reuses one blob performs at most one DB
+    // lookup and one filesystem/R2 probe.
+    const storedState = new Map<string, { metadata: boolean; bytes: boolean }>();
+    const stateFor = async (hash: string): Promise<{ metadata: boolean; bytes: boolean }> => {
+      const cached = storedState.get(hash);
+      if (cached) return cached;
+      const metadata = await store.blobExists(hash);
+      const state = { metadata, bytes: metadata && await this.blobStore.has(hash) };
+      storedState.set(hash, state);
+      return state;
+    };
+    // Presence checks can be filesystem stats or R2 HEAD requests. Prewarm every
+    // valid in-cap manifest hash with bounded concurrency: this repairs missing
+    // byte objects without serializing thousands of remote round trips.
+    const manifestHashes = new Set<string>();
+    for (const raw of manifest) {
+      const rel = safeRelPath((raw as { path?: unknown })?.path);
+      if (!rel || isIgnoredPath(rel)) continue;
+      const hash = (raw as { hash?: unknown })?.hash;
+      const size = Number((raw as { size?: unknown })?.size);
+      if (isValidHash(hash) && !((raw as { oversize?: unknown })?.oversize) && !(Number.isFinite(size) && size > BLOB_CAP)) {
+        manifestHashes.add(hash);
+      }
+    }
+    await mapConcurrent([...manifestHashes], BLOB_PRESENCE_CONCURRENCY, async (hash) => { await stateFor(hash); });
     // Byte-backed accepted paths → hash, for the task-file content refresh below.
     const pathHashes = new Map<string, string>();
 
@@ -158,7 +195,10 @@ export class ArtifactSync {
       // a buggy/hostile client, which we want to bound, not trust). putBlob re-checks
       // against the real byte length regardless.
       const fileSize = inlined?.length ?? (sizeOk ? rawSize : BLOB_CAP);
-      const addsNewBytes = !((await store.blobExists(hash)) || toStore.has(hash) || needHashes.has(hash));
+      const stored = await stateFor(hash);
+      // Existing metadata already counts toward the loop quota even if its byte
+      // object was lost; restoring those bytes must not charge the loop twice.
+      const addsNewBytes = !(stored.metadata || toStore.has(hash) || needHashes.has(hash));
       if (addsNewBytes) {
         // Cap only the NET growth: overwriting an existing live, byte-backed row at
         // `rel` FREES its currently-counted bytes (the upsert below replaces it), so
@@ -183,7 +223,7 @@ export class ArtifactSync {
       }
 
       if (inlined) toStore.set(hash, inlined);
-      else if (!(await store.blobExists(hash))) needHashes.add(hash);
+      else if (!stored.bytes) needHashes.add(hash);
 
       await store.upsertArtifactFile({
         loopId,
@@ -285,7 +325,7 @@ export class ArtifactSync {
     // for — i.e. a hash a live artifact_files row on one of its loops points at
     // (the row sync wrote when it returned the hash in needHashes). Any other PUT
     // (an arbitrary self-hashed blob nothing references) is refused, so a device
-    // token can't be used as an uncapped R2 write channel. A re-PUT of a still-
+    // token can't be used as an uncapped blob write channel. A re-PUT of a still-
     // referenced hash stays accepted (idempotent — daemon retries are safe).
     if (!(await store.machineReferencesBlob(machineId, hash))) {
       return { status: 403, body: { error: "hash was not requested for this machine (sync a manifest first)" } };

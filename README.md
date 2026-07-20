@@ -105,7 +105,7 @@ pnpm install
 pnpm dev            # http://127.0.0.1:3000
 ```
 
-That is a fully working server out of the box: auth is off (the app runs open), the database is an embedded, file-backed **pglite** Postgres at `~/.pievo/pgdata` (zero external DB - it migrates itself at boot), and artifact bytes are held in memory. Use the Quickstart above against `http://127.0.0.1:3000` to connect a machine.
+That is a fully working server out of the box: auth is off (the app runs open), the database is an embedded, file-backed **pglite** Postgres at `~/.pievo/pgdata` (zero external DB - it migrates itself at boot), and artifact bytes persist under `~/.pievo/blobs`. Use the Quickstart above against `http://127.0.0.1:3000` to connect a machine.
 
 All configuration is env-based. For **local development only**, copy [`.env.example`](.env.example) to `packages/server/.env` and uncomment what you need - vite loads that file for `pnpm dev`. **`pnpm start` and Docker do NOT read `.env`**: in production pass real environment variables instead (Fly secrets, `docker -e` / `--env-file`, or a systemd `Environment=`), never a committed `.env`.
 
@@ -121,13 +121,13 @@ For a real deployment, set at minimum:
 
 - **Database** - either point `DATABASE_URL` at a Postgres (e.g. Supabase; set it to the transaction pooler `:6543`, plus `DIRECT_DATABASE_URL` at the direct `:5432` URL for migrations), or leave both unset and set **`PIEVO_DB=pglite`** plus a persistent `PIEVO_DATA_DIR` - the embedded pglite database lives at `<dir>/pgdata`. The built server treats a missing `DATABASE_URL` as a config error unless `PIEVO_DB=pglite` explicitly opts into the embedded tier (so a lost database secret fails the deploy loudly instead of silently booting an empty ephemeral DB); only `pnpm dev` runs pglite without the opt-in. `pnpm start` applies pending migrations before serving (over the direct URL for the hosted tier; in-process for the pglite tier).
 - `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` + `PIEVO_AUTH_SECRET` (a long random value) + `PIEVO_BASE_URL` + `PIEVO_ALLOWED_LOGINS` - gate sign-in behind GitHub. Leaving these unset runs the app **open, with no auth** - fine locally, not on the public internet.
-- `PIEVO_R2_*` - an S3-compatible object store (e.g. Cloudflare R2) for artifact bytes. Unset, artifacts are stored in memory and lost on restart.
+- `PIEVO_R2_*` - optional S3-compatible object storage (e.g. Cloudflare R2) for artifact bytes. When unset, bytes persist locally under `<PIEVO_DATA_DIR>/blobs`; keep that directory on durable storage.
 
 > **Exposing a server publicly? Set the auth vars.** With `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` / `PIEVO_AUTH_SECRET` / `PIEVO_BASE_URL` / `PIEVO_ALLOWED_LOGINS` unset the app runs **open, with no sign-in** - anyone who can reach it is in. This applies equally to a bare Node host and the Docker image below.
 
 > **Run exactly one server process.** The in-process scheduler owns the cron loop; two processes against the same DB would double-fire every run.
 
-> **Backing up the embedded pglite tier.** `<PIEVO_DATA_DIR>/pgdata` is a LIVE Postgres data directory. Stop the server before copying it - a hot copy of a running data dir is not crash-consistent. If you need real, online backups, use an external Postgres instead (`DATABASE_URL`/Supabase gives you point-in-time backups).
+> **Backing up the embedded pglite tier.** `<PIEVO_DATA_DIR>/pgdata` is a LIVE Postgres data directory. Stop the server before copying it - a hot copy of a running data dir is not crash-consistent. Back up `<PIEVO_DATA_DIR>/blobs` with it unless artifact bytes live in R2. If you need real, online database backups, use an external Postgres instead (`DATABASE_URL`/Supabase gives you point-in-time backups).
 
 ### Optional Fly examples
 
@@ -142,14 +142,15 @@ before running `flyctl` unless the corresponding explicit GitHub configuration e
 
 ### Docker
 
-The included [`Dockerfile`](Dockerfile) builds the server. For the embedded pglite database, opt in with `PIEVO_DB=pglite` and persist `/data` on a volume; with a `DATABASE_URL` (Supabase/any Postgres) the container is stateless and needs no volume. (The opt-in is deliberate: without it a container that LOST its `DATABASE_URL` would silently boot an empty ephemeral database - instead it refuses to start.)
+The included [`Dockerfile`](Dockerfile) builds the server. Persist `/data` for the default local artifact store; the embedded pglite database also lives there when `PIEVO_DB=pglite`. A `DATABASE_URL` deployment is stateless only when `PIEVO_R2_*` is configured. (The pglite opt-in is deliberate: without it a container that LOST its `DATABASE_URL` would silently boot an empty ephemeral database - instead it refuses to start.)
 
 ```bash
 docker build -t pievo .
-# Embedded pglite (opt in + persist the DB on a volume):
+# Embedded pglite + local artifacts (persist both on one volume):
 docker run -p 3000:3000 -e PIEVO_DB=pglite -v pievo-data:/data pievo
-# Or against Postgres (stateless):
-docker run -p 3000:3000 -e DATABASE_URL=... -e DIRECT_DATABASE_URL=... pievo
+# External Postgres + local artifacts (still persist /data):
+docker run -p 3000:3000 -e DATABASE_URL=... -e DIRECT_DATABASE_URL=... -v pievo-data:/data pievo
+# External Postgres + R2 is stateless and needs no volume.
 ```
 
 Pass configuration with `-e KEY=value` or `--env-file` (same variables as [`.env.example`](.env.example)).

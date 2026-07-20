@@ -254,7 +254,7 @@ export class MachineGateway {
     /** Public (not private): `CliGateway.applyMutation` re-arms it after a
      *  run-token schedule mutation. */
     readonly scheduler: Scheduler,
-    /** Artifact blob byte store (R2 in prod; injectable in-memory store for tests).
+    /** Artifact bytes (local filesystem default, R2 when configured; injectable in tests).
      *  Only `maintainStorage` (retention/GC) reads it here - the byte-ingress
      *  methods live on `ArtifactSync` (`sync.ts`), and boot hands BOTH classes
      *  the same instance. */
