@@ -428,19 +428,18 @@ computes pure functions. Run instructions: `README.md`.
 - **The run credential is a RUN LEASE (`tokens.ts`, Batch 6)**, not a mint→revoke
   token: the per-run caps (`runId/loopId/machineId/role/allowControl/canSet*/canFinish`
   — the old `RunSlot` fields, now `RunLeaseCaps`) PLUS a tiny state machine `state:
-  "active" | "terminal-grace" | "retired"` + `expiresAt`. `retired` preserves a
-  bounded definitive `410 RETIRED` report acknowledgement after force-delete and
-  authorizes no mutation. Wire token is `rk_<random>` (device
+  "active" | "terminal-grace" | "retired"` + `expiresAt`. `retired` is durable,
+  authorizes no mutation, never blocks claims, and exists only until a matching late
+  report atomically commits its permanent `410 RETIRED` receipt and consumes it. Wire token is `rk_<random>` (device
   stays `dk_`); the unified `cli` router branches on the `dk_` prefix, so a run token
   (rk_ OR a pre-Batch-6 bare UUID) falls through to the run path. The lease table is
   keyed by the FULL wire token, so `resolveLease` needs NO prefix parsing — a
   bare-UUID token minted before the deploy resolves identically (free back-compat; a
   daemon release is NOT required for this batch — the daemon forwards whatever token
-  its env carries, opaque to shape). `resolveLease` lazily drops a lease past
-  `expiresAt` (active leases carry `Infinity`, so a live run never times out here — the
-  server's inactivity sweep is the vanished-machine guard). Leases are DURABLE
-  (`run_leases` table, keyed by sha256(wire token) — hash only, a DB leak never
-  hands out live credentials; `expiresAt` null encodes active/Infinity): a deploy
+  its env carries, opaque to shape). An expired `terminal-grace` transitions to
+  durable `retired`, never deletion; active/retired encode `expiresAt=null`. Leases are
+  DURABLE (`run_leases` table, keyed by sha256(wire token) — hash only, a DB leak never
+  hands out live credentials): a deploy
   is invisible to an in-flight run, and a long-sleep wake-report survives a
   restart inside its grace window. `store.deleteLoop` cascades the loop's leases
   (active ones have no expiry, so the prune alone would never collect them).
@@ -459,10 +458,10 @@ computes pure functions. Run instructions: `README.md`.
   matching active lease + running run under that same lock before writing.
   `retireLease(token)` handles a canceled/losing report; `store.cancelRun` deletes that run's lease in the same
   transaction, so a canceled local process immediately loses all run-token authority
-  (its late report may 401). `pruneExpiredLeases(now)` in `sweep()` bounds memory.
-  NB: `finish` deliberately does NOT terminalize — it leaves
-  the lease ACTIVE for one enriching report, so the run may still `show` / a second
-  `finish` → 400 (idempotency guard), and the enriching report retires it.
+  (its late report may 401). `pruneExpiredLeases(now)` converts expired grace to retired.
+  `finish` atomically moves its lease to a fixed 10-minute terminal grace: only the
+  daemon's enriching report is accepted; expiry restores machine liveness and a later
+  report receives durable 410. Startup idempotently repairs terminal-run active leases.
 - **Sweep-reclaimed runs are NOT retired immediately** - the usual cause is a laptop
   that merely fell ASLEEP mid-run, and on wake the daemon delivers the real (often
   successful) result. `reclaimRun` TERMINALIZES the run's lease (grace) instead of

@@ -1010,9 +1010,10 @@ test("finish completes a closed loop, cancels queued exec/evolve, preserves queu
   // finish records a server-computed durationMs even before the daemon's report.
   expect(typeof r.durationMs).toBe("number");
 
-  // The run token stays live for exactly ONE enriching post-run report (which then
-  // revokes it) — so the daemon's report can add the precise durationMs/sessionId.
-  expect((await gateway().agentApi(rt, ["show"])).status).toBe(200);
+  // Finish immediately removes mutation authority while retaining a bounded
+  // terminal-report enrichment window.
+  expect((await tokens.resolveLease(rt))?.state).toBe("terminal-grace");
+  expect((await gateway().agentApi(rt, ["show"])).status).toBe(409);
 });
 
 test("finish and poll claim share one loop transaction: completed work can never escape", async () => {
@@ -1077,10 +1078,10 @@ test("finish is single-shot: a second finish on the same still-live run refuses,
   expect(first.completedAt).toBeTruthy();
   expect(sent).toHaveLength(1);
 
-  // The token is still live (for the enriching report), so a second finish is attempted.
+  // Terminal grace authorizes enrichment only, so a second mutation is fenced.
   const res = (await gw.agentApi(rt, ["finish", "--message", "second", "--reason", "again"]));
-  expect(res.status).toBe(400);
-  expect((res.body as { text: string }).text).toMatch(/already finished/i);
+  expect(res.status).toBe(409);
+  expect((res.body as { text: string }).text).toMatch(/reclaimed|no longer accepts/i);
 
   // Loop stamps unchanged (no re-stamp), run message unchanged, no second notification.
   const l = (await store.getLoop(loop.id))!;
@@ -3007,9 +3008,9 @@ test("cli finish [R]: success renders the goal-met detail; a second finish is a 
   expect(text).toContain(`finished: L (${closed.loop.id}) — goal met`); // bare: "L" needs no quoting
   expect(text).toContain("completedAt:");
   expect(text).toContain("completionReason: shipped");
-  // The lease stays live for one enriching report, so a second finish is a legible CONFLICT.
+  // The lease is enrichment-only terminal grace, so a second finish is a conflict.
   const again = (await gateway().cli(closed.runToken, ["finish", "--message", "again"]));
-  expect(again.status).toBe(400);
+  expect(again.status).toBe(409);
   expect(textOf(again)).toContain("code: CONFLICT");
 });
 

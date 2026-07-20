@@ -30,10 +30,11 @@ export interface PersistedReport {
 export type ReportAck =
   | { kind: "ack"; reportId: string }
   | { kind: "retired"; reportId: string }
-  | { kind: "conflict"; error: string }
+  | { kind: "conflict"; reportId: string; error: string }
+  | { kind: "invalid"; reportId: string; error: string }
   | { kind: "retry"; error: string };
 
-const POISON_PREFIX = "REPORT_CONFLICT:";
+const POISON_PREFIXES = ["REPORT_CONFLICT:", "REPORT_INVALID:"] as const;
 const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000] as const;
 
 /** Durable, single-row terminal-report queue. The database lives under PIEVO_HOME,
@@ -84,8 +85,10 @@ export class PendingReportOutbox {
       if (ack.reportId === row.reportId) this.db.prepare("DELETE FROM pending_reports WHERE report_id=?").run(row.reportId);
       return;
     }
-    if (ack.kind === "conflict") {
-      this.db.prepare("UPDATE pending_reports SET last_error=? WHERE report_id=?").run(`${POISON_PREFIX} ${ack.error}`, row.reportId);
+    if (ack.kind === "conflict" || ack.kind === "invalid") {
+      if (ack.reportId !== row.reportId) return;
+      const code = ack.kind === "conflict" ? "REPORT_CONFLICT" : "REPORT_INVALID";
+      this.db.prepare("UPDATE pending_reports SET last_error=? WHERE report_id=?").run(`${code}: ${ack.error}`, row.reportId);
       return;
     }
     const attempts = row.attemptCount + 1;
@@ -96,7 +99,7 @@ export class PendingReportOutbox {
 
   diagnostics(): { pendingRunId?: string; poisoned: boolean; lastError?: string } {
     const row = this.peek();
-    return row ? { pendingRunId: row.runId, poisoned: row.lastError?.startsWith(POISON_PREFIX) ?? false, ...(row.lastError ? { lastError: row.lastError } : {}) } : { poisoned: false };
+    return row ? { pendingRunId: row.runId, poisoned: POISON_PREFIXES.some((prefix) => row.lastError?.startsWith(prefix)), ...(row.lastError ? { lastError: row.lastError } : {}) } : { poisoned: false };
   }
 
   close(): void { this.db.close(); }
@@ -126,10 +129,16 @@ export async function sendTerminalReport(serverUrl: string, report: PersistedRep
       headers: { Authorization: `Bearer ${report.runToken}`, "Content-Type": "application/json" },
       body: report.payloadJson,
     });
-    let body: { reportId?: unknown; code?: unknown } = {};
+    let body: { reportId?: unknown; code?: unknown; issues?: unknown } = {};
     try { body = await res.json() as typeof body; } catch { /* malformed is ambiguous */ }
-    if (res.status === 409 && body.code === "REPORT_CONFLICT") return { kind: "conflict", error: "server rejected a different payload for this reportId" };
-    if (res.status === 410 && body.code === "RETIRED") return { kind: "retired", reportId: report.reportId };
+    if (body.reportId === report.reportId && res.status === 409 && body.code === "REPORT_CONFLICT") {
+      return { kind: "conflict", reportId: report.reportId, error: "server rejected a different payload for this reportId" };
+    }
+    if (body.reportId === report.reportId && res.status === 422 && body.code === "REPORT_INVALID") {
+      const issues = Array.isArray(body.issues) ? body.issues.filter((issue): issue is string => typeof issue === "string").join("; ") : "invalid terminal payload";
+      return { kind: "invalid", reportId: report.reportId, error: issues };
+    }
+    if (body.reportId === report.reportId && res.status === 410 && body.code === "RETIRED") return { kind: "retired", reportId: report.reportId };
     if (res.ok && body.reportId === report.reportId) return { kind: "ack", reportId: report.reportId };
     return { kind: "retry", error: `ambiguous report response (${res.status})` };
   } catch (err) {

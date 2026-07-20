@@ -30,6 +30,8 @@ export type MachineStatus = {
   currentRun?: { runId: string; stage: "executing" | "reporting"; cancelPending?: boolean };
   cancelPending?: boolean;
   blockedRunId?: string | null;
+  runConflict?: { daemonRunId: string; serverRunId: string };
+  reliability?: { terminalGraceLeases: number; retiredLeases: number; reportReceipts: number };
 };
 
 /** Best-effort server view of this machine (`/api/machine/status`) — shared by
@@ -110,6 +112,11 @@ export async function runStatus(args: string[], injected: ControlDeps = {}): Pro
   }
   if (runtime?.cancelPending) d.out("  cancel pending: stop requested; waiting for daemon confirmation\n");
   if (runtime?.blockedRunId) d.out(`  blocked prior run: ${runtime.blockedRunId} — previous run state is unknown; no new work will start\n`);
+  if (runtime?.runConflict) d.out(`  run conflict: daemon ${runtime.runConflict.daemonRunId}, server ${runtime.runConflict.serverRunId} — operator decision required; no new work will start\n`);
+  if (runtime?.persistenceError) {
+    d.out(`  local persistence: needs attention — ${runtime.persistenceError}\n`);
+    d.out(`  report database: ${runtime.outboxPath ?? "unknown"}; new work is blocked\n`);
+  }
   if (report.poisoned) {
     d.out(`  terminal report: needs attention (${report.pendingRunId ?? "unknown run"}); new work is blocked\n`);
   } else if (report.pendingRunId) {
@@ -131,6 +138,8 @@ export async function runStatus(args: string[], injected: ControlDeps = {}): Pro
       }
       if (!runtime?.cancelPending && (view.cancelPending || view.currentRun?.cancelPending)) d.out("  cancel pending: stop requested; waiting for daemon confirmation\n");
       if (!runtime?.blockedRunId && view.blockedRunId) d.out(`  blocked prior run: ${view.blockedRunId} — previous run state is unknown; no new work will start\n`);
+      if (!runtime?.runConflict && view.runConflict) d.out(`  run conflict: daemon ${view.runConflict.daemonRunId}, server ${view.runConflict.serverRunId} — operator decision required; no new work will start\n`);
+      if (view.reliability) d.out(`  server lifecycle: ${view.reliability.terminalGraceLeases} terminal-grace, ${view.reliability.retiredLeases} retired, ${view.reliability.reportReceipts} report receipts\n`);
     } else {
       d.out("  server connectivity: unknown — server unreachable\n");
       d.out("  daemon protocol: 2 locally; server support unknown\n");

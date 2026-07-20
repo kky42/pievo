@@ -42,7 +42,9 @@ describe("PendingReportOutbox", () => {
       expect(Boolean(box.peek())).toBe(i < 2);
     }
     box.put("rk_retired", report({ reportId: "22222222-2222-4222-8222-222222222222", runId: "run-2" }));
-    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "RETIRED" }), { status: 410 })));
+    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "RETIRED", reportId: "wrong" }), { status: 410 })));
+    expect(box.peek()).toBeDefined();
+    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "RETIRED", reportId: "22222222-2222-4222-8222-222222222222" }), { status: 410 })));
     expect(box.peek()).toBeUndefined();
     box.close();
   });
@@ -72,9 +74,23 @@ describe("PendingReportOutbox", () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-outbox-"));
     const box = new PendingReportOutbox(path.join(root, "pending.sqlite"));
     box.put("rk_secret", report());
-    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "REPORT_CONFLICT" }), { status: 409 })));
+    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "REPORT_CONFLICT", reportId: "wrong" }), { status: 409 })));
+    expect(box.diagnostics()).toMatchObject({ pendingRunId: "run-1", poisoned: false });
+    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "REPORT_CONFLICT", reportId: report().reportId }), { status: 409 })));
     expect(box.diagnostics()).toMatchObject({ pendingRunId: "run-1", poisoned: true });
     expect(box.peek()).toBeDefined();
+    box.close();
+  });
+
+  test("matching REPORT_INVALID poisons the report while a mismatched id remains retryable", async () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-outbox-"));
+    const box = new PendingReportOutbox(path.join(root, "pending.sqlite"));
+    box.put("rk_secret", report());
+    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "REPORT_INVALID", reportId: "wrong", issues: ["result"] }), { status: 422 })));
+    expect(box.diagnostics().poisoned).toBe(false);
+    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "REPORT_INVALID", reportId: report().reportId, issues: ["result"] }), { status: 422 })));
+    expect(box.diagnostics()).toMatchObject({ poisoned: true, pendingRunId: "run-1" });
+    expect(box.diagnostics().lastError).toContain("REPORT_INVALID");
     box.close();
   });
 });

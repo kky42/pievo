@@ -127,7 +127,7 @@ test("delete waits for execution authority and force delete retires it", async (
   expect(requested?.loop.deleteRequestedAt).toBeTruthy();
   expect(repeated?.loop.deleteRequestedAt).toBe(requested?.loop.deleteRequestedAt);
   expect(await store.tryDeleteLoop(loop.id)).toBe(false);
-  expect(await store.forceDeleteLoop(loop.id, 60_000)).toBe(true);
+  expect(await store.forceDeleteLoop(loop.id)).toBe(true);
   expect(await store.getLoop(loop.id)).toBeUndefined();
   expect((await tokens.resolveLease(token))?.state).toBe("retired");
 });
@@ -149,6 +149,8 @@ test("protocol v2 is explicit, single-flight, and repeats cancellation", async (
   const second = await gw.pollV2(deviceToken, { protocolVersion: 2, currentRun: { runId: run.id, stage: "reporting" } });
   expect(first.body).toMatchObject({ delivery: null, cancelRunId: run.id });
   expect(second.body).toMatchObject({ delivery: null, cancelRunId: run.id });
+  const conflict = await gw.pollV2(deviceToken, { protocolVersion: 2, currentRun: { runId: "daemon-run-a", stage: "executing" } });
+  expect(conflict.body).toMatchObject({ delivery: null, runConflict: { daemonRunId: "daemon-run-a", serverRunId: run.id } });
   const blocked = await gw.pollV2(deviceToken, { protocolVersion: 2 });
   expect(blocked.body).toMatchObject({ delivery: null, blockedRunId: run.id });
 });
@@ -161,10 +163,21 @@ test("protocol-v2 terminal reports require valid reportId and matching runId bef
   const gw = gateway();
 
   expect((await gw.report(token, { runId: run.id, result: "success" })).status).toBe(400);
-  expect((await gw.report(token, { reportId: "not-a-uuid", runId: run.id, result: "success" })).status).toBe(400);
-  expect((await gw.report(token, { reportId: "018f47a2-9c2b-7d11-8f52-123456789aa1", result: "success" })).status).toBe(400);
+  expect(await gw.report(token, { reportId: "not-a-uuid", runId: run.id, result: "success" })).toMatchObject({ status: 422, body: { code: "REPORT_INVALID", reportId: "not-a-uuid" } });
+  expect(await gw.report(token, { reportId: "018f47a2-9c2b-7d11-8f52-123456789aa1", result: "success" })).toMatchObject({ status: 422, body: { code: "REPORT_INVALID", reportId: "018f47a2-9c2b-7d11-8f52-123456789aa1" } });
   expect((await gw.report(token, { reportId: "018f47a2-9c2b-7d11-8f52-123456789aa2", runId: "other", result: "success" })).status).toBe(403);
+  for (const [reportId, invalid] of [
+    ["018f47a2-9c2b-7d11-8f52-123456789aa8", { result: "bogus" }],
+    ["018f47a2-9c2b-7d11-8f52-123456789aa9", { result: "success", durationMs: -1 }],
+    ["018f47a2-9c2b-7d11-8f52-123456789aaa", { result: "success", exitCode: 1.5 }],
+  ] as const) {
+    expect(await gw.report(token, { reportId, runId: run.id, ...invalid } as any)).toMatchObject({
+      status: 422,
+      body: { code: "REPORT_INVALID", reportId },
+    });
+  }
   expect((await store.getRun(run.id))?.phase).toBe("running");
+  expect((await tokens.resolveLease(token))?.state).toBe("active");
   expect(await store.countReportReceipts()).toBe(0);
 });
 
@@ -235,6 +248,7 @@ test("finished-run enrichment completes a pending delete", async () => {
   const loop = await seedLoop(machine.id);
   const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "done", role: "exec", ts: new Date().toISOString() });
   const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false });
+  await tokens.terminalizeLease(run.id);
   await store.requestDeleteLoop(loop.id);
 
   const response = await gateway().report(token, { reportId: "018f47a2-9c2b-7d11-8f52-123456789aa4", runId: run.id, result: "success", durationMs: 7 });
@@ -242,7 +256,7 @@ test("finished-run enrichment completes a pending delete", async () => {
   expect(await store.getLoop(loop.id)).toBeUndefined();
 });
 
-test("force-delete winning after report pre-resolution returns persisted 410 and preserves retired lease", async () => {
+test("force-delete winning after report pre-resolution persists 410 and consumes retired lease", async () => {
   const machine = await seedMachine();
   const loop = await seedLoop(machine.id);
   const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
@@ -260,14 +274,49 @@ test("force-delete winning after report pre-resolution returns persisted 410 and
   const reportId = "018f47a2-9c2b-7d11-8f52-123456789aa5";
   const reporting = gateway().report(token, { reportId, runId: run.id, result: "success" });
   await entered;
-  await store.forceDeleteLoop(loop.id, 60_000);
+  await store.forceDeleteLoop(loop.id);
   release();
 
   const response = await reporting;
   expect(response).toMatchObject({ status: 410, body: { code: "RETIRED", reportId } });
-  expect((await tokens.resolveLease(token))?.state).toBe("retired");
+  expect(await tokens.resolveLease(token)).toBeUndefined();
   expect((await store.getReportReceipt(reportId))?.ackStatus).toBe(410);
   vi.restoreAllMocks();
+});
+
+test("finish crash leaves bounded grace, then unblocks the machine and rejects late enrichment definitively", async () => {
+  const machine = await seedMachine();
+  const loop = await store.createLoop({ userId: "u1", machineId: machine.id, name: "closed", cron: "0 0 1 1 *", enabled: true, goal: "done" });
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false, canFinish: true });
+  const at = Date.now();
+  expect((await store.finishLoopRun(loop.id, run.id, tokens.sha256(token), { ts: new Date(at).toISOString(), reason: "met" })).state).toBe("finished");
+  expect((await tokens.resolveLease(token, at))?.state).toBe("terminal-grace");
+
+  const other = await seedLoop(machine.id);
+  const queued = await store.enqueueRun(other.id, { role: "exec", requestedBy: "owner" });
+  expect(await store.claimReadyRunForMachine(machine.id)).toBeUndefined();
+  await tokens.pruneExpiredLeases(at + store.FINISH_REPORT_GRACE_MS + 1);
+  expect((await tokens.resolveLease(token))?.state).toBe("retired");
+  expect((await store.claimReadyRunForMachine(machine.id))?.run.id).toBe("run" in queued ? queued.run.id : "missing");
+
+  const reportId = "018f47a2-9c2b-7d11-8f52-123456789aab";
+  expect(await gateway().report(token, { reportId, runId: run.id, result: "success", durationMs: 99 })).toMatchObject({ status: 410, body: { code: "RETIRED", reportId } });
+  expect((await store.getRun(run.id))?.durationMs).not.toBe(99);
+});
+
+test("startup repair terminalizes terminal-run active leases idempotently", async () => {
+  const machine = await seedMachine();
+  const loop = await seedLoop(machine.id);
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "done", role: "exec", ts: new Date().toISOString() });
+  const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false });
+  const at = Date.now();
+  expect(await store.repairTerminalRunLeases(at)).toBe(1);
+  const first = await tokens.resolveLease(token, at);
+  expect(first?.state).toBe("terminal-grace");
+  expect(first?.expiresAt).toBe(at + store.FINISH_REPORT_GRACE_MS);
+  expect(await store.repairTerminalRunLeases(at + 1000)).toBe(0);
+  expect((await tokens.resolveLease(token, at))?.expiresAt).toBe(first?.expiresAt);
 });
 
 test("cancellation is terminal only when the daemon reports canceled", async () => {
@@ -299,7 +348,7 @@ test("continuous stop-run restores cadence while loop stop remains unscheduled",
   expect(await store.getLoop(stoppedLoop.id)).toMatchObject({ enabled: false, nextCadenceAt: null });
 });
 
-test("restart-style sweep resumes delete and bounds receipt/retired cleanup idempotently", async () => {
+test("restart-style sweep resumes delete while preserving durable receipts and retired authority", async () => {
   const machine = await seedMachine();
   const loop = await seedLoop(machine.id);
   await store.requestDeleteLoop(loop.id);
@@ -311,12 +360,12 @@ test("restart-style sweep resumes delete and bounds receipt/retired cleanup idem
   const retainedLoop = await seedLoop(machine.id);
   const run = await store.addRun({ loopId: retainedLoop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
   const token = await tokens.registerRunLease({ runId: run.id, loopId: retainedLoop.id, machineId: machine.id, role: "exec", allowControl: false });
-  await store.forceDeleteLoop(retainedLoop.id, -1);
+  await store.forceDeleteLoop(retainedLoop.id);
   await store.insertReportReceipt({ reportId: "old-report", runId: run.id, payloadDigest: "d", ackStatus: 200, ackBody: { ok: true }, createdAt: "2000-01-01T00:00:00.000Z" });
   await restarted.sweep();
   await restarted.sweep();
-  expect(await tokens.resolveLease(token)).toBeUndefined();
-  expect(await store.getReportReceipt("old-report")).toBeUndefined();
+  expect((await tokens.resolveLease(token))?.state).toBe("retired");
+  expect(await store.getReportReceipt("old-report")).toBeDefined();
 });
 
 test("a retired credential gets definitive 410 and maintenance cleanup is bounded and idempotent", async () => {
@@ -324,15 +373,14 @@ test("a retired credential gets definitive 410 and maintenance cleanup is bounde
   const loop = await seedLoop(machine.id);
   const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
   const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false });
-  await store.forceDeleteLoop(loop.id, 60_000);
+  await store.forceDeleteLoop(loop.id);
   const reportId = "018f47a2-9c2b-7d11-8f52-123456789abe";
-  expect(await gateway().report(token, { reportId, runId: run.id, result: "success" })).toMatchObject({ status: 410, body: { code: "RETIRED", reportId } });
+  const payload = { reportId, runId: run.id, result: "success" as const };
+  expect(await gateway().report(token, payload)).toMatchObject({ status: 410, body: { code: "RETIRED", reportId } });
   expect((await store.getReportReceipt(reportId))?.ackStatus).toBe(410);
-
-  await store.insertReportReceipt({ reportId: "old-report", runId: run.id, payloadDigest: "d", ackStatus: 200, ackBody: { ok: true }, createdAt: "2000-01-01T00:00:00.000Z" });
-  expect(await store.pruneReportReceipts("2001-01-01T00:00:00.000Z")).toBe(1);
-  expect(await store.pruneReportReceipts("2001-01-01T00:00:00.000Z")).toBe(0);
-  await tokens.pruneExpiredLeases(Date.now() + 120_000);
-  await tokens.pruneExpiredLeases(Date.now() + 120_000);
+  // The 410 transaction consumes the tombstone; a lost HTTP ACK still replays
+  // from the durable receipt without recreating server authority/data.
   expect(await tokens.resolveLease(token)).toBeUndefined();
+  expect(await gateway().report(token, payload)).toMatchObject({ status: 410, body: { code: "RETIRED", reportId } });
+  expect(await store.getLoop(loop.id)).toBeUndefined();
 });

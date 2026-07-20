@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
-import { buildPollBody, SingleFlightRuntime } from "./daemon.js";
+import { buildPollBody, nextRunConflict, SingleFlightRuntime } from "./daemon.js";
 import { RUN_CANCEL_REASON, executeDelivery, type Delivery } from "./runner.js";
 import { PendingReportOutbox } from "./report-outbox.js";
 import { isAlive } from "./pidfile.js";
@@ -20,6 +20,13 @@ describe("poll protocol v2", () => {
   test("advertises exactly one current run and only idles without a slot", () => {
     expect(buildPollBody({ host: "mac" }, null, "watch")).toEqual({ protocolVersion: 2, host: "mac", watchDigest: "watch" });
     expect(buildPollBody({ host: "mac" }, { runId: "r1", stage: "executing" }, undefined)).toEqual({ protocolVersion: 2, host: "mac", currentRun: { runId: "r1", stage: "executing" } });
+  });
+
+  test("keeps a run conflict until the local run has a definitive end", () => {
+    const conflict = { daemonRunId: "run-a", serverRunId: "run-b" };
+    expect(nextRunConflict(undefined, conflict, { runId: "run-a", stage: "executing" })).toEqual(conflict);
+    expect(nextRunConflict(conflict, undefined, { runId: "run-a", stage: "reporting" })).toEqual(conflict);
+    expect(nextRunConflict(conflict, undefined, null)).toBeUndefined();
   });
 });
 
@@ -153,9 +160,16 @@ describe("single-flight persistence boundary", () => {
       if (attempts === 1) throw new Error("database temporarily busy");
       return put(...args);
     }) as typeof box.put;
-    const runtime = new SingleFlightRuntime(box, async () => ({ reportId: "66666666-6666-4666-8666-666666666666", runId: "run-1", result: "failure", durationMs: 1, exitCode: null }));
+    const states: Array<{ persistenceError?: string; outboxPath: string }> = [];
+    const runtime = new SingleFlightRuntime(
+      box,
+      async () => ({ reportId: "66666666-6666-4666-8666-666666666666", runId: "run-1", result: "failure", durationMs: 1, exitCode: null }),
+      (state) => states.push(state),
+    );
     await runtime.accept(delivery(), "https://example.test", []);
     expect(attempts).toBe(2);
+    expect(states.some((state) => state.persistenceError === "database temporarily busy" && state.outboxPath.endsWith("outbox.sqlite"))).toBe(true);
+    expect(states.at(-1)?.persistenceError).toBeUndefined();
     expect(box.peek()?.reportId).toBe("66666666-6666-4666-8666-666666666666");
     box.close();
   });

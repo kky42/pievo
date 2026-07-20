@@ -57,6 +57,13 @@
       "when": 1784529980417,
       "tag": "0007_faulty_starbolt",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784530000000,
+      "tag": "0008_durable_lifecycle_evidence",
+      "breakpoints": true
     }
   ]
 }

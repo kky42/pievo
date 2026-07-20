@@ -384,12 +384,13 @@ export async function tryDeleteLoop(id: string): Promise<boolean> {
   });
 }
 
-export async function forceDeleteLoop(id: string, retentionMs = 24 * 60 * 60 * 1000): Promise<boolean> {
+export async function forceDeleteLoop(id: string): Promise<boolean> {
   return db.transaction(async (tx) => {
     const loop = (await tx.select().from(loops).where(eq(loops.id, id)).for("update"))[0];
     if (!loop) return false;
-    const expiresAt = new Date(Date.now() + retentionMs).toISOString();
-    await tx.update(runLeases).set({ state: "retired", expiresAt }).where(and(eq(runLeases.loopId, id), inArray(runLeases.state, ["active", "terminal-grace"])));
+    // Retired is durable acknowledgement evidence, not execution authority. It
+    // never blocks claims and has no wall-clock expiry.
+    await tx.update(runLeases).set({ state: "retired", expiresAt: null }).where(and(eq(runLeases.loopId, id), inArray(runLeases.state, ["active", "terminal-grace", "retired"])));
     return deleteLoopDataTx(tx, id, true);
   });
 }
@@ -610,8 +611,44 @@ export async function countReportReceipts(): Promise<number> {
   return Number(row?.n ?? 0);
 }
 
-export async function pruneReportReceipts(before: string): Promise<number> {
-  return (await db.delete(runReportReceipts).where(lt(runReportReceipts.createdAt, before)).returning({ id: runReportReceipts.reportId })).length;
+export async function countRunLeasesByState(): Promise<{ terminalGrace: number; retired: number }> {
+  const rows = await db.select({ state: runLeases.state, n: sql<number>`count(*)` }).from(runLeases).groupBy(runLeases.state);
+  const count = (state: "terminal-grace" | "retired") => Number(rows.find((row) => row.state === state)?.n ?? 0);
+  return { terminalGrace: count("terminal-grace"), retired: count("retired") };
+}
+
+/** Idempotent startup repair for lifecycle rows left by an older server or a
+ * crash across the finish boundary. Terminal runs can never retain active authority. */
+export async function repairTerminalRunLeases(now: number = Date.now()): Promise<number> {
+  const repaired = await db.update(runLeases)
+    .set({ state: "terminal-grace", expiresAt: new Date(now + FINISH_REPORT_GRACE_MS).toISOString() })
+    .where(and(
+      eq(runLeases.state, "active"),
+      sql`exists (select 1 from ${runs} where ${runs.id} = ${runLeases.runId} and ${runs.phase} in ('done', 'error', 'canceled'))`,
+    ))
+    .returning({ tokenHash: runLeases.tokenHash });
+  await db.update(runLeases).set({ expiresAt: null }).where(eq(runLeases.state, "retired"));
+  return repaired.length;
+}
+
+/** Atomically persist a definitive 410 and consume only the matching retired
+ * tombstone. If the HTTP response is lost, the independent receipt replays it. */
+export async function acknowledgeRetiredReport(
+  leaseTokenHash: string,
+  input: typeof runReportReceipts.$inferInsert,
+) {
+  return db.transaction(async (tx) => {
+    const lease = (await tx.select().from(runLeases)
+      .where(and(eq(runLeases.tokenHash, leaseTokenHash), eq(runLeases.state, "retired")))
+      .limit(1).for("update"))[0];
+    if (!lease) return undefined;
+    await tx.insert(runReportReceipts).values(input).onConflictDoNothing({ target: runReportReceipts.reportId });
+    const stored = (await tx.select().from(runReportReceipts).where(eq(runReportReceipts.reportId, input.reportId)))[0];
+    if (stored?.runId === input.runId && stored.payloadDigest === input.payloadDigest && stored.ackStatus === input.ackStatus) {
+      await tx.delete(runLeases).where(and(eq(runLeases.tokenHash, leaseTokenHash), eq(runLeases.state, "retired")));
+    }
+    return stored;
+  });
 }
 
 export async function updateRun(id: string, patch: Partial<NewRun>): Promise<Run | undefined> {
@@ -862,6 +899,7 @@ export async function enrichFinishedRun(
   return db.transaction(async (tx) => {
     const loop = (await tx.select({ id: loops.id }).from(loops).where(eq(loops.id, loopId)).for("update"))[0];
     if (!loop) return undefined;
+    const leaseNow = nowIso();
     const lease = (
       await tx
         .select({ tokenHash: runLeases.tokenHash })
@@ -871,7 +909,8 @@ export async function enrichFinishedRun(
             eq(runLeases.tokenHash, leaseTokenHash),
             eq(runLeases.runId, runId),
             eq(runLeases.loopId, loopId),
-            eq(runLeases.state, "active"),
+            eq(runLeases.state, "terminal-grace"),
+            gt(runLeases.expiresAt, leaseNow),
           ),
         )
         .limit(1)
@@ -1000,6 +1039,8 @@ export async function reconcileReclaimedRun(
   });
 }
 
+export const FINISH_REPORT_GRACE_MS = 10 * 60 * 1000;
+
 export type FinishLoopRunResult =
   | { state: "finished"; loop: Loop; run: Run }
   | { state: "missing" | "goal-cleared" | "already-finished" | "run-not-running" | "invalid-lease" | "forbidden" };
@@ -1048,6 +1089,9 @@ export async function finishLoopRun(
       completedAt: input.ts,
       completionReason: input.reason,
     }, input.ts);
+    await tx.update(runLeases)
+      .set({ state: "terminal-grace", expiresAt: new Date(Date.parse(input.ts) + FINISH_REPORT_GRACE_MS).toISOString() })
+      .where(and(eq(runLeases.tokenHash, leaseTokenHash), eq(runLeases.runId, runId), eq(runLeases.state, "active")));
     return { state: "finished" as const, loop, run: finished };
   });
 }

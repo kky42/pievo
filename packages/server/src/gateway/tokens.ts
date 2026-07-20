@@ -4,7 +4,7 @@
  * LEASE (`rk_…`) is minted per delivery, bound to one run, and carries the
  * run's least-privilege caps — the CLI dispatch authorizes the `pievo` shim
  * against it. Its lifecycle is a small state machine (`active` →
- * `terminal-grace` → expired), not a mint→revoke pair; see `RunLease` below.
+ * `terminal-grace` → `retired`), not a mint→revoke pair; see `RunLease` below.
  *
  * Leases and connect-key bindings are DURABLE (run_leases / connect_keys
  * tables): they must survive a deploy, or every restart 401s the in-flight
@@ -132,25 +132,24 @@ export interface RunLeaseCaps {
  * that replaces the old mint→revoke scatter (`revokeRunToken` /
  * `revokeRunTokensForRun` / `markRunTokensReclaimed` / `pruneReclaimedRunTokens`).
  *
- *   active  ──[normal report / finish→enrich / canceled]──▶ retired (deleted)
+ *   active ──[normal report / canceled]──────────────────────────▶ deleted
  *      │
- *      └────[sweep reclaim]──▶ terminal-grace ──[one reconciling report]──▶ retired
+ *      ├────[finish]──────────▶ terminal-grace ──[enrich]────────▶ deleted
+ *      └────[sweep reclaim]───▶ terminal-grace ──[reconcile]─────▶ deleted
+ *                                      └──[expiry]──▶ retired ──[410 receipt]──▶ deleted
  *
  * `terminal-grace` uniquely marks a SWEPT run (the machine went unreachable
  * mid-run, so the sweep finalized a false failure but kept the lease alive). While
  * terminal-grace, agent-api mutations are refused (409); ONLY the single
  * reconciling wake-report is honored, and it retires the lease single-shot. A
- * lease past `expiresAt` is dead — dropped lazily on the next `resolveLease` (so a
- * lease that never gets its wake-report can't be reused) and swept by
- * `pruneExpiredLeases`. `finish` deliberately leaves the lease ACTIVE for one
- * enriching report (the run may still want `show`/a second finish → 400), so it is
- * NOT a terminal-grace transition.
+ * lease past `expiresAt` loses reconciliation authority and becomes durable
+ * `retired`; it is deleted only when a matching 410 receipt commits. `finish`
+ * uses a separate short grace set by the store so a terminal Run is never active.
  */
 export interface RunLease extends RunLeaseCaps {
   state: "active" | "terminal-grace" | "retired";
-  /** Absolute expiry (ms epoch). `Infinity` while active (a live run never times
-   *  out here — the server's inactivity sweep is the vanished-machine guard);
-   *  `now + TERMINAL_GRACE_MS` once terminalized. */
+  /** Absolute expiry (ms epoch). `Infinity` for active and retired rows;
+   *  terminal-grace alone carries a deadline. */
   expiresAt: number;
 }
 
@@ -202,16 +201,20 @@ export async function registerRunLease(caps: RunLeaseCaps): Promise<string> {
   return token;
 }
 
-/** Resolve a run lease by its wire token, lazily dropping it once past expiry. */
+/** Resolve a run lease. An elapsed reconciliation window is atomically reduced
+ * to durable, non-authorizing retired evidence rather than deleted. */
 export async function resolveLease(token: string, now: number = Date.now()): Promise<RunLease | undefined> {
-  const row = (await db.select().from(runLeases).where(eq(runLeases.tokenHash, sha256(token))))[0];
+  const tokenHash = sha256(token);
+  let row = (await db.select().from(runLeases).where(eq(runLeases.tokenHash, tokenHash)))[0];
   if (!row) return undefined;
-  const lease = leaseFromRow(row);
-  if (now > lease.expiresAt) {
-    await db.delete(runLeases).where(eq(runLeases.tokenHash, row.tokenHash));
-    return undefined;
+  if (row.state === "terminal-grace" && row.expiresAt != null && now > Date.parse(row.expiresAt)) {
+    row = (await db.update(runLeases)
+      .set({ state: "retired", expiresAt: null })
+      .where(and(eq(runLeases.tokenHash, tokenHash), eq(runLeases.state, "terminal-grace"), isNotNull(runLeases.expiresAt), lt(runLeases.expiresAt, new Date(now).toISOString())))
+      .returning())[0] ?? (await db.select().from(runLeases).where(eq(runLeases.tokenHash, tokenHash)))[0];
+    if (!row) return undefined;
   }
-  return lease;
+  return leaseFromRow(row);
 }
 
 /** Terminalize the lease(s) for `runId`: flip `active` → `terminal-grace`, opening
@@ -236,12 +239,12 @@ export async function retireLease(token: string): Promise<void> {
   await db.delete(runLeases).where(eq(runLeases.tokenHash, sha256(token)));
 }
 
-/** Drop leases whose window has elapsed — bounded table, so a terminal-grace lease
- *  that never gets its wake-report doesn't linger forever. Called from the sweep.
- *  (`active` leases have null expiry and are never pruned here; a vanished
- *  machine's run is reclaimed by the inactivity sweep, which terminalizes it.) */
+/** State-aware lease maintenance. Expired reconciliation authority becomes a
+ * durable retired tombstone. Active and already-retired rows are never age-pruned. */
 export async function pruneExpiredLeases(now: number = Date.now()): Promise<void> {
-  await db.delete(runLeases).where(and(isNotNull(runLeases.expiresAt), lt(runLeases.expiresAt, new Date(now).toISOString())));
+  await db.update(runLeases)
+    .set({ state: "retired", expiresAt: null })
+    .where(and(eq(runLeases.state, "terminal-grace"), isNotNull(runLeases.expiresAt), lt(runLeases.expiresAt, new Date(now).toISOString())));
 }
 
 // ---- `new` idempotency (content-hash → the loop it created) ----

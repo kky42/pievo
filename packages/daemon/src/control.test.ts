@@ -144,6 +144,25 @@ describe("runStatus", () => {
     expect(cap.stdout()).toContain("blocked prior run: run-old");
   });
 
+  test("surfaces run conflicts and local report persistence failures actionably", async () => {
+    const cap = capture({
+      readPid: () => ({ pid: 12 }), alive: () => true,
+      server: "", token: undefined,
+      runtimeDiagnostics: () => ({
+        protocolVersion: 2,
+        currentRun: { runId: "run-local", stage: "reporting" },
+        runConflict: { daemonRunId: "run-local", serverRunId: "run-server" },
+        persistenceError: "SQLITE_FULL: database or disk is full",
+        outboxPath: "/home/me/.pievo/pending-reports.sqlite",
+      }),
+    });
+    await runStatus([], cap);
+    expect(cap.stdout()).toContain("run conflict: daemon run-local, server run-server");
+    expect(cap.stdout()).toContain("SQLITE_FULL");
+    expect(cap.stdout()).toContain("/home/me/.pievo/pending-reports.sqlite");
+    expect(cap.stdout()).toContain("new work is blocked");
+  });
+
   test("shows protocol, current run, cancellation, and blocked-prior diagnostics from the server", async () => {
     const cap = capture({
       readPid: () => ({ pid: 12 }), alive: () => true,

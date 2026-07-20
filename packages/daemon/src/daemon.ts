@@ -28,11 +28,12 @@ type Execute = (delivery: Delivery, serverUrl: string, roots: string[], signal: 
 export class SingleFlightRuntime {
   private active: { runId: string; stage: RunStage; abortController: AbortController; cancelRequested: boolean } | null;
   private execution: Promise<void> | null = null;
+  private persistenceError: string | undefined;
 
   constructor(
     private readonly outbox: PendingReportOutbox,
     private readonly execute: Execute = executeDelivery,
-    private readonly onState: (state: { currentRun: CurrentRun | null; cancelPending: boolean }) => void = () => {},
+    private readonly onState: (state: { currentRun: CurrentRun | null; cancelPending: boolean; persistenceError?: string; outboxPath: string }) => void = () => {},
   ) {
     const pending = outbox.peek();
     this.active = pending ? { runId: pending.runId, stage: "reporting", abortController: new AbortController(), cancelRequested: false } : null;
@@ -40,7 +41,9 @@ export class SingleFlightRuntime {
   }
 
   currentRun(): CurrentRun | null { return this.active ? { runId: this.active.runId, stage: this.active.stage } : null; }
-  private emitState(): void { this.onState({ currentRun: this.currentRun(), cancelPending: this.active?.cancelRequested ?? false }); }
+  private emitState(): void {
+    this.onState({ currentRun: this.currentRun(), cancelPending: this.active?.cancelRequested ?? false, outboxPath: this.outbox.file, ...(this.persistenceError ? { persistenceError: this.persistenceError } : {}) });
+  }
   poisoned(): boolean { return this.outbox.diagnostics().poisoned; }
 
   async accept(delivery: Delivery, serverUrl: string, roots: string[]): Promise<boolean> {
@@ -65,9 +68,12 @@ export class SingleFlightRuntime {
       for (;;) {
         try {
           this.outbox.put(delivery.runToken, terminal);
+          this.persistenceError = undefined;
           break;
         } catch (err) {
-          logger.error({ runId: delivery.runId, err: err instanceof Error ? err.message : String(err) }, "terminal report persistence failed; retrying before exit");
+          this.persistenceError = err instanceof Error ? err.message : String(err);
+          this.emitState();
+          logger.error({ runId: delivery.runId, err: this.persistenceError }, "terminal report persistence failed; retrying before exit");
           await new Promise((resolve) => setTimeout(resolve, 250));
         }
       }
@@ -110,7 +116,7 @@ export class SingleFlightRuntime {
     const ack = await sendTerminalReport(serverUrl, pending);
     this.outbox.applyAck(ack);
     if (!this.outbox.peek()) this.active = null;
-    else if (ack.kind === "conflict") logger.error({ runId: pending.runId }, "REPORT_CONFLICT: terminal report needs attention; new work is blocked");
+    else if (ack.kind === "conflict" || ack.kind === "invalid") logger.error({ runId: pending.runId }, `${ack.kind === "conflict" ? "REPORT_CONFLICT" : "REPORT_INVALID"}: terminal report needs attention; new work is blocked`);
     this.emitState();
   }
 }
@@ -126,6 +132,14 @@ export function buildPollBody(info: Record<string, unknown>, currentRun: Current
 
 export function nextPollDelayMs(elapsedMs: number, pollMs = POLL_MS): number {
   return Math.max(REPOLL_MS, pollMs - elapsedMs);
+}
+
+export function nextRunConflict(
+  previous: { daemonRunId: string; serverRunId: string } | undefined,
+  incoming: { daemonRunId: string; serverRunId: string } | undefined,
+  currentRun: CurrentRun | null,
+) {
+  return incoming ?? (currentRun ? previous : undefined);
 }
 
 function resolveStored(file: string, explicit: string | undefined): string | undefined {
@@ -150,7 +164,8 @@ export async function runDaemon(): Promise<number> {
   const outbox = new PendingReportOutbox(path.join(PIEVO_DIR, "pending-reports.sqlite"));
   const runtimeStatusFile = path.join(PIEVO_DIR, "runtime-status.json");
   let blockedRunId: string | undefined;
-  let runtimeState: { currentRun: CurrentRun | null; cancelPending: boolean } = { currentRun: null, cancelPending: false };
+  let runConflict: { daemonRunId: string; serverRunId: string } | undefined;
+  let runtimeState: { currentRun: CurrentRun | null; cancelPending: boolean; persistenceError?: string; outboxPath?: string } = { currentRun: null, cancelPending: false };
   const persistRuntime = () => {
     try {
       writeRuntimeDiagnostics(runtimeStatusFile, {
@@ -158,6 +173,9 @@ export async function runDaemon(): Promise<number> {
         ...(runtimeState.currentRun ? { currentRun: runtimeState.currentRun } : {}),
         ...(runtimeState.cancelPending ? { cancelPending: true } : {}),
         ...(blockedRunId ? { blockedRunId } : {}),
+        ...(runConflict ? { runConflict } : {}),
+        ...(runtimeState.persistenceError ? { persistenceError: runtimeState.persistenceError } : {}),
+        ...(runtimeState.outboxPath ? { outboxPath: runtimeState.outboxPath } : {}),
       });
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : String(err) }, "could not persist runtime diagnostics");
@@ -185,13 +203,19 @@ export async function runDaemon(): Promise<number> {
       if (res.status === 426) logger.error("daemon protocol rejected; update Pievo daemon (protocol 2 required)");
       else if (!res.ok) logger.warn({ status: res.status, statusText: res.statusText }, "poll non-ok");
       else {
-        const data = await res.json() as { delivery?: Delivery | null; cancelRunId?: string; blockedRunId?: string | null; watch?: WatchSpec[]; watchDigest?: string };
+        const data = await res.json() as { delivery?: Delivery | null; cancelRunId?: string; blockedRunId?: string | null; runConflict?: { daemonRunId: string; serverRunId: string }; watch?: WatchSpec[]; watchDigest?: string };
         if (Array.isArray(data.watch)) watchManager.reconcile(data.watch);
         if (typeof data.watchDigest === "string") watchDigest = data.watchDigest;
         if (typeof data.cancelRunId === "string") runtime.cancel(data.cancelRunId);
         blockedRunId = data.blockedRunId || undefined;
+        const incomingConflict = data.runConflict && typeof data.runConflict.daemonRunId === "string" && typeof data.runConflict.serverRunId === "string" ? data.runConflict : undefined;
+        // Keep execution uncertainty visible until the local run reaches a
+        // definitive report ACK (or an operator stops the daemon). A transient
+        // change in the server's running row is not reconciliation.
+        runConflict = nextRunConflict(runConflict, incomingConflict, runtime.currentRun());
         persistRuntime();
         if (data.blockedRunId) logger.warn({ runId: data.blockedRunId }, "previous run state is unknown; no new work will start");
+        if (runConflict) logger.error(runConflict, "local/server run conflict; no new work will start");
         if (data.delivery) runtime.start(data.delivery, server, roots);
       }
       await runtime.sendPending(server);

@@ -73,15 +73,15 @@ test("terminalizeLease flips active → terminal-grace with a bounded expiry", a
   expect(lease.expiresAt).toBe(at + tokens.TERMINAL_GRACE_MS);
 });
 
-test("a terminal-grace lease is dropped lazily once past its grace window", async () => {
+test("an expired terminal-grace lease becomes a durable retired tombstone", async () => {
   const token = await tokens.registerRunLease(caps());
   const at = 2_000_000;
   await tokens.terminalizeLease((await tokens.resolveLease(token))!.runId, at);
-  // Still resolvable within the window…
-  expect(await tokens.resolveLease(token, at + tokens.TERMINAL_GRACE_MS)).toBeTruthy();
-  // …gone one ms past it (and the miss deletes it, so a later resolve is undefined too).
-  expect(await tokens.resolveLease(token, at + tokens.TERMINAL_GRACE_MS + 1)).toBeUndefined();
-  expect(await tokens.resolveLease(token)).toBeUndefined();
+  expect((await tokens.resolveLease(token, at + tokens.TERMINAL_GRACE_MS))?.state).toBe("terminal-grace");
+  const retired = await tokens.resolveLease(token, at + tokens.TERMINAL_GRACE_MS + 1);
+  expect(retired?.state).toBe("retired");
+  expect(retired?.expiresAt).toBe(Number.POSITIVE_INFINITY);
+  expect((await tokens.resolveLease(token))?.state).toBe("retired");
 });
 
 test("terminalizeLease is idempotent — a second call keeps the FIRST grace window", async () => {
@@ -103,19 +103,22 @@ test("retireLease deletes the lease single-shot (a second resolve is undefined)"
   expect(await tokens.resolveLease(token)).toBeUndefined();
 });
 
-test("pruneExpiredLeases drops only expired leases, keeping active + in-window ones", async () => {
+test("pruneExpiredLeases retires expired grace while preserving active, in-window, and retired leases", async () => {
   const active = await tokens.registerRunLease(caps());
   const inWindow = await tokens.registerRunLease(caps());
   const expired = await tokens.registerRunLease(caps());
+  const alreadyRetired = await tokens.registerRunLease(caps());
   const now = Date.now();
   await tokens.terminalizeLease((await tokens.resolveLease(inWindow))!.runId, now);
   await tokens.terminalizeLease((await tokens.resolveLease(expired))!.runId, now - 2 * tokens.TERMINAL_GRACE_MS);
-
+  await tokens.terminalizeLease((await tokens.resolveLease(alreadyRetired))!.runId, now - 2 * tokens.TERMINAL_GRACE_MS);
   await tokens.pruneExpiredLeases(now);
 
   expect((await tokens.resolveLease(active, now))?.state).toBe("active");
   expect((await tokens.resolveLease(inWindow, now))?.state).toBe("terminal-grace");
-  expect(await tokens.resolveLease(expired, now)).toBeUndefined();
+  expect((await tokens.resolveLease(expired, now))?.state).toBe("retired");
+  await tokens.pruneExpiredLeases(now + tokens.TERMINAL_GRACE_MS);
+  expect((await tokens.resolveLease(alreadyRetired))?.state).toBe("retired");
 });
 
 test("bare-UUID back-compat: resolveLease keys on the FULL token, doing no prefix parsing", async () => {

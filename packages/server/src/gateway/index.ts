@@ -136,14 +136,13 @@ const HEARTBEAT_STAMP_REFRESH_MS = heartbeatRefreshMs(RUN_TIMEOUT_MS);
  *  and an idle poll becomes read-only, with worst-case staleness well inside
  *  the 30s TTL (max stamp gap = refresh + one poll interval). */
 const LAST_SEEN_REFRESH_MS = 10_000;
-const REPORT_RECEIPT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface MachineReportBody {
   reportId?: string;
   runId?: string;
   result?: "success" | "failure" | "canceled" | "timeout";
   ok?: boolean;
-  exitCode?: number;
+  exitCode?: number | null;
   durationMs?: number;
   outcome?: "direct" | "silent" | "exec" | "evolve";
   sessionId?: string;
@@ -207,6 +206,22 @@ function reportMessage(body: MachineReportBody, run: Run | undefined): string | 
         ? body.finalText
         : undefined;
   return raw === undefined ? undefined : clipText(raw, MESSAGE_CAP);
+}
+
+function validateTerminalReport(body: MachineReportBody): string[] {
+  const issues: string[] = [];
+  if (body.result !== undefined) {
+    if (!["success", "failure", "canceled", "timeout"].includes(body.result as string)) issues.push("result must be success, failure, canceled, or timeout");
+  } else if (typeof body.ok !== "boolean") {
+    issues.push("result must be success, failure, canceled, or timeout");
+  }
+  if (body.durationMs !== undefined && (typeof body.durationMs !== "number" || !Number.isFinite(body.durationMs) || body.durationMs < 0)) {
+    issues.push("durationMs must be a finite non-negative number");
+  }
+  if (body.exitCode !== undefined && body.exitCode !== null && (typeof body.exitCode !== "number" || !Number.isInteger(body.exitCode))) {
+    issues.push("exitCode must be an integer or null");
+  }
+  return issues;
 }
 
 function coerceTelemetry(body: MachineReportBody): Partial<Pick<NewRun, "durationMs" | "exitCode" | "sessionId" | "finalText" | "usage">> {
@@ -419,9 +434,8 @@ export class MachineGateway {
         }
       }
     }
-    // Bound durable idempotency receipts and retired/terminal-grace credentials,
-    // then resume deletes that were waiting on authority which just expired.
-    await store.pruneReportReceipts(new Date(now - REPORT_RECEIPT_RETENTION_MS).toISOString());
+    // Expired reconciliation authority becomes durable retired evidence. Report
+    // receipts are intentionally not age-pruned: daemon outboxes have no TTL.
     await pruneExpiredLeases(now);
     for (const loop of await store.listLoops()) {
       if (loop.deleteRequestedAt) await store.tryDeleteLoop(loop.id);
@@ -662,7 +676,8 @@ export class MachineGateway {
     const base = await this.poll(deviceToken, request.info, current ? [current.runId] : undefined, request.watchDigest, !current);
     if (base.status !== 200) return base;
     const machineId = machineIdFromToken(deviceToken);
-    await store.updateMachine(machineId, { daemonProtocol: 2 });
+    const machine = await store.getMachine(machineId);
+    if (machine?.daemonProtocol !== 2) await store.updateMachine(machineId, { daemonProtocol: 2 });
     const running = await store.runningRunForMachine(machineId);
     const body = base.body as { deliveries: Delivery[]; watchDigest: string; watch?: WatchEntry[] };
     const cancelRunId = current && running?.id === current.runId && running.cancelRequestedAt ? current.runId : undefined;
@@ -671,6 +686,9 @@ export class MachineGateway {
       body: {
         delivery: current ? null : body.deliveries[0] ?? null,
         ...(cancelRunId ? { cancelRunId } : {}),
+        ...(current && running && current.runId !== running.id
+          ? { runConflict: { daemonRunId: current.runId, serverRunId: running.id } }
+          : {}),
         ...(!current && running && !body.deliveries.length ? { blockedRunId: running.id } : {}),
         watchDigest: body.watchDigest,
         ...(body.watch ? { watch: body.watch } : {}),
@@ -751,6 +769,7 @@ export class MachineGateway {
     const fresh = !!machine.lastSeen && Date.now() - Date.parse(machine.lastSeen) < ONLINE_TTL_MS;
     const online = !!machine.online && fresh;
     const running = await store.runningRunForMachine(machineId);
+    const [leaseCounts, reportReceipts] = await Promise.all([store.countRunLeasesByState(), store.countReportReceipts()]);
     return {
       status: 200,
       body: {
@@ -758,6 +777,7 @@ export class MachineGateway {
         name: machine.name || null,
         lastSeen: machine.lastSeen ?? null,
         daemonProtocol: machine.daemonProtocol ?? null,
+        reliability: { terminalGraceLeases: leaseCounts.terminalGrace, retiredLeases: leaseCounts.retired, reportReceipts },
         ...(running ? {
           ...(online ? { currentRun: { runId: running.id, stage: "executing", cancelPending: running.cancelRequestedAt != null } } : { blockedRunId: running.id }),
           ...(running.cancelRequestedAt ? { cancelPending: true } : {}),
@@ -1394,13 +1414,17 @@ export class MachineGateway {
 
   // ---- POST /machine/report ----
 
-  private async retiredReport(body: MachineReportBody, runId: string): Promise<HttpResult> {
+  private async retiredReport(runToken: string, body: MachineReportBody, runId: string): Promise<HttpResult> {
     const expected = receiptFor(body, runId, 410, {
       error: "execution authority retired",
       code: "RETIRED",
       reportId: body.reportId!,
     })!;
-    const stored = await store.putReportReceiptIfAbsent(expected);
+    const stored = await store.acknowledgeRetiredReport(sha256(runToken), expected);
+    if (!stored) {
+      const replay = receiptResponse(await store.getReportReceipt(expected.reportId), expected);
+      return replay ?? { status: 401, body: { error: "invalid or expired token" } };
+    }
     return receiptResponse(stored, expected)!;
   }
 
@@ -1443,7 +1467,7 @@ export class MachineGateway {
     }
     if (!enriched) {
       const refreshed = await resolveLease(runToken);
-      if (refreshed?.state === "retired") return this.retiredReport(body, lease.runId);
+      if (refreshed?.state === "retired") return this.retiredReport(runToken, body, lease.runId);
       const raced = receipt && receiptResponse(await store.getReportReceipt(receipt.reportId), receipt);
       if (raced) return raced;
       return { status: 409, body: { error: "terminal report was not finalized", code: "REPORT_NOT_FINALIZED", reportId: body.reportId } };
@@ -1526,7 +1550,7 @@ export class MachineGateway {
       if (fresh?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease, body);
       if (fresh?.phase === "done") return this.enrichFinishedReport(runToken, lease, body);
       const refreshed = await resolveLease(runToken);
-      if (refreshed?.state === "retired") return this.retiredReport(body, lease.runId);
+      if (refreshed?.state === "retired") return this.retiredReport(runToken, body, lease.runId);
       log.info({ runId: lease.runId, phase: fresh?.phase }, "report: late reconcile lost terminal race");
       return { status: 409, body: { error: "terminal report was not finalized", code: "REPORT_NOT_FINALIZED", reportId: body.reportId } };
     }
@@ -1564,11 +1588,18 @@ export class MachineGateway {
   }
 
   async report(runToken: string, body: MachineReportBody): Promise<HttpResult> {
-    if (typeof body.reportId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.reportId)) {
-      return { status: 400, body: { error: "reportId must be a valid UUID", code: "VALIDATION_ERROR" } };
+    if (typeof body.reportId !== "string") {
+      return { status: 400, body: { error: "reportId is required", code: "VALIDATION_ERROR" } };
+    }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.reportId)) {
+      return { status: 422, body: { error: "invalid terminal report", code: "REPORT_INVALID", reportId: body.reportId, issues: ["reportId must be a valid UUID"] } };
     }
     if (typeof body.runId !== "string" || !body.runId) {
-      return { status: 400, body: { error: "runId is required", code: "VALIDATION_ERROR" } };
+      return { status: 422, body: { error: "invalid terminal report", code: "REPORT_INVALID", reportId: body.reportId, issues: ["runId is required"] } };
+    }
+    const issues = validateTerminalReport(body);
+    if (issues.length) {
+      return { status: 422, body: { error: "invalid terminal report", code: "REPORT_INVALID", reportId: body.reportId, issues } };
     }
     const reportId = body.reportId;
     const expected = receiptFor(body, body.runId)!;
@@ -1582,8 +1613,8 @@ export class MachineGateway {
     if (body.runId !== lease.runId) {
       return { status: 403, body: { error: "report runId does not match this run lease" } };
     }
-    if (lease.state === "retired") return this.retiredReport(body, lease.runId);
-    const ok = body.result ? body.result === "success" : !!body.ok;
+    if (lease.state === "retired") return this.retiredReport(runToken, body, lease.runId);
+    const ok = body.result !== undefined ? body.result === "success" : body.ok === true;
     const canceled = body.result === "canceled";
 
     const run = await store.getRun(lease.runId);
@@ -1671,7 +1702,7 @@ export class MachineGateway {
       if (fresh?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease, body);
       if (fresh?.phase === "done") return this.enrichFinishedReport(runToken, lease, body);
       const refreshedLease = await resolveLease(runToken);
-      if (refreshedLease?.state === "retired") return this.retiredReport(body, lease.runId);
+      if (refreshedLease?.state === "retired") return this.retiredReport(runToken, body, lease.runId);
       if (fresh?.phase === "error" && refreshedLease?.state === "terminal-grace") {
         return this.reconcileReclaimedReport(runToken, refreshedLease, fresh, body);
       }

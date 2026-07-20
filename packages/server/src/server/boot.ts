@@ -9,6 +9,7 @@
 import { sql } from "drizzle-orm";
 
 import { runMigrations, closeClient, db } from "../db/index.js";
+import { repairTerminalRunLeases } from "../db/store.js";
 import { logger } from "../logger.js";
 import { MachineGateway, ONLINE_TTL_MS } from "../gateway/index.js";
 import { ArtifactSync } from "../gateway/sync.js";
@@ -52,6 +53,7 @@ export function ensureServer(): Promise<Booted> {
 
 async function boot(): Promise<Booted> {
   await runMigrations();
+  await repairTerminalRunLeases();
 
   const abort = new AbortController();
   // Drain the runtime postgres pool on clean shutdown (main.ts aborts on
