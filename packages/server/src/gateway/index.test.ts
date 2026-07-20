@@ -2587,10 +2587,11 @@ test("cli device credential: new/edit/loops/log/show route to the existing gatew
   const { deviceToken, machineId } = (await seededCli());
   const gw = gateway();
   // new → createLoop
-  const created = (await gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Daily", cron: "0 8 * * *", taskFile: "pievo/x/README.md" })]));
+  const created = (await gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Daily", cron: "0 8 * * *", taskFile: "pievo/x/README.md", model: "gpt-5.6-luna" })]));
   expect(created.status).toBe(200);
   const newId = idIn(created);
   expect((await store.getLoop(newId))!.machineId).toBe(machineId);
+  expect((await store.getLoop(newId))!.model).toBe("gpt-5.6-luna");
   // loops → listLoops (includes the just-created loop; the `loops` channel is retained)
   const loops = (await gw.cli(deviceToken, ["loops"]));
   expect((loops.body as any).loops.map((l: any) => l.id)).toContain(newId);
@@ -2764,15 +2765,16 @@ async function seededRichLoop() {
       notify: "always",
       taskFile: "pievo/docs-sweep/README.md",
       goal: "ship v1",
+      model: "opus",
       workflow: "return { state: prev };",
       ui: "<div id=\"dash\">hello dashboard body that is comfortably over the size hint threshold</div>",
       stateSchema: [{ key: "drift", label: "Drift", unit: "files" }],
     }),
   ]));
   const id = idIn(created);
-  // model/allowControl aren't create fields; the pinned runAt override is edit-only.
-  // Set them so the envelope carries non-default values for every editable key.
-  const edited = (await gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify({ model: "opus", allowControl: false, runAt: "2h", agent: "codex" })]));
+  // allowControl and the pinned runAt override are edit-only. Set them, plus a
+  // non-default agent, so the envelope carries non-default editable values.
+  const edited = (await gw.cli(deviceToken, ["edit", id, "--json", JSON.stringify({ allowControl: false, runAt: "2h", agent: "codex" })]));
   expect(edited.status).toBe(200);
   return { deviceToken, machineId, id, gw };
 }
@@ -2789,7 +2791,8 @@ test("show --json → edit --dry-run roundtrip: the envelope minus id is a no-op
   expect(Object.keys(env).sort()).toEqual(
     ["agent", "allowControl", "continuousDelayMinutes", "cron", "enabled", "goal", "id", "model", "name", "notify", "runAt", "scheduleMode", "stateSchema", "taskFile", "timezone", "ui", "workflow"].sort(),
   );
-  // The agent edited to a non-default value roundtrips through the envelope.
+  // Values set through both create and edit roundtrip through the envelope.
+  expect(env.model).toBe("opus");
   expect(env.agent).toBe("codex");
   expect(env.id).toBe(id);
   // No derived read-only aggregates leak into the editable envelope.
@@ -2909,11 +2912,12 @@ test("cli new: a closed loop reads classification closed; a provided-but-dropped
 
 test("cli new --dry-run: text is the normalized config detail + fire preview (structured config retired)", async () => {
   const { deviceToken } = (await seededCli());
-  const res = (await gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "pievo/x/README.md" }), "--dry-run"]));
+  const res = (await gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "pievo/x/README.md", model: "gpt-5.6-luna" }), "--dry-run"]));
   expect(res.status).toBe(200);
   const body = res.body as { text: string };
   expect(body.text).toContain("dry-run:");
   expect(body.text).toContain('cron: "0 6 * * 1"');
+  expect(body.text).toContain("model: gpt-5.6-luna");
   expect(body.text).toContain("nextRuns[3]:");
 });
 

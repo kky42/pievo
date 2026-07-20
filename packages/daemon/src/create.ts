@@ -3,7 +3,7 @@
  *
  * Folds SKILL.md §3 (hand IANA-timezone detection) and §4 (hand-built JSON +
  * curl) into one command. The agent's config carries only real intent —
- * name · cron · workflow|task · workdir · taskFile · stateSchema · notify. This
+ * name · cron · workflow|taskFile · workdir · model · stateSchema · ui · notify. This
  * command fills the fixed envelope the agent shouldn't have to think about:
  *   - timezone: auto-detected IANA (config/--tz override), so the cadence fires
  *     in the user's local time, not the server's (UTC in prod),

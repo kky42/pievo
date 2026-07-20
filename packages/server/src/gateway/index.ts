@@ -800,6 +800,8 @@ export class MachineGateway {
       scheduleMode?: unknown;
       continuousDelayMinutes?: unknown;
       timezone?: unknown;
+      /** Optional provider model id used by the selected coding agent. */
+      model?: unknown;
       workflow?: unknown;
       workdir?: unknown;
       taskFile?: unknown;
@@ -870,6 +872,7 @@ export class MachineGateway {
     const goal = str(body.goal)?.slice(0, GOAL_CAP) ?? null;
 
     const notify = body.notify === "always" || body.notify === "never" ? body.notify : "auto";
+    const model = str(body.model);
     // Recorded coding agent: trust the daemon's resolved value when it's known.
     // Older daemons may omit it and generic unknown values retain the historical
     // claude-code fallback. The explicitly retired Grok executor fails loud so an
@@ -903,6 +906,7 @@ export class MachineGateway {
         timezone: timezone ?? null,
         taskFile: taskFile ?? null,
         workdir: str(body.workdir) ?? null,
+        model: model ?? null,
         // The workflow JS body can be large — report presence, not the source.
         workflow: workflow != null,
         // Ditto for the dashboard HTML — presence flag, not the markup.
@@ -997,6 +1001,7 @@ export class MachineGateway {
       scheduleMode,
       continuousDelayMinutes,
       timezone,
+      model,
       workflow,
       workdir: str(body.workdir),
       taskFile,
@@ -2059,7 +2064,7 @@ function renderReplayText(name: string, loopId: string, goal: string | null): st
 
 /** `pievo new --dry-run` — the normalized config + fire preview (no persistence). */
 function renderCreateDryRunText(
-  config: { name: string | null; cron: string; scheduleMode: "cron" | "continuous"; continuousDelayMinutes: number; timezone: string | null; taskFile: string | null; workflow: boolean; ui: boolean; goal: string | null; notify: string },
+  config: { name: string | null; cron: string; scheduleMode: "cron" | "continuous"; continuousDelayMinutes: number; timezone: string | null; taskFile: string | null; model: string | null; workflow: boolean; ui: boolean; goal: string | null; notify: string },
   nextRuns: string[],
   warning: string | undefined,
 ): string {
@@ -2071,6 +2076,7 @@ function renderCreateDryRunText(
       ["continuousDelayMinutes", config.continuousDelayMinutes],
       ["timezone", config.timezone],
       ["taskFile", config.taskFile],
+      ["model", config.model],
       ["workflow", config.workflow ? "present" : "absent"],
       ["ui", config.ui ? "present" : "absent"],
       ["goal", config.goal],

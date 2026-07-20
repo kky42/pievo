@@ -558,13 +558,15 @@ computes pure functions. Run instructions: `README.md`.
   `EDITABLE_LOOP_FIELDS` are rejected with a 400 listing the allowed set. Both
   `pievo new` and `pievo edit` support `--dry-run` (server validate-only, zero
   persistence).
-- **`createLoop` also accepts an optional `ui`** (gateway `createLoop`, same
-  `validateUi` + `WIRE_TEXT_CAP` clip as `set-ui`/`editLoop`), so a template-driven
-  loop ships a **day-one dashboard** instead of waiting for an evolve pass. The daemon
-  `pievo new` spreads the whole `--json` config, so `ui` passes through with no
-  whitelist change; `--dry-run` reports `ui` as a presence flag (like `workflow`), not
-  the markup. `create.md`'s "Dashboard at create" step tells the agent to author the
-  initial `ui` when the product shape is already known (cross-refs `evolve.md` §3).
+- **`createLoop` accepts optional `model` and `ui`**. `model` persists at create so
+  the immediate first run cannot race a corrective edit; create `--dry-run` echoes it.
+  `ui` uses the same `validateUi` + `WIRE_TEXT_CAP` clip as `set-ui`/`editLoop`, so a
+  template-driven loop ships a **day-one dashboard** instead of waiting for an evolve
+  pass. The daemon `pievo new` spreads the whole `--json` config, so both pass through
+  with no whitelist change; `--dry-run` reports `ui` as a presence flag (like
+  `workflow`), not the markup. `create.md`'s "Dashboard at create" step tells the
+  agent to author the initial `ui` when the product shape is already known
+  (cross-refs `evolve.md` §3).
   **A dropped dashboard is never silent**: the REAL create response echoes `ui`
   presence (and the CLI prints `dashboard ui: applied|not applied`), and when a
   provided `ui` validated to null the response carries a `warning` that the CLI shouts

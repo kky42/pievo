@@ -189,6 +189,7 @@ file to write. Only the loop's real intent goes in it; the CLI fills the envelop
   "goal": "<one-line checkable finish line — omit for a monitor loop>",
   "workdir": "<absolute project dir>",
   "taskFile": "<absolute path to the task file above>",
+  "model": "<optional coding-agent model id>",
   "stateSchema": [{ "key": "x", "label": "X", "unit": "" }],
   "ui": "<small dashboard HTML — optional; see 'Dashboard at create' below>",
   "notify": "auto"
@@ -206,6 +207,8 @@ Rules:
 - **`goal` makes the loop closed**: with a goal set, each run judges it and calls
   `pievo finish` when met, ending the loop. Omit `goal` for a monitor/digest loop
   that runs indefinitely (§2), including an indefinite continuous monitor.
+- `model` is optional — when the owner requests a particular coding-agent model,
+  set its provider model id here so the first run uses it.
 - `stateSchema` is optional — declare numeric per-run metrics to get a chart.
 - `ui` is optional — the loop's dashboard panel as small HTML (see **Dashboard at
   create** below).
