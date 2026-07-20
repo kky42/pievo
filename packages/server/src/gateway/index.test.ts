@@ -41,7 +41,22 @@ beforeEach(async () => {
 type TestGateway = InstanceType<typeof gatewayMod.MachineGateway> &
   Pick<InstanceType<typeof cliMod.CliGateway>, "agentApi" | "cli">;
 
-function gateway(notify?: (loop: any, message: string) => Promise<void>): TestGateway {
+async function withReportIds(token: string, body: Parameters<InstanceType<typeof gatewayMod.MachineGateway>["report"]>[1]) {
+  const lease = await tokens.resolveLease(token);
+  const runId = body.runId ?? lease?.runId ?? "missing-run";
+  const hash = tokens.sha256(JSON.stringify({ ...body, runId, token }));
+  const reportId = body.reportId ?? `018f47a2-${hash.slice(0, 4)}-7${hash.slice(4, 7)}-8${hash.slice(7, 10)}-${hash.slice(10, 22)}`;
+  return { ...body, reportId, runId };
+}
+
+async function reportV2(gw: InstanceType<typeof gatewayMod.MachineGateway>, token: string, body: Parameters<typeof gw.report>[1]) {
+  return gw.report(token, await withReportIds(token, body));
+}
+
+function gateway(
+  notify?: (loop: any, message: string) => Promise<void>,
+  cliDeps?: ConstructorParameters<typeof cliMod.CliGateway>[1],
+): TestGateway {
   const core = new gatewayMod.MachineGateway(
     {
       advanceDueSchedules(): never[] { return []; },
@@ -53,7 +68,9 @@ function gateway(notify?: (loop: any, message: string) => Promise<void>): TestGa
     undefined, // default in-memory blobstore
     notify,
   );
-  const cli = new cliMod.CliGateway(core);
+  const rawReport = core.report.bind(core);
+  core.report = async (token, body) => rawReport(token, await withReportIds(token, body));
+  const cli = new cliMod.CliGateway(core, cliDeps);
   return Object.assign(core, {
     agentApi: cli.agentApi.bind(cli),
     cli: cli.cli.bind(cli),
@@ -315,8 +332,8 @@ test("a machine's bound loops gate its deletion (loopsForMachine drains to empty
   const { machine, loop } = (await seededLoop());
   // While a loop is bound, the delete guard sees it and must block.
   expect((await store.loopsForMachine(machine.id)).map((l) => l.id)).toEqual([loop.id]);
-  // Remove the loop first → the machine is now free to delete.
-  (await store.deleteLoop(loop.id));
+  // An executing loop requires explicit authority retirement before deletion.
+  (await store.forceDeleteLoop(loop.id));
   expect((await store.loopsForMachine(machine.id))).toHaveLength(0);
   expect((await store.deleteMachine(machine.id))).toBe(true);
 });
@@ -402,7 +419,8 @@ test("owner cadence edits and run-token resume synchronously persist facts then 
   expect((await cli.agentApi(rt, ["resume"])).status).toBe(200);
   expect((await store.getLoop(loop.id))!.enabled).toBe(true);
 
-  await store.cancelRun(loop.id, editRun.id);
+  await store.updateRun(editRun.id, { phase: "canceled" });
+  await tokens.retireLease(rt);
   const editRun2 = await store.addRun({
     loopId: loop.id, userId: "u1", machineId, phase: "running", role: "edit", requestedBy: "owner", ts: new Date().toISOString(),
   });
@@ -695,6 +713,7 @@ test("poll claims only one ready run per loop and honors edit > evolve > exec", 
   // Even a second poll cannot drain the other roles while edit is running.
   expect(((await gw.poll(token)).body as { deliveries: unknown[] }).deliveries).toHaveLength(0);
   await store.updateRun(first.deliveries[0]!.runId, { phase: "done" });
+  await tokens.retireLease((first.deliveries[0] as any).runToken);
   const second = (await gw.poll(token)).body as { deliveries: Array<{ role: string }> };
   expect(second.deliveries.map((d) => d.role)).toEqual(["evolve"]);
 });
@@ -1121,6 +1140,8 @@ test("evolve and edit runs never get canFinish — finish refused even on a clos
     const res = (await gateway().agentApi(rt, ["finish", "--message", "x"]));
     expect(res.status).toBe(403);
     expect((res.body as { text: string }).text).toMatch(/only an exec run/i);
+    await store.updateRun(run.id, { phase: "canceled" });
+    await tokens.retireLease(rt);
   }
   expect((await store.getLoop(loop.id))!.completedAt).toBeNull();
 });
@@ -1143,14 +1164,15 @@ test("poll mints canFinish only for an exec run on a closed loop (via show self-
   (await store.addRun({ loopId: open.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() }));
 
   const gw = gateway();
-  const deliveries = ((await gw.poll(token)).body as { deliveries: Array<{ loop: { id: string }; runToken: string }> }).deliveries;
-  const tokenFor = (loopId: string) => deliveries.find((d) => d.loop.id === loopId)!.runToken;
-
-  const closedShow = ((await gw.agentApi(tokenFor(closed.id), ["show"])).body as { text: string }).text;
+  const closedDelivery = ((await gw.poll(token)).body as { deliveries: Array<{ runId: string; loop: { id: string }; runToken: string }> }).deliveries[0]!;
+  const closedShow = ((await gw.agentApi(closedDelivery.runToken, ["show"])).body as { text: string }).text;
   expect(closedShow).toContain("goal: g");
   expect(closedShow).toContain("selfFinish: allowed");
 
-  const openShow = ((await gw.agentApi(tokenFor(open.id), ["show"])).body as { text: string }).text;
+  await store.updateRun(closedDelivery.runId, { phase: "done" });
+  await tokens.retireLease(closedDelivery.runToken);
+  const openDelivery = ((await gw.poll(token)).body as { deliveries: Array<{ runToken: string }> }).deliveries[0]!;
+  const openShow = ((await gw.agentApi(openDelivery.runToken, ["show"])).body as { text: string }).text;
   expect(openShow).toContain("goal: —");
   expect(openShow).toContain("selfFinish: off");
 });
@@ -1577,7 +1599,7 @@ test("continuous loop stops enqueueing after the 3rd exec error trips the breake
   let current = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", requestedBy: "system", ts: new Date().toISOString() });
   for (let attempt = 1; attempt <= 3; attempt++) {
     const rt = await tokens.registerRunLease({ runId: current.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
-    expect((await gw.report(rt, { ok: false, error: `boom ${attempt}`, durationMs: 1 })).status).toBe(200);
+    expect((await reportV2(gw, rt, { ok: false, error: `boom ${attempt}`, durationMs: 1 })).status).toBe(200);
     let waiting = (await store.openRunsForLoop(loop.id)).find((r) => r.phase === "pending" && r.role === "exec");
     if (attempt < 3) {
       expect(waiting).toBeUndefined(); // cadence remains a fact until due
@@ -1760,14 +1782,14 @@ test("concurrent normal reports have one terminal winner and loser side effects 
     removeLoop(): void {}, advanceDueSchedules(): never[] { return []; },
   } as any, undefined, fn);
   await Promise.all([
-    gw.report(rt, {
+    reportV2(gw, rt, {
       ok: true,
       sessionId: "normal-success",
       cursor: { winner: "success" },
       taskFileContent: "normal success task",
       finalText: "success",
     }),
-    gw.report(rt, {
+    reportV2(gw, rt, {
       ok: false,
       sessionId: "normal-failure",
       taskFileContent: "normal failure task",
@@ -1834,8 +1856,7 @@ test("concurrent terminal-grace reports consume exactly one reconcile and cannot
       error: "real failure",
     }),
   ]);
-  const reconciled = [success, failure].filter((r) => (r.body as { reconciled?: boolean }).reconciled === true);
-  expect(reconciled).toHaveLength(1);
+  expect([success.status, failure.status].sort()).toEqual([200, 409]);
   const final = (await store.getRun(run.id))!;
   const storedLoop = (await store.getLoop(loop.id))!;
   if (final.phase === "done") {
@@ -1866,7 +1887,8 @@ test("a reclaimed workflow run restores its explicit message on wake-report", as
     message: "Workflow recovered after wake",
     finalText: "lower-priority fallback",
   });
-  expect((res.body as { reconciled?: boolean }).reconciled).toBe(true);
+  expect(res.status).toBe(200);
+  expect(await store.getReportReceipt((res.body as { reportId: string }).reportId)).toBeDefined();
   expect((await store.getRun(run.id))!).toMatchObject({
     phase: "done",
     message: "Workflow recovered after wake",
@@ -1919,7 +1941,7 @@ test("a pending reclaim CAS cannot overwrite a concurrent poll claim", async () 
   const queued = await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });
   if (!("run" in queued)) throw new Error("expected queued run");
   const stalePending = queued.run;
-  expect(await store.claimReadyRunsForMachine(machineId)).toHaveLength(1);
+  expect(await store.claimReadyRunForMachine(machineId)).toBeDefined();
   const calls: string[] = [];
   const core = new gatewayMod.MachineGateway({
     addLoop(): void { calls.push("arm"); }, removeLoop(): void {}, advanceDueSchedules(): never[] { return []; },
@@ -2030,24 +2052,14 @@ test("sweep is INACTIVITY-based: a >20min run with a fresh activeRunIds heartbea
   expect((await store.getRun(run.id))!.error).toBe("machine timed out / disconnected");
 });
 
-test("activeRunIds heartbeats every legitimate run beyond the old 32-run cap", async () => {
+test("activeRunIds heartbeat refresh is scoped to the machine's single run", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" });
-  const runs = await Promise.all(Array.from({ length: 40 }, (_, i) => store.addRun({
-    id: `many-active-${i}`,
-    loopId: loop.id,
-    userId: "u1",
-    machineId,
-    phase: "running",
-    role: "exec",
-    ts: new Date().toISOString(),
-  })));
-
-  await gateway().poll(token, undefined, [...runs.map((run) => run.id), ...runs.map((run) => run.id)]);
-  const stored = await Promise.all(runs.map((run) => store.getRun(run.id)));
-  expect(stored.every((run) => !!run?.heartbeatAt)).toBe(true);
+  const run = await store.addRun({ id: "single-active", loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  await gateway().poll(token, undefined, [run.id, run.id]);
+  expect((await store.getRun(run.id))?.heartbeatAt).toBeTruthy();
 });
 
 test("heartbeat refresh throttling stays inside short custom timeout windows", () => {
@@ -2086,6 +2098,8 @@ test("show computes `next` in the loop's timezone", async () => {
     const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
     const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
     const text = ((await gw.agentApi(rt, ["show"])).body as { text: string }).text;
+    await store.updateRun(run.id, { phase: "canceled" });
+    await tokens.retireLease(rt);
     return text.split("\n").find((l) => l.startsWith("nextFire:"))!;
   };
   // Same cron, timezones 25h apart — the derived nextFire, rendered IN the loop's own
@@ -2257,14 +2271,136 @@ test("cli run credential: show is scoped to the run's own loop with its caps", a
   expect(text).toContain("selfSchedule: allowed");
 });
 
-test("cli run credential: owner-only verbs (new/edit/loops/status) are 403, not unknown-command", async () => {
+test("cli run credential: owner-only verbs are 403, not unknown-command", async () => {
   const { runToken } = (await seededCli());
   const gw = gateway();
-  for (const argv of [["new"], ["edit"], ["loops"], ["status"]]) {
+  for (const argv of [["new"], ["edit"], ["loops"], ["start"], ["stop"], ["delete"], ["run", "stop", "r"], ["status"], ["doctor"]]) {
     const res = (await gw.cli(runToken, argv));
     expect(res.status).toBe(403);
     expect((res.body as { text: string }).text).toMatch(/device credential|own loop/);
   }
+});
+
+test("cli device lifecycle: pause/start are truthful and use the store lifecycle", async () => {
+  const { deviceToken, loop } = await seededCli();
+  const gw = gateway();
+  const paused = await gw.cli(deviceToken, ["pause", loop.id]);
+  expect(paused.status).toBe(200);
+  expect(textOf(paused)).toContain("loop paused; current run is finishing");
+  expect((await store.getLoop(loop.id))?.enabled).toBe(false);
+
+  const started = await gw.cli(deviceToken, ["start", loop.id]);
+  expect(started.status).toBe(200);
+  expect(textOf(started)).toContain("loop started");
+  expect((await store.getLoop(loop.id))?.enabled).toBe(true);
+});
+
+test("cli pause wording uses the running state returned after the locked pause", async () => {
+  const { deviceToken, loop } = await seededCli();
+  const pausedLoop = { ...loop, enabled: false };
+  const res = await gateway(undefined, {
+    pauseLoopState: async () => ({ loop: pausedLoop }),
+  }).cli(deviceToken, ["pause", loop.id]);
+  expect(res.status).toBe(200);
+  expect(textOf(res)).toBe("loop paused; future runs disabled");
+  expect(textOf(res)).not.toContain("current run is finishing");
+});
+
+test("cli device stop is update-gated before mutation and never falsely advertises a stop", async () => {
+  const { deviceToken, loop, run } = await seededCli();
+  const gw = gateway();
+  const rejected = await gw.cli(deviceToken, ["stop", loop.id]);
+  expect(rejected.status).toBe(426);
+  expect(textOf(rejected)).toContain("Daemon update required to stop a running process");
+  expect((await store.getLoop(loop.id))?.enabled).toBe(true);
+  expect((await store.getRun(run.id))?.cancelRequestedAt).toBeNull();
+
+  await store.updateMachine(loop.machineId, { daemonProtocol: 2 });
+  const stopped = await gw.cli(deviceToken, ["stop", loop.id]);
+  expect(stopped.status).toBe(200);
+  expect(textOf(stopped)).toContain("stop requested; waiting for");
+  expect((await store.getLoop(loop.id))?.enabled).toBe(false);
+  expect((await store.getRun(run.id))?.cancelRequestedAt).toBeTruthy();
+  expect((await store.getRun(run.id))?.phase).toBe("running");
+});
+
+test("cli delete is protocol-gated before requesting deletion when a run is active", async () => {
+  const { deviceToken, loop } = await seededCli();
+  const rejected = await gateway().cli(deviceToken, ["delete", loop.id]);
+  expect(rejected.status).toBe(426);
+  expect(textOf(rejected)).toContain("Daemon update required to stop a running process");
+  expect((await store.getLoop(loop.id))?.deleteRequestedAt).toBeNull();
+  expect((await store.getLoop(loop.id))?.enabled).toBe(true);
+});
+
+test("cli device run stop preserves loop state and reports terminal runs truthfully", async () => {
+  const { deviceToken, loop, run } = await seededCli();
+  await store.updateMachine(loop.machineId, { daemonProtocol: 2 });
+  const gw = gateway();
+  const stopped = await gw.cli(deviceToken, ["run", "stop", run.id]);
+  expect(stopped.status).toBe(200);
+  expect(textOf(stopped)).toContain("stop requested; waiting for");
+  expect((await store.getLoop(loop.id))?.enabled).toBe(true);
+  expect((await store.getRun(run.id))?.phase).toBe("running");
+});
+
+test("cli force delete requires prior request, explicit marker, and team-owner authority", async () => {
+  const { deviceToken, loop } = await seededCli();
+  await store.ensureTeam("team-cli", "CLI", "u1");
+  await store.updateLoop(loop.id, { teamId: "team-cli" });
+  await store.updateMachine(loop.machineId, { daemonProtocol: 2 });
+  const gw = gateway();
+
+  const noRequest = await gw.cli(deviceToken, ["delete", loop.id, "--force", "--confirmation", "delete-server-data-anyway"]);
+  expect(noRequest.status).toBe(409);
+  expect(textOf(noRequest)).toContain("delete must be requested first");
+
+  expect((await gw.cli(deviceToken, ["delete", loop.id])).status).toBe(200);
+  const noMarker = await gw.cli(deviceToken, ["delete", loop.id, "--force"]);
+  expect(noMarker.status).toBe(400);
+  expect(textOf(noMarker)).toContain("force delete confirmation required");
+
+  await store.addTeamMember("team-cli", "u2", "owner");
+  expect(await store.setTeamMemberRoleGuarded("team-cli", "u1", "member")).toBe("ok");
+  const notOwner = await gw.cli(deviceToken, ["delete", loop.id, "--force", "--confirmation", "delete-server-data-anyway"]);
+  expect(notOwner.status).toBe(403);
+  expect(textOf(notOwner)).toContain("team owner");
+});
+
+test("cli force delete logs, reports reachability truthfully, and honors a false store result", async () => {
+  const first = await seededCli();
+  await store.ensureTeam("team-force", "Force", "u1");
+  await store.updateLoop(first.loop.id, { teamId: "team-force" });
+  await store.updateMachine(first.loop.machineId, { daemonProtocol: 2, online: false, lastSeen: null });
+  await store.requestDeleteLoop(first.loop.id);
+  const audit: Array<Record<string, unknown>> = [];
+  const forced = await gateway(undefined, { destructiveLog: (event) => audit.push(event) }).cli(first.deviceToken, [
+    "delete", first.loop.id, "--force", "--confirmation", "delete-server-data-anyway",
+  ]);
+  expect(forced.status).toBe(200);
+  expect(textOf(forced)).toContain("machine is unreachable");
+  expect(audit).toEqual([expect.objectContaining({ action: "force-delete", loopId: first.loop.id, machineReachability: "offline" })]);
+
+  const online = await seededCli();
+  await store.updateLoop(online.loop.id, { teamId: "team-force" });
+  await store.updateMachine(online.loop.machineId, { online: true, lastSeen: new Date().toISOString() });
+  await store.requestDeleteLoop(online.loop.id);
+  const onlineForced = await gateway().cli(online.deviceToken, [
+    "delete", online.loop.id, "--force", "--confirmation", "delete-server-data-anyway",
+  ]);
+  expect(onlineForced.status).toBe(200);
+  expect(textOf(onlineForced)).toContain("machine is online");
+  expect(textOf(onlineForced)).not.toContain("machine is unreachable");
+
+  const second = await seededCli();
+  await store.updateLoop(second.loop.id, { teamId: "team-force" });
+  await store.requestDeleteLoop(second.loop.id);
+  const failed = await gateway(undefined, { forceDeleteLoop: async () => false }).cli(second.deviceToken, [
+    "delete", second.loop.id, "--force", "--confirmation", "delete-server-data-anyway",
+  ]);
+  expect(failed.status).toBe(409);
+  expect(textOf(failed)).toContain("server data was not deleted");
+  expect(await store.getLoop(second.loop.id)).toBeTruthy();
 });
 
 test("cli device credential: report/finish are run-only → 403", async () => {

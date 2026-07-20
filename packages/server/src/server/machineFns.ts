@@ -67,6 +67,7 @@ async function toSummary(m: Machine, scope: RequestScope): Promise<MachineSummar
     platform: m.platform ?? null,
     arch: m.arch ?? null,
     daemonVersion: m.daemonVersion ?? null,
+    daemonProtocol: m.daemonProtocol ?? null,
     // Same for every machine (cached npm latest); non-blocking + fail-silent.
     latestDaemonVersion: latestDaemonVersion.get(),
     token: tokenVisibleTo(m, scope) ? (m.token ?? null) : null,

@@ -109,7 +109,7 @@ export async function getDeviceOwner(machineId: string, now: number = Date.now()
 }
 
 /** The least-privilege capability set a run lease carries. Normal delivery
- * derives these inside `store.claimReadyRunsForMachine` and inserts the lease in
+ * derives these inside `store.claimReadyRunForMachine` and inserts the lease in
  * the claim transaction; `registerRunLease` remains the direct helper for tests
  * and compatibility paths. */
 export interface RunLeaseCaps {
@@ -147,7 +147,7 @@ export interface RunLeaseCaps {
  * NOT a terminal-grace transition.
  */
 export interface RunLease extends RunLeaseCaps {
-  state: "active" | "terminal-grace";
+  state: "active" | "terminal-grace" | "retired";
   /** Absolute expiry (ms epoch). `Infinity` while active (a live run never times
    *  out here — the server's inactivity sweep is the vanished-machine guard);
    *  `now + TERMINAL_GRACE_MS` once terminalized. */

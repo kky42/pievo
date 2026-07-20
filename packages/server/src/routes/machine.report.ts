@@ -14,7 +14,7 @@ export const Route = createFileRoute('/machine/report')({
         if (!token) return Response.json({ error: 'missing token' }, { status: 401 })
         const parsed = await readJsonBody(request, MACHINE_BODY_CAP)
         if (parsed.kind === 'too-large') return Response.json({ error: 'body too large' }, { status: 413 })
-        const body = parsed.kind === 'ok' ? parsed.body : {}
+        const body = parsed.kind === 'ok' && parsed.body && typeof parsed.body === 'object' ? parsed.body : {}
         const { getGateway } = await import('../server/boot.js')
         const gw = await getGateway()
         const r = await gw.report(token, body as Parameters<typeof gw.report>[1])

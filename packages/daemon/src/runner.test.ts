@@ -9,11 +9,9 @@
  * workflow error, the workflow source, the dated setup file, and the copy-paste fix prompt.
  */
 import fs from "node:fs";
-import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { AddressInfo } from "node:net";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -377,25 +375,8 @@ describe("runDelivery — a timed-out run keeps its session pointer", () => {
     fs.chmodSync(bin, 0o755);
     process.env.PIEVO_CLAUDE_BIN = bin;
 
-    // Capture the report POST with a real local server (report is fire-and-forget).
-    const reports: any[] = [];
-    const srv = http.createServer((req, res) => {
-      let body = "";
-      req.on("data", (c) => (body += c));
-      req.on("end", () => {
-        reports.push(JSON.parse(body));
-        res.end("{}");
-      });
-    });
-    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
-    try {
-      const port = (srv.address() as AddressInfo).port;
-      await run(delivery({ loop: { ...delivery().loop, workflow: null } }), `http://127.0.0.1:${port}`, []);
-    } finally {
-      srv.close();
-      delete process.env.PIEVO_EXEC_TIMEOUT_MS;
-    }
-    const rep = reports.find((r) => r.runId === "run-1");
+    const rep = await run(delivery({ loop: { ...delivery().loop, workflow: null } }), "https://unused.test", []);
+    delete process.env.PIEVO_EXEC_TIMEOUT_MS;
     expect(rep).toBeTruthy();
     expect(rep.ok).toBe(false);
     expect(rep.error).toMatch(/timed out/);
@@ -429,23 +410,7 @@ describe("runDelivery — the exec timeout is opt-in (unlimited by default)", ()
     fs.chmodSync(bin, 0o755);
     process.env.PIEVO_CLAUDE_BIN = bin;
 
-    const reports: any[] = [];
-    const srv = http.createServer((req, res) => {
-      let body = "";
-      req.on("data", (c) => (body += c));
-      req.on("end", () => {
-        reports.push(JSON.parse(body));
-        res.end("{}");
-      });
-    });
-    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
-    try {
-      const port = (srv.address() as AddressInfo).port;
-      await run(delivery({ loop: { ...delivery().loop, workflow: null } }), `http://127.0.0.1:${port}`, []);
-    } finally {
-      srv.close();
-    }
-    const rep = reports.find((r) => r.runId === "run-1");
+    const rep = await run(delivery({ loop: { ...delivery().loop, workflow: null } }), "https://unused.test", []);
     expect(rep).toBeTruthy();
     expect(rep.ok).toBe(true);
     expect(rep.error).toBeUndefined();
@@ -510,32 +475,15 @@ describe("runDelivery — provider execution is always single-shot", () => {
     fs.chmodSync(bin, 0o755);
     process.env[envKey] = bin;
 
-    const reports: any[] = [];
-    const srv = http.createServer((req, res) => {
-      let body = "";
-      req.on("data", (c) => (body += c));
-      req.on("end", () => {
-        reports.push(JSON.parse(body));
-        res.end("{}");
-      });
-    });
-    await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
-    try {
-      const port = (srv.address() as AddressInfo).port;
-      await runDelivery(
-        delivery({ loop: { ...delivery().loop, workflow: null, agent } }),
-        `http://127.0.0.1:${port}`,
-        [],
-      );
-    } finally {
-      srv.close();
-    }
+    const rep = await runDelivery(
+      delivery({ loop: { ...delivery().loop, workflow: null, agent } }),
+      "https://unused.test", [],
+    );
 
     expect(fs.readFileSync(path.join(workdir, "invocations.txt"), "utf8")).toBe("1");
     const argv = fs.readFileSync(path.join(workdir, "provider-argv.txt"), "utf8").split("\n");
     expect(argv).not.toContain("--resume");
     expect(argv).not.toContain("resume");
-    const rep = reports.find((r) => r.runId === "run-1");
     expect(rep).toMatchObject({ ok: false, exitCode: 1, sessionId: "session-once" });
     expect(rep.error).toMatch(/error_during_execution|Connection closed mid-response/);
   }, 30000);
@@ -590,41 +538,13 @@ describe("runDelivery — the local PIEVO_ROOTS jail always applies", () => {
   }, 20000);
 });
 
-/** Local server that captures every report POST (report is fire-and-forget). */
-function reportCapture(): { reports: any[]; start: () => Promise<string>; close: () => void } {
-  const reports: any[] = [];
-  const srv = http.createServer((req, res) => {
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => {
-      reports.push(JSON.parse(body));
-      res.end("{}");
-    });
-  });
-  return {
-    reports,
-    start: async () => {
-      await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
-      return `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
-    },
-    close: () => srv.close(),
-  };
-}
-
 describe("runDelivery — workflow-only reports preserve their message", () => {
   test("direct workflow message is included with exitCode 0", async () => {
-    const cap = reportCapture();
-    const url = await cap.start();
-    try {
-      await runDelivery(
-        delivery({ loop: { ...delivery().loop, workflow: `return { message: "workflow delivered", state: { cursor: 1 } };` } }),
-        url,
-        [],
-      );
-    } finally {
-      cap.close();
-    }
-    expect(cap.reports.find((r) => r.runId === "run-1")).toMatchObject({
+    const rep = await runDelivery(
+      delivery({ loop: { ...delivery().loop, workflow: `return { message: "workflow delivered", state: { cursor: 1 } };` } }),
+      "https://unused.test", [],
+    );
+    expect(rep).toMatchObject({
       ok: true,
       exitCode: 0,
       outcome: "direct",
@@ -650,14 +570,7 @@ describe("runDelivery — an evolve run's finalText reaches the report", () => {
     fs.chmodSync(bin, 0o755);
     process.env.PIEVO_CLAUDE_BIN = bin;
 
-    const cap = reportCapture();
-    const url = await cap.start();
-    try {
-      await runDelivery(delivery({ role: "evolve", loop: { ...delivery().loop, workflow: null } }), url, []);
-    } finally {
-      cap.close();
-    }
-    const rep = cap.reports.find((r) => r.runId === "run-1");
+    const rep = await runDelivery(delivery({ role: "evolve", loop: { ...delivery().loop, workflow: null } }), "https://unused.test", []);
     expect(rep).toBeTruthy();
     expect(rep.ok).toBe(true);
     expect(rep.outcome).toBe("evolve");
@@ -682,14 +595,7 @@ describe("runDelivery — a non-zero exit with a clean result never records 'suc
     fs.chmodSync(bin, 0o755);
     process.env.PIEVO_CLAUDE_BIN = bin;
 
-    const cap = reportCapture();
-    const url = await cap.start();
-    try {
-      await runDelivery(delivery({ loop: { ...delivery().loop, workflow: null } }), url, []);
-    } finally {
-      cap.close();
-    }
-    const rep = cap.reports.find((r) => r.runId === "run-1");
+    const rep = await runDelivery(delivery({ loop: { ...delivery().loop, workflow: null } }), "https://unused.test", []);
     expect(rep).toBeTruthy();
     expect(rep.ok).toBe(false);
     // Pre-fix: error was literally "success" (the result event's subtype).
@@ -711,14 +617,7 @@ describe("runDelivery — a non-zero exit with a clean result never records 'suc
     fs.chmodSync(bin, 0o755);
     process.env.PIEVO_CLAUDE_BIN = bin;
 
-    const cap = reportCapture();
-    const url = await cap.start();
-    try {
-      await runDelivery(delivery({ loop: { ...delivery().loop, workflow: null } }), url, []);
-    } finally {
-      cap.close();
-    }
-    const rep = cap.reports.find((r) => r.runId === "run-1");
+    const rep = await runDelivery(delivery({ loop: { ...delivery().loop, workflow: null } }), "https://unused.test", []);
     expect(rep).toBeTruthy();
     expect(rep.ok).toBe(false);
     expect(rep.error).toBe("error_max_turns");
@@ -744,14 +643,7 @@ describe("runDelivery — Codex terminal telemetry report", () => {
     fs.chmodSync(bin, 0o755);
     process.env.PIEVO_CODEX_BIN = bin;
 
-    const cap = reportCapture();
-    const url = await cap.start();
-    try {
-      await runDelivery(delivery({ loop: { ...delivery().loop, workflow: null, agent: "codex" } }), url, []);
-    } finally {
-      cap.close();
-    }
-    const rep = cap.reports.find((r) => r.runId === "run-1");
+    const rep = await runDelivery(delivery({ loop: { ...delivery().loop, workflow: null, agent: "codex" } }), "https://unused.test", []);
     expect(rep).toMatchObject({
       ok: true,
       exitCode: 0,

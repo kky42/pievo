@@ -25,6 +25,7 @@ import {
   artifactFiles,
   runSnapshots,
   runLeases,
+  runReportReceipts,
   type ArtifactFile,
   type ArtifactMeta,
   type ControlAction,
@@ -211,7 +212,8 @@ async function updateLoopTx(tx: StoreTx, current: Loop, patch: Partial<NewLoop>,
   const completing = patch.completedAt != null;
   if (completing) extra.enabled = false;
   const effective = { ...current, ...patch, ...extra } as Loop;
-  const pausing = !effective.enabled || effective.completedAt != null;
+  if (current.deleteRequestedAt) extra.enabled = false;
+  const pausing = !effective.enabled || effective.completedAt != null || current.deleteRequestedAt != null;
   const activating =
     effective.enabled && effective.completedAt == null &&
     ((patch.enabled === true && (!current.enabled || current.completedAt != null)) ||
@@ -277,23 +279,118 @@ export async function updateLoop(id: string, patch: Partial<NewLoop>): Promise<L
   });
 }
 
+async function deleteLoopDataTx(tx: StoreTx, id: string, keepRetiredLeases = false): Promise<boolean> {
+  const deleted = await tx.delete(loops).where(eq(loops.id, id)).returning({ id: loops.id });
+  if (!deleted.length) return false;
+  await tx.delete(runs).where(eq(runs.loopId, id));
+  await tx.delete(runLeases).where(and(eq(runLeases.loopId, id), keepRetiredLeases ? ne(runLeases.state, "retired") : undefined));
+  await tx.delete(artifactFiles).where(eq(artifactFiles.loopId, id));
+  await tx.delete(runSnapshots).where(eq(runSnapshots.loopId, id));
+  return true;
+}
+
 export async function deleteLoop(id: string): Promise<boolean> {
+  await requestDeleteLoop(id);
+  return tryDeleteLoop(id);
+}
+
+export interface PauseLoopResult { loop: Loop; running?: Run }
+
+/** Stable Pause plus the post-transition running fact, observed under the same loop
+ * lock. Callers use this result for truthful wording without a pre-lock race. */
+export async function pauseLoopState(id: string): Promise<PauseLoopResult | undefined> {
   return db.transaction(async (tx) => {
-    const deleted = await tx.delete(loops).where(eq(loops.id, id)).returning({ id: loops.id });
-    if (deleted.length > 0) {
-      // Cascade the loop's execution + artifact metadata. Leaving these rows behind
-      // would pin their blob hashes in the GC keep-set FOREVER (liveBlobRefs unions
-      // every artifact_files hash + every retained snapshot manifest), so a deleted
-      // loop's R2 bytes would never be reclaimed. The bytes themselves fall out on
-      // the next periodic GC pass once nothing references them.
-      await tx.delete(runs).where(eq(runs.loopId, id));
-      // A live lease for a deleted loop would otherwise linger forever (active
-      // leases have no expiry, so the prune never collects them).
-      await tx.delete(runLeases).where(eq(runLeases.loopId, id));
-      await tx.delete(artifactFiles).where(eq(artifactFiles.loopId, id));
-      await tx.delete(runSnapshots).where(eq(runSnapshots.loopId, id));
+    const current = (await tx.select().from(loops).where(eq(loops.id, id)).for("update"))[0];
+    if (!current) return undefined;
+    const loop = await updateLoopTx(tx, current, { enabled: false }, nowIso());
+    const running = (await tx.select().from(runs).where(and(eq(runs.loopId, id), eq(runs.phase, "running"))).limit(1))[0];
+    return { loop, ...(running ? { running } : {}) };
+  });
+}
+
+/** Stable Pause compatibility seam for existing non-rendering callers. */
+export async function pauseLoop(id: string): Promise<Loop | undefined> {
+  return (await pauseLoopState(id))?.loop;
+}
+
+/** Start is distinct from reopen: deleting/completed loops cannot be started. */
+export async function startLoop(id: string): Promise<Loop | undefined> {
+  return db.transaction(async (tx) => {
+    const current = (await tx.select().from(loops).where(eq(loops.id, id)).for("update"))[0];
+    if (!current || current.completedAt || current.deleteRequestedAt) return undefined;
+    return updateLoopTx(tx, current, { enabled: true }, nowIso());
+  });
+}
+
+export interface StopLoopResult { loop: Loop; running?: Run }
+
+async function stopLoopTx(tx: StoreTx, current: Loop, at: string): Promise<StopLoopResult> {
+  const loop = (await tx.update(loops).set({ enabled: false, nextCadenceAt: null, nextRunAt: null, updatedAt: at })
+    .where(eq(loops.id, current.id)).returning())[0]!;
+  await cancelPendingTx(tx, and(eq(runs.loopId, current.id), eq(runs.phase, "pending")), "canceled - loop stopped before this queued run was claimed", at);
+  const running = (await tx.select().from(runs).where(and(eq(runs.loopId, current.id), eq(runs.phase, "running"))).limit(1).for("update"))[0];
+  if (!running) return { loop };
+  const marked = running.cancelRequestedAt ? running : (await tx.update(runs).set({ cancelRequestedAt: at, updatedAt: at })
+    .where(and(eq(runs.id, running.id), eq(runs.phase, "running"), isNull(runs.cancelRequestedAt))).returning())[0] ?? running;
+  return { loop, running: marked };
+}
+
+/** Stop is one loop-locked write: Pause + cancel all queue + mark current run. */
+export async function stopLoop(id: string): Promise<StopLoopResult | undefined> {
+  return db.transaction(async (tx) => {
+    const current = (await tx.select().from(loops).where(eq(loops.id, id)).for("update"))[0];
+    return current ? stopLoopTx(tx, current, nowIso()) : undefined;
+  });
+}
+
+/** Stop-run preserves loop lifecycle; running cancellation waits for daemon proof. */
+export async function requestRunCancel(loopId: string, runId: string): Promise<Run | undefined> {
+  return db.transaction(async (tx) => {
+    const loop = (await tx.select({ id: loops.id }).from(loops).where(eq(loops.id, loopId)).for("update"))[0];
+    if (!loop) return undefined;
+    const run = (await tx.select().from(runs).where(and(eq(runs.id, runId), eq(runs.loopId, loopId))).limit(1).for("update"))[0];
+    if (!run) return undefined;
+    if (run.phase === "pending") {
+      const at = nowIso();
+      return (await tx.update(runs).set({ phase: "canceled", outcome: "skipped", error: "stopped by user", ts: at, updatedAt: at })
+        .where(and(eq(runs.id, runId), eq(runs.phase, "pending"))).returning())[0] ?? run;
     }
-    return deleted.length > 0;
+    if (run.phase === "running" && !run.cancelRequestedAt) {
+      const at = nowIso();
+      return (await tx.update(runs).set({ cancelRequestedAt: at, updatedAt: at })
+        .where(and(eq(runs.id, runId), eq(runs.phase, "running"), isNull(runs.cancelRequestedAt))).returning())[0] ?? run;
+    }
+    return run;
+  });
+}
+
+export async function requestDeleteLoop(id: string): Promise<StopLoopResult | undefined> {
+  return db.transaction(async (tx) => {
+    let current = (await tx.select().from(loops).where(eq(loops.id, id)).for("update"))[0];
+    if (!current) return undefined;
+    const at = current.deleteRequestedAt ?? nowIso();
+    if (!current.deleteRequestedAt) current = (await tx.update(loops).set({ deleteRequestedAt: at, updatedAt: at }).where(eq(loops.id, id)).returning())[0]!;
+    return stopLoopTx(tx, current, at);
+  });
+}
+
+export async function tryDeleteLoop(id: string): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const loop = (await tx.select().from(loops).where(eq(loops.id, id)).for("update"))[0];
+    if (!loop?.deleteRequestedAt) return false;
+    const open = (await tx.select({ id: runs.id }).from(runs).where(and(eq(runs.loopId, id), inArray(runs.phase, ["pending", "running"]))).limit(1))[0];
+    const authority = (await tx.select({ id: runLeases.tokenHash }).from(runLeases).where(and(eq(runLeases.loopId, id), inArray(runLeases.state, ["active", "terminal-grace"]))).limit(1))[0];
+    return open || authority ? false : deleteLoopDataTx(tx, id);
+  });
+}
+
+export async function forceDeleteLoop(id: string, retentionMs = 24 * 60 * 60 * 1000): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const loop = (await tx.select().from(loops).where(eq(loops.id, id)).for("update"))[0];
+    if (!loop) return false;
+    const expiresAt = new Date(Date.now() + retentionMs).toISOString();
+    await tx.update(runLeases).set({ state: "retired", expiresAt }).where(and(eq(runLeases.loopId, id), inArray(runLeases.state, ["active", "terminal-grace"])));
+    return deleteLoopDataTx(tx, id, true);
   });
 }
 
@@ -305,6 +402,9 @@ async function enqueueRunTx(
   request: EnqueueRunRequest,
   at: string,
 ): Promise<EnqueueRunResult> {
+  if (loop.deleteRequestedAt) {
+    return { state: "rejected", reason: "loop is being deleted" };
+  }
   if (request.requestedBy === "owner") {
     if (loop.completedAt && request.role !== "edit") {
       return { state: "rejected", reason: "loop is completed - only an owner edit may be queued" };
@@ -485,6 +585,35 @@ export async function getRun(id: string): Promise<Run | undefined> {
   return (await db.select().from(runs).where(eq(runs.id, id)))[0];
 }
 
+export async function runningRunForMachine(machineId: string): Promise<Run | undefined> {
+  return (await db.select().from(runs).where(and(eq(runs.machineId, machineId), eq(runs.phase, "running"))).limit(1))[0];
+}
+
+export async function getReportReceipt(reportId: string) {
+  return (await db.select().from(runReportReceipts).where(eq(runReportReceipts.reportId, reportId)))[0];
+}
+
+export async function insertReportReceipt(input: typeof runReportReceipts.$inferInsert): Promise<void> {
+  await db.insert(runReportReceipts).values(input);
+}
+
+/** Race-safe receipt reservation for definitive non-finalization ACKs (RETIRED).
+ * Returns the row that owns reportId, whether inserted here or concurrently. */
+export async function putReportReceiptIfAbsent(input: typeof runReportReceipts.$inferInsert) {
+  const inserted = await db.insert(runReportReceipts).values(input)
+    .onConflictDoNothing({ target: runReportReceipts.reportId }).returning();
+  return inserted[0] ?? getReportReceipt(input.reportId);
+}
+
+export async function countReportReceipts(): Promise<number> {
+  const row = (await db.select({ n: sql<number>`count(*)` }).from(runReportReceipts))[0];
+  return Number(row?.n ?? 0);
+}
+
+export async function pruneReportReceipts(before: string): Promise<number> {
+  return (await db.delete(runReportReceipts).where(lt(runReportReceipts.createdAt, before)).returning({ id: runReportReceipts.reportId })).length;
+}
+
 export async function updateRun(id: string, patch: Partial<NewRun>): Promise<Run | undefined> {
   await db.update(runs).set({ ...patch, updatedAt: nowIso() }).where(eq(runs.id, id));
   return getRun(id);
@@ -512,7 +641,7 @@ export async function refreshRunHeartbeats(
   return refreshed.length;
 }
 
-type RunMutationCapability = "always" | "control" | "set-ui" | "set-schema" | "set-workflow" | "finish";
+type RunMutationCapability = "always" | "report" | "control" | "set-ui" | "set-schema" | "set-workflow" | "finish";
 type ActiveRunCheck =
   | { state: "active"; run: Run }
   | { state: "invalid-lease" | "run-not-running" | "forbidden" };
@@ -538,7 +667,10 @@ async function activeRunForMutationTx(
       .for("update")
   )[0];
   if (!lease) return { state: "invalid-lease" };
-  const permitted = capability === "always" ||
+  const canceled = (await tx.select({ cancelRequestedAt: runs.cancelRequestedAt }).from(runs)
+    .where(and(eq(runs.id, runId), eq(runs.loopId, loopId))).limit(1))[0];
+  if (canceled?.cancelRequestedAt && capability !== "report") return { state: "run-not-running" };
+  const permitted = capability === "always" || capability === "report" ||
     (capability === "control" && lease.allowControl) ||
     (capability === "set-ui" && lease.canSetUi) ||
     (capability === "set-schema" && lease.canSetSchema) ||
@@ -688,16 +820,17 @@ export interface FinalizeRunningRunResult {
 export async function finalizeRunningRun(
   loopId: string,
   runId: string,
-  runPatch: Partial<NewRun> & { phase: "done" | "error" },
+  runPatch: Partial<NewRun> & { phase: "done" | "error" | "canceled" },
   loopPatch: Partial<NewLoop> = {},
   leaseTokenHash?: string,
   failureAutopauseStreak = 0,
+  receipt?: typeof runReportReceipts.$inferInsert,
 ): Promise<FinalizeRunningRunResult | undefined> {
   return db.transaction(async (tx) => {
     const current = (await tx.select().from(loops).where(eq(loops.id, loopId)).for("update"))[0];
     if (!current) return undefined;
     if (leaseTokenHash) {
-      const active = await activeRunForMutationTx(tx, loopId, runId, leaseTokenHash, "always");
+      const active = await activeRunForMutationTx(tx, loopId, runId, leaseTokenHash, "report");
       if (active.state !== "active") return undefined;
     }
     const at = typeof runPatch.ts === "string" ? runPatch.ts : nowIso();
@@ -711,6 +844,7 @@ export async function finalizeRunningRun(
     if (!run) return undefined;
     const lifecycle = await terminalLifecycleTx(tx, current, run, at, loopPatch, true, failureAutopauseStreak);
     if (leaseTokenHash) await tx.delete(runLeases).where(eq(runLeases.runId, runId));
+    if (receipt) await tx.insert(runReportReceipts).values(receipt);
     return { run, ...lifecycle };
   });
 }
@@ -723,6 +857,7 @@ export async function enrichFinishedRun(
   runId: string,
   leaseTokenHash: string,
   patch: Partial<NewRun>,
+  receipt?: typeof runReportReceipts.$inferInsert,
 ): Promise<Run | undefined> {
   return db.transaction(async (tx) => {
     const loop = (await tx.select({ id: loops.id }).from(loops).where(eq(loops.id, loopId)).for("update"))[0];
@@ -762,6 +897,7 @@ export async function enrichFinishedRun(
       : current;
     if (!run) return undefined;
     await tx.delete(runLeases).where(eq(runLeases.runId, runId));
+    if (receipt) await tx.insert(runReportReceipts).values(receipt);
     return run;
   });
 }
@@ -769,25 +905,7 @@ export async function enrichFinishedRun(
 /** User cancellation competes with claim/report/reclaim under the loop lock,
  * transitions only a still-open row, and retires its lease in the same txn. */
 export async function cancelRun(loopId: string, runId: string): Promise<Run | undefined> {
-  return db.transaction(async (tx) => {
-    const loop = (await tx.select({ id: loops.id }).from(loops).where(eq(loops.id, loopId)).for("update"))[0];
-    if (!loop) return undefined;
-    const at = nowIso();
-    const canceled = (
-      await tx
-        .update(runs)
-        .set({
-          phase: "canceled",
-          error: "stopped by user",
-          ts: at,
-          updatedAt: at,
-        })
-        .where(and(eq(runs.id, runId), eq(runs.loopId, loopId), inArray(runs.phase, ["pending", "running"])))
-        .returning()
-    )[0];
-    if (canceled) await tx.delete(runLeases).where(eq(runLeases.runId, runId));
-    return canceled;
-  });
+  return requestRunCancel(loopId, runId);
 }
 
 /** Sweep reclaim under the same loop lock as claim/report/cancel. Running
@@ -835,9 +953,10 @@ export async function reconcileReclaimedRun(
   loopId: string,
   runId: string,
   leaseTokenHash: string,
-  runPatch: Partial<NewRun> & { phase: "done" | "error" },
+  runPatch: Partial<NewRun> & { phase: "done" | "error" | "canceled" },
   loopPatch: Partial<NewLoop> = {},
   failureAutopauseStreak = 0,
+  receipt?: typeof runReportReceipts.$inferInsert,
 ): Promise<FinalizeRunningRunResult | undefined> {
   return db.transaction(async (tx) => {
     const current = (await tx.select().from(loops).where(eq(loops.id, loopId)).for("update"))[0];
@@ -876,6 +995,7 @@ export async function reconcileReclaimedRun(
     // existed. Replace it with the real terminal cadence in this same commit.
     const lifecycle = await terminalLifecycleTx(tx, current, run, at, loopPatch, true, failureAutopauseStreak);
     await tx.delete(runLeases).where(eq(runLeases.runId, runId));
+    if (receipt) await tx.insert(runReportReceipts).values(receipt);
     return { run, ...lifecycle };
   });
 }
@@ -983,6 +1103,7 @@ export async function advanceDueSchedules(
     .where(and(
       eq(loops.enabled, true),
       isNull(loops.completedAt),
+      isNull(loops.deleteRequestedAt),
       due,
       filter.loopId ? eq(loops.id, filter.loopId) : undefined,
       filter.machineId ? eq(loops.machineId, filter.machineId) : undefined,
@@ -992,7 +1113,7 @@ export async function advanceDueSchedules(
   for (const { id } of candidates) {
     const result = await db.transaction(async (tx) => {
       const loop = (await tx.select().from(loops).where(eq(loops.id, id)).for("update"))[0];
-      if (!loop?.enabled || loop.completedAt) return undefined;
+      if (!loop?.enabled || loop.completedAt || loop.deleteRequestedAt) return undefined;
       const cadenceDue = !!loop.nextCadenceAt && Date.parse(loop.nextCadenceAt) <= Date.parse(at);
       const oneShotDue = !!loop.nextRunAt && Date.parse(loop.nextRunAt) <= Date.parse(at);
       if (!cadenceDue && !oneShotDue) return undefined;
@@ -1039,7 +1160,7 @@ export async function initializeCronCadence(at = nowIso()): Promise<Loop[]> {
   const candidates = await db
     .select({ id: loops.id })
     .from(loops)
-    .where(and(eq(loops.enabled, true), isNull(loops.completedAt), eq(loops.scheduleMode, "cron"), isNull(loops.nextCadenceAt)));
+    .where(and(eq(loops.enabled, true), isNull(loops.completedAt), isNull(loops.deleteRequestedAt), eq(loops.scheduleMode, "cron"), isNull(loops.nextCadenceAt)));
   const initialized: Loop[] = [];
   for (const { id } of candidates) {
     const loop = await db.transaction(async (tx) => {
@@ -1067,89 +1188,50 @@ export interface ClaimedRun {
 /** Claim and lease mint are one atomic loop-lock transaction. A cancel can win
  * before this commit or delete the inserted lease afterward, but can never race
  * through the historical running-without-a-lease gap. */
-export async function claimReadyRunsForMachine(machineId: string, at = nowIso()): Promise<ClaimedRun[]> {
-  const candidates = await db
-    .select({ loopId: runs.loopId })
-    .from(runs)
-    .where(and(eq(runs.machineId, machineId), eq(runs.phase, "pending")))
-    .orderBy(asc(runs.createdAt));
-  const loopIds = [...new Set(candidates.map((r) => r.loopId))];
-  const claimed: ClaimedRun[] = [];
-  for (const loopId of loopIds) {
-    // Randomness is generated before opening the transaction; only its hash is
-    // persisted with the claim.
-    const runToken = `rk_${randomBytes(16).toString("hex")}`;
-    const tokenHash = createHash("sha256").update(runToken).digest("hex");
-    const result = await db.transaction(async (tx) => {
-      let loop = (await tx.select().from(loops).where(eq(loops.id, loopId)).for("update"))[0];
-      if (!loop) return undefined;
-      const graceLease = (
-        await tx
-          .select({ tokenHash: runLeases.tokenHash })
-          .from(runLeases)
-          .where(and(eq(runLeases.loopId, loopId), eq(runLeases.state, "terminal-grace"), gt(runLeases.expiresAt, at)))
-          .limit(1)
-      )[0];
-      if (graceLease) return undefined;
-      const alreadyRunning = (
-        await tx.select({ id: runs.id }).from(runs).where(and(eq(runs.loopId, loopId), eq(runs.phase, "running"))).limit(1)
-      )[0];
-      if (alreadyRunning) return undefined;
+export async function claimReadyRunForMachine(machineId: string, at = nowIso()): Promise<ClaimedRun | undefined> {
+  const runToken = `rk_${randomBytes(16).toString("hex")}`;
+  const tokenHash = createHash("sha256").update(runToken).digest("hex");
+  return db.transaction(async (tx) => {
+    // The machine row is the cross-loop claim mutex. The partial unique index is
+    // the final database defense if a future caller bypasses this seam.
+    const machine = (await tx.select({ id: machines.id }).from(machines).where(eq(machines.id, machineId)).for("update"))[0];
+    if (!machine) return undefined;
+    const occupied = (await tx.select({ id: runs.id }).from(runs).where(and(eq(runs.machineId, machineId), eq(runs.phase, "running"))).limit(1))[0];
+    if (occupied) return undefined;
+    const blockedLease = (await tx.select({ tokenHash: runLeases.tokenHash }).from(runLeases).where(and(
+      eq(runLeases.machineId, machineId),
+      inArray(runLeases.state, ["active", "terminal-grace"]),
+      or(eq(runLeases.state, "active"), gt(runLeases.expiresAt, at)),
+    )).limit(1))[0];
+    if (blockedLease) return undefined;
 
-      const lifecycle = loop.completedAt
-        ? and(eq(runs.requestedBy, "owner"), eq(runs.role, "edit"))
-        : !loop.enabled
-          ? eq(runs.requestedBy, "owner")
-          : undefined;
-      const next = (
-        await tx
-          .select()
-          .from(runs)
-          .where(and(eq(runs.loopId, loopId), eq(runs.machineId, machineId), eq(runs.phase, "pending"), lifecycle))
-          .orderBy(sql`case ${runs.role} when 'edit' then 0 when 'evolve' then 1 else 2 end`, asc(runs.createdAt))
-          .limit(1)
-      )[0];
-      if (!next) return undefined;
-      // Capture the actual execution choice under the same loop lock as claim +
-      // lease mint. A later owner edit changes only future runs.
-      const run = (
-        await tx
-          .update(runs)
-          .set({ phase: "running", agent: loop.agent, heartbeatAt: null, ts: at, updatedAt: at })
-          .where(and(eq(runs.id, next.id), eq(runs.phase, "pending")))
-          .returning()
-      )[0];
-      if (!run) return undefined;
-
-      if (run.role === "exec" && loop.scheduleMode === "continuous" && loop.nextCadenceAt != null) {
-        loop = (
-          await tx
-            .update(loops)
-            .set({ nextCadenceAt: null, updatedAt: at })
-            .where(eq(loops.id, loop.id))
-            .returning()
-        )[0]!;
-      }
-      const structural = run.role === "evolve" || run.role === "edit";
-      await tx.insert(runLeases).values({
-        tokenHash,
-        runId: run.id,
-        loopId: loop.id,
-        machineId,
-        role: run.role,
-        allowControl: structural || loop.allowControl,
-        canSetUi: structural,
-        canSetSchema: structural,
-        canSetWorkflow: structural,
-        canFinish: run.role === "exec" && loop.goal != null,
-        createdAt: at,
-      });
-      return { run, loop, runToken };
-    });
-    if (result) claimed.push(result);
-  }
-  return claimed;
+    const next = (await tx
+      .select({ run: runs, loop: loops })
+      .from(runs)
+      .innerJoin(loops, eq(loops.id, runs.loopId))
+      .where(and(
+        eq(runs.machineId, machineId), eq(runs.phase, "pending"), isNull(runs.cancelRequestedAt),
+        eq(loops.enabled, true), isNull(loops.completedAt), isNull(loops.deleteRequestedAt),
+      ))
+      .orderBy(sql`case ${runs.role} when 'edit' then 0 when 'evolve' then 1 else 2 end`, asc(runs.createdAt))
+      .limit(1))[0];
+    if (!next) return undefined;
+    let loop = (await tx.select().from(loops).where(eq(loops.id, next.loop.id)).for("update"))[0];
+    if (!loop?.enabled || loop.completedAt || loop.deleteRequestedAt) return undefined;
+    const run = (await tx.update(runs).set({ phase: "running", agent: loop.agent, heartbeatAt: null, ts: at, updatedAt: at })
+      .where(and(eq(runs.id, next.run.id), eq(runs.phase, "pending"), isNull(runs.cancelRequestedAt))).returning())[0];
+    if (!run) return undefined;
+    if (run.role === "exec" && loop.scheduleMode === "continuous" && loop.nextCadenceAt != null) {
+      loop = (await tx.update(loops).set({ nextCadenceAt: null, updatedAt: at }).where(eq(loops.id, loop.id)).returning())[0]!;
+    }
+    const structural = run.role === "evolve" || run.role === "edit";
+    await tx.insert(runLeases).values({ tokenHash, runId: run.id, loopId: loop.id, machineId, role: run.role,
+      allowControl: structural || loop.allowControl, canSetUi: structural, canSetSchema: structural,
+      canSetWorkflow: structural, canFinish: run.role === "exec" && loop.goal != null, createdAt: at });
+    return { run, loop, runToken };
+  });
 }
+
 
 /** Newest-last run history for a loop (chronological), capped. */
 export async function listRuns(loopId: string, limit = 30): Promise<Run[]> {

@@ -12,7 +12,7 @@
  * (de)serialization. Booleans use native `boolean()`.
  */
 import { sql } from "drizzle-orm";
-import { pgTable, text, integer, boolean, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, boolean, jsonb, index, uniqueIndex, timestamp } from "drizzle-orm/pg-core";
 
 import type { ArtifactMeta } from "../server/frontmatter.js";
 // The coding-agent enum's SINGLE SOURCE lives in `../types` (client-safe, no db
@@ -105,6 +105,8 @@ export const machines = pgTable(
      *  daemons that don't report it (and until the first poll). Drives the web's
      *  "update available" hint against the cached npm latest. */
     daemonVersion: text("daemon_version"),
+    /** Breaking machine protocol last observed on poll. */
+    daemonProtocol: integer("daemon_protocol"),
     /** Hash of the device token (machine identity derives from the token). */
     tokenHash: text("token_hash").notNull(),
     /**
@@ -182,6 +184,8 @@ export const loops = pgTable(
      *  running / never completed. Completing forces enabled=false (the scheduler
      *  skips it for free). Structural invariant: non-null implies goal != null. */
     completedAt: text("completed_at"),
+    /** Durable Stop-before-delete marker. A deleting loop is never claimable. */
+    deleteRequestedAt: timestamp("delete_requested_at", { withTimezone: true, mode: "string" }),
     /** One-line reason recorded at completion (the finishing run's summary). */
     completionReason: text("completion_reason"),
     model: text("model"),
@@ -217,6 +221,7 @@ export const loops = pgTable(
     index("loops_user_idx").on(t.userId),
     index("loops_team_idx").on(t.teamId),
     index("loops_machine_idx").on(t.machineId),
+    index("delete_requested_loops").on(t.deleteRequestedAt).where(sql`${t.deleteRequestedAt} IS NOT NULL`),
   ],
 );
 
@@ -261,6 +266,8 @@ export const runs = pgTable(
     sessionId: text("session_id"),
     /** Provider-neutral token usage. Dollar cost is deliberately not stored. */
     usage: jsonb("usage").$type<RunUsage>(),
+    /** Monotonic cancellation intent. Running becomes canceled only on daemon report. */
+    cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true, mode: "string" }),
     /** Last poll where this machine declared the run active. Timeout authority. */
     heartbeatAt: text("heartbeat_at"),
     /** One-shot marker for the offline deferred notification; separate from heartbeat. */
@@ -274,6 +281,7 @@ export const runs = pgTable(
     // The queue seam coalesces under a loop-row lock; this partial unique index is
     // the final invariant if another process races or a future caller regresses.
     uniqueIndex("runs_loop_role_pending_idx").on(t.loopId, t.role).where(sql`${t.phase} = 'pending'`),
+    uniqueIndex("one_running_run_per_machine").on(t.machineId).where(sql`${t.phase} = 'running'`),
   ],
 );
 
@@ -304,13 +312,28 @@ export const runLeases = pgTable(
     canSetSchema: boolean("can_set_schema").notNull().default(false),
     canSetWorkflow: boolean("can_set_workflow").notNull().default(false),
     canFinish: boolean("can_finish").notNull().default(false),
-    state: text("state", { enum: ["active", "terminal-grace"] }).notNull().default("active"),
+    state: text("state", { enum: ["active", "terminal-grace", "retired"] }).notNull().default("active"),
     /** Null while active (never expires); ISO once terminalized (grace window). */
     expiresAt: text("expires_at"),
     createdAt: text("created_at").notNull(),
   },
   // terminalizeLease targets by runId; the loop cascade deletes by loopId.
   (t) => [index("run_leases_run_idx").on(t.runId), index("run_leases_loop_idx").on(t.loopId)],
+);
+
+// ---- durable terminal report receipts (survive loop deletion) ----
+
+export const runReportReceipts = pgTable(
+  "run_report_receipts",
+  {
+    reportId: text("report_id").primaryKey(),
+    runId: text("run_id").notNull(),
+    payloadDigest: text("payload_digest").notNull(),
+    ackStatus: integer("ack_status").notNull(),
+    ackBody: jsonb("ack_body").$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+  },
+  (t) => [index("report_receipts_created").on(t.createdAt)],
 );
 
 // ---- connect_keys: a minted connect-key's owner + team binding (durable) ----
@@ -524,9 +547,10 @@ export type RunSnapshot = typeof runSnapshots.$inferSelect;
 export type NewRunSnapshot = typeof runSnapshots.$inferInsert;
 export type RunLeaseRow = typeof runLeases.$inferSelect;
 export type ConnectKeyRow = typeof connectKeys.$inferSelect;
+export type RunReportReceipt = typeof runReportReceipts.$inferSelect;
 
 /** Drizzle table bag (also used by the Better Auth drizzle adapter once auth lands). */
-export const businessSchema = { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runSnapshots, runLeases, connectKeys };
+export const businessSchema = { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runSnapshots, runLeases, runReportReceipts, connectKeys };
 
 // Keep a default no-op SQL reference so `sql` import isn't flagged before use.
 export const _schemaVersion = sql`1`;

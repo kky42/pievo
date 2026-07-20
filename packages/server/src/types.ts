@@ -59,6 +59,8 @@ export interface RunSummary {
   requestedBy?: 'owner' | 'system'
   /** Stopped by the user before it finished (phase canceled). */
   canceled?: boolean
+  /** Durable cancellation intent. This is never itself presented as Canceled. */
+  cancelRequested?: boolean
   /** Delivery role — lets the UI tint an in-flight evolve pass (blue) vs a normal run. */
   role?: 'exec' | 'evolve' | 'edit' | string
   /** Agent captured when this run was claimed; null for pending/legacy rows. */
@@ -105,6 +107,8 @@ export interface MachineSummary {
   /** Daemon package version reported on poll (e.g. "0.8.0"); null for older
    *  daemons / before the first poll. */
   daemonVersion: string | null
+  /** Breaking daemon/server protocol last observed on poll. */
+  daemonProtocol: number | null
   /** Latest published daemon version (cached npm dist-tag `latest`); null when
    *  npm is unreachable. Same for every machine — the web compares it against
    *  `daemonVersion` to show an "update available" hint. */
@@ -142,6 +146,8 @@ export interface JobSummary {
   completedAt?: string | null
   /** One-line reason recorded at completion. */
   completionReason?: string | null
+  /** Durable Stop-before-delete marker. Non-null means server deletion is waiting. */
+  deleteRequestedAt?: string | null
   /** The newest page of runs (chronological, capped) — the card seeds its
    *  timeline from this and lazy-loads older pages via loadOlderRuns. */
   runs: RunSummary[]
@@ -212,7 +218,7 @@ export interface JobDetail {
    *  claim immediately, but manual work remains queued; `presence` distinguishes a calm
    *  "asleep" (recently seen, likely just idle) from a hard "offline", and
    *  `lastSeen` (ISO) feeds the "last seen 3m ago" hint. */
-  machine: { id: string; name: string; online: boolean; presence: MachinePresence; lastSeen: string | null }
+  machine: { id: string; name: string; online: boolean; presence: MachinePresence; lastSeen: string | null; daemonProtocol: number | null }
   /** The loop's owning team + whether it is the caller's active team. Present only
    *  when the auth gate is on (open mode has a single workspace, so no chip). Lets
    *  the loop header show which team owns the loop and, when a member opens it from
@@ -320,6 +326,10 @@ export interface MutationResult {
   runId?: string
   queued?: boolean
   coalesced?: boolean
+  /** Delete request committed but execution authority still exists. */
+  waiting?: boolean
+  /** Server-side loop data was removed. Local files are never part of this action. */
+  deleted?: boolean
   error?: string
 }
 

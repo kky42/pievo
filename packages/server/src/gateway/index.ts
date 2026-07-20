@@ -136,9 +136,12 @@ const HEARTBEAT_STAMP_REFRESH_MS = heartbeatRefreshMs(RUN_TIMEOUT_MS);
  *  and an idle poll becomes read-only, with worst-case staleness well inside
  *  the 30s TTL (max stamp gap = refresh + one poll interval). */
 const LAST_SEEN_REFRESH_MS = 10_000;
+const REPORT_RECEIPT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface MachineReportBody {
+  reportId?: string;
   runId?: string;
+  result?: "success" | "failure" | "canceled" | "timeout";
   ok?: boolean;
   exitCode?: number;
   durationMs?: number;
@@ -173,6 +176,28 @@ const USAGE_MAX = 1e12;
 /** Resolve the user-facing run summary across both execution paths. A pure
  * workflow returns `body.message`; an agent may already have persisted its message
  * through `pievo report`; provider final text is only the last-resort fallback. */
+function receiptFor(body: MachineReportBody, runId: string, ackStatus = 200, ackBody?: Record<string, unknown>) {
+  if (typeof body.reportId !== "string") return undefined;
+  return {
+    reportId: body.reportId,
+    runId,
+    payloadDigest: sha256(canonicalJson(body)),
+    ackStatus,
+    ackBody: ackBody ?? { ok: true, reportId: body.reportId },
+    createdAt: nowIso(),
+  };
+}
+
+function receiptResponse(
+  receipt: Awaited<ReturnType<typeof store.getReportReceipt>>,
+  expected: NonNullable<ReturnType<typeof receiptFor>>,
+): HttpResult | undefined {
+  if (!receipt) return undefined;
+  return receipt.runId === expected.runId && receipt.payloadDigest === expected.payloadDigest
+    ? { status: receipt.ackStatus, body: receipt.ackBody }
+    : { status: 409, body: { error: "reportId was already used for another run or payload", code: "REPORT_CONFLICT", reportId: expected.reportId } };
+}
+
 function reportMessage(body: MachineReportBody, run: Run | undefined): string | undefined {
   const raw = typeof body.message === "string"
     ? body.message
@@ -394,8 +419,13 @@ export class MachineGateway {
         }
       }
     }
-    // Drop terminal-grace leases whose wake-report window has elapsed (bounded memory).
+    // Bound durable idempotency receipts and retired/terminal-grace credentials,
+    // then resume deletes that were waiting on authority which just expired.
+    await store.pruneReportReceipts(new Date(now - REPORT_RECEIPT_RETENTION_MS).toISOString());
     await pruneExpiredLeases(now);
+    for (const loop of await store.listLoops()) {
+      if (loop.deleteRequestedAt) await store.tryDeleteLoop(loop.id);
+    }
   }
 
   /** Finalize one stuck run as an error (the sweep's reclaim path): persist the
@@ -470,6 +500,7 @@ export class MachineGateway {
     /** The daemon's echo of the last watch digest it applied — matching ⇒ the
      *  watch array is omitted from the response (an old daemon never echoes). */
     watchDigest?: string,
+    claimWork = true,
   ): Promise<HttpResult> {
     // Reject malformed tokens (empty / wrong prefix / junk) before any DB work —
     // a cheap filter at the enrollment surface (the auth boundary is the gate below).
@@ -560,16 +591,12 @@ export class MachineGateway {
       }
     }
 
-    // Timers are only latency hints. Every poll first materializes this machine's
-    // due DB facts, so a restart or lost timeout cannot lose cadence work.
-    await this.scheduler.advanceDueSchedules(machineId);
-
     const deliveries: Delivery[] = [];
-    // Claim + lease insert are one store transaction per loop. The returned loop,
-    // run, and wire token are a coherent delivery snapshot; cancellation can no
-    // longer slip into a running-without-a-lease gap.
-    for (const claimed of await store.claimReadyRunsForMachine(machineId)) {
-      deliveries.push(await buildDelivery(claimed.loop, claimed.run, claimed.runToken, machine.roots ?? []));
+    if (claimWork) {
+      // Timers are latency hints; the singular claim is machine-serialized.
+      await this.scheduler.advanceDueSchedules(machineId);
+      const claimed = await store.claimReadyRunForMachine(machineId);
+      if (claimed) deliveries.push(await buildDelivery(claimed.loop, claimed.run, claimed.runToken, machine.roots ?? []));
     }
 
     // Watch set: every loop bound to this machine (not just those with a pending
@@ -605,8 +632,75 @@ export class MachineGateway {
     };
   }
 
+  /** Breaking protocol-v2 single-flight poll seam. */
+  async pollV2(deviceToken: string, request: {
+    protocolVersion?: number;
+    currentRun?: { runId: string; stage: "executing" | "reporting" };
+    watchDigest?: string;
+    info?: { host?: string; platform?: string; arch?: string; version?: string };
+  }): Promise<HttpResult> {
+    if (request.protocolVersion !== 2) {
+      // Do not leave stale v2 capability behind when a machine rolls back to an
+      // incompatible daemon. Update only an already-authenticated machine; this
+      // mismatch path is not an enrollment surface.
+      if (isDeviceTokenShape(deviceToken)) {
+        const machineId = machineIdFromToken(deviceToken);
+        const machine = await store.getMachine(machineId);
+        if (machine?.tokenHash === sha256(deviceToken)) {
+          const reported = typeof request.protocolVersion === "number" && Number.isInteger(request.protocolVersion)
+            ? request.protocolVersion
+            : null;
+          await store.updateMachine(machineId, { daemonProtocol: reported });
+        }
+      }
+      return { status: 426, body: { error: "daemon update required", code: "UPGRADE_REQUIRED", requiredProtocol: 2 } };
+    }
+    const current = request.currentRun;
+    if (current && (typeof current.runId !== "string" || !["executing", "reporting"].includes(current.stage))) {
+      return { status: 400, body: { error: "invalid currentRun", code: "VALIDATION_ERROR" } };
+    }
+    const base = await this.poll(deviceToken, request.info, current ? [current.runId] : undefined, request.watchDigest, !current);
+    if (base.status !== 200) return base;
+    const machineId = machineIdFromToken(deviceToken);
+    await store.updateMachine(machineId, { daemonProtocol: 2 });
+    const running = await store.runningRunForMachine(machineId);
+    const body = base.body as { deliveries: Delivery[]; watchDigest: string; watch?: WatchEntry[] };
+    const cancelRunId = current && running?.id === current.runId && running.cancelRequestedAt ? current.runId : undefined;
+    return {
+      status: 200,
+      body: {
+        delivery: current ? null : body.deliveries[0] ?? null,
+        ...(cancelRunId ? { cancelRunId } : {}),
+        ...(!current && running && !body.deliveries.length ? { blockedRunId: running.id } : {}),
+        watchDigest: body.watchDigest,
+        ...(body.watch ? { watch: body.watch } : {}),
+      },
+    };
+  }
+
+  /** Protocol-v2 idle polls long-poll automatically; active/reporting polls never park. */
+  async pollV2Wait(deviceToken: string, request: Parameters<MachineGateway["pollV2"]>[1], waitMs = LONG_POLL_WAIT_MS): Promise<HttpResult> {
+    if (request.currentRun || request.protocolVersion !== 2) return this.pollV2(deviceToken, request);
+    const machineId = machineIdFromToken(deviceToken);
+    const waiter = this.armPollWaiter(machineId, Math.min(Math.max(waitMs, 0), LONG_POLL_WAIT_MS));
+    try {
+      const first = await this.pollV2(deviceToken, request);
+      if (first.status !== 200) return first;
+      const body = first.body as { delivery?: Delivery | null; blockedRunId?: string };
+      if (body.delivery || body.blockedRunId) return first;
+      const woken = await waiter.promise;
+      if (!woken) {
+        await store.setMachineOnline(machineId, true);
+        return first;
+      }
+      return this.pollV2(deviceToken, request);
+    } finally {
+      waiter.cancel();
+    }
+  }
+
   /**
-   * Long-poll wrapper over `poll()`: when the daemon opted in (`wait:true`) and
+   * Legacy long-poll wrapper over `poll()`: when the daemon opted in (`wait:true`) and
    * the immediate pass claimed nothing, park the request on the machine's waiter
    * until the Dispatcher wakes it (a run went pending) or the bounded window
    * elapses, then re-claim. Old daemons never send `wait` and keep the classic
@@ -653,9 +747,23 @@ export class MachineGateway {
     const machine = await store.getMachine(machineId);
     // Unknown token ⇒ not connected yet (the daemon self-registers on first poll),
     // so report offline rather than erroring — keeps the skill's check uniform.
-    if (!machine) return { status: 200, body: { online: false, name: null, lastSeen: null } };
+    if (!machine) return { status: 200, body: { online: false, name: null, lastSeen: null, daemonProtocol: null } };
     const fresh = !!machine.lastSeen && Date.now() - Date.parse(machine.lastSeen) < ONLINE_TTL_MS;
-    return { status: 200, body: { online: !!machine.online && fresh, name: machine.name || null, lastSeen: machine.lastSeen ?? null } };
+    const online = !!machine.online && fresh;
+    const running = await store.runningRunForMachine(machineId);
+    return {
+      status: 200,
+      body: {
+        online,
+        name: machine.name || null,
+        lastSeen: machine.lastSeen ?? null,
+        daemonProtocol: machine.daemonProtocol ?? null,
+        ...(running ? {
+          ...(online ? { currentRun: { runId: running.id, stage: "executing", cancelPending: running.cancelRequestedAt != null } } : { blockedRunId: running.id }),
+          ...(running.cancelRequestedAt ? { cancelPending: true } : {}),
+        } : {}),
+      },
+    };
   }
 
   // ---- POST /api/machine/loop ----
@@ -1286,11 +1394,23 @@ export class MachineGateway {
 
   // ---- POST /machine/report ----
 
-  private async ignoreCanceledReport(runToken: string, lease: RunLease): Promise<HttpResult> {
-    await retireLease(runToken);
-    // Cancellation won: never touch cursor/task, notification, or cadence.
+  private async retiredReport(body: MachineReportBody, runId: string): Promise<HttpResult> {
+    const expected = receiptFor(body, runId, 410, {
+      error: "execution authority retired",
+      code: "RETIRED",
+      reportId: body.reportId!,
+    })!;
+    const stored = await store.putReportReceiptIfAbsent(expected);
+    return receiptResponse(stored, expected)!;
+  }
+
+  private async ignoreCanceledReport(runToken: string, lease: RunLease, body: MachineReportBody): Promise<HttpResult> {
+    const expected = receiptFor(body, lease.runId)!;
+    const stored = await store.putReportReceiptIfAbsent(expected);
+    const response = receiptResponse(stored, expected)!;
+    if (response.status < 300) await retireLease(runToken);
     log.info({ runId: lease.runId }, "report: ignored (run was canceled)");
-    return { status: 200, body: { ok: true } };
+    return response;
   }
 
   /** Finish already won. Enrich only run-local report data; a losing report must
@@ -1306,15 +1426,33 @@ export class MachineGateway {
       ...coerceTelemetry(body),
       ...(message !== undefined ? { message } : {}),
     };
-    const enriched = await store.enrichFinishedRun(
-      lease.loopId,
-      lease.runId,
-      sha256(runToken),
-      patch,
-    );
-    if (!enriched) await retireLease(runToken);
+    const receipt = receiptFor(body, lease.runId);
+    let enriched: Awaited<ReturnType<typeof store.enrichFinishedRun>>;
+    try {
+      enriched = await store.enrichFinishedRun(
+        lease.loopId,
+        lease.runId,
+        sha256(runToken),
+        patch,
+        receipt,
+      );
+    } catch (error) {
+      const raced = receipt && receiptResponse(await store.getReportReceipt(receipt.reportId), receipt);
+      if (raced) return raced;
+      throw error;
+    }
+    if (!enriched) {
+      const refreshed = await resolveLease(runToken);
+      if (refreshed?.state === "retired") return this.retiredReport(body, lease.runId);
+      const raced = receipt && receiptResponse(await store.getReportReceipt(receipt.reportId), receipt);
+      if (raced) return raced;
+      return { status: 409, body: { error: "terminal report was not finalized", code: "REPORT_NOT_FINALIZED", reportId: body.reportId } };
+    }
+    if (enriched && (await store.getLoop(lease.loopId))?.deleteRequestedAt) {
+      await store.tryDeleteLoop(lease.loopId);
+    }
     log.info({ runId: lease.runId, enriched: !!enriched }, "report: finished-run enrichment consumed");
-    return { status: 200, body: { ok: true } };
+    return { status: 200, body: receipt!.ackBody };
   }
 
   /** Reconcile one swept run. The store consumes the terminal-grace lease in the
@@ -1326,7 +1464,8 @@ export class MachineGateway {
     run: Run,
     body: MachineReportBody,
   ): Promise<HttpResult> {
-    const ok = !!body.ok;
+    const ok = body.result ? body.result === "success" : !!body.ok;
+    const canceled = body.result === "canceled";
     const message = reportMessage(body, run);
     const claimedOutcome = RUN_OUTCOMES.has(body.outcome as string) ? body.outcome : undefined;
     let cursor = ok ? body.cursor : undefined;
@@ -1349,71 +1488,106 @@ export class MachineGateway {
           }
         : {}),
     };
-    const reconciled = await store.reconcileReclaimedRun(
-      lease.loopId,
-      lease.runId,
-      sha256(runToken),
+    const receipt = receiptFor(body, lease.runId)!;
+    let reconciled: Awaited<ReturnType<typeof store.reconcileReclaimedRun>>;
+    try {
+      reconciled = await store.reconcileReclaimedRun(
+        lease.loopId,
+        lease.runId,
+        sha256(runToken),
       {
-        phase: ok ? "done" : "error",
-        outcome: ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
+        phase: canceled ? "canceled" : ok ? "done" : "error",
+        outcome: canceled ? "skipped" : ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
         ...coerceTelemetry(body),
         ...(runState ? { state: runState } : {}),
         ...(message !== undefined ? { message } : {}),
-        ...(ok
-          ? { error: null }
-          : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : run.error }),
+        ...(canceled
+          ? { error: "stopped by user" }
+          : ok
+            ? { error: null }
+            : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : run.error }),
         ts: nowIso(),
       },
-      loopPatch,
-      AUTOPAUSE_STREAK,
-    );
+        loopPatch,
+        AUTOPAUSE_STREAK,
+        receipt,
+      );
+    } catch (error) {
+      const raced = receiptResponse(await store.getReportReceipt(receipt.reportId), receipt);
+      if (raced) return raced;
+      throw error;
+    }
     if (!reconciled) {
       // Another terminal actor consumed the lease/phase. Handle the observed
       // winner once, without recursive report() retries.
+      const raced = receiptResponse(await store.getReportReceipt(receipt.reportId), receipt);
+      if (raced) return raced;
       const fresh = await store.getRun(lease.runId);
-      if (fresh?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease);
+      if (fresh?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease, body);
       if (fresh?.phase === "done") return this.enrichFinishedReport(runToken, lease, body);
-      await retireLease(runToken);
+      const refreshed = await resolveLease(runToken);
+      if (refreshed?.state === "retired") return this.retiredReport(body, lease.runId);
       log.info({ runId: lease.runId, phase: fresh?.phase }, "report: late reconcile lost terminal race");
-      return { status: 200, body: { ok: true } };
+      return { status: 409, body: { error: "terminal report was not finalized", code: "REPORT_NOT_FINALIZED", reportId: body.reportId } };
     }
 
-    try {
+    const deleting = reconciled.loop.deleteRequestedAt != null;
+    if (!deleting) try {
       await store.putRunSnapshot(lease.runId, lease.loopId, await store.buildLoopManifest(lease.loopId));
       await store.pruneRunSnapshots(lease.loopId, snapshotRetention());
     } catch (err) {
       log.warn({ runId: lease.runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
     }
     const finalized = reconciled.run;
-    if (ok && lease.role !== "evolve" && lease.role !== "edit") {
+    if (!deleting && ok && lease.role !== "evolve" && lease.role !== "edit") {
       const loop = await store.getLoop(lease.loopId);
       if (finalized.message && loop && shouldNotify(loop.notify, finalized.status ?? null)) {
         this.pushNotify(loop, finalized.message);
       }
     }
     this.scheduler.addLoop(reconciled.loop);
-    if (!ok && lease.role === "exec") {
+    if (!deleting && !ok && !canceled && lease.role === "exec") {
       // The provisional reclaim already sent the failure alert, but the real
       // failure must still be allowed to trip the circuit breaker.
       await this.notifyRunFailure(lease.loopId, lease.role, finalized.error ?? null, reconciled, { alert: false });
     }
+    if (deleting) await store.tryDeleteLoop(lease.loopId);
     log.info(
       { runId: lease.runId, ok, reclaimed: true },
-      ok ? "report: reconciled a reclaimed run to done (machine woke)" : "report: recorded a reclaimed run's real error",
+      canceled
+        ? "report: reconciled a reclaimed run to canceled"
+        : ok
+          ? "report: reconciled a reclaimed run to done (machine woke)"
+          : "report: recorded a reclaimed run's real error",
     );
-    return { status: 200, body: { ok: true, reconciled: true } };
+    return { status: 200, body: body.reportId ? { ok: true, reportId: body.reportId } : { ok: true, reconciled: true } };
   }
 
   async report(runToken: string, body: MachineReportBody): Promise<HttpResult> {
+    if (typeof body.reportId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.reportId)) {
+      return { status: 400, body: { error: "reportId must be a valid UUID", code: "VALIDATION_ERROR" } };
+    }
+    if (typeof body.runId !== "string" || !body.runId) {
+      return { status: 400, body: { error: "runId is required", code: "VALIDATION_ERROR" } };
+    }
+    const reportId = body.reportId;
+    const expected = receiptFor(body, body.runId)!;
+    const digest = expected.payloadDigest;
+    const existing = await store.getReportReceipt(reportId);
+    const replay = receiptResponse(existing, expected);
+    if (replay) return replay;
+
     const lease = await resolveLease(runToken);
     if (!lease) return { status: 401, body: { error: "invalid or expired token" } };
-    if (typeof body.runId === "string" && body.runId !== lease.runId) {
+    if (body.runId !== lease.runId) {
       return { status: 403, body: { error: "report runId does not match this run lease" } };
     }
-    const ok = !!body.ok;
+    if (lease.state === "retired") return this.retiredReport(body, lease.runId);
+    const ok = body.result ? body.result === "success" : !!body.ok;
+    const canceled = body.result === "canceled";
 
     const run = await store.getRun(lease.runId);
-    if (run?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease);
+    if (run?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease, body);
     if (run?.phase === "done") return this.enrichFinishedReport(runToken, lease, body);
     if (run?.phase === "error" && lease.state === "terminal-grace") {
       return this.reconcileReclaimedReport(runToken, lease, run, body);
@@ -1459,44 +1633,57 @@ export class MachineGateway {
     // Whitelist the claimed outcome (untrusted wire input) — anything outside the
     // known enum falls back to the role default rather than landing in the column.
     const claimedOutcome = RUN_OUTCOMES.has(body.outcome as string) ? body.outcome : undefined;
-    const terminal = await store.finalizeRunningRun(
-      lease.loopId,
-      lease.runId,
-      {
-        phase: ok ? "done" : "error",
-        outcome: ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
+    let terminal: Awaited<ReturnType<typeof store.finalizeRunningRun>>;
+    try {
+      terminal = await store.finalizeRunningRun(
+        lease.loopId,
+        lease.runId,
+        {
+        phase: canceled ? "canceled" : ok ? "done" : "error",
+        outcome: canceled ? "skipped" : ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
         ...coerceTelemetry(body),
         ...(runState ? { state: runState } : {}),
         ...(message !== undefined ? { message } : {}),
-        ...(ok ? {} : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : "run failed on machine" }),
+        ...(canceled
+          ? { error: "stopped by user" }
+          : ok ? {} : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : "run failed on machine" }),
         ts: nowIso(),
       },
-      loopPatch,
-      sha256(runToken),
-      AUTOPAUSE_STREAK,
-    );
+        loopPatch,
+        sha256(runToken),
+        AUTOPAUSE_STREAK,
+        expected,
+      );
+    } catch (error) {
+      // A different loop may win the reportId unique race while this transaction
+      // waits. Its insert rolls this finalization back; convert the collision to a
+      // replay/conflict only after observing the durable winning receipt.
+      const raced = receiptResponse(await store.getReportReceipt(reportId), expected);
+      if (raced) return raced;
+      throw error;
+    }
     if (!terminal) {
-      // A terminal actor won after our initial read. Observe it once and route to
-      // the appropriate non-recursive loser behavior.
+      // A concurrent report may have passed the pre-lock receipt read. Re-read
+      // after the loop-lock winner commits before considering legacy loser paths.
+      const raced = receiptResponse(await store.getReportReceipt(reportId), expected);
+      if (raced) return raced;
       const fresh = await store.getRun(lease.runId);
-      if (fresh?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease);
+      if (fresh?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease, body);
       if (fresh?.phase === "done") return this.enrichFinishedReport(runToken, lease, body);
       const refreshedLease = await resolveLease(runToken);
+      if (refreshedLease?.state === "retired") return this.retiredReport(body, lease.runId);
       if (fresh?.phase === "error" && refreshedLease?.state === "terminal-grace") {
         return this.reconcileReclaimedReport(runToken, refreshedLease, fresh, body);
       }
-      await retireLease(runToken);
       log.info({ runId: lease.runId, phase: fresh?.phase }, "report: lost terminal race");
-      return { status: 200, body: { ok: true } };
+      return { status: 409, body: { error: "terminal report was not finalized", code: "REPORT_NOT_FINALIZED", reportId } };
     }
     const finalized = terminal.run;
 
-    // Capture the loop's full file set as THIS run's snapshot (Phase 3 diff
-    // baseline). Cheap: just record the manifest from the already-synced
-    // artifact_files; the diff is computed lazily on read (getRunDiff), never
-    // here. The daemon flushes a final run-tagged sync before reporting, so this
-    // reflects the run's end-state. Best-effort — never let it fail the report.
-    try {
+    // A delete-requested loop needs only the atomic receipt/finalization; deletion
+    // follows in a second transaction and maintenance can repair a crash gap.
+    const deleting = terminal.loop.deleteRequestedAt != null;
+    if (!deleting) try {
       await store.putRunSnapshot(lease.runId, lease.loopId, await store.buildLoopManifest(lease.loopId));
       // Bound the snapshot history right away (cheap, keeps the table from growing
       // unbounded between maintenance passes). The blobs this unpins are reclaimed
@@ -1514,21 +1701,22 @@ export class MachineGateway {
     // Notify (the loop's chosen channel), best-effort. Edit/evolve runs are
     // internal (owner config change / self-shaping) — never user-facing, success
     // OR failure. `updateRun` already returned the finalized row.
-    if (lease.role === "exec") {
+    if (!deleting && lease.role === "exec") {
       if (ok) {
         // Success: gate on the loop's notify policy + the run's content status.
         const loop = await store.getLoop(lease.loopId);
         if (finalized?.message && loop && shouldNotify(loop.notify, finalized.status ?? null)) {
           this.pushNotify(loop, finalized.message);
         }
-      } else {
+      } else if (!canceled) {
         // The breaker may pause the loop, clearing its cadence fact and canceling
         // pending system work in the same store transaction.
         await this.notifyRunFailure(lease.loopId, lease.role, finalized?.error ?? null, terminal);
       }
     }
     log.info({ runId: lease.runId, ok }, "report: finalized");
-    return { status: 200, body: { ok: true } };
+    if (deleting) await store.tryDeleteLoop(lease.loopId);
+    return { status: 200, body: reportId ? { ok: true, reportId } : { ok: true } };
   }
 
   /**

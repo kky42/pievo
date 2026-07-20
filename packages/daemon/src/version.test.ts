@@ -13,6 +13,13 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { daemonVersion } from "./version.js";
 
+describe("package runtime floor", () => {
+  test("requires the first Node 22 minor where node:sqlite is available without a flag", () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+    expect(pkg.engines.node).toBe(">=22.13.0");
+  });
+});
+
 describe("daemonVersion", () => {
   test("resolves this package's real version", () => {
     // ../package.json from src/ (this test's dir) is the daemon package.json.

@@ -24,6 +24,7 @@ export function toRunSummary(r: Run): RunSummary {
     running: r.phase === "running",
     requestedBy: r.requestedBy,
     canceled: r.phase === "canceled",
+    cancelRequested: r.cancelRequestedAt != null,
     role: r.role,
     agent: r.agent ?? null,
     outcome: r.outcome ?? "silent",
@@ -82,6 +83,7 @@ export async function toJobSummary(loop: Loop): Promise<JobSummary> {
     goal: loop.goal ?? null,
     completedAt: loop.completedAt ?? null,
     completionReason: loop.completionReason ?? null,
+    deleteRequestedAt: loop.deleteRequestedAt ?? null,
     runs,
     runCount: await store.countRuns(loop.id),
   };
@@ -129,7 +131,7 @@ export async function toJobDetail(loop: Loop): Promise<JobDetail> {
     taskFileSyncedAt: loop.taskFileSyncedAt ?? null,
     // Presence drives calm asleep-vs-offline copy. Manual work may queue while
     // offline and is claimed after reconnect.
-    machine: { id: loop.machineId, name: m?.name || "", online: presence === "online", presence, lastSeen: m?.lastSeen ?? null },
+    machine: { id: loop.machineId, name: m?.name || "", online: presence === "online", presence, lastSeen: m?.lastSeen ?? null, daemonProtocol: m?.daemonProtocol ?? null },
     runs: fullRuns,
   };
 }

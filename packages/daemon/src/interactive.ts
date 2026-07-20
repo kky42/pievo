@@ -1,12 +1,13 @@
 /**
- * Interactive mode — `pievo loops` / `pievo edit <id> [...flags]`, run by the
- * owner (or their Claude Code) OUTSIDE a run. Goes through the shared CLI client
+ * Interactive owner mode — loop reads/edits plus Pause/Start/Stop/Delete and
+ * `run stop`, run OUTSIDE an agent run. Goes through the shared CLI client
  * (`postCli`), which reuses the device token + server URL the daemon persisted under
  * ~/.pievo and POSTs `{argv}` to the unified `/api/machine/cli`, falling back to the
  * legacy `/api/machine/loop` channel on a 404 (old server). No run token, no re-auth,
  * no claim — the machine is already connected, so editing an existing loop needs none.
  */
 import { readFileSync } from "node:fs";
+import { createInterface } from "node:readline/promises";
 
 import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
 import { postCli, printTextOrTooOld } from "./cli-client.js";
@@ -21,6 +22,7 @@ export interface InteractiveDeps {
   token?: string;
   out?: (s: string) => void;
   err?: (s: string) => void;
+  confirmForceDelete?: () => Promise<boolean>;
 }
 
 /** `--k v` / `--k=v` pairs, bare `--flag` → true; everything else is positional. */
@@ -70,6 +72,19 @@ const EDIT_FLAGS = new Set(["json", "workflow-file", "ui-file", "schema-file", "
  *  `--help`, plus the global daemon flags (consumed separately). An unknown flag is a
  *  usage error (exit 2) — the server validates unknown `--fields` VALUES separately. */
 const LOOPS_FLAGS = new Set(["fields", "json", "help", "server-url", "api-key"]);
+const LIFECYCLE_VERBS = new Set(["pause", "start", "stop", "delete", "run"]);
+const FORCE_DELETE_CONFIRMATION = "delete-server-data-anyway";
+
+async function confirmForceDeleteInteractive(): Promise<boolean> {
+  if (!process.stdin.isTTY) return false;
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = await rl.question(`Type ${FORCE_DELETE_CONFIRMATION} to confirm force delete: `);
+    return answer.trim() === FORCE_DELETE_CONFIRMATION;
+  } finally {
+    rl.close();
+  }
+}
 
 /**
  * Assemble the `pievo edit` patch body from the surviving flags. `--json '<obj>'`
@@ -166,6 +181,38 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     // Text-sink: the server renders the TOON list, the JSON escape hatch (`--json`), and
     // the empty/error states; we just print `text`. A too-old server (no `text`) → a
     // definitive SERVER_TOO_OLD error, never blank output.
+    return printTextOrTooOld(r.body, r.status, out);
+  }
+
+  if (LIFECYCLE_VERBS.has(verb ?? "")) {
+    const isRunStop = verb === "run";
+    const id = isRunStop ? positional[1] : positional[0];
+    const validRunShape = !isRunStop || positional[0] === "stop";
+    const force = flags["force"] === true || flags["force"] === "true";
+    const allowedFlags = verb === "delete" ? new Set(["force", "server-url", "api-key"]) : new Set(["server-url", "api-key"]);
+    const unknown = Object.keys(flags).filter((k) => !allowedFlags.has(k));
+    if (!id || !validRunShape || unknown.length || (force && verb !== "delete")) {
+      const syntax = isRunStop ? "pievo run stop <run>" : `pievo ${verb} <loop>${verb === "delete" ? " [--force]" : ""}`;
+      return err(`pievo: usage: ${syntax}\n`), 2;
+    }
+    if (force) {
+      const confirmed = await (injected.confirmForceDelete ?? confirmForceDeleteInteractive)();
+      if (!confirmed) return err(`pievo: force delete canceled; type ${FORCE_DELETE_CONFIRMATION} when prompted to confirm\n`), 1;
+    }
+    const cliArgv = isRunStop
+      ? ["run", "stop", id]
+      : [verb!, id, ...(force ? ["--force", "--confirmation", FORCE_DELETE_CONFIRMATION] : [])];
+    // Lifecycle verbs require protocol-v2 semantics. A server without the unified
+    // endpoint cannot safely implement Stop/Delete, so the 404 fallback is an explicit
+    // update-required response, never a legacy edit call or a false success.
+    const legacy: LegacyFallback = async () => ({
+      status: 426,
+      body: { text: "Daemon/server update required for reliable lifecycle control", exitCode: 1 },
+    });
+    const r = await postCli(cliArgv, legacy, cliDeps);
+    if (r.kind === "not-configured") return notConnected(), 2;
+    if (r.kind === "read-error") return err(`pievo: cannot read ${r.path}\n`), 1;
+    if (r.kind === "network-error") return err(`pievo: ${r.message}\n`), 1;
     return printTextOrTooOld(r.body, r.status, out);
   }
 

@@ -191,6 +191,19 @@ describe("classify — CLI routing table (Batch 6)", () => {
     expect(classify(["show", "loop-1"], {})).toEqual({ kind: "show", args: ["loop-1"] });
   });
 
+  test("doctor uses the same local durable-report diagnostics as status", () => {
+    expect(classify(["doctor"], {})).toEqual({ kind: "status", args: [] });
+    expect(classify(["doctor", "--help"], {})).toEqual({ kind: "help", verb: "doctor" });
+  });
+
+  test("owner lifecycle commands route to the public interactive seam", () => {
+    for (const argv of [["pause", "loop-1"], ["start", "loop-1"], ["stop", "loop-1"], ["delete", "loop-1", "--force"], ["run", "stop", "run-1"]]) {
+      expect(classify(argv, {})).toEqual({ kind: "interactive", argv });
+    }
+    expect(classify(["stop", "--help"], {})).toEqual({ kind: "help", verb: "stop" });
+    expect(classify(["delete", "--help"], {})).toEqual({ kind: "help", verb: "delete" });
+  });
+
   test("an unknown verb is still `unknown` (→ exit 2), never a silent daemon launch", () => {
     expect(classify(["bogus"], {})).toEqual({ kind: "unknown", verb: "bogus" });
     expect(classify(["--frobnicate"], {})).toEqual({ kind: "unknown", verb: "--frobnicate" });

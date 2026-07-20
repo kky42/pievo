@@ -29,7 +29,7 @@ afterAll(() => {
 });
 
 beforeEach(async () => {
-  await (db.client as { exec(q: string): Promise<unknown> }).exec("DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
+  await (db.client as { exec(q: string): Promise<unknown> }).exec("DELETE FROM run_leases; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
 async function seed(agent: "claude-code" | "codex") {
@@ -66,7 +66,7 @@ test("a claude-code loop maps to exec:claude-code (no longer the hardcoded \"cla
 test("a claimed run keeps its actual agent after the loop agent changes", async () => {
   const loop = await seed("codex");
   await store.enqueueRun(loop.id, { role: "exec", requestedBy: "owner" });
-  const [claimed] = await store.claimReadyRunsForMachine(loop.machineId);
+  const claimed = await store.claimReadyRunForMachine(loop.machineId);
   expect(claimed?.run.agent).toBe("codex");
 
   await store.updateLoop(loop.id, { agent: "claude-code" });
@@ -104,6 +104,24 @@ test("goal / completion stamps surface on JobSummary and JobFull (+ isCompleted 
   expect(doneSum.completedAt).toBe("2026-07-01T00:00:00Z");
   expect(doneSum.completionReason).toBe("v1 shipped");
   expect(isCompleted(doneSum)).toBe(true);
+});
+
+test("lifecycle request markers and daemon protocol surface at the Dashboard boundary", async () => {
+  const loop = await seed("claude-code");
+  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "owner" });
+  const claimed = await store.claimReadyRunForMachine(loop.machineId);
+  await store.requestRunCancel(loop.id, claimed!.run.id);
+  await store.requestDeleteLoop(loop.id);
+  await store.updateMachine(loop.machineId, { daemonProtocol: 2 });
+
+  const detail = await adapters.toJobDetail((await store.getLoop(loop.id))!);
+  expect(detail.summary.deleteRequestedAt).toBeTruthy();
+  expect(detail.runs.find((run) => run.id === claimed!.run.id)).toMatchObject({
+    running: true,
+    canceled: false,
+    cancelRequested: true,
+  });
+  expect(detail.machine.daemonProtocol).toBe(2);
 });
 
 test("a workflow loop keeps the workflow kind regardless of recorded agent", async () => {

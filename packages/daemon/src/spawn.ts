@@ -12,6 +12,10 @@ export interface SpawnResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  /** The caller's AbortSignal initiated termination before the process settled.
+   * Some wrappers translate SIGTERM into exit code 143 and leave `signal=null`,
+   * so the signal field alone cannot classify user cancellation. */
+  aborted: boolean;
 }
 
 const KILL_GRACE_MS = 5_000;
@@ -30,6 +34,11 @@ export interface SpawnOptions {
 }
 
 export function runProcess(command: string, args: string[], opts: SpawnOptions): Promise<SpawnResult> {
+  // Cancellation won the race before this boundary: do not create even a
+  // short-lived provider/workflow process.
+  if (opts.signal?.aborted) {
+    return Promise.resolve({ code: null, signal: "SIGTERM", stdout: "", stderr: "", timedOut: false, aborted: true });
+  }
   return new Promise((resolve, reject) => {
     // POSIX: run the child in its OWN process group so the timeout/abort kill can
     // signal the whole tree — a SIGKILLed workflow's mcporter stdio grandchildren
@@ -45,6 +54,7 @@ export function runProcess(command: string, args: string[], opts: SpawnOptions):
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let aborted = false;
     let killTimer: NodeJS.Timeout | undefined;
 
     /** Signal the child's process group (posix), falling back to the child alone. */
@@ -65,15 +75,18 @@ export function runProcess(command: string, args: string[], opts: SpawnOptions):
       killTimer ??= setTimeout(() => signalTree("SIGKILL"), KILL_GRACE_MS);
     };
 
-    const onAbort = () => terminate();
+    const onAbort = () => { aborted = true; terminate(); };
     if (opts.signal) {
-      if (opts.signal.aborted) terminate();
+      if (opts.signal.aborted) onAbort();
       else opts.signal.addEventListener("abort", onAbort, { once: true });
     }
 
     let timer: NodeJS.Timeout | undefined;
     if (opts.timeoutMs && opts.timeoutMs > 0) {
       timer = setTimeout(() => {
+        // First termination cause wins. If server cancellation already began,
+        // the timeout expiring during TERM/stream cleanup must not relabel it.
+        if (aborted) return;
         timedOut = true;
         terminate();
       }, opts.timeoutMs);
@@ -107,7 +120,7 @@ export function runProcess(command: string, args: string[], opts: SpawnOptions):
       if (settled) return;
       settled = true;
       cleanup();
-      resolve({ code, signal: sig, stdout, stderr, timedOut });
+      resolve({ code, signal: sig, stdout, stderr, timedOut, aborted });
     };
     child.on("close", (code, sig) => settle(code, sig));
     child.on("exit", (code, sig) => {

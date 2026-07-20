@@ -5,11 +5,9 @@
  * workflow escalates via `agent()` (or the loop has no workflow) do we run
  * claude-code. Finally report the run back to the server.
  */
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-
-import { boundedFetch } from "./http.js";
-import { logger } from "./logger.js";
 import { execEnv, runProcess } from "./spawn.js";
 import { runWorkflow, type AgentCall } from "./workflow.js";
 import { expandTilde } from "./loopdir.js";
@@ -19,6 +17,11 @@ import { makeTerminalCollector, type TokenUsage } from "./telemetry.js";
 import { flushLoop, markRunActive, markRunDone } from "./watcher.js";
 import { PIEVO_DIR } from "./config.js";
 import type { CodingAgent } from "./create.js";
+import type { TerminalReport, TerminalResult } from "./report-outbox.js";
+
+/** Abort reason reserved for a server-requested cancellation. Shutdown uses a
+ * different reason and therefore can never be mislabeled as user cancellation. */
+export const RUN_CANCEL_REASON = "pievo:run-cancel";
 
 export interface Delivery {
   runId: string;
@@ -45,7 +48,7 @@ export interface Delivery {
   task: string;
 }
 
-interface ReportBody {
+export interface ReportBody {
   runId: string;
   ok: boolean;
   /** Coding-agent subprocess exit code. Workflow-only success is 0; a spawn,
@@ -143,31 +146,40 @@ const TIMEOUT_MS = Number.isFinite(rawExecTimeout) && rawExecTimeout > 0 ? rawEx
 /** Hard cap on the pre-report flush so a slow/hung server can't delay reporting. */
 const FLUSH_TIMEOUT_MS = 2500;
 
-export async function runDelivery(d: Delivery, serverUrl: string, roots: string[], signal?: AbortSignal): Promise<void> {
-  // Attribute artifact syncs that happen during this run to its runId (Phase 3
-  // seam) — the loop's folder watcher reads this while the run is in-flight.
+export async function executeDelivery(d: Delivery, serverUrl: string, roots: string[], signal?: AbortSignal): Promise<TerminalReport> {
   markRunActive(d.loop.id, d.runId);
   try {
-    return await runDeliveryImpl(d, serverUrl, roots, signal);
+    return await executeDeliveryImpl(d, serverUrl, roots, signal);
   } finally {
     markRunDone(d.loop.id);
   }
 }
 
-async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], signal?: AbortSignal): Promise<void> {
+/** Temporary source compatibility for embedders; reporting is intentionally no
+ * longer performed here. */
+export const runDelivery = executeDelivery;
+
+async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], signal?: AbortSignal): Promise<TerminalReport> {
   const start = Date.now();
+  const canceled = () => signal?.aborted && signal.reason === RUN_CANCEL_REASON;
+  const finish = (body: ReportBody, forcedResult?: TerminalResult): TerminalReport => ({
+    reportId: randomUUID(),
+    ...body,
+    result: forcedResult ?? (body.ok ? "success" : body.error?.includes("timed out") ? "timeout" : "failure"),
+  });
+  if (canceled()) return finish({ runId: d.runId, ok: false, exitCode: null, durationMs: 0, error: "canceled before execution" }, "canceled");
   // Force a final, run-tagged sync of the loop folder right before reporting so
   // the server's run snapshot (Phase 3) captures end-state even if a late write
   // slipped the watcher's debounce. Best-effort and bounded: the flush is raced
   // against a short timeout so a slow/hung server can't stall run reporting (and
   // the notification it triggers) past FLUSH_TIMEOUT_MS — the reclaim sweep + the
   // continuous watcher still converge the server's artifact state afterward.
-  const reportRun = async (body: ReportBody): Promise<void> => {
+  const completeRun = async (body: ReportBody, forcedResult?: TerminalResult): Promise<TerminalReport> => {
     await Promise.race([
       flushLoop(d.loop.id).catch(() => {}),
       new Promise<void>((resolve) => setTimeout(resolve, FLUSH_TIMEOUT_MS)),
     ]);
-    return report(serverUrl, d.runToken, body);
+    return finish(body, forcedResult);
   };
   // The LOCAL env jail (PIEVO_ROOTS) always applies when set; server-sent
   // roots can only narrow it — a hostile server must not widen the jail.
@@ -176,7 +188,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
   try {
     workdir = resolveWorkdir(d.loop.workdir, d.loop.id, jail);
   } catch (err) {
-    return reportRun({ runId: d.runId, ok: false, exitCode: null, durationMs: Date.now() - start, error: msg(err) });
+    return completeRun({ runId: d.runId, ok: false, exitCode: null, durationMs: Date.now() - start, error: msg(err) });
   }
 
   // 1. Workflow gate (cheap, zero-LLM). Pure result → report directly, no agent.
@@ -187,6 +199,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
   let workflowFailure: { error: string; source: string } | undefined;
   if (d.role === "exec" && d.loop.workflow) {
     const wf = await runWorkflow(d.loop.workflow, d.prevState, workdir, signal);
+    if (wf.aborted && canceled()) return completeRun({ runId: d.runId, ok: false, exitCode: null, durationMs: Date.now() - start, error: "canceled during workflow" }, "canceled");
     if (!wf.ok) {
       // A failed workflow (thrown JS, a failed tools.call, a timeout) no longer just
       // reports a failed run. Instead we FALL BACK to the agent: it first completes
@@ -204,7 +217,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       if (wf.result!.agentCalls.length === 0) {
         // Pure workflow: direct message (or silent). No claude — but still sync
         // the task file if the loop maintains one (the workflow may write it).
-        return reportRun({
+        return completeRun({
           runId: d.runId, ok: true, exitCode: 0, durationMs: Date.now() - start,
           outcome: wf.result!.message ? "direct" : "silent",
           message: wf.result!.message, cursor,
@@ -265,6 +278,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
       sysFile: hasSystemPrompt ? sysFile : undefined,
     });
 
+    if (canceled()) return completeRun({ runId: d.runId, ok: false, exitCode: null, durationMs: Date.now() - start, error: "canceled before provider spawn" }, "canceled");
     const collector = makeTerminalCollector(agent);
     const r = await runProcess(bin, args, { cwd: workdir, env, timeoutMs: TIMEOUT_MS, onStdout: collector.feed, signal });
     const final = collector.result();
@@ -275,6 +289,11 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
 
     if (r.timedOut) {
       error = `${agentLabel} timed out (${Math.round(TIMEOUT_MS / 1000)}s)`;
+    } else if (r.aborted && canceled()) {
+      // A provider wrapper may trap SIGTERM and exit 143 with `signal=null`.
+      // `runProcess.aborted` records that our run-scoped signal initiated
+      // termination before settlement, which is the proof cancellation caused it.
+      error = "canceled by server request";
     } else {
       ok = !final.isError && r.code === 0;
       if (!ok) {
@@ -297,7 +316,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
     if (sysFile) fs.rmSync(sysFile, { force: true }); // don't let prompt files accumulate
   }
 
-  await reportRun({
+  return completeRun({
     runId: d.runId,
     ok,
     exitCode,
@@ -313,7 +332,7 @@ async function runDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], 
     // still leaves a readable run-log line instead of a blank timeline block.
     finalText,
     cursor,
-  });
+  }, error === "canceled by server request" ? "canceled" : undefined);
 }
 
 /** UTC date stamp (YYYY-MM-DD) for the dated workflow-setup file name. */
@@ -478,40 +497,4 @@ function resolveWorkdir(workdir: string | null, loopId: string, roots: string[])
 
 function msg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-/** Generous per-attempt timeout on the report POST — a hung connection must not
- *  stall the delivery (the run would look lost). */
-const REPORT_TIMEOUT_MS = 60_000;
-
-async function report(serverUrl: string, runToken: string, body: ReportBody): Promise<void> {
-  // One retry on a thrown fetch (timeout / transient network) — still
-  // best-effort: the server's reclaim sweep covers a genuinely lost report.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const res = await boundedFetch(`${serverUrl.replace(/\/$/, "")}/machine/report`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${runToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      }, REPORT_TIMEOUT_MS);
-      // A 401 here means the run token was already revoked server-side — almost
-      // always because the run was reclaimed while this machine was asleep/offline
-      // and only now delivered its result. Don't retry (the token stays 401) and
-      // don't fail silently: name it so on-machine debugging isn't a mystery. The
-      // server honors one such late report to reconcile the run when it can.
-      if (res.status === 401) {
-        logger.warn(
-          { runId: body.runId, status: res.status },
-          "report: run was already reclaimed by the server (machine was likely asleep); result delivered late",
-        );
-        return;
-      }
-      if (!res.ok) {
-        logger.warn({ runId: body.runId, status: res.status, statusText: res.statusText }, "report: non-ok response");
-      }
-      return;
-    } catch {
-      /* retry once, then give up */
-    }
-  }
 }

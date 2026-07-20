@@ -90,9 +90,9 @@ describe("runStatus", () => {
     expect(asked).toEqual(["https://srv.example", "dk_secret_abcdef"]);
     expect(cap.stdout()).toContain("online (MacBook)");
     expect(cap.stdout()).toContain("https://srv.example");
-    // The token is fingerprinted, never printed in full.
-    expect(cap.stdout()).toContain("…abcdef");
+    // Status is actionable-only: the credential is used, never displayed.
     expect(cap.stdout()).not.toContain("dk_secret_abcdef");
+    expect(cap.stdout()).not.toContain("…abcdef");
   });
 
   test("server unreachable → connection unknown, never throws", async () => {
@@ -118,23 +118,84 @@ describe("runStatus", () => {
     expect(called).toBe(false);
     expect(cap.stdout()).toContain("no device token");
   });
+
+  test("a poisoned durable report is actionable and visibly blocks work", async () => {
+    const cap = capture({
+      readPid: () => undefined, server: "", token: undefined,
+      reportDiagnostics: () => ({ pendingRunId: "run-7", poisoned: true, lastError: "REPORT_CONFLICT: payload differs" }),
+    });
+    await runStatus([], cap);
+    expect(cap.stdout()).toContain("terminal report: needs attention (run-7)");
+    expect(cap.stdout()).toContain("REPORT_CONFLICT");
+    expect(cap.stdout()).toContain("new work is blocked");
+  });
+
+  test("uses durable local runtime diagnostics for the truthful stage and blocked prior run", async () => {
+    const cap = capture({
+      readPid: () => ({ pid: 12 }), alive: () => true,
+      server: "https://srv.example", token: "dk_x",
+      runtimeDiagnostics: () => ({ currentRun: { runId: "run-local", stage: "reporting" }, cancelPending: true, blockedRunId: "run-old" }),
+      fetchOnline: async () => ({ online: true, name: "MacBook", daemonProtocol: 2, currentRun: { runId: "run-local", stage: "executing" } }),
+    });
+    await runStatus([], cap);
+    expect(cap.stdout()).toContain("current run: run-local (reporting)");
+    expect(cap.stdout()).not.toContain("run-local (executing)");
+    expect(cap.stdout()).toContain("cancel pending");
+    expect(cap.stdout()).toContain("blocked prior run: run-old");
+  });
+
+  test("shows protocol, current run, cancellation, and blocked-prior diagnostics from the server", async () => {
+    const cap = capture({
+      readPid: () => ({ pid: 12 }), alive: () => true,
+      server: "https://srv.example", token: "dk_x",
+      fetchOnline: async () => ({
+        online: false, name: "MacBook", daemonProtocol: 1,
+        currentRun: { runId: "run-9", stage: "executing", cancelPending: true },
+        blockedRunId: "run-old",
+      }),
+    });
+    await runStatus([], cap);
+    expect(cap.stdout()).toContain("daemon update required: protocol 1 -> 2");
+    expect(cap.stdout()).toContain("current run: run-9 (executing)");
+    expect(cap.stdout()).toContain("cancel pending");
+    expect(cap.stdout()).toContain("previous run state is unknown");
+    expect(cap.stdout()).toContain("no new work will start");
+  });
 });
 
 describe("runDown", () => {
-  test("running daemon → SIGTERM the tracked pid, clears pidfile", async () => {
-    const signals: Array<[number, string]> = [];
-    let cleared = false;
+  test("running daemon → waits for verified old pid exit before clearing pidfile", async () => {
+    const events: string[] = [];
+    let running = true;
     const cap = capture({
-      readPid: () => ({ pid: 4242 }),
-      alive: () => true,
-      kill: (pid, sig) => { signals.push([pid, sig]); },
-      clearPid: () => { cleared = true; },
+      readPid: () => ({ pid: 4242, startTime: "old-start" }),
+      alive: () => running,
+      startTime: () => "old-start",
+      kill: (_pid, sig) => { events.push(sig); },
+      sleep: async () => { events.push("wait"); running = false; },
+      clearPid: () => { events.push("clear"); },
     });
     const code = await runDown([], cap);
     expect(code).toBe(0);
-    expect(signals).toEqual([[4242, "SIGTERM"]]);
-    expect(cleared).toBe(true);
+    expect(events).toEqual(["SIGTERM", "wait", "clear"]);
     expect(cap.stdout()).toContain("stopped daemon (pid 4242)");
+  });
+
+  test("never SIGKILLs a daemon that is still persisting before handoff", async () => {
+    const events: string[] = [];
+    let running = true;
+    let waits = 0;
+    const cap = capture({
+      readPid: () => ({ pid: 4242, startTime: "old-start" }),
+      alive: () => running,
+      startTime: () => "old-start",
+      kill: (_pid, sig) => { events.push(sig); },
+      sleep: async () => { waits += 1; if (waits === 105) running = false; },
+      clearPid: () => { events.push("clear"); },
+    });
+    expect(await runDown([], cap)).toBe(0);
+    expect(events).toEqual(["SIGTERM", "clear"]);
+    expect(waits).toBe(105);
   });
 
   test("no daemon → clean no-op, never signals", async () => {

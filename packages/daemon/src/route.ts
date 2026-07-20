@@ -4,7 +4,7 @@
  * daemon-flag / run-only-forward branches) is unit-testable without launching anything.
  * `cli.ts` is the entry that maps a `Route` to the lazily-imported handler.
  */
-const INTERACTIVE_VERBS = new Set(["loops", "edit"]);
+const INTERACTIVE_VERBS = new Set(["loops", "edit", "pause", "start", "stop", "delete", "run"]);
 const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 // The per-verb short-circuit only fires on the actual FLAG forms (not the bare `help`
 // verb, which is a leading token, never a trailing flag on another verb).
@@ -25,7 +25,7 @@ const FORWARD_VERBS = new Set(["report", "finish", "complete"]);
 // short-circuits to that verb's usage BEFORE its handler runs — so a foot-gun like
 // `update` (immediate daemon handover) is always safe to inspect, and a NEW verb inherits
 // the guarantee by being added here alongside its branch.
-const COMMAND_VERBS = new Set(["up", "new", "skill", "update", "status", "down", "log", "show", ...INTERACTIVE_VERBS, ...FORWARD_VERBS]);
+const COMMAND_VERBS = new Set(["up", "new", "skill", "update", "status", "doctor", "down", "log", "show", ...INTERACTIVE_VERBS, ...FORWARD_VERBS]);
 
 function hasHelpFlag(args: string[]): boolean {
   return args.some((a) => HELP_FLAG_ARGS.has(a));
@@ -74,7 +74,7 @@ export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
   if (verb === "new") return { kind: "create", args: argv.slice(1) };
   if (verb === "skill") return { kind: "skill", args: argv.slice(1) };
   if (verb === "update") return { kind: "update", args: argv.slice(1) };
-  if (verb === "status") return { kind: "status", args: argv.slice(1) };
+  if (verb === "status" || verb === "doctor") return { kind: "status", args: argv.slice(1) };
   if (verb === "down") return { kind: "down", args: argv.slice(1) };
   if (verb === "log") return { kind: "log", args: argv.slice(1) };
   if (verb === "show") return { kind: "show", args: argv.slice(1) };

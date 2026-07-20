@@ -48,7 +48,7 @@ done
 # real ~/.pievo device token / server URL on this machine.
 echo "▶ starting daemon → $BASE (self-registers the machine on first poll)"
 PIEVO_HOME="$TMP/pievo-home" PIEVO_TOKEN="$TOKEN" PIEVO_SERVER_URL="$BASE" PIEVO_POLL_MS=2000 \
-  node "$DAEMON_CLI" >"$TMP/daemon.log" 2>&1 &
+  node "$DAEMON_CLI" up --foreground >"$TMP/daemon.log" 2>&1 &
 daemon_pid=$!
 
 echo "▶ waiting for the machine to register ..."

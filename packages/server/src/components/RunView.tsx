@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import type { JobDetail, RunDiffResult, RunSummary } from '../types'
 import { dur, fmt, fnum, until } from '../lib/format'
-import { cancelRun, getJobDetail, getRunDiff, loadOlderRuns } from '../server/loopApi'
+import { getJobDetail, getRunDiff, loadOlderRuns, stopRun } from '../server/loopApi'
 import { DiffView } from './DiffView'
 import { btn, btnDanger, Loading, Pill, runPulseStyle, sectionHeadCls, StatusPill } from './ui'
 import { LoadErrorCard } from './actionUi'
@@ -201,8 +201,8 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
 
   async function onStop() {
     if (!run) return
-    if (!confirm('Stop this run? It will be marked canceled.')) return
-    const r = await cancelRun({ data: run.id })
+    if (!confirm('Stop this run? If it is running, Pievo will ask the daemon to terminate it.')) return
+    const r = await stopRun({ data: run.id })
     if (r?.error) {
       alert(`Stop failed: ${r.error}`)
       return
@@ -255,7 +255,13 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
             View the whole loop →
           </Link>
           {(run.queued || run.running) && (
-            <button type="button" onClick={onStop} className={btnDanger}>
+            <button
+              type="button"
+              onClick={onStop}
+              className={btnDanger}
+              disabled={!!run.running && detail.machine.daemonProtocol !== 2}
+              title={run.running && detail.machine.daemonProtocol !== 2 ? 'Daemon update required to stop a running process' : undefined}
+            >
               Stop run
             </button>
           )}

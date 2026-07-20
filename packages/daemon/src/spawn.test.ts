@@ -3,7 +3,9 @@
  * process-GROUP kill: a timed-out child's grandchildren (e.g. a workflow's
  * mcporter stdio servers) must not survive the timeout.
  */
+import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -102,6 +104,34 @@ async function waitFor(cond: () => boolean, timeoutMs: number): Promise<boolean>
 }
 
 describe("runProcess — process-group kill (posix)", () => {
+  test("an already-aborted run never spawns a child", async () => {
+    const marker = path.join(os.tmpdir(), `pievo-spawned-${process.pid}-${Date.now()}`);
+    const ac = new AbortController();
+    ac.abort("cancel");
+    const r = await runProcess(process.execPath, ["-e", `require('fs').writeFileSync(${JSON.stringify(marker)}, 'yes')`], { cwd: os.tmpdir(), signal: ac.signal });
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(r.signal).toBe("SIGTERM");
+  });
+
+  test("an earlier abort remains authoritative when the timeout elapses during TERM cleanup", async () => {
+    if (process.platform === "win32") return;
+    const ready = path.join(os.tmpdir(), `pievo-abort-first-${process.pid}-${Date.now()}`);
+    const script = [
+      'const fs = require("node:fs");',
+      `fs.writeFileSync(${JSON.stringify(ready)}, "ready");`,
+      'process.on("SIGTERM", () => setTimeout(() => process.exit(143), 200));',
+      'setInterval(() => {}, 1000);',
+    ].join("\n");
+    const ac = new AbortController();
+    const running = runProcess(process.execPath, ["-e", script], { cwd: os.tmpdir(), timeoutMs: 100, signal: ac.signal });
+    expect(await waitFor(() => fs.existsSync(ready), 2000)).toBe(true);
+    ac.abort("server-cancel");
+    const result = await running;
+    fs.rmSync(ready, { force: true });
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(false);
+  });
+
   test("a timed-out child's grandchild dies with it", async () => {
     if (process.platform === "win32") return; // no process groups on win32 (plain kill fallback)
     // The child spawns a long-sleeping grandchild, prints its pid, then idles

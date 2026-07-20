@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { isClosed, isCompleted } from './format'
-import type { JobSummary } from '../types'
+import { dotLabel, isClosed, isCompleted } from './format'
+import type { JobSummary, RunSummary } from '../types'
 
 /** Minimal JobSummary factory — only the goal/completedAt fields matter here. */
 function job(over: Partial<JobSummary>): JobSummary {
@@ -19,6 +19,21 @@ function job(over: Partial<JobSummary>): JobSummary {
     ...over,
   }
 }
+
+const run = (over: Partial<RunSummary>): RunSummary => ({
+  id: 'r1', loopId: 'l1', ts: '2026-01-01T00:00:00Z', agent: null, outcome: 'exec', status: null,
+  message: null, durationMs: null, exitCode: null, finalText: null, usage: null, error: null,
+  state: null, control: null, sessionId: null, ...over,
+})
+
+describe('truthful cancellation labels', () => {
+  it('shows intent as running and preserves actual terminal results', () => {
+    expect(dotLabel(run({ running: true, cancelRequested: true }))).toBe('Stopping…')
+    expect(dotLabel(run({ cancelRequested: true, outcome: 'exec' }))).toBe('Succeeded while stopping')
+    expect(dotLabel(run({ cancelRequested: true, outcome: 'error' }))).toBe('Failed while stopping')
+    expect(dotLabel(run({ canceled: true, cancelRequested: true, outcome: 'skipped', error: 'stopped by user' }))).toBe('Canceled')
+  })
+})
 
 describe('isCompleted / isClosed (open vs closed loop states)', () => {
   it('isCompleted is driven purely by completedAt, not the old disabled+resolved heuristic', () => {

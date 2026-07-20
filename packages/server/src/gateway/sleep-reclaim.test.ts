@@ -57,7 +57,7 @@ function recordingNotify() {
 }
 
 function gateway(notify?: (loop: any, message: string) => Promise<void>, scheduler?: any) {
-  return new gatewayMod.MachineGateway(
+  const gw = new gatewayMod.MachineGateway(
     scheduler ?? {
       advanceDueSchedules(): never[] { return []; },
       enqueueInitialExec(): void {},
@@ -68,6 +68,15 @@ function gateway(notify?: (loop: any, message: string) => Promise<void>, schedul
     undefined,
     notify,
   );
+  const rawReport = gw.report.bind(gw);
+  gw.report = async (token, body) => {
+    const lease = await tokens.resolveLease(token);
+    const runId = body.runId ?? lease?.runId ?? "missing-run";
+    const hash = tokens.sha256(JSON.stringify({ ...body, runId, token }));
+    const reportId = body.reportId ?? `018f47a2-${hash.slice(0, 4)}-7${hash.slice(4, 7)}-8${hash.slice(7, 10)}-${hash.slice(10, 22)}`;
+    return rawReport(token, { ...body, reportId, runId });
+  };
+  return gw;
 }
 
 const isoAgo = (ms: number) => new Date(Date.now() - ms).toISOString();
@@ -134,7 +143,7 @@ test("terminal-grace fences due cadence; late success consumes grace and retimes
   await gw.sweep();
   const reclaimDue = (await store.getLoop(loop.id))!.nextCadenceAt!;
   expect(await store.advanceDueSchedules(new Date(Date.now() + 10 * MIN).toISOString())).toHaveLength(0);
-  expect(await store.claimReadyRunsForMachine(machineId)).toHaveLength(0);
+  expect(await store.claimReadyRunForMachine(machineId)).toBeUndefined();
 
   expect((await gw.report(rt, { ok: true, finalText: "woke and finished" })).status).toBe(200);
   const final = (await store.getRun(run.id))!;
@@ -142,7 +151,7 @@ test("terminal-grace fences due cadence; late success consumes grace and retimes
   expect(retimed).toBe(new Date(Date.parse(final.ts) + 5 * MIN).toISOString());
   expect(Date.parse(retimed)).toBeGreaterThan(Date.parse(reclaimDue));
   await store.advanceDueSchedules(new Date(Date.parse(retimed) + 1).toISOString());
-  expect(await store.claimReadyRunsForMachine(machineId)).toHaveLength(1);
+  expect(await store.claimReadyRunForMachine(machineId)).toBeDefined();
 });
 
 test("a provisional reclaim defers the breaker; confirmed late failure pauses atomically without duplicate alert", async () => {
@@ -189,6 +198,18 @@ test("(a') a late FAILURE report records the real error honestly, without a seco
   expect(final.error).toBe("claude reported an error"); // real reason replaces the generic reclaim reason
   // No double-alert: the reclaim already notified once for this run.
   expect(sent).toHaveLength(1);
+});
+
+test("a cancellation report that races timeout reclaim remains canceled", async () => {
+  const gw = gateway(() => Promise.resolve());
+  const { machineId, loop } = await seedMachineLoop(21 * MIN);
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+
+  await gw.sweep();
+  expect((await store.getRun(run.id))!.phase).toBe("error");
+  expect((await gw.report(rt, { result: "canceled", ok: false, exitCode: 143, error: "canceled by server request" })).status).toBe(200);
+  expect(await store.getRun(run.id)).toMatchObject({ phase: "canceled", error: "stopped by user" });
 });
 
 test("(a'') a successful late reconcile advances loop.state and mirrors the scalar cursor onto run.state", async () => {

@@ -62,6 +62,16 @@ describe("runUpdate", () => {
     expect(cap.stdout()).toContain("updated: v0.8.0 → v0.9.0");
   });
 
+  test("replacement starts only after down has verified the old daemon exited", async () => {
+    const events: string[] = [];
+    const cap = seams({
+      down: async () => { events.push("term"); await Promise.resolve(); events.push("old-exited"); return 0; },
+      ensure: async () => { events.push("replacement-start"); return 0; },
+    });
+    expect(await runUpdate([], cap)).toBe(0);
+    expect(events).toEqual(["term", "old-exited", "replacement-start"]);
+  });
+
   test("old version unknown (older daemon, no version file) → honest wording, still updates", async () => {
     const cap = seams({ runningVersion: () => undefined });
     const code = await runUpdate([], cap);

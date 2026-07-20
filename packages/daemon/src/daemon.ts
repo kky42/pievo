@@ -1,200 +1,214 @@
-/**
- * Daemon mode — connect to a Pievo server and poll for deliveries. On each
- * poll the server claims this machine's pending runs and returns them; we run
- * each locally (workflow gate + claude) and report back. While idle the poll
- * opts into a server-held LONG-poll (`wait:true`, ~20s hold, near-zero dispatch
- * latency); with a run in flight it stays the classic ~3s short poll so the
- * active-run heartbeat keeps flowing. Either way plain stateless HTTP — a deploy
- * or dropped request just re-polls. Foreground, no keep-alive (BYOA §6); Ctrl-C
- * stops cleanly.
- *
- * Machine identity + workdir roots are the daemon's local config: the device
- * token (env) identifies the machine; PIEVO_ROOTS is the cwd jail (empty ⇒
- * unrestricted — the bind-time UI is where a user would normally set this).
- */
+/** Protocol-v2 fixed single-flight daemon runtime. */
+import { randomUUID } from "node:crypto";
 import os from "node:os";
+import path from "node:path";
 
 import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
-import { runDelivery, type Delivery } from "./runner.js";
-import { DEVICE_FILE, SERVER_FILE, persist, readStored } from "./config.js";
+import { executeDelivery, RUN_CANCEL_REASON, type Delivery } from "./runner.js";
+import { PendingReportOutbox, sendTerminalReport, type TerminalReport } from "./report-outbox.js";
+import { DEVICE_FILE, PIEVO_DIR, SERVER_FILE, persist, readStored } from "./config.js";
 import { ensureCallbackBin } from "./callback-bin.js";
 import { WatchManager, type WatchSpec } from "./watcher.js";
 import { writePidFile, clearPidFile, verifiedRunningPid } from "./pidfile.js";
 import { daemonVersion, writeRunningVersion } from "./version.js";
+import { writeRuntimeDiagnostics } from "./runtime-diagnostics.js";
 
 const POLL_MS = Number(process.env.PIEVO_POLL_MS || 3000);
-/** Per-poll fetch timeout — a hung connection must not stall the heartbeat
- *  (the machine would look offline and get swept). Must comfortably exceed the
- *  server's long-poll hold (~20s) so a held request is never aborted client-side. */
 const POLL_TIMEOUT_MS = 30_000;
-/** Breather between long-polls: when the server held the request (idle machine,
- *  no work), re-poll almost immediately — the hold WAS the interval. */
 const REPOLL_MS = 250;
-/** On SIGTERM/`down`, wait at most this long for in-flight runs to settle (the
- *  abort SIGTERMs their claude children; KILL_GRACE is 5s, so 10s covers it). */
-const DRAIN_MS = 10_000;
+const SHUTDOWN_REASON = "pievo:daemon-shutdown";
+export type RunStage = "executing" | "reporting";
+export type CurrentRun = { runId: string; stage: RunStage };
 
-/** Read a `--flag value` from argv. */
+type Execute = (delivery: Delivery, serverUrl: string, roots: string[], signal: AbortSignal) => Promise<TerminalReport>;
+
+/** Owns the daemon's sole execution/report slot. The slot remains occupied after
+ * execution until its durable report receives a definitive acknowledgement. */
+export class SingleFlightRuntime {
+  private active: { runId: string; stage: RunStage; abortController: AbortController; cancelRequested: boolean } | null;
+  private execution: Promise<void> | null = null;
+
+  constructor(
+    private readonly outbox: PendingReportOutbox,
+    private readonly execute: Execute = executeDelivery,
+    private readonly onState: (state: { currentRun: CurrentRun | null; cancelPending: boolean }) => void = () => {},
+  ) {
+    const pending = outbox.peek();
+    this.active = pending ? { runId: pending.runId, stage: "reporting", abortController: new AbortController(), cancelRequested: false } : null;
+    this.emitState();
+  }
+
+  currentRun(): CurrentRun | null { return this.active ? { runId: this.active.runId, stage: this.active.stage } : null; }
+  private emitState(): void { this.onState({ currentRun: this.currentRun(), cancelPending: this.active?.cancelRequested ?? false }); }
+  poisoned(): boolean { return this.outbox.diagnostics().poisoned; }
+
+  async accept(delivery: Delivery, serverUrl: string, roots: string[]): Promise<boolean> {
+    if (this.active || this.outbox.peek()) return false;
+    const controller = new AbortController();
+    this.active = { runId: delivery.runId, stage: "executing", abortController: controller, cancelRequested: false };
+    this.emitState();
+    this.execution = (async () => {
+      let terminal: TerminalReport;
+      try {
+        terminal = await this.execute(delivery, serverUrl, roots, controller.signal);
+      } catch (err) {
+        terminal = {
+          reportId: randomUUID(), runId: delivery.runId, result: "failure", durationMs: 0, exitCode: null,
+          ok: false, error: err instanceof Error ? err.message : String(err),
+        };
+      }
+      // SQLite commit is the boundary: stage cannot become reporting and the
+      // slot cannot be released—or graceful shutdown complete—until the exact
+      // payload is durable. A transient local lock/I/O error must not turn a
+      // terminal result into process exit and data loss.
+      for (;;) {
+        try {
+          this.outbox.put(delivery.runToken, terminal);
+          break;
+        } catch (err) {
+          logger.error({ runId: delivery.runId, err: err instanceof Error ? err.message : String(err) }, "terminal report persistence failed; retrying before exit");
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      }
+      if (this.active?.runId === delivery.runId) this.active.stage = "reporting";
+      this.emitState();
+    })();
+    await this.execution;
+    return true;
+  }
+
+  start(delivery: Delivery, serverUrl: string, roots: string[]): boolean {
+    if (this.active || this.outbox.peek()) return false;
+    void this.accept(delivery, serverUrl, roots).catch((err) => logger.error({ err }, "execution persistence failed"));
+    return true;
+  }
+
+  cancel(runId: string): boolean {
+    if (!this.active || this.active.runId !== runId || this.active.stage !== "executing") return false;
+    if (!this.active.cancelRequested) {
+      this.active.cancelRequested = true;
+      this.active.abortController.abort(RUN_CANCEL_REASON);
+      this.emitState();
+    }
+    return true;
+  }
+
+  shutdown(): void {
+    if (this.active?.stage === "executing" && !this.active.abortController.signal.aborted) {
+      this.active.abortController.abort(SHUTDOWN_REASON);
+    }
+  }
+
+  async waitForPersistence(): Promise<void> {
+    if (this.execution) await this.execution;
+  }
+
+  async sendPending(serverUrl: string, force = false): Promise<void> {
+    const pending = this.outbox.peek();
+    if (!pending || this.poisoned() || (!force && pending.nextAttemptAt > Date.now())) return;
+    const ack = await sendTerminalReport(serverUrl, pending);
+    this.outbox.applyAck(ack);
+    if (!this.outbox.peek()) this.active = null;
+    else if (ack.kind === "conflict") logger.error({ runId: pending.runId }, "REPORT_CONFLICT: terminal report needs attention; new work is blocked");
+    this.emitState();
+  }
+}
+
 function flag(name: string): string | undefined {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
-/** Poll request body: machine identity + provider-neutral active run ids +
- * long-poll opt-in (idle only) + the last watch digest echo. */
-export function buildPollBody(
-  info: Record<string, unknown>,
-  activeRunIds: string[],
-  idle: boolean,
-  watchDigest: string | undefined,
-): Record<string, unknown> {
-  return {
-    ...info,
-    ...(activeRunIds.length ? { activeRunIds } : {}),
-    ...(idle ? { wait: true } : {}),
-    ...(watchDigest ? { watchDigest } : {}),
-  };
+export function buildPollBody(info: Record<string, unknown>, currentRun: CurrentRun | null, watchDigest: string | undefined): Record<string, unknown> {
+  return { protocolVersion: 2, ...info, ...(currentRun ? { currentRun } : {}), ...(watchDigest ? { watchDigest } : {}) };
 }
 
-/** Elapsed-based cadence: a response that consumed the poll interval was a
- *  server-held long-poll — re-poll almost immediately (the hold WAS the wait).
- *  A fast response (work delivered, old server, short mode, or an error) keeps
- *  the classic POLL_MS cadence, so this self-regulates with zero protocol
- *  coupling: against a pre-long-poll server it degrades to today's behavior. */
 export function nextPollDelayMs(elapsedMs: number, pollMs = POLL_MS): number {
   return Math.max(REPOLL_MS, pollMs - elapsedMs);
 }
 
-/**
- * Stable per-machine identity: persist the value we're given (so this machine
- * keeps the same identity/server across loops/restarts), or reuse the stored one
- * when none is passed. The machine id is derived from the token; the server URL
- * is persisted too so the interactive `pievo loops`/`edit` commands need no flags.
- */
 function resolveStored(file: string, explicit: string | undefined): string | undefined {
-  if (explicit) {
-    persist(file, explicit);
-    return explicit;
-  }
+  if (explicit) { persist(file, explicit); return explicit; }
   return readStored(file);
 }
 
 export async function runDaemon(): Promise<number> {
-  // CLI flags (the UI shows `--server-url … --api-key …`) win over env. Both the
-  // token and server URL are persisted/reused so this machine keeps a stable
-  // identity across runs — and so interactive edits later read them zero-config.
   const token = resolveStored(DEVICE_FILE, flag("--api-key") || process.env.PIEVO_TOKEN);
   const server = resolveStored(SERVER_FILE, (flag("--server-url") || process.env.PIEVO_SERVER_URL)?.replace(/\/$/, ""));
-  if (!token || !server) {
-    logger.error("pass --server-url <url> --api-key <token> (or set PIEVO_SERVER_URL / PIEVO_TOKEN)");
-    return 1;
-  }
-  const roots = (process.env.PIEVO_ROOTS || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  // Machine identity reported on every poll (the server captures it on connect).
-  // `version` is this daemon's own package version, so the web can flag an
-  // outdated daemon and show the exact update command.
+  if (!token || !server) { logger.error("pass --server-url <url> --api-key <token> (or set PIEVO_SERVER_URL / PIEVO_TOKEN)"); return 1; }
+  const roots = (process.env.PIEVO_ROOTS || "").split(",").map((s) => s.trim()).filter(Boolean);
   const info = { host: os.hostname(), platform: process.platform, arch: process.arch, version: daemonVersion() };
-
-  // Refuse to boot when a live, VERIFIED daemon already owns the pidfile — a
-  // second daemon (e.g. a bare `pievo` in a terminal) would overwrite it, and
-  // its exit would delete the file while daemon #1 still runs: invisible to
-  // `status`, unkillable by `down`, and double-polling the server.
   const existing = verifiedRunningPid();
-  if (existing !== undefined) {
-    logger.error({ pid: existing }, "daemon already running — use `pievo down` first");
-    return 1;
-  }
+  if (existing !== undefined) { logger.error({ pid: existing }, "daemon already running — use `pievo down` first"); return 1; }
 
-  // Write the `pievo` callback wrapper once, before any run can fire. Each run
-  // prepends CALLBACK_BIN_DIR to claude's PATH (no per-run shim in the workdir).
   ensureCallbackBin();
-
-  // Record our pid so `pievo status`/`pievo down` can find this detached
-  // daemon locally (the server only knows online-ness, not the local process).
   writePidFile();
-  // Record our version beside the pidfile so `pievo update` can report the
-  // old→new version when it hands the running daemon over (best-effort).
   writeRunningVersion();
-
-  const ac = new AbortController();
-  for (const sig of ["SIGINT", "SIGTERM"] as const) {
-    process.on(sig, () => ac.abort());
-  }
-
-  // Continuously watch each loop's folder and live-sync artifacts to the server.
-  // The watch set is learned from the poll response (server-authoritative), so it
-  // survives restarts and covers idle-time human edits, not just in-run output —
-  // but the LOCAL roots jail still confines which folders may ever be watched.
+  const pollAbort = new AbortController();
+  let stopping = false;
+  const outbox = new PendingReportOutbox(path.join(PIEVO_DIR, "pending-reports.sqlite"));
+  const runtimeStatusFile = path.join(PIEVO_DIR, "runtime-status.json");
+  let blockedRunId: string | undefined;
+  let runtimeState: { currentRun: CurrentRun | null; cancelPending: boolean } = { currentRun: null, cancelPending: false };
+  const persistRuntime = () => {
+    try {
+      writeRuntimeDiagnostics(runtimeStatusFile, {
+        protocolVersion: 2,
+        ...(runtimeState.currentRun ? { currentRun: runtimeState.currentRun } : {}),
+        ...(runtimeState.cancelPending ? { cancelPending: true } : {}),
+        ...(blockedRunId ? { blockedRunId } : {}),
+      });
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : String(err) }, "could not persist runtime diagnostics");
+    }
+  };
+  const runtime = new SingleFlightRuntime(outbox, executeDelivery, (state) => { runtimeState = state; persistRuntime(); });
+  const onShutdown = () => { stopping = true; pollAbort.abort(SHUTDOWN_REASON); runtime.shutdown(); };
+  for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, onShutdown);
   const watchManager = new WatchManager(server, token, roots);
-
-  logger.info({ server, pollMs: POLL_MS, roots: roots.length ? roots : "(no workdir jail)" }, "polling for deliveries");
-
-  // Runs execute in the BACKGROUND so the poll loop keeps heart-beating and can
-  // claim further runs while one is still going — a claude run can take minutes,
-  // and awaiting it inline made the machine look offline (the server then
-  // reclaimed any queued run as "machine offline"). `inFlight` dedups in case the
-  // same delivery is ever returned twice.
-  const inFlight = new Set<string>();
-
-  // Last watch digest the server sent (echoed on the next poll so an unchanged
-  // watch set is omitted from the response — old servers never send one).
   let watchDigest: string | undefined;
 
-  while (!ac.signal.aborted) {
+  logger.info({ server, protocolVersion: 2 }, "polling for deliveries");
+  // Startup ordering is deliberate: replay once before machine polling can
+  // observe or claim anything. Force ignores a persisted backoff timestamp;
+  // failure leaves the slot in reporting state.
+  await runtime.sendPending(server, true);
+
+  while (!stopping) {
     const started = Date.now();
     try {
-      // Heartbeat carries only provider-neutral daemon in-flight identities.
-      // No provider tool/text stream is exposed on the poll protocol.
-      const activeRunIds = [...inFlight];
-      // ac.signal rides along so SIGTERM/`down` aborts an in-flight poll too.
       const res = await boundedFetch(`${server}/api/machine/poll`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(buildPollBody(info, activeRunIds, inFlight.size === 0, watchDigest)),
-      }, POLL_TIMEOUT_MS, ac.signal);
-      if (res.ok) {
-        const data = (await res.json()) as { deliveries?: Delivery[]; watch?: WatchSpec[]; watchDigest?: string };
-        // Reconcile the loop-folder watchers against the server's current set.
-        // An ABSENT `watch` means "unchanged since the digest you echoed" (the
-        // server omits it only after a matching echo) — never an empty set.
+        method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(buildPollBody(info, runtime.currentRun(), watchDigest)),
+      }, POLL_TIMEOUT_MS, pollAbort.signal);
+      if (res.status === 426) logger.error("daemon protocol rejected; update Pievo daemon (protocol 2 required)");
+      else if (!res.ok) logger.warn({ status: res.status, statusText: res.statusText }, "poll non-ok");
+      else {
+        const data = await res.json() as { delivery?: Delivery | null; cancelRunId?: string; blockedRunId?: string | null; watch?: WatchSpec[]; watchDigest?: string };
         if (Array.isArray(data.watch)) watchManager.reconcile(data.watch);
         if (typeof data.watchDigest === "string") watchDigest = data.watchDigest;
-        for (const d of data.deliveries ?? []) {
-          if (inFlight.has(d.runId)) continue;
-          inFlight.add(d.runId);
-          logger.info({ runId: d.runId, role: d.role }, "delivery claimed — running");
-          // Don't await — let it run in the background while we keep polling.
-          // The abort signal rides along so SIGTERM/`down` terminates in-flight
-          // claude children instead of orphaning them.
-          void runDelivery(d, server, roots, ac.signal)
-            .then(() => logger.info({ runId: d.runId }, "delivery finished"))
-            .catch((err) => logger.error({ runId: d.runId, err: err instanceof Error ? err.message : String(err) }, "delivery failed"))
-            .finally(() => inFlight.delete(d.runId));
-        }
-      } else {
-        logger.warn({ status: res.status, statusText: res.statusText }, "poll non-ok");
+        if (typeof data.cancelRunId === "string") runtime.cancel(data.cancelRunId);
+        blockedRunId = data.blockedRunId || undefined;
+        persistRuntime();
+        if (data.blockedRunId) logger.warn({ runId: data.blockedRunId }, "previous run state is unknown; no new work will start");
+        if (data.delivery) runtime.start(data.delivery, server, roots);
       }
+      await runtime.sendPending(server);
     } catch (err) {
-      if (!ac.signal.aborted) {
-        logger.error({ err: err instanceof Error ? err.message : String(err) }, "poll failed");
-      }
+      if (!stopping) logger.error({ err: err instanceof Error ? err.message : String(err) }, "poll failed");
     }
-    await sleep(nextPollDelayMs(Date.now() - started), ac.signal);
+    await sleep(nextPollDelayMs(Date.now() - started), pollAbort.signal);
   }
-  // Brief drain: the abort above already SIGTERMed in-flight claude children
-  // (plumbed through runDelivery → runProcess); give them a bounded window to
-  // settle and report instead of being orphaned mid-write.
-  const drainDeadline = Date.now() + DRAIN_MS;
-  while (inFlight.size > 0 && Date.now() < drainDeadline) {
-    await new Promise((r) => setTimeout(r, 200));
-  }
+
+  runtime.shutdown();
+  // Execution owns a bounded TERM→KILL subprocess shutdown, but report creation
+  // and the synchronous SQLite commit are not optional. Never close the outbox
+  // or exit while that persistence boundary is still in flight.
+  await runtime.waitForPersistence();
   await watchManager.closeAll();
-  // Only clear the pidfile if it still records OUR pid — never delete a file a
-  // newer daemon has since claimed.
+  outbox.close();
+  for (const sig of ["SIGINT", "SIGTERM"] as const) process.off(sig, onShutdown);
   clearPidFile(process.pid);
   return 0;
 }
@@ -202,8 +216,6 @@ export async function runDaemon(): Promise<number> {
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) return resolve();
-    // Remove the abort listener on normal timeout too — otherwise every poll
-    // cycle leaks one listener on the long-lived signal (MaxListenersExceeded).
     const onAbort = () => { clearTimeout(t); resolve(); };
     const t = setTimeout(() => { signal.removeEventListener("abort", onAbort); resolve(); }, ms);
     signal.addEventListener("abort", onAbort, { once: true });

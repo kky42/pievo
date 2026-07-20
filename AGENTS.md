@@ -54,13 +54,14 @@ computes pure functions. Run instructions: `README.md`.
 - Manual/system work uses the durable run queue in `runs.phase=pending`
   (`requestedBy: owner|system`, role-scoped `requestText`; no separate queue table).
   Recurring work stays in `loops.nextCadenceAt` until due; `nextRunAt` is the
-  independent one-shot fact. The bound machine's **HTTP poll** atomically claims at
-  most one run per loop, priority `edit > evolve > exec`, and inserts its run lease
-  in that SAME transaction. IDLE daemons opt into a ~20s server-held long-poll;
-  timers/Dispatcher wakeups are latency hints, while DB facts + poll advancement are
-  authoritative. Different loops still deliver in parallel; the final `report()`
-  persists normalized terminal metadata/task state and retires the lease; synced
-  files + run snapshots remain the artifact/diff authority.
+  independent one-shot fact. Protocol-v2 **HTTP poll** is machine-single-flight:
+  it atomically claims at most one run across all bound loops (priority
+  `edit > evolve > exec`) and inserts its run lease in that SAME transaction. An
+  idle daemon long-polls; an executing/reporting daemon sends its one `currentRun`
+  and receives no delivery. Timers/Dispatcher wakeups are latency hints, while DB
+  facts + poll advancement are authoritative. Terminal reports persist first in the
+  daemon SQLite outbox and finalize idempotently by `reportId`; synced files + run
+  snapshots remain the artifact/diff authority.
 - Run roles: `exec` (scheduled/manual work), `evolve` (self-improvement pass),
   `edit` (owner-requested change). There is at most one running run per loop and
   one pending row per loop+role; same-role requests coalesce (latest edit text
@@ -419,14 +420,17 @@ computes pure functions. Run instructions: `README.md`.
   subprocess gets extra keys only via `PIEVO_WORKFLOW_ENV=KEY1,KEY2`. All daemon
   fetches go through `boundedFetch`; kills take the whole process group.
 - Exec timeout is OPT-IN (`PIEVO_EXEC_TIMEOUT_MS`; default unlimited). The guard
-  against a vanished machine is the SERVER's inactivity-based sweep: daemon polls
-  carry provider-neutral `activeRunIds`, refreshing each run's `heartbeatAt`; a run
-  is reclaimed only after `RUN_TIMEOUT_MS` of silence. A canceled run's late `report()`
-  is ignored BEFORE any loop-level write (never advances cursor/taskFileContent).
+  against a vanished machine is the SERVER's inactivity-based sweep: protocol-v2
+  polls carry one provider-neutral `currentRun` (`executing|reporting`), refreshing
+  its `heartbeatAt`; a run is reclaimed only after `RUN_TIMEOUT_MS` of silence.
+  Cancellation intent is durable and does not terminalize a running run; only the
+  daemon's actual terminal result may produce `canceled`.
 - **The run credential is a RUN LEASE (`tokens.ts`, Batch 6)**, not a mint→revoke
   token: the per-run caps (`runId/loopId/machineId/role/allowControl/canSet*/canFinish`
   — the old `RunSlot` fields, now `RunLeaseCaps`) PLUS a tiny state machine `state:
-  "active" | "terminal-grace"` + `expiresAt`. Wire token is `rk_<random>` (device
+  "active" | "terminal-grace" | "retired"` + `expiresAt`. `retired` preserves a
+  bounded definitive `410 RETIRED` report acknowledgement after force-delete and
+  authorizes no mutation. Wire token is `rk_<random>` (device
   stays `dk_`); the unified `cli` router branches on the `dk_` prefix, so a run token
   (rk_ OR a pre-Batch-6 bare UUID) falls through to the run path. The lease table is
   keyed by the FULL wire token, so `resolveLease` needs NO prefix parsing — a
@@ -652,8 +656,10 @@ computes pure functions. Run instructions: `README.md`.
   lease is batch 6, not here.)
 - A run launches its selected provider EXACTLY ONCE. There is no provider retry or
   resume path today; captured session ids are terminal metadata reserved for future
-  use. Each invocation produces one normalized token-usage result. Poll
-  `activeRunIds` independently keeps the server's `heartbeatAt` fresh during execution.
+  use. Each invocation produces one normalized token-usage result. The fixed
+  single-flight slot reports `currentRun` + stage, keeping the server heartbeat fresh;
+  after execution, its exact serialized terminal payload is stored in the local SQLite
+  outbox and replayed to a definitive ACK before the slot accepts more work.
 - **`runner.ts` skips the sys file + `--append-system-prompt-file` when the delivery's
   `systemPrompt` is empty** (batches 1-2 make it empty; an OLD server that still
   populates it keeps working — the flag path is preserved when the string is non-empty).

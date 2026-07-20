@@ -21,7 +21,7 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "build": "node scripts/sync-skill.mjs && node scripts/copy-runtime-assets.mjs && tsc",

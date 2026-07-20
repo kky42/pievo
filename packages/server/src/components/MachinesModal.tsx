@@ -3,6 +3,7 @@ import { Modal, ModalHead, ModalSection } from './Modal'
 import { btn, btnDanger, btnPrimary, ErrorBanner, inputCls, labelCls } from './ui'
 import { rel } from '../lib/format'
 import { machinePresence } from '../lib/machinePresence'
+import { daemonStopSupport } from '../lib/lifecycleUi'
 import {
   listMachines,
   createMachine,
@@ -250,6 +251,10 @@ export function MachinesModal({
                 Delete
               </button>
             </div>
+            <div className="text-label text-secondary">{daemonStopSupport(m.daemonProtocol).label}</div>
+            {m.daemonProtocol !== 2 && (
+              <div className="text-label text-accent">Daemon update required to stop a running process</div>
+            )}
             {/* Offline → offer the exact command to bring this machine back (same token).
                 The token is serialized only to the machine's OWNER (never a teammate),
                 so a null token quietly notes where the command lives instead. */}

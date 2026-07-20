@@ -267,13 +267,96 @@ export const patchJob = createServerFn({ method: 'POST' })
     return { ok: true }
   })
 
-export const deleteJob = createServerFn({ method: 'POST' })
+/** Dedicated lifecycle operations. Dashboard callers never synthesize these
+ * transitions with patchJob: each delegates to the loop-locked store operation. */
+export const pauseJob = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<MutationResult> => {
     const { scheduler } = await backend()
     if (!(await ownedLoop(id))) return { error: 'not found' }
+    const loop = await store.pauseLoop(id)
+    if (!loop) return { error: 'not found' }
     scheduler.removeLoop(id)
-    return { ok: await store.deleteLoop(id) }
+    return { ok: true }
+  })
+
+export const startJob = createServerFn({ method: 'POST' })
+  .validator((id: string) => id)
+  .handler(async ({ data: id }): Promise<MutationResult> => {
+    const { scheduler } = await backend()
+    const owned = await ownedLoop(id)
+    if (!owned) return { error: 'not found' }
+    if (owned.loop.deleteRequestedAt) return { error: 'loop is being deleted' }
+    if (owned.loop.completedAt) return { error: 'completed loops must be reopened' }
+    const loop = await store.startLoop(id)
+    if (!loop) return { error: 'not found' }
+    scheduler.addLoop(loop)
+    return { ok: true }
+  })
+
+export const stopJob = createServerFn({ method: 'POST' })
+  .validator((id: string) => id)
+  .handler(async ({ data: id }): Promise<MutationResult> => {
+    const { scheduler } = await backend()
+    const owned = await ownedLoop(id)
+    if (!owned) return { error: 'not found' }
+    if (await store.hasRunningRun(id)) {
+      const machine = await store.getMachine(owned.loop.machineId)
+      if (machine?.daemonProtocol !== 2) return { error: 'Daemon update required to stop a running process' }
+    }
+    const stopped = await store.stopLoop(id)
+    if (!stopped) return { error: 'not found' }
+    scheduler.removeLoop(id)
+    return { ok: true, waiting: !!stopped.running }
+  })
+
+/** Delete is Stop + wait. A successful request may remove an idle loop
+ * immediately; otherwise the report/sweep path calls tryDeleteLoop later. */
+export const deleteJob = createServerFn({ method: 'POST' })
+  .validator((id: string) => id)
+  .handler(async ({ data: id }): Promise<MutationResult> => {
+    const { scheduler } = await backend()
+    const owned = await ownedLoop(id)
+    if (!owned) return { error: 'not found' }
+    if (await store.hasRunningRun(id)) {
+      const machine = await store.getMachine(owned.loop.machineId)
+      if (machine?.daemonProtocol !== 2) return { error: 'Daemon update required to stop a running process' }
+    }
+    scheduler.removeLoop(id)
+    const requested = await store.requestDeleteLoop(id)
+    if (!requested) return { error: 'not found' }
+    const deleted = await store.tryDeleteLoop(id)
+    return { ok: true, deleted, waiting: !deleted }
+  })
+
+const FORCE_DELETE_CONFIRMATION = 'delete-server-data-anyway'
+
+/** Destructive uncertainty escape hatch. Team owners only; the explicit marker
+ * is the server-side half of the Dashboard's second confirmation. */
+export const forceDeleteJob = createServerFn({ method: 'POST' })
+  .validator((d: { id: string; confirmation: string }) => d)
+  .handler(async ({ data }): Promise<MutationResult> => {
+    const { scheduler } = await backend()
+    const owned = await ownedLoop(data.id)
+    if (!owned) return { error: 'not found' }
+    if (!owned.loop.deleteRequestedAt) return { error: 'delete must be requested first' }
+    if (data.confirmation !== FORCE_DELETE_CONFIRMATION) return { error: 'force delete confirmation required' }
+    if (owned.enforce) {
+      if (!owned.loop.teamId) return { error: 'only a team owner can force delete this loop' }
+      const actor = (await requestScope()).userId
+      if (!actor || (await store.getTeamMember(owned.loop.teamId, actor))?.role !== 'owner') {
+        return { error: 'only a team owner can force delete this loop' }
+      }
+    }
+    scheduler.removeLoop(data.id)
+    const deleted = await store.forceDeleteLoop(data.id)
+    if (!deleted) return { error: 'force delete failed; server data was not deleted' }
+    const { logger } = await import('../logger.js')
+    logger.child({ mod: 'loop-lifecycle' }).warn(
+      { action: 'force-delete', loopId: data.id, actorUserId: (await requestScope()).userId, machineId: owned.loop.machineId },
+      'force-delete: destructive server authority removal',
+    )
+    return { ok: true, deleted: true }
   })
 
 export const runJob = createServerFn({ method: 'POST' })
@@ -312,21 +395,24 @@ export const requestEdit = createServerFn({ method: 'POST' })
     return { ok: true, runId: queued.run.id, queued: true, coalesced: queued.state === 'coalesced' }
   })
 
-/** Stop an in-flight run — mark it canceled. Does not kill the claude process
- *  already running on the machine (BYOA short-poll has no kill channel in v1);
- *  the report handler ignores a late report for a canceled run so it sticks. */
-export const cancelRun = createServerFn({ method: 'POST' })
+/** Dedicated Stop-run operation. Pending work cancels immediately; running work
+ * records intent and stays Running until the daemon reports its actual result. */
+export const stopRun = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<MutationResult> => {
     await backend()
     const run = await store.getRun(id)
-    if (!run) return { error: 'run not found' }
-    if (!(await ownedLoop(run.loopId))) return { error: 'run not found' }
-    if (run.phase !== 'pending' && run.phase !== 'running') return { error: 'run is not in progress' }
-    const canceled = await store.cancelRun(run.loopId, id)
-    if (!canceled) return { error: 'run is not in progress' }
-    return { ok: true }
+    const owned = run ? await ownedLoop(run.loopId) : undefined
+    if (!run || !owned) return { error: 'run not found' }
+    if (run.phase === 'running' && (await store.getMachine(owned.loop.machineId))?.daemonProtocol !== 2) {
+      return { error: 'Daemon update required to stop a running process' }
+    }
+    const result = await store.requestRunCancel(run.loopId, id)
+    return result ? { ok: true, waiting: result.phase === 'running' } : { error: 'run not found' }
   })
+
+/** Compatibility export for older web chunks; it now has truthful Stop-run semantics. */
+export const cancelRun = stopRun
 
 // ---- New-loop claim (capture-from-Claude-Code, no machine picker) ----
 

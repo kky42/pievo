@@ -8,7 +8,7 @@
  * the in-run callbacks (`pievo report …`, which the agent invokes via the PATH
  * wrapper) are NOT user commands and are deliberately omitted.
  *
- * The owner loop verbs (loops/edit/log/new) and the in-run callbacks are no longer
+ * The owner loop verbs (including lifecycle control) and the in-run callbacks are no longer
  * two separate mechanisms: both funnel through the one shared CLI client that POSTs to
  * the unified `/api/machine/cli` dispatch (see `cli-client.ts`) — only the LOCAL verbs
  * grouped below (up/down/update/skill/status) run without touching the server.
@@ -37,7 +37,18 @@ Setup
                           running daemon, starts the new one, refreshes the skill/shim.
 
 Management
-  status                  Is this machine's daemon running? Show pid + connection.
+  pause <loop>            Pause future runs. The current run will continue.
+  start <loop>            Start a paused loop using its existing cadence.
+  stop <loop>             Pause, cancel queued work, and request termination of the
+                          current run. Requires daemon protocol 2 when one is running.
+  delete <loop> [--force] Stop first, then delete Pievo history and synced artifact
+                          metadata. Local project files are not deleted. --force
+                          requires a prior Delete request and typed confirmation,
+                          then removes authority even if a local process may run.
+  run stop <run>          Stop one run without pausing its loop.
+  status                  Show actionable daemon, protocol, connectivity, current-run,
+                          cancellation, blocked-run, and report diagnostics.
+  doctor                  Run the same actionable diagnostics as status.
   down                    Stop the detached daemon this machine started with up.
   show [<id>]             Show a loop's full editable config + recent state (the
                           device credential inspects any loop on this machine).
@@ -70,7 +81,13 @@ const VERB_USAGE: Record<string, string> = {
   new: "pievo new --json '<config>' [--dry-run]\n  Create a loop from an inline JSON config (--json - reads stdin). --dry-run\n  validates + previews, creating nothing.",
   skill: "pievo skill [status|install] [--project]\n  Manage the pievo agent skill install (user scope by default; --project installs\n  into the current directory).",
   update: "pievo update\n  Hand this machine's daemon over to the (newer) CLI you invoked: stop the running\n  daemon, start the new one, refresh the skill/shim.",
-  status: "pievo status\n  Report whether this machine's daemon is running (local pid) + its connection state.",
+  pause: "pievo pause <loop>\n  Pause future runs. The current run will continue.",
+  start: "pievo start <loop>\n  Start a paused loop and re-arm its existing cadence.",
+  stop: "pievo stop <loop>\n  Pause this loop, cancel queued work, and stop the current run if it is still running?\n  A running process requires daemon protocol 2; otherwise update is required.",
+  delete: "pievo delete <loop> [--force]\n  Stop this loop and delete its Pievo history and synced artifacts? Local project files\n  are not deleted. --force requires a prior Delete request and typed confirmation; it\n  removes server authority while a local process may still run.",
+  run: "pievo run stop <run>\n  Stop one pending or running run without pausing its loop. Canceled is reported only\n  after daemon confirmation for a running process.",
+  status: "pievo status\n  Show actionable daemon protocol, server connectivity, current run/stage, cancel\n  pending, terminal report, blocked prior run, and last report error diagnostics.",
+  doctor: "pievo doctor\n  Run the same actionable local/server diagnostics as `pievo status`.",
   down: "pievo down\n  Stop the detached daemon this machine started with `up`.",
   log: "pievo log [<loop>] [--json] [--limit N]\n  Show a loop's recent runs (concise: status + metrics + session id). Defaults to the\n  loop for the current directory.",
   show: "pievo show [<id>] [--full] [--json]\n  Show a loop's full editable config + recent state (the device credential inspects\n  any loop on this machine).",

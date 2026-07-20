@@ -63,6 +63,8 @@ export interface WorkflowRun {
   error?: string;
   stdout: string;
   stderr: string;
+  /** The subprocess was terminated by its AbortSignal rather than completing. */
+  aborted?: boolean;
 }
 
 const TIMEOUT_MS = (Number(process.env.PIEVO_WORKFLOW_TIMEOUT_SECONDS) || 30) * 1000;
@@ -133,7 +135,7 @@ export async function runWorkflow(body: string, prevState: unknown, cwd: string,
       signal,
       timeoutMs: TIMEOUT_MS,
     });
-    const logs = { stdout: res.stdout, stderr: res.stderr };
+    const logs = { stdout: res.stdout, stderr: res.stderr, aborted: res.aborted && signal?.aborted === true };
 
     if (res.timedOut) return { ok: false, error: `workflow timed out (>${TIMEOUT_MS / 1000}s)`, ...logs };
     if (res.code !== 0) return { ok: false, error: `workflow exited with code ${res.code}`, ...logs };

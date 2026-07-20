@@ -136,11 +136,18 @@ export function dotColor(r: RunSummary): string {
 
 export function dotLabel(r: RunSummary): string {
   if (r.queued) return 'Queued'
-  if (r.running) return r.role === 'evolve' ? 'Evolving…' : 'Running…'
+  if (r.running) {
+    if (r.cancelRequested) return 'Stopping…'
+    return r.role === 'evolve' ? 'Evolving…' : 'Running…'
+  }
+  // Only daemon-confirmed (or never-started) user cancellation says Canceled.
+  if (r.canceled && r.error === 'stopped by user') return 'Canceled'
   // A deferred run retired without executing (machine offline at fire time) -
-  // it rides phase `canceled`, so this check must come first for the honest label.
+  // it rides phase `canceled`, so it keeps the honest Skipped label.
   if (r.outcome === 'skipped') return 'Skipped'
   if (r.canceled) return 'Canceled'
+  if (r.cancelRequested && r.outcome === 'error') return 'Failed while stopping'
+  if (r.cancelRequested && r.outcome !== 'silent' && r.outcome !== 'evolve') return 'Succeeded while stopping'
   if (r.outcome === 'error') return ST.error.label
   if (r.outcome === 'evolve') return ST.evolve.label
   if (r.outcome === 'silent') return ST.silent.label

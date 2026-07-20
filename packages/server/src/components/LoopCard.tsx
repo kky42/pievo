@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import type { JobSummary, RunSummary } from '../types'
 import { cronText, dotLabel, fmt, isClosed, isCompleted, lastRunOf, rel } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
+import { deriveLoopLifecycle } from '../lib/lifecycleUi'
 import { loadOlderRuns } from '../server/loopApi'
 import { Timeline, WINDOW } from './Timeline'
 import { Pill, useHydrated } from './ui'
@@ -18,6 +19,7 @@ export function LoopCard({
   const en = job.enabled
   const last = lastRunOf(job)
   const completed = isCompleted(job)
+  const lifecycle = deriveLoopLifecycle(job)
   // A closed loop still working toward its goal (not yet completed) → the quiet
   // "Goal" chip. Completed closed loops read via the Completed badge instead.
   const closedActive = isClosed(job) && !completed
@@ -65,10 +67,14 @@ export function LoopCard({
         >
           {job.name}
         </button>
-        {job.running ? (
-          <Pill tone="running" dot="pulse">
-            Running
-          </Pill>
+        {lifecycle === 'stopping' ? (
+          <Pill tone="running" dot="pulse">Stopping</Pill>
+        ) : lifecycle === 'paused-finishing' ? (
+          <Pill>Paused · current run finishing</Pill>
+        ) : lifecycle === 'deleting' ? (
+          <Pill>Deleting</Pill>
+        ) : job.running ? (
+          <Pill tone="running" dot="pulse">Running</Pill>
         ) : job.queued ? (
           <Pill tone="outline">Queued</Pill>
         ) : null}
@@ -83,7 +89,7 @@ export function LoopCard({
             Goal
           </Pill>
         )}
-        {!completed && !en && <Pill>Paused</Pill>}
+        {!completed && lifecycle === 'paused' && <Pill>Paused</Pill>}
         <div className="ml-auto whitespace-nowrap text-meta text-secondary">
           <span className="text-primary" title={job.cron}>
             {job.scheduleMode === 'continuous' ? `continuous · ${job.continuousDelayMinutes}m` : cronText(job.cron)}

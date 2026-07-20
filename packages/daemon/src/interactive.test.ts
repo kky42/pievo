@@ -259,6 +259,42 @@ describe("runInteractive — legacy fallback (old server 404s the unified dispat
   });
 });
 
+describe("runInteractive — lifecycle commands", () => {
+  test("forwards pause/start/stop/delete and run stop exactly", async () => {
+    const { fetchFn, calls } = stub(() => ({ ok: true, body: { text: "ok", exitCode: 0 } }));
+    const cap = capture({ fetchImpl: fetchFn, confirmForceDelete: async () => true });
+    expect(await runInteractive(["pause", "loop-1"], cap)).toBe(0);
+    expect(await runInteractive(["start", "loop-1"], cap)).toBe(0);
+    expect(await runInteractive(["stop", "loop-1"], cap)).toBe(0);
+    expect(await runInteractive(["delete", "loop-1", "--force"], cap)).toBe(0);
+    expect(await runInteractive(["run", "stop", "run-1"], cap)).toBe(0);
+    expect(calls.map((c) => c.argv)).toEqual([
+      ["pause", "loop-1"], ["start", "loop-1"], ["stop", "loop-1"],
+      ["delete", "loop-1", "--force", "--confirmation", "delete-server-data-anyway"], ["run", "stop", "run-1"],
+    ]);
+  });
+
+  test("force delete requires interactive double-confirmation before network mutation", async () => {
+    let fetched = false;
+    const cap = capture({
+      fetchImpl: (async () => { fetched = true; throw new Error("must not fetch"); }) as typeof fetch,
+      confirmForceDelete: async () => false,
+    });
+    expect(await runInteractive(["delete", "loop-1", "--force"], cap)).toBe(1);
+    expect(fetched).toBe(false);
+    expect(cap.stderr()).toContain("force delete canceled");
+  });
+
+  test("requires ids and rejects flags outside delete --force without fetching", async () => {
+    let fetched = false;
+    const cap = capture({ fetchImpl: (async () => { fetched = true; throw new Error("no"); }) as typeof fetch });
+    expect(await runInteractive(["pause"], cap)).toBe(2);
+    expect(await runInteractive(["stop", "loop-1", "--force"], cap)).toBe(2);
+    expect(await runInteractive(["run", "stop"], cap)).toBe(2);
+    expect(fetched).toBe(false);
+  });
+});
+
 describe("runInteractive — local guards (no fetch)", () => {
   test("not connected → exit 2 with a clear message, no fetch", async () => {
     const { fetchFn, calls } = stub(() => ({ ok: true, body: {} }));

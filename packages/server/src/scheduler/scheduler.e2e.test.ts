@@ -67,7 +67,7 @@ async function pending(loopId: string, role?: RunRole): Promise<Run[]> {
 }
 
 async function claim(loop: Loop) {
-  const [claimed] = await store.claimReadyRunsForMachine(loop.machineId);
+  const claimed = await store.claimReadyRunForMachine(loop.machineId);
   if (!claimed) throw new Error("expected claim");
   return claimed;
 }
@@ -108,8 +108,9 @@ test("cross-role claims are edit > evolve > exec and claim inserts the lease ato
     const item = await claim(loop);
     roles.push(item.run.role);
     expect((await tokens.resolveLease(item.runToken))?.runId).toBe(item.run.id);
-    expect(await store.claimReadyRunsForMachine(loop.machineId)).toHaveLength(0);
-    await store.cancelRun(loop.id, item.run.id);
+    expect(await store.claimReadyRunForMachine(loop.machineId)).toBeUndefined();
+    await store.updateRun(item.run.id, { phase: "canceled" });
+    await tokens.retireLease(item.runToken);
   }
   expect(roles).toEqual(["edit", "evolve", "exec"]);
 });
@@ -120,17 +121,17 @@ test("claim and cancel race cannot leave a canceled run with a live lease", asyn
   if (!("run" in queued)) throw new Error("expected run");
 
   const [claimed, canceled] = await Promise.all([
-    store.claimReadyRunsForMachine(loop.machineId),
+    store.claimReadyRunForMachine(loop.machineId),
     store.cancelRun(loop.id, queued.run.id),
   ]);
   const final = (await store.getRun(queued.run.id))!;
   expect(["running", "canceled"]).toContain(final.phase);
+  expect(canceled).toBeTruthy();
   if (final.phase === "canceled") {
-    expect(canceled).toBeTruthy();
-    if (claimed[0]) expect(await tokens.resolveLease(claimed[0].runToken)).toBeUndefined();
+    expect(claimed).toBeUndefined();
   } else {
-    expect(canceled).toBeUndefined();
-    expect((await tokens.resolveLease(claimed[0]!.runToken))?.runId).toBe(final.id);
+    expect(final.cancelRequestedAt).toBeTruthy();
+    expect((await tokens.resolveLease(claimed!.runToken))?.runId).toBe(final.id);
   }
 });
 
@@ -337,7 +338,7 @@ test("terminal failure auto-pauses and cancels system work in the terminal trans
   expect(terminal).toMatchObject({ autoPaused: true, failureStreak: 3 });
   expect(terminal?.loop).toMatchObject({ enabled: false, nextCadenceAt: null, nextRunAt: null });
   expect(await pending(loop.id)).toHaveLength(0);
-  expect(await store.claimReadyRunsForMachine(loop.machineId)).toHaveLength(0);
+  expect(await store.claimReadyRunForMachine(loop.machineId)).toBeUndefined();
 });
 
 test("terminal-grace fences due cadence until one late reconcile retimes it", async () => {
@@ -378,7 +379,7 @@ test("expired terminal-grace cannot reconcile after a successor claim", async ()
   const token = await tokens.registerRunLease({ runId: old.id, loopId: loop.id, machineId: loop.machineId, role: "exec", allowControl: true });
   await store.reclaimRun(old.id, "running", "timeout", new Date(Date.now() - 2_000).toISOString(), 1);
   await store.enqueueRun(loop.id, { role: "exec", requestedBy: "owner" });
-  const [successor] = await store.claimReadyRunsForMachine(loop.machineId);
+  const successor = await store.claimReadyRunForMachine(loop.machineId);
   expect(successor?.run.id).not.toBe(old.id);
 
   const reconciled = await store.reconcileReclaimedRun(

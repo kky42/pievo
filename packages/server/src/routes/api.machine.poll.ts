@@ -19,16 +19,17 @@ export const Route = createFileRoute('/api/machine/poll')({
           platform?: string
           arch?: string
           version?: string
-          activeRunIds?: string[]
-          /** Long-poll opt-in: hold the request until work arrives (bounded server-side). */
-          wait?: boolean
+          protocolVersion?: number
+          currentRun?: { runId: string; stage: 'executing' | 'reporting' }
           /** Echo of the last applied watch digest — matching ⇒ `watch` omitted. */
           watchDigest?: string
         }
         const { getGateway } = await import('../server/boot.js')
-        const r = await (await getGateway()).pollWait(token, body, body.activeRunIds, {
-          wait: body.wait === true,
+        const r = await (await getGateway()).pollV2Wait(token, {
+          protocolVersion: body.protocolVersion,
+          currentRun: body.currentRun,
           watchDigest: typeof body.watchDigest === 'string' ? body.watchDigest : undefined,
+          info: body,
         })
         return Response.json(r.body, { status: r.status })
       },

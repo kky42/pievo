@@ -50,6 +50,13 @@
       "when": 1784482476327,
       "tag": "0006_tranquil_sharon_carter",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784529980417,
+      "tag": "0007_faulty_starbolt",
+      "breakpoints": true
     }
   ]
 }

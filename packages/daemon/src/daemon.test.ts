@@ -55,21 +55,13 @@ describe("runDaemon", () => {
 });
 
 describe("poll transport helpers", () => {
-  test("buildPollBody: idle ⇒ long-poll opt-in; in-flight ⇒ classic short poll (no wait)", async () => {
+  test("buildPollBody: protocol v2 carries one fixed slot and no capacity surface", async () => {
     const { buildPollBody } = await import("./daemon.js");
     const info = { host: "mac", platform: "darwin" };
-
-    const idle = buildPollBody(info, [], true, undefined);
-    expect(idle).toEqual({ host: "mac", platform: "darwin", wait: true });
-
-    // A run in flight: no wait flag; only provider-neutral in-flight ids ride
-    // along with the last-seen digest (never provider tool/text progress).
-    const busy = buildPollBody(info, ["r1"], false, "d1");
-    expect(busy).toEqual({
-      host: "mac",
-      platform: "darwin",
-      activeRunIds: ["r1"],
-      watchDigest: "d1",
+    expect(buildPollBody(info, null, undefined)).toEqual({ protocolVersion: 2, host: "mac", platform: "darwin" });
+    expect(buildPollBody(info, { runId: "r1", stage: "reporting" }, "d1")).toEqual({
+      protocolVersion: 2, host: "mac", platform: "darwin",
+      currentRun: { runId: "r1", stage: "reporting" }, watchDigest: "d1",
     });
   });
 

@@ -285,36 +285,30 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
 
 ## Run telemetry
 
-- Poll liveness is provider-neutral: daemons send deduped `activeRunIds` (up to 5000); one machine/phase-scoped bulk update refreshes stale `runs.heartbeatAt`, with its throttle derived below `RUN_TIMEOUT_MS` (claim `ts` is the pre-first-heartbeat fallback). Offline pending notification dedup uses separate `runs.deferredAt`.
+- Poll liveness is provider-neutral: a protocol-v2 daemon sends its one `currentRun` and stage (`executing|reporting`); the machine/phase-scoped update refreshes that run's `heartbeatAt` (claim `ts` is the pre-first-heartbeat fallback). Offline pending notification dedup uses separate `runs.deferredAt`.
 - Claim atomically copies `loops.agent` to nullable `runs.agent`, preserving the actual executor as run history even after an owner edits the loop agent. Final reports store normalized `exitCode`, `durationMs`, `sessionId`, `finalText`, `error`, and provider-neutral token `usage`; each run has exactly one provider invocation. `sessionId` is metadata for future use — there is no current resume UI or command generation. Dollar cost, provider activity/progress, slim transcripts, and transcript-derived run artifacts are not stored or rendered. Live artifact sync + `artifact_files`/`blobs`/`run_snapshots` remain the file/diff authority.
 
 ## Poll transport (long-poll + hot-path budget)
 
-- `/api/machine/poll` is `gateway.pollWait()` wrapping the sync-shaped `poll()`:
-  an idle daemon sends `wait:true` and the request PARKS on a per-machine waiter
-  (`armPollWaiter`, held <= `LONG_POLL_WAIT_MS` 20s - under the daemon's 30s fetch
-  timeout AND `ONLINE_TTL_MS` 30s; an empty timeout re-stamps lastSeen before
-  returning so a parked poll never looks offline). The Scheduler's Dispatcher is
-  no longer a no-op: `dispatch(loop)` -> `wakeMachine(loop.machineId)` resolves the
-  parked waiter, so a new pending run is claimed near-instantly. The waiter is
-  armed BEFORE the first claim pass (no slip-past race); waiters are IN-MEMORY
-  (unlike run leases, which are durable rows) - a deploy drops them and the
-  daemon just re-polls. Old daemons
-  never send `wait` and keep the classic instant response; `main.ts` still calls
-  bare `poll()`.
-- Daemon side (`daemon.ts`): `buildPollBody` opts into `wait:true` ONLY while
-  `inFlight` is empty (a running run needs the ~3s activeRunIds heartbeat cadence);
-  the sleep is `nextPollDelayMs(elapsed)` - a response that consumed the interval
-  was a server hold => re-poll after a 250ms breather, a fast answer sleeps out
-  POLL_MS. Zero protocol coupling: against an old server this degrades to the
-  classic 3s cadence by construction. Both helpers are exported + unit-tested.
+- `/api/machine/poll` is the breaking protocol-v2 `gateway.pollV2Wait()` seam.
+  Idle requests park automatically on the per-machine waiter (held <=
+  `LONG_POLL_WAIT_MS` 20s); executing/reporting requests never park and receive no
+  delivery. Dispatcher wakeups resolve the in-memory waiter so durable pending work
+  claims promptly; a deploy merely drops the hint and the daemon re-polls. A
+  protocol mismatch returns `426 UPGRADE_REQUIRED` and updates the authenticated
+  machine's stored protocol so Dashboard capability cannot stay stale.
+- Daemon side (`daemon.ts`): one fixed slot sends `currentRun` + stage; it is cleared
+  only after execution's exact terminal payload is durable in the local SQLite
+  outbox and receives a definitive report ACK. Startup replays that outbox before
+  its first poll. `nextPollDelayMs(elapsed)` keeps the short-poll/held-poll cadence.
 - Poll hot-path DB budget: `machines.lastSeen` re-stamps only when the flag must
   flip or the stamp is older than `LAST_SEEN_REFRESH_MS` (10s) - an idle poll is
   read-only when no schedule fact is due. Poll first calls
-  `advanceDueSchedules(machineId)`, then `store.claimReadyRunsForMachine`: a
-  targeted pending scan plus loop-row lock gives one claim per loop, rejects a
-  second running row, picks `edit > evolve > exec`, and inserts the hashed run
-  lease before committing. `openRuns()` remains sweep-only.
+  `advanceDueSchedules(machineId)`, then `store.claimReadyRunForMachine`: a
+  targeted pending scan plus machine advisory lock gives one claim across all
+  loops on that machine, picks `edit > evolve > exec`, and inserts the hashed run
+  lease before committing; the partial unique machine-running index is the final
+  defense. `openRuns()` remains sweep-only.
 - Watch set: served from a per-machine cache (`WATCH_CACHE_TTL_MS` 15s), response
   always carries `watchDigest`; when the daemon echoes a matching digest the
   `watch` array is OMITTED. Omission requires the echo (proof the client speaks

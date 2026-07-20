@@ -22,6 +22,7 @@ import path from "node:path";
 import * as store from "../db/store.js";
 import type { Loop, NewLoop, NewRun, NotifyPolicy, RunRole, RunStatus, StateField } from "../db/schema.js";
 import { machinePresence, type MachinePresence } from "../lib/machinePresence.js";
+import { logger } from "../logger.js";
 import { selfCronFloorMinutes, selfRescheduleFloorMinutes } from "../env.js";
 import { machineIdFromToken, resolveLease, type RunLease } from "./tokens.js";
 import {
@@ -59,13 +60,30 @@ import {
 import { validateSchema, validateUi, validateWorkflow } from "./validate.js";
 import { nowIso, stripNul, type HttpResult } from "./http.js";
 
+export interface CliGatewayDeps {
+  pauseLoopState?: typeof store.pauseLoopState;
+  forceDeleteLoop?: typeof store.forceDeleteLoop;
+  destructiveLog?: (event: Record<string, unknown>) => void;
+}
+
+const cliLog = logger.child({ mod: "cli" });
+
 export class CliGateway {
+  private readonly pauseLoopState: typeof store.pauseLoopState;
+  private readonly forceDeleteLoop: typeof store.forceDeleteLoop;
+  private readonly destructiveLog: (event: Record<string, unknown>) => void;
+
   constructor(
     /** The run-lifecycle core: the CLI verbs reuse its owner methods
      *  (createLoop/listLoops/editLoop/loopLog), the shared `renderLoopLog`
      *  scoping body, `finishLoop`, and the scheduler (schedule re-arm). */
     private readonly gateway: MachineGateway,
-  ) {}
+    deps: CliGatewayDeps = {},
+  ) {
+    this.pauseLoopState = deps.pauseLoopState ?? store.pauseLoopState;
+    this.forceDeleteLoop = deps.forceDeleteLoop ?? store.forceDeleteLoop;
+    this.destructiveLog = deps.destructiveLog ?? ((event) => cliLog.warn(event, "force-delete: destructive server authority removal"));
+  }
 
   // ---- POST /agent-api/loop ----
 
@@ -138,6 +156,24 @@ export class CliGateway {
       }
       case "loops":
         return this.gateway.listLoops(deviceToken, typeof flags["fields"] === "string" ? (flags["fields"] as string) : undefined, flags["json"] === true);
+      case "pause":
+        return this.pauseOwnerLoop(machineId, loopArg);
+      case "start":
+        return this.startOwnerLoop(machineId, loopArg);
+      case "stop":
+        return this.stopOwnerLoop(machineId, loopArg);
+      case "delete":
+        return this.deleteOwnerLoop(
+          machineId,
+          loopArg,
+          flags["force"] === true,
+          typeof flags["confirmation"] === "string" ? flags["confirmation"] as string : undefined,
+        );
+      case "run":
+        return this.stopOwnerRun(machineId, argv);
+      case "status":
+      case "doctor":
+        return this.ownerStatus(machineId);
       case "edit": {
         const parsed = parseJsonFlag(flags["json"]);
         if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
@@ -165,8 +201,113 @@ export class CliGateway {
         // Per §4.1: there is no run to attribute a device-credential report/finish to.
         return { status: 403, body: { error: `pievo: "${verb}" is a run-only verb — a run reports/finishes itself; the owner edits via "edit"` } };
       default:
-        return { status: 400, body: { error: `pievo: unknown command "${verb}" for the device credential (try: new, loops, edit, log, show)` } };
+        return { status: 400, body: { error: `pievo: unknown command "${verb}" for the device credential (try: new, loops, pause, start, stop, delete, run stop, edit, log, show, status, doctor)` } };
     }
+  }
+
+  private async ownedLoop(machineId: string, loopId: string): Promise<Loop | undefined> {
+    if (!loopId) return undefined;
+    const loop = await store.getLoop(loopId);
+    return loop?.machineId === machineId ? loop : undefined;
+  }
+
+  private async pauseOwnerLoop(machineId: string, loopId: string): Promise<HttpResult> {
+    const loop = await this.ownedLoop(machineId, loopId);
+    if (!loop) return { status: 404, body: { error: "no such loop on this machine" } };
+    const paused = await this.pauseLoopState(loop.id);
+    if (!paused) return { status: 404, body: { error: "no such loop on this machine" } };
+    this.gateway.scheduler.removeLoop(loop.id);
+    return { status: 200, body: { text: paused.running ? PAUSED_FINISHING : "loop paused; future runs disabled" } };
+  }
+
+  private async startOwnerLoop(machineId: string, loopId: string): Promise<HttpResult> {
+    const loop = await this.ownedLoop(machineId, loopId);
+    if (!loop) return { status: 404, body: { error: "no such loop on this machine" } };
+    if (loop.deleteRequestedAt) return { status: 409, body: { error: "loop is being deleted and cannot be started" } };
+    if (loop.completedAt) return { status: 409, body: { error: "completed loop cannot be started; reopen it explicitly" } };
+    const started = await store.startLoop(loop.id);
+    if (!started) return { status: 409, body: { error: "loop could not be started" } };
+    this.gateway.scheduler.addLoop(started);
+    return { status: 200, body: { text: "loop started; preserved queued work is now eligible" } };
+  }
+
+  private async requireStopProtocol(machineId: string, running: NewRun | undefined): Promise<HttpResult | undefined> {
+    if (!running) return undefined;
+    const machine = await store.getMachine(machineId);
+    if (machine?.daemonProtocol === 2) return undefined;
+    return { status: 426, body: { text: STOP_UPDATE_REQUIRED, exitCode: 1 } };
+  }
+
+  private async stopOwnerLoop(machineId: string, loopId: string): Promise<HttpResult> {
+    const loop = await this.ownedLoop(machineId, loopId);
+    if (!loop) return { status: 404, body: { error: "no such loop on this machine" } };
+    const running = await store.runningRunForMachine(machineId);
+    const target = running?.loopId === loop.id ? running : undefined;
+    const upgrade = await this.requireStopProtocol(machineId, target);
+    if (upgrade) return upgrade;
+    const result = await store.stopLoop(loop.id);
+    this.gateway.scheduler.removeLoop(loop.id);
+    if (!result) return { status: 404, body: { error: "no such loop on this machine" } };
+    const machine = await store.getMachine(machineId);
+    return { status: 200, body: { text: result.running ? `stop requested; waiting for ${machine?.name || "machine"}` : "loop paused; queued work canceled; no current run" } };
+  }
+
+  private async deleteOwnerLoop(machineId: string, loopId: string, force: boolean, confirmation?: string): Promise<HttpResult> {
+    const loop = await this.ownedLoop(machineId, loopId);
+    if (!loop) return { status: 404, body: { error: "no such loop on this machine" } };
+    if (force) {
+      if (!loop.deleteRequestedAt) return { status: 409, body: { error: "delete must be requested first" } };
+      if (confirmation !== FORCE_DELETE_CONFIRMATION) return { status: 400, body: { error: "force delete confirmation required" } };
+      const machine = await store.getMachine(machineId);
+      const actor = machine?.userId;
+      if (!loop.teamId || !actor || (await store.getTeamMember(loop.teamId, actor))?.role !== "owner") {
+        return { status: 403, body: { error: "only a team owner can force delete this loop" } };
+      }
+      const reachability = machinePresence(!!machine?.online, machine?.lastSeen ?? null);
+      const deleted = await this.forceDeleteLoop(loop.id);
+      if (!deleted) return { status: 409, body: { error: "force delete failed; server data was not deleted" } };
+      this.gateway.scheduler.removeLoop(loop.id);
+      this.destructiveLog({ action: "force-delete", loopId: loop.id, machineId, actorUserId: actor, machineReachability: reachability });
+      return { status: 200, body: { text: forceDeleteWarning(reachability) } };
+    }
+    const running = await store.runningRunForMachine(machineId);
+    const target = running?.loopId === loop.id ? running : undefined;
+    const upgrade = await this.requireStopProtocol(machineId, target);
+    if (upgrade) return upgrade;
+    const result = await store.requestDeleteLoop(loop.id);
+    this.gateway.scheduler.removeLoop(loop.id);
+    if (!result) return { status: 404, body: { error: "no such loop on this machine" } };
+    if (await store.tryDeleteLoop(loop.id)) return { status: 200, body: { text: "loop deleted; local project files were not deleted" } };
+    const machine = await store.getMachine(machineId);
+    return { status: 200, body: { text: `delete requested; stop requested; waiting for ${machine?.name || "machine"}` } };
+  }
+
+  private async stopOwnerRun(machineId: string, argv: string[]): Promise<HttpResult> {
+    if (argv[1] !== "stop" || !argv[2]) return { status: 400, body: { error: "usage: pievo run stop <run>" } };
+    const run = await store.getRun(argv[2]);
+    if (!run || run.machineId !== machineId) return { status: 404, body: { error: "no such run on this machine" } };
+    const upgrade = await this.requireStopProtocol(machineId, run.phase === "running" ? run : undefined);
+    if (upgrade) return upgrade;
+    const stopped = await store.requestRunCancel(run.loopId, run.id);
+    if (!stopped) return { status: 404, body: { error: "no such run on this machine" } };
+    if (stopped.phase === "running") {
+      const machine = await store.getMachine(machineId);
+      return { status: 200, body: { text: `stop requested; waiting for ${machine?.name || "machine"}` } };
+    }
+    if (stopped.phase === "canceled") return { status: 200, body: { text: "run canceled before it started" } };
+    return { status: 200, body: { text: `run already finished: ${runOutcomeToken(stopped)}` } };
+  }
+
+  private async ownerStatus(machineId: string): Promise<HttpResult> {
+    const machine = await store.getMachine(machineId);
+    if (!machine) return { status: 404, body: { error: "machine not found" } };
+    const running = await store.runningRunForMachine(machineId);
+    const lines = [
+      machine.daemonProtocol === 2 ? "daemon protocol: 2" : `daemon update required: protocol ${machine.daemonProtocol ?? "unknown"} -> 2`,
+      `server connectivity: connected (${machine.name || machine.id})`,
+      ...(running ? [`current run: ${running.id} (stage unknown to server)`, ...(running.cancelRequestedAt ? ["cancel pending"] : [])] : []),
+    ];
+    return { status: 200, body: { text: lines.join("\n") } };
   }
 
   /** RUN-credential branch of the unified CLI: the existing per-run `dispatch()`
@@ -731,7 +872,16 @@ const RECLAIMED_MSG =
 /** Verbs that require OWNER (device) authority — a run credential is 403'd on these
  *  in the unified `cli` dispatch (§4.1). `report`/`finish` are the mirror image
  *  (run-only, 403 for a device credential) and are handled inline in `deviceCli`. */
-const DEVICE_ONLY_VERBS = new Set(["new", "edit", "loops", "status"]);
+const DEVICE_ONLY_VERBS = new Set(["new", "edit", "loops", "start", "stop", "delete", "run", "status", "doctor"]);
+
+const PAUSED_FINISHING = "loop paused; current run is finishing";
+const STOP_UPDATE_REQUIRED = "Daemon update required to stop a running process";
+const FORCE_DELETE_CONFIRMATION = "delete-server-data-anyway";
+
+function forceDeleteWarning(reachability: MachinePresence): string {
+  const machine = reachability === "online" ? "machine is online" : reachability === "asleep" ? "machine is asleep" : "machine is unreachable";
+  return `The ${machine}. Its local process may still be running. This removes Pievo authority and server data only. Local project files are not deleted.`;
+}
 
 /** Parse a `--json '<obj>'` flag into an object. Absent → an empty object (the
  *  downstream createLoop/editLoop validators then produce the precise error, e.g.
@@ -987,6 +1137,41 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
     syntax: "show <id>",
     summary: "print a loop's full config + recent state",
     help: ["Run `pievo loops` to list loops on this machine", "Run `pievo log <id>` to see the loop's recent runs"],
+  },
+  pause: {
+    syntax: "pause <id>",
+    summary: "pause future runs; the current run continues",
+    help: ["Pause future runs? The current run will continue."],
+  },
+  start: {
+    syntax: "start <id>",
+    summary: "enable a paused loop and re-arm its existing cadence",
+    help: ["Completed loops must be reopened explicitly; deleting loops cannot be started"],
+  },
+  stop: {
+    syntax: "stop <id>",
+    summary: "pause the loop, cancel queued work, and request process termination",
+    help: ["Pause this loop, cancel queued work, and stop the current run if it is still running?"],
+  },
+  delete: {
+    syntax: "delete <id> [--force]",
+    summary: "stop first, then delete server history and synced artifact metadata",
+    help: ["Stop this loop and delete its Pievo history and synced artifacts? Local project files are not deleted.", "--force requires a prior Delete request and explicit local confirmation; the local process may still be running"],
+  },
+  run: {
+    syntax: "run stop <run-id>",
+    summary: "stop one pending or running run without pausing its loop",
+    help: ["A running run remains running until the daemon confirms cancellation"],
+  },
+  status: {
+    syntax: "status",
+    summary: "show actionable server-side protocol and run diagnostics",
+    help: ["Run `pievo doctor` for the same diagnostics plus local daemon/report state"],
+  },
+  doctor: {
+    syntax: "doctor",
+    summary: "show actionable protocol, connectivity, run, and report diagnostics",
+    help: ["Update the daemon when protocol support is below 2"],
   },
   log: {
     syntax: "log [<id>] [--limit <n>] [--json]",

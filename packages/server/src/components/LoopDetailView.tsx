@@ -5,15 +5,16 @@ import type { ChannelSummary, CodingAgent, JobDetail, RunSummary } from '../type
 import { buildEditPrompt, loopDir } from '../lib/editPrompt'
 import { cronText, dotColor, dotLabel, dur, fmt, isClosed, isCompleted, rel, tsShort, until } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
+import { daemonStopSupport, deriveLoopLifecycle, lifecycleDisplay } from '../lib/lifecycleUi'
 import { setActiveTeamCookie } from '../lib/teamCookie'
-import { deleteJob, evolveJob, getJobDetail, loadOlderRuns, patchJob, requestEdit, runJob } from '../server/loopApi'
+import { deleteJob, evolveJob, forceDeleteJob, getJobDetail, loadOlderRuns, patchJob, pauseJob, requestEdit, runJob, startJob, stopJob } from '../server/loopApi'
 import { listChannels } from '../server/notifyFns'
 import { LoopFilesPanel } from './LoopFilesPanel'
 import { LoopForm, type LoopFormHandle } from './LoopForm'
 import { MachinesModal } from './MachinesModal'
 import { Timeline, WINDOW } from './Timeline'
-import { btn, btnCost, btnPrimary, btnQuiet, ErrorBanner, Loading, Pill, Pre, runPulseStyle, sectionHeadCls } from './ui'
-import { ConfirmBar, FlashLine, LoadErrorCard, useDeferredDelete, useFlash } from './actionUi'
+import { btn, btnCost, btnDanger, btnPrimary, btnQuiet, ErrorBanner, Loading, Pill, Pre, runPulseStyle, sectionHeadCls } from './ui'
+import { ConfirmBar, FlashLine, LoadErrorCard, useFlash } from './actionUi'
 
 const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
 
@@ -64,13 +65,11 @@ export function LoopDetailView({ id }: { id: string }) {
   const [pushOpen, setPushOpen] = useState(false)
   const [pushSaved, setPushSaved] = useState(false)
   const [machinesOpen, setMachinesOpen] = useState(false)
-  const [pending, setPending] = useState<null | 'run' | 'evolve' | 'save' | 'toggle' | 'edit'>(null)
-  const [confirming, setConfirming] = useState<null | 'run' | 'evolve' | 'delete'>(null)
+  const [pending, setPending] = useState<null | 'run' | 'evolve' | 'save' | 'lifecycle' | 'edit'>(null)
+  const [confirming, setConfirming] = useState<null | 'run' | 'evolve' | 'pause' | 'stop' | 'delete' | 'force-delete'>(null)
   const [flash, setFlash] = useFlash()
   const formRef = useRef<LoopFormHandle>(null)
-  const del = useDeferredDelete(id, (loopId) => deleteJob({ data: loopId }).then(() => navigate({ to: '/' })), {
-    onExpire: () => navigate({ to: '/' }),
-  })
+  const deletingRef = useRef(false)
 
   // Older run pages (lazy) for the timeline strip, mirroring LoopCard.
   const [older, setOlder] = useState<RunSummary[]>([])
@@ -82,10 +81,13 @@ export function LoopDetailView({ id }: { id: string }) {
   const load = useCallback(
     async (silent = false) => {
       try {
-        setDetail(await getJobDetail({ data: id }))
+        const next = await getJobDetail({ data: id })
+        setDetail(next)
+        deletingRef.current = next.summary.deleteRequestedAt != null
         setErr(null)
       } catch (e) {
-        if (!silent) setErr(String(e))
+        if (deletingRef.current) navigate({ to: '/' })
+        else if (!silent) setErr(String(e))
       }
     },
     [id],
@@ -111,10 +113,10 @@ export function LoopDetailView({ id }: { id: string }) {
   // the form) or mid-delete (the optimistic tombstone).
   const running = !!detail?.summary.running
   useEffect(() => {
-    if (editing || del.armed) return
-    const t = setInterval(() => void load(true), running ? 3_000 : 8_000)
+    if (editing) return
+    const t = setInterval(() => void load(true), running || deletingRef.current ? 3_000 : 8_000)
     return () => clearInterval(t)
-  }, [editing, del.armed, running, load])
+  }, [editing, running, load])
 
   useEffect(() => {
     if (!pushSaved) return
@@ -156,12 +158,25 @@ export function LoopDetailView({ id }: { id: string }) {
       setPending(null)
     }
   }
-  async function onToggle(enabled: boolean) {
-    setPending('toggle')
+  async function doLifecycle(action: 'pause' | 'start' | 'stop' | 'delete' | 'force-delete') {
+    setActionErr(null)
+    setPending('lifecycle')
     try {
-      await patchJob({ data: { id, patch: { enabled } } })
+      const r = action === 'pause' ? await pauseJob({ data: id })
+        : action === 'start' ? await startJob({ data: id })
+          : action === 'stop' ? await stopJob({ data: id })
+            : action === 'delete' ? await deleteJob({ data: id })
+              : await forceDeleteJob({ data: { id, confirmation: 'delete-server-data-anyway' } })
+      if (r.error) return setActionErr(`${action === 'force-delete' ? 'Force delete' : action[0]!.toUpperCase() + action.slice(1)} failed: ${r.error}`)
+      setConfirming(null)
+      if (r.deleted) {
+        deletingRef.current = false
+        navigate({ to: '/' })
+        return
+      }
+      if (action === 'delete') deletingRef.current = true
       await refreshAll()
-      setFlash({ label: enabled ? 'Enabled' : 'Paused', undo: () => void onToggle(!enabled) })
+      setFlash({ label: action === 'start' ? 'Started' : action === 'pause' ? 'Paused' : action === 'stop' ? 'Stop requested' : 'Deleting' })
     } finally {
       setPending(null)
     }
@@ -208,10 +223,10 @@ export function LoopDetailView({ id }: { id: string }) {
   function onConfirm() {
     if (confirming === 'run') void doRun()
     else if (confirming === 'evolve') void doEvolve()
-    else if (confirming === 'delete') {
-      setConfirming(null)
-      del.arm()
-    }
+    else if (confirming === 'pause') void doLifecycle('pause')
+    else if (confirming === 'stop') void doLifecycle('stop')
+    else if (confirming === 'delete') void doLifecycle('delete')
+    else if (confirming === 'force-delete') void doLifecycle('force-delete')
   }
 
   const backLink = (
@@ -250,6 +265,9 @@ export function LoopDetailView({ id }: { id: string }) {
       : 'Machine offline - requests will stay queued until it reconnects'
     : undefined
   const completed = isCompleted(s)
+  const lifecycle = deriveLoopLifecycle(s)
+  const lifecycleText = lifecycleDisplay(detail)
+  const protocolSupport = daemonStopSupport(detail.machine.daemonProtocol)
   // A closed loop still working toward its goal (not yet completed).
   const closedActive = isClosed(s) && !completed
   const onMachine = detail.machine.name ? `“${detail.machine.name}”` : 'the bound machine'
@@ -281,7 +299,15 @@ export function LoopDetailView({ id }: { id: string }) {
       cta: 'Evolve',
       danger: false,
     },
-    delete: { q: 'Delete this loop?', note: 'Removes the loop and its schedule. This cannot be undone.', cta: 'Delete', danger: true },
+    pause: { q: 'Pause future runs? The current run will continue.', cta: 'Pause', danger: false },
+    stop: { q: 'Pause this loop, cancel queued work, and stop the current run if it is still running?', cta: 'Stop', danger: true },
+    delete: { q: 'Stop this loop and delete its Pievo history and synced artifacts? Local project files are not deleted.', cta: 'Delete', danger: true },
+    'force-delete': {
+      q: 'Delete server data anyway',
+      note: 'The machine is unreachable. Its local process may still be running. This removes Pievo authority and server data only.',
+      cta: 'Delete server data anyway',
+      danger: true,
+    },
   } as const
 
   const flashLine = flash && (
@@ -300,10 +326,16 @@ export function LoopDetailView({ id }: { id: string }) {
     'flex w-full cursor-pointer select-none items-center px-3.5 py-2 text-body text-accent outline-none transition-colors data-[highlighted]:bg-accent-soft data-[disabled]:cursor-default data-[disabled]:opacity-40'
 
   const actionBar = c ? (
-    <ConfirmBar key={confirming} prompt={c.q} note={c.note} cta={c.cta} danger={c.danger} busy={confirmLocked} onConfirm={onConfirm} onCancel={() => setConfirming(null)} />
-  ) : del.armed ? (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border border-wire bg-raised px-4 py-3">
-      <FlashLine tone="gone" label="Deleted" onUndo={del.cancel} />
+    <ConfirmBar key={confirming} prompt={c.q} note={'note' in c ? c.note : undefined} cta={c.cta} danger={c.danger} busy={confirmLocked} onConfirm={onConfirm} onCancel={() => setConfirming(null)} />
+  ) : lifecycle === 'deleting' ? (
+    <div className="flex flex-wrap items-center gap-3 rounded-md border border-wire bg-raised px-4 py-3">
+      <span className="text-body font-medium text-display">{lifecycleText}</span>
+      <span className="text-meta text-secondary">Server deletion is waiting for execution authority to end.</span>
+      {!online && (
+        <button type="button" className={btnDanger} onClick={() => setConfirming('force-delete')} disabled={busy}>
+          Delete server data anyway
+        </button>
+      )}
     </div>
   ) : editVia ? (
     <div
@@ -477,11 +509,32 @@ export function LoopDetailView({ id }: { id: string }) {
               <Menu.Item className={menuItem} onClick={() => setPushOpen(true)}>
                 Push…
               </Menu.Item>
-              <Menu.Item className={menuItem} onClick={() => void onToggle(!s.enabled)}>
-                {completed ? 'Reopen' : s.enabled ? 'Pause' : 'Enable'}
-              </Menu.Item>
+              {completed ? (
+                <Menu.Item className={menuItem} onClick={() => void patchJob({ data: { id, patch: { enabled: true } } }).then(refreshAll)}>
+                  {'Reopen'}
+                </Menu.Item>
+              ) : lifecycle === 'paused' ? (
+                <Menu.Item className={menuItem} onClick={() => void doLifecycle('start')}>Start</Menu.Item>
+              ) : (
+                <Menu.Item className={menuItem} onClick={() => setConfirming('pause')}>Pause</Menu.Item>
+              )}
+              {!completed && lifecycle !== 'stopping' && (
+                <Menu.Item
+                  className={menuItemDanger}
+                  disabled={!!s.running && !protocolSupport.supported}
+                  title={s.running && !protocolSupport.supported ? 'Daemon update required to stop a running process' : undefined}
+                  onClick={() => setConfirming('stop')}
+                >
+                  Stop
+                </Menu.Item>
+              )}
               <Menu.Separator className="my-1.5 h-px bg-hairline" />
-              <Menu.Item className={menuItemDanger} onClick={() => setConfirming('delete')}>
+              <Menu.Item
+                className={menuItemDanger}
+                disabled={!!s.running && !protocolSupport.supported}
+                title={s.running && !protocolSupport.supported ? 'Daemon update required to stop a running process' : undefined}
+                onClick={() => setConfirming('delete')}
+              >
                 Delete
               </Menu.Item>
             </Menu.Popup>
@@ -578,20 +631,16 @@ export function LoopDetailView({ id }: { id: string }) {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.015em] text-display">{s.name}</h1>
-              {s.running ? (
-                <Pill tone="running" dot="pulse">
-                  Running
-                </Pill>
-              ) : s.queued ? (
-                <Pill tone="outline">Queued</Pill>
-              ) : null}
               {completed ? (
                 <Pill tone="success" dot="green">
                   Completed
                 </Pill>
-              ) : !s.enabled ? (
-                <Pill>Paused</Pill>
-              ) : null}
+              ) : (
+                <Pill tone={lifecycle === 'stopping' ? 'running' : undefined} dot={lifecycle === 'stopping' ? 'pulse' : undefined}>
+                  {lifecycleText}
+                </Pill>
+              )}
+              {s.queued && lifecycle === 'active' ? <Pill tone="outline">Queued</Pill> : null}
               {/* Closed loop still working toward its goal → the quiet "Goal" chip
                   (same understated style as the agent chip, not a status pill). */}
               {closedActive && (
@@ -624,6 +673,8 @@ export function LoopDetailView({ id }: { id: string }) {
                 <span className={`size-1.5 rounded-full ${online ? 'bg-rubik-green' : asleep ? 'bg-rubik-yellow' : 'bg-disabled'}`} />
                 {detail.machine.name || 'machine'}
               </span>
+              {metaDot}
+              <span title="Breaking daemon/server lifecycle protocol">{protocolSupport.label}</span>
               {metaDot}
               <code className="font-mono text-label text-disabled">{s.id}</code>
             </div>
