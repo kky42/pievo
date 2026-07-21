@@ -1,7 +1,7 @@
 /**
  * The best-effort `npx skills` install path, exercised with the runner INJECTED so
  * nothing spawns npx or touches the network. Covers the exact argv (verified
- * against the current `skills` CLI), project-vs-global scope, idempotent-overwrite
+ * against the current `skills` CLI), user scope, idempotent-overwrite
  * success, and the never-throws fallback on every failure mode.
  */
 import fs from "node:fs";
@@ -28,16 +28,10 @@ afterAll(() => fs.rmSync(fixtureDir, { recursive: true, force: true }));
 const ok: Runner = async () => ({ code: 0, stdout: "installed", stderr: "" });
 
 describe("installArgs", () => {
-  test("project scope (default) — verified multi-agent invocation", () => {
+  test("always uses user scope with a verified multi-agent invocation", () => {
     // Repeated `-a <id>` flags, one per known agent (the comma form `-a a,b` is
     // rejected by the `skills` CLI as a single bogus agent name).
     expect(installArgs("/b/skill")).toEqual([
-      "--yes", "skills", "add", "/b/skill", "-a", "claude-code", "-a", "codex", "-y", "--copy",
-    ]);
-  });
-
-  test("global appends -g", () => {
-    expect(installArgs("/b/skill", true)).toEqual([
       "--yes", "skills", "add", "/b/skill", "-a", "claude-code", "-a", "codex", "-y", "--copy", "-g",
     ]);
   });
@@ -52,30 +46,16 @@ describe("installArgs", () => {
 });
 
 describe("targetSkillDirs", () => {
-  test("global → each agent's ~ skill dir", () => {
-    expect(targetSkillDirs({ global: true })).toEqual([
+  test("returns each agent's user skill dir", () => {
+    expect(targetSkillDirs()).toEqual([
       "~/.claude/skills/pievo",
       "~/.agents/skills/pievo",
-    ]);
-  });
-
-  test("project cwd → each agent's dir under the cwd", () => {
-    expect(targetSkillDirs({ cwd: "/loops/cookie" })).toEqual([
-      path.join("/loops/cookie", ".claude/skills/pievo"),
-      path.join("/loops/cookie", ".agents/skills/pievo"),
-    ]);
-  });
-
-  test("default (no cwd) → cwd-relative, keeps the ./ prefix", () => {
-    expect(targetSkillDirs()).toEqual([
-      "./.claude/skills/pievo",
-      "./.agents/skills/pievo",
     ]);
   });
 });
 
 describe("installSkill", () => {
-  test("success → ok + project location line", async () => {
+  test("success → user locations + -g passed", async () => {
     let seen: string[] = [];
     const runner: Runner = async (_cmd, args) => {
       seen = args;
@@ -83,47 +63,10 @@ describe("installSkill", () => {
     };
     const r = await installSkill({ dir: fixtureDir, runner });
     expect(r.ok).toBe(true);
-    expect(r.line).toContain("./.claude/skills/pievo"); // Claude Code
-    expect(r.line).toContain("./.agents/skills/pievo"); // Codex
-    expect(seen).toEqual(installArgs(fixtureDir, false));
-  });
-
-  test("global → ~/.claude location line + -g passed", async () => {
-    let seen: string[] = [];
-    const runner: Runner = async (_cmd, args) => {
-      seen = args;
-      return { code: 0, stdout: "", stderr: "" };
-    };
-    const r = await installSkill({ dir: fixtureDir, global: true, runner });
-    expect(r.ok).toBe(true);
     expect(r.line).toContain("~/.claude/skills/pievo"); // Claude Code
     expect(r.line).toContain("~/.agents/skills/pievo"); // Codex
+    expect(seen).toEqual(installArgs(fixtureDir));
     expect(seen).toContain("-g");
-  });
-
-  test("cwd → threaded into the runner + reflected in the install location line", async () => {
-    let seenCwd: string | undefined = "UNSET";
-    const runner: Runner = async (_cmd, _args, opts) => {
-      seenCwd = opts?.cwd;
-      return { code: 0, stdout: "", stderr: "" };
-    };
-    const r = await installSkill({ dir: fixtureDir, cwd: "/loops/cookie", runner });
-    expect(r.ok).toBe(true);
-    expect(seenCwd).toBe("/loops/cookie"); // the project install runs IN the loop workdir
-    expect(r.line).toContain(path.join("/loops/cookie", ".claude/skills/pievo"));
-    expect(r.line).toContain(path.join("/loops/cookie", ".agents/skills/pievo"));
-  });
-
-  test("global ignores cwd — targets ~/.claude and runs with no cwd", async () => {
-    let seenCwd: string | undefined = "UNSET";
-    const runner: Runner = async (_cmd, _args, opts) => {
-      seenCwd = opts?.cwd;
-      return { code: 0, stdout: "", stderr: "" };
-    };
-    const r = await installSkill({ dir: fixtureDir, cwd: "/loops/cookie", global: true, runner });
-    expect(r.ok).toBe(true);
-    expect(r.line).toContain("~/.claude/skills/pievo");
-    expect(seenCwd).toBeUndefined();
   });
 
   test("bundled skill absent → skipped, never runs the command", async () => {

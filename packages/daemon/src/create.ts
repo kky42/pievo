@@ -3,7 +3,7 @@
  *
  * Folds SKILL.md §3 (hand IANA-timezone detection) and §4 (hand-built JSON +
  * curl) into one command. The agent's config carries only real intent —
- * name · cron · workflow|taskFile · workdir · model · stateSchema · ui · notify. This
+ * name · cron · workflow|taskFile · workdir · model · reasoningEffort · stateSchema · ui · notify. This
  * command fills the fixed envelope the agent shouldn't have to think about:
  *   - timezone: auto-detected IANA (config/--tz override), so the cadence fires
  *     in the user's local time, not the server's (UTC in prod),
@@ -18,7 +18,7 @@ import fs from "node:fs";
 import type { CliResponse, LegacyFallback } from "./cli-client.js";
 import { postCli, printTextOrTooOld } from "./cli-client.js";
 import { DEVICE_FILE, flag, readStored, resolveServerUrl } from "./config.js";
-import { type InstallOpts, type InstallOutcome, installSkill } from "./skill-install.js";
+import { type InstallOutcome, installSkill } from "./skill-install.js";
 
 /**
  * Best-effort IANA zone for THIS machine. `Intl` is the portable primary (works
@@ -139,7 +139,7 @@ export function resolveAgent(env: NodeJS.ProcessEnv, declared: unknown): CodingA
 /** Tests inject these to assert the post-create skill install without network/npx. */
 export interface CreateDeps {
   fetchImpl?: typeof fetch;
-  installer?: (opts: InstallOpts) => Promise<InstallOutcome>;
+  installer?: () => Promise<InstallOutcome>;
   stdout?: (s: string) => void;
 }
 
@@ -269,11 +269,11 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
 /** Best-effort, announced USER-scope install (`~/.claude/skills/pievo`). Swallows
  *  every error and prints one line — loop creation must never fail on the skill. */
 async function announceSkillInstall(
-  installer: (opts: InstallOpts) => Promise<InstallOutcome>,
+  installer: () => Promise<InstallOutcome>,
   write: (s: string) => void,
 ): Promise<void> {
   try {
-    const r = await installer({ global: true });
+    const r = await installer();
     write(r.line + "\n");
   } catch {
     /* truly never block create */

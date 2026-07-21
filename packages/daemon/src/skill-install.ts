@@ -8,7 +8,7 @@
  * `pievo new`, and it NEVER blocks: any failure (no network, no npx, no write
  * permission, bundled skill absent) degrades silently to the always-working
  * /api/skill inline path. It just prints one status line. `pievo skill install`
- * is the manual escape hatch (`--project` installs into the cwd instead).
+ * is the manual refresh command.
  *
  * MULTI-AGENT: the skill is installed for every coding agent pievo knows about
  * (`SKILL_TARGET_AGENTS` — currently Claude Code and Codex, the two `CodingAgent`
@@ -31,11 +31,10 @@
  * was verified against the current `skills` CLI (`-g` targets each agent's user dir
  * → ~/.claude/skills/pievo/ for Claude Code, ~/.agents/skills/pievo/ for Codex;
  * `-y` is non-interactive + idempotent-overwrite; `--copy` makes a self-contained
- * copy, no symlink into this package's temp dir). Dropping `-g` (the `--project`
- * escape hatch) installs into the runner's cwd instead.
+ * copy, no symlink into this package's temp dir).
  *
- * CAVEAT: a PRE-EXISTING per-workdir skill copy left behind by the old project-scope
- * installer is NOT auto-removed — it must be deleted BY HAND, or it shadows the
+ * A PRE-EXISTING per-workdir skill copy left behind by the retired project-scope
+ * installer is NOT auto-removed — it must be deleted by hand, or it shadows the
  * user-level skill (project scope wins in agent discovery).
  */
 import { spawn } from "node:child_process";
@@ -79,18 +78,17 @@ export interface RunResult {
   stdout: string;
   stderr: string;
 }
-export type Runner = (cmd: string, args: string[], opts?: { cwd?: string }) => Promise<RunResult>;
+export type Runner = (cmd: string, args: string[]) => Promise<RunResult>;
 
 /** Spawn `npx skills …`, capture output, bounded by INSTALL_TIMEOUT_MS. Resolves
- *  (never rejects) with code -1 when the binary can't be spawned or times out. The
- *  child's `cwd` decides where a project-level install lands (`<cwd>/.claude/…`). */
-const defaultRunner: Runner = (cmd, args, opts) =>
+ *  (never rejects) with code -1 when the binary can't be spawned or times out. */
+const defaultRunner: Runner = (cmd, args) =>
   new Promise<RunResult>((resolve) => {
     let stdout = "";
     let stderr = "";
     let child;
     try {
-      child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], cwd: opts?.cwd });
+      child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
     } catch (err) {
       resolve({ code: -1, stdout: "", stderr: err instanceof Error ? err.message : String(err) });
       return;
@@ -116,12 +114,6 @@ const defaultRunner: Runner = (cmd, args, opts) =>
   });
 
 export interface InstallOpts {
-  /** Install to the user dir (`~/.claude/skills`) instead of the project default. */
-  global?: boolean;
-  /** Project-level install target: the dir to run `npx skills` in, so the skill
-   *  lands in `<cwd>/.claude/skills/pievo`. Defaults to the process cwd. Ignored
-   *  when `global` is set (that always targets `~/.claude/skills`). */
-  cwd?: string;
   /** Override the bundled skill dir (tests). */
   dir?: string;
   /** Override the command runner (tests) so nothing spawns npx / hits the network. */
@@ -147,26 +139,19 @@ export const SKILL_TARGET_AGENTS: ReadonlyArray<{
   { id: "codex", label: "Codex", skillsRoot: [".agents", "skills"] },
 ];
 
-/** The argv (after `npx`) for the install — pure, so tests can assert it. Targets
- *  every agent in `SKILL_TARGET_AGENTS` via repeated `-a <id>` flags (the comma form
- *  `-a a,b` is rejected by the CLI as one bogus agent name). */
-export function installArgs(dir: string, global = false): string[] {
+/** The argv (after `npx`) for the user-scope install — pure, so tests can
+ *  assert it. Targets every agent in `SKILL_TARGET_AGENTS` via repeated `-a <id>`
+ *  flags (the comma form `-a a,b` is rejected as one bogus agent name). */
+export function installArgs(dir: string): string[] {
   const args = ["--yes", "skills", "add", dir];
   for (const t of SKILL_TARGET_AGENTS) args.push("-a", t.id);
-  args.push("-y", "--copy");
-  if (global) args.push("-g");
+  args.push("-y", "--copy", "-g");
   return args;
 }
 
-/** The per-agent skill directories a given scope install writes to, for display.
- *  `global` → under `~`; else under `cwd` (or `.` when unset, keeping the `./` prefix
- *  path.join would otherwise strip). */
-export function targetSkillDirs(opts: { global?: boolean; cwd?: string } = {}): string[] {
-  return SKILL_TARGET_AGENTS.map((t) => {
-    if (opts.global) return path.join("~", ...t.skillsRoot, "pievo");
-    if (opts.cwd) return path.join(opts.cwd, ...t.skillsRoot, "pievo");
-    return `./${path.join(...t.skillsRoot, "pievo")}`;
-  });
+/** The user-scope skill directories written for display. */
+export function targetSkillDirs(): string[] {
+  return SKILL_TARGET_AGENTS.map((t) => path.join("~", ...t.skillsRoot, "pievo"));
 }
 
 /**
@@ -183,16 +168,14 @@ export async function installSkill(opts: InstallOpts = {}): Promise<InstallOutco
     };
   }
   const runner = opts.runner ?? defaultRunner;
-  // A project install runs in `cwd` (so it lands there); a global one ignores it.
-  const cwd = opts.global ? undefined : opts.cwd;
   let res: RunResult;
   try {
-    res = await runner("npx", installArgs(dir, opts.global), { cwd });
+    res = await runner("npx", installArgs(dir));
   } catch (err) {
     return { ok: false, line: `pievo skill: skipped (${err instanceof Error ? err.message : String(err)})` };
   }
   if (res.code === 0) {
-    const where = targetSkillDirs(opts).join(", ");
+    const where = targetSkillDirs().join(", ");
     return { ok: true, line: `pievo skill: installed → ${where}` };
   }
   const why = firstLine(res.stderr) || firstLine(res.stdout) || `exit ${res.code}`;

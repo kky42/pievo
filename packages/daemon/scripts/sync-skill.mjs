@@ -12,7 +12,7 @@
  * (not an installable skill file), and skill/templates/ is the template-market
  * metadata (public-served via listTemplates, not an installable skill file) — none of
  * these may reach the public npm tarball or a user's installed
- * ./.claude/skills/pievo/. A naive `cpSync(src, dst, {recursive})` would copy run/,
+ * ~/.claude/skills/pievo/. A naive `cpSync(src, dst, {recursive})` would copy run/,
  * bootstrap.md AND templates/ too — so we whitelist instead.
  *
  * The daemon installs this bundled dir locally via `npx skills` during `pievo new`

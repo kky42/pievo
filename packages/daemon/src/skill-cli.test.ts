@@ -1,8 +1,8 @@
 /**
  * `pievo skill status` — honest, per-agent install reporting. The install now
  * targets every agent in `SKILL_TARGET_AGENTS` (Claude Code + Codex today), so
- * status must report each one's location for BOTH scopes (user + project), derived
- * from the same target list as the installer so the two surfaces cannot drift.
+ * status must report each one's user-scope location, derived from the same target
+ * list as the installer so the two surfaces cannot drift.
  * Nothing here spawns npx or hits the network — status is pure filesystem reads.
  */
 import fs from "node:fs";
@@ -41,20 +41,14 @@ describe("pievo skill status — multi-agent", () => {
     expect(SKILL_TARGET_AGENTS.map((t) => t.id)).toEqual(["claude-code", "codex"]);
   });
 
-  test("reports each agent × scope (user + project) with a real installed/not-installed verdict", async () => {
+  test("reports each agent's user install with a real verdict", async () => {
     const out = await captureStatus();
     for (const t of SKILL_TARGET_AGENTS) {
       const userDir = path.join(os.homedir(), ...t.skillsRoot, "pievo");
-      const projectDir = path.join(process.cwd(), ...t.skillsRoot, "pievo");
       const userInstalled = fs.existsSync(path.join(userDir, "SKILL.md"));
-      const projectInstalled = fs.existsSync(path.join(projectDir, "SKILL.md"));
-      // user scope line
       expect(out).toContain(`${t.label} user (${userDir}): ${userInstalled ? "installed" : "not installed"}`);
-      // project scope line
-      expect(out).toContain(
-        `${t.label} project (${projectDir}): ${projectInstalled ? "installed (would shadow user scope)" : "not installed"}`,
-      );
     }
+    expect(out).not.toContain(" project (");
     expect(out).toMatch(/bundled source: (available|missing)/);
   });
 
@@ -62,5 +56,17 @@ describe("pievo skill status — multi-agent", () => {
     const out = await captureStatus();
     expect(out).toContain(path.join(".claude", "skills", "pievo"));
     expect(out).toContain(path.join(".agents", "skills", "pievo"));
+  });
+
+  test.each(["--project", "--local"])("rejects retired project flag %s", async (flag) => {
+    let err = "";
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      err += String(chunk);
+      return true;
+    });
+    const code = await runSkill(["install", flag]);
+    spy.mockRestore();
+    expect(code).toBe(2);
+    expect(err).toContain("pievo skill [status|install]");
   });
 });

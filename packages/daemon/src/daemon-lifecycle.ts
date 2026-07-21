@@ -9,7 +9,7 @@ import { ensureBinShim } from "./bin-shim.js";
 import { DEVICE_FILE, PIEVO_DIR, SERVER_FILE, flag, persist, readStored, resolveServerUrl } from "./config.js";
 import { fetchMachineStatus, runDaemonStop } from "./daemon-control.js";
 import { verifiedRunningPid } from "./pidfile.js";
-import { type InstallOpts, type InstallOutcome, installSkill } from "./skill-install.js";
+import { type InstallOutcome, installSkill } from "./skill-install.js";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -66,7 +66,7 @@ export type DaemonStartDeps = {
   persist?: (file: string, value: string) => void;
   readToken?: () => string | undefined;
   /** Refresh the user-scope skill (best-effort, announced). Injected in tests. */
-  installSkill?: (opts: InstallOpts) => Promise<InstallOutcome>;
+  installSkill?: () => Promise<InstallOutcome>;
   /** Install/refresh the `pievo` PATH shim (best-effort). Injected in tests. */
   ensureBinShim?: () => void;
   /** Override the private detached-child marker in tests. */
@@ -110,7 +110,7 @@ export async function runDaemonStart(args: string[], injected: DaemonStartDeps =
   /** Best-effort user-scope skill and PATH refresh. */
   const refreshSkill = async (): Promise<void> => {
     try {
-      const r = await d.installSkill({ global: true });
+      const r = await d.installSkill();
       d.out(r.line + "\n");
     } catch {
       /* never let a skill refresh fail daemon start */

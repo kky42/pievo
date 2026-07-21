@@ -22,8 +22,8 @@ Loop setup and management
   new --json '<config>' [--dry-run] [--tz <IANA>] [--agent claude-code|codex]
                           Create a loop (--json - reads stdin). Connection overrides:
                           --server-url <url>, --connect-key <dk_…>.
-  skill [status|install] [--project]
-                          Install or inspect the Pievo skill; user scope is default.
+  skill [status|install]
+                          Install or inspect the user-scope Pievo skill.
   pause <loop>            Pause future runs; the current run continues.
   start <loop>            Start a paused loop using its existing cadence.
   stop <loop>             Pause, cancel queued work, and request run termination.
@@ -58,7 +58,7 @@ const VERB_USAGE: Record<string, string> = {
   "daemon restart": "pievo daemon restart [--force]\n  Stop then start the currently installed version. --force applies only to stop.",
   "daemon status": "pievo daemon status\n  Show local daemon, server connectivity, run, and report diagnostics.",
   new: "pievo new --json '<config>' [--dry-run] [--connect-key <dk_…>] [--server-url <url>] [--tz <IANA>] [--agent claude-code|codex]\n  Create a loop (--json - reads stdin); --dry-run validates without persistence. The detected coding agent takes precedence over --agent.",
-  skill: "pievo skill [status|install] [--project]\n  Install for every supported coding agent or inspect installation status. User scope is the default; --project targets the current directory.",
+  skill: "pievo skill [status|install]\n  Install at user scope for every supported coding agent or inspect installation status.",
   pause: "pievo pause <loop>\n  Pause future runs. The current run continues.",
   start: "pievo start <loop>\n  Start a paused loop and re-arm its cadence.",
   stop: "pievo stop <loop>\n  Pause the loop, cancel queued work, and request current-run termination.",

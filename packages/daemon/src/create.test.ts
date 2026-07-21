@@ -15,7 +15,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { canonicalJson, coerceAgent, cronLooksValid, detectAgentFromEnv, idempotencyKey, resolveAgent, runCreate } from "./create.js";
-import type { InstallOpts, InstallOutcome } from "./skill-install.js";
+import type { InstallOutcome } from "./skill-install.js";
 
 const okResponse = (body: unknown) => ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
 const errResponse = (status: number, body: unknown) =>
@@ -113,11 +113,11 @@ describe("runCreate — skill install fires only after a confirmed create, never
     else process.env.PIEVO_TOKEN = prevToken;
   });
 
-  test("a successful create installs the skill at USER scope (global), independent of workdir", async () => {
+  test("a successful create installs the skill at USER scope, independent of workdir", async () => {
     const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "pievo/x/README.md", workdir: tmpWorkdir() });
-    const installed: InstallOpts[] = [];
-    const installer = async (opts: InstallOpts): Promise<InstallOutcome> => {
-      installed.push(opts);
+    let installs = 0;
+    const installer = async (): Promise<InstallOutcome> => {
+      installs += 1;
       return { ok: true, line: "pievo skill: installed → ~/.claude/skills/pievo" };
     };
     const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
@@ -126,15 +126,14 @@ describe("runCreate — skill install fires only after a confirmed create, never
       stdout: () => {},
     });
     expect(code).toBe(0);
-    // The install targets the user dir (global) — never the loop workdir/cwd.
-    expect(installed).toEqual([{ global: true }]);
+    expect(installs).toBe(1);
   });
 
   test("a successful create with no workdir + no returned id STILL installs (user scope needs neither)", async () => {
     const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "pievo/x/README.md" }); // no workdir
-    const installed: InstallOpts[] = [];
-    const installer = async (opts: InstallOpts): Promise<InstallOutcome> => {
-      installed.push(opts);
+    let installs = 0;
+    const installer = async (): Promise<InstallOutcome> => {
+      installs += 1;
       return { ok: true, line: "" };
     };
     const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
@@ -143,7 +142,7 @@ describe("runCreate — skill install fires only after a confirmed create, never
       stdout: () => {},
     });
     expect(code).toBe(0);
-    expect(installed).toEqual([{ global: true }]);
+    expect(installs).toBe(1);
   });
 
   test("a failed create does NOT install the skill", async () => {
@@ -180,18 +179,18 @@ describe("runCreate — skill install fires only after a confirmed create, never
   test("text sink: a new server's `text` is printed verbatim (not the structured line), and the skill still installs", async () => {
     const cfg = cfgJson({ cron: "0 8 * * *", taskFile: "pievo/x/README.md" });
     const toon = "created: Cookie (loop-1)\nclassification: open — runs until paused\ndashboard: not applied";
-    const installed: InstallOpts[] = [];
+    let installs = 0;
     const out: string[] = [];
     const code = await runCreate(["--json", cfg, "--server-url", "http://test"], {
       fetchImpl: async () => okResponse({ ok: true, id: "loop-1", name: "Cookie", text: toon, exitCode: 0 }),
-      installer: async (opts) => { installed.push(opts); return { ok: true, line: "pievo skill: installed" }; },
+      installer: async () => { installs += 1; return { ok: true, line: "pievo skill: installed" }; },
       stdout: (s) => out.push(s),
     });
     expect(code).toBe(0);
     const text = out.join("");
     expect(text).toContain(toon); // the server render, verbatim
     expect(text).not.toContain("created loop Cookie"); // NOT the old structured line
-    expect(installed).toEqual([{ global: true }]); // still runs after a confirmed create
+    expect(installs).toBe(1); // still runs after a confirmed create
   });
 
   test("text sink: a --dry-run new server prints its `text` preview (no structured fallback)", async () => {
@@ -235,9 +234,9 @@ describe("runCreate — skill install fires only after a confirmed create, never
     expect(out.join("")).toBe(toon + "\n"); // the server preview, verbatim
   });
 
-  test("posts the whole config (including `ui`) to the unified /api/machine/cli as `new --json`", async () => {
+  test("posts the whole config (including provider settings and `ui`) to the unified /api/machine/cli as `new --json`", async () => {
     const ui = '<h3>React Doctor</h3><loop-chart series="score:Red Dot Score"></loop-chart><loop-kanban columns="open,merged"></loop-kanban>';
-    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "pievo/react-doctor/README.md", ui });
+    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "pievo/react-doctor/README.md", model: "gpt-custom", reasoningEffort: "custom-high", ui });
     let sentUrl = "";
     let sentBody: any = null;
     const out: string[] = [];
@@ -257,6 +256,8 @@ describe("runCreate — skill install fires only after a confirmed create, never
     expect(sentBody.argv[1]).toBe("--json");
     // The whole config — including ui — rides inside the --json payload (no whitelist drops it).
     expect(JSON.parse(sentBody.argv[2]).ui).toBe(ui);
+    expect(JSON.parse(sentBody.argv[2]).model).toBe("gpt-custom");
+    expect(JSON.parse(sentBody.argv[2]).reasoningEffort).toBe("custom-high");
     // The real create echoes the dashboard presence in the server-rendered `text`.
     expect(out.join("")).toContain("dashboard: applied");
   });

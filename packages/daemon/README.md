@@ -50,8 +50,7 @@ Daemon lifecycle
 Setup and management
   new --json '<config>'   Create a loop from an inline JSON config (--json - reads
                           stdin). --dry-run validates + previews, creates nothing.
-  skill [status|install]  Manage the pievo agent skill install (user scope by
-                          default; --project installs into the current directory).
+  skill [status|install]  Manage the user-scope pievo agent skill install.
   show [<id>]             Show a loop's full editable config + recent state (the
                           device credential inspects any loop on this machine).
   log [<loop>]            Show a loop's recent runs (status, metrics, session id;

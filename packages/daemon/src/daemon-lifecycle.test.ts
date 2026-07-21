@@ -2,14 +2,12 @@
 import { describe, expect, test } from "vitest";
 
 import { buildDaemonSpawn, runDaemonRestart, runDaemonStart, type DaemonStartDeps } from "./daemon-lifecycle.js";
-import type { InstallOpts } from "./skill-install.js";
-
 type Cap = DaemonStartDeps & {
   stdout: () => string;
   stderr: () => string;
   spawned: () => number;
   killed: () => Array<[number, string]>;
-  skillInstalls: () => InstallOpts[];
+  skillInstalls: () => number;
 };
 
 /** Baseline seams: nothing running, server unreachable, spawn returns pid 555. The
@@ -19,7 +17,7 @@ function seams(extra: DaemonStartDeps = {}): Cap {
   let err = "";
   let spawned = 0;
   const killed: Array<[number, string]> = [];
-  const skillInstalls: InstallOpts[] = [];
+  let skillInstalls = 0;
   return {
     fetchStatus: async () => undefined,
     spawnDaemon: () => { spawned += 1; return 555; },
@@ -28,7 +26,7 @@ function seams(extra: DaemonStartDeps = {}): Cap {
     localPid: () => undefined,
     persist: () => {},
     readToken: () => "dk_stored",
-    installSkill: async (opts) => { skillInstalls.push(opts); return { ok: true, line: "pievo skill: installed → ~/.claude/skills/pievo" }; },
+    installSkill: async () => { skillInstalls += 1; return { ok: true, line: "pievo skill: installed → ~/.claude/skills/pievo" }; },
     // No-op the PATH shim so no test writes the real ~/.local/bin.
     ensureBinShim: () => {},
     out: (s) => { out += s; },
@@ -186,7 +184,7 @@ describe("runDaemonStart — foreground", () => {
       foreground: async () => 0,
     });
     expect(await runDaemonStart(["--foreground", "--server-url", "http://srv"], cap)).toBe(0);
-    expect(cap.skillInstalls()).toEqual([]);
+    expect(cap.skillInstalls()).toBe(0);
     expect(shimCalls).toBe(0);
   });
 });
@@ -220,11 +218,11 @@ describe("runDaemonRestart", () => {
 });
 
 describe("runDaemonStart — user-scope skill refresh on every success path", () => {
-  test("live local daemon + server online → refreshes the skill (global), announced", async () => {
+  test("live local daemon + server online → refreshes the user skill, announced", async () => {
     const cap = seams({ localPid: () => 4242, fetchStatus: async () => ({ online: true, name: "Mac" }) });
     const code = await runDaemonStart(["--server-url", "http://srv"], cap);
     expect(code).toBe(0);
-    expect(cap.skillInstalls()).toEqual([{ global: true }]);
+    expect(cap.skillInstalls()).toBe(1);
     expect(cap.stdout()).toContain("pievo skill: installed → ~/.claude/skills/pievo");
   });
 
@@ -232,7 +230,7 @@ describe("runDaemonStart — user-scope skill refresh on every success path", ()
     const cap = seams({ localPid: () => 4242, fetchStatus: async () => undefined });
     const code = await runDaemonStart(["--server-url", "http://srv"], cap);
     expect(code).toBe(0);
-    expect(cap.skillInstalls()).toEqual([{ global: true }]);
+    expect(cap.skillInstalls()).toBe(1);
   });
 
   test("stale server presence (no local pid) → spawns, then refreshes the skill once fresh", async () => {
@@ -243,7 +241,7 @@ describe("runDaemonStart — user-scope skill refresh on every success path", ()
     const code = await runDaemonStart(["--server-url", "http://srv"], cap);
     expect(code).toBe(0);
     expect(cap.spawned()).toBe(1);
-    expect(cap.skillInstalls()).toEqual([{ global: true }]);
+    expect(cap.skillInstalls()).toBe(1);
   });
 
   test("detached parent refreshes skill and PATH exactly once, only after readiness", async () => {
@@ -272,14 +270,14 @@ describe("runDaemonStart — user-scope skill refresh on every success path", ()
       : { online: false, name: null, lastSeen: null }) });
     const code = await runDaemonStart(["--server-url", "http://srv"], cap);
     expect(code).toBe(0);
-    expect(cap.skillInstalls()).toEqual([{ global: true }]);
+    expect(cap.skillInstalls()).toBe(1);
   });
 
   test("readiness timeout (start FAILS) → does NOT refresh the skill", async () => {
     const cap = seams(); // never online
     const code = await runDaemonStart(["--server-url", "http://srv"], cap);
     expect(code).toBe(1);
-    expect(cap.skillInstalls()).toEqual([]);
+    expect(cap.skillInstalls()).toBe(0);
   });
 
   test("a throwing skill refresh never fails daemon start (best-effort)", async () => {
