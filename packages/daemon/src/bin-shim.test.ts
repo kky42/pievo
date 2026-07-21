@@ -2,6 +2,8 @@
  * The `pievo` PATH shim (feedback #4). All filesystem/env touches are injected, so
  * NO test writes into the real home dir or a real bin.
  */
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, test } from "vitest";
@@ -118,6 +120,35 @@ describe("ensureBinShim", () => {
     expect(r).toEqual({ path: null, onPath: false, written: false });
     expect(out.join("")).toContain("npx cache");
     expect(out.join("")).toContain("npm install -g @kky42/pievo@latest");
+  });
+
+  test("accepts the current global npm symlink without rewriting or warning", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-global-bin-"));
+    const prefix = path.join(root, "prefix");
+    const binDir = path.join(prefix, "bin");
+    const entry = path.join(prefix, "lib", "node_modules", "@kky42", "pievo", "dist", "cli.js");
+    fs.mkdirSync(path.dirname(entry), { recursive: true });
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(entry, "#!/usr/bin/env node\n");
+    fs.symlinkSync(path.relative(binDir, entry), path.join(binDir, "pievo"));
+    const out: string[] = [];
+    try {
+      const r = ensureBinShim({
+        // Directly running a global npm bin does not normally export npm_config_prefix;
+        // the already-valid symlink must be discovered from PATH alone.
+        env: { PATH: binDir },
+        homedir: () => path.join(root, "home"),
+        entry: () => entry,
+        writeShim: () => {
+          throw new Error("must not rewrite a valid npm bin symlink");
+        },
+        out: (s) => out.push(s),
+      });
+      expect(r).toEqual({ path: path.join(binDir, "pievo"), onPath: true, written: false });
+      expect(out).toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("refuses to overwrite a FOREIGN `pievo`, falling through to the next candidate", () => {

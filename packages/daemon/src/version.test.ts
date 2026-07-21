@@ -10,9 +10,12 @@ import { describe, expect, test } from "vitest";
 import { daemonVersion } from "./version.js";
 
 describe("package runtime floor", () => {
-  test("requires the first Node 22 minor where node:sqlite is available without a flag", () => {
+  test("keeps Node 22 support with the pinned MCP runtime", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+    const mcporter = JSON.parse(fs.readFileSync(path.join(process.cwd(), "node_modules", "mcporter", "package.json"), "utf8"));
     expect(pkg.engines.node).toBe(">=22.13.0");
+    expect(pkg.dependencies.mcporter).toBe("0.9.0");
+    expect(mcporter.engines.node).toBe(">=20.11.0");
   });
 });
 

@@ -63,6 +63,9 @@ export interface BinShimDeps {
   /** Read an existing `pievo` file's contents, or null when absent — used to refuse
    *  overwriting a foreign binary. */
   readShim?: (p: string) => string | null;
+  /** Whether an existing bin entry resolves to this process's CLI entry. This accepts
+   *  npm's normal global symlink without mistaking it for a foreign binary. */
+  sameFile?: (binEntry: string, cliEntry: string) => boolean;
   /** Write the shim; throws (e.g. EACCES) → the caller falls back to ~/.local/bin. */
   writeShim?: (dir: string) => void;
   out?: (s: string) => void;
@@ -110,6 +113,15 @@ function defaultReadShim(p: string): string | null {
   }
 }
 
+/** True when both paths resolve to the same installed CLI (including npm symlinks). */
+function defaultSameFile(binEntry: string, cliEntry: string): boolean {
+  try {
+    return fs.realpathSync(binEntry) === fs.realpathSync(cliEntry);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Write (idempotently) the `pievo` shim to the best writable bin dir and, when that
  * dir is not on PATH, print one copy-pasteable line of guidance. Best-effort and
@@ -122,6 +134,7 @@ export function ensureBinShim(injected: BinShimDeps = {}): BinShimResult {
   const homedir = (injected.homedir ?? os.homedir)();
   const entry = (injected.entry ?? (() => process.argv[1] ?? ""))();
   const readShim = injected.readShim ?? defaultReadShim;
+  const sameFile = injected.sameFile ?? defaultSameFile;
   const writeShim = injected.writeShim ?? defaultWriteShim;
   const out = injected.out ?? ((s: string) => void process.stdout.write(s));
 
@@ -132,10 +145,21 @@ export function ensureBinShim(injected: BinShimDeps = {}): BinShimResult {
     return { path: null, onPath: false, written: false };
   }
 
+  // A direct invocation of a global npm bin normally has no npm_config_prefix. Find
+  // the symlink on PATH before considering places where a source launch might need a
+  // shim. Comparing real paths keeps this exact: an unrelated `pievo` remains foreign.
+  const installedBin = pievoPathBin(env.PATH, (p) => sameFile(p, entry));
+  if (installedBin) return { path: installedBin, onPath: true, written: false };
+
   for (const dir of binDirCandidates(env, homedir)) {
     const shimPath = path.join(dir, "pievo");
-    // Never clobber a foreign `pievo` (e.g. a real global npm binary); only refresh
-    // our OWN prior shim. A missing file (null) is free to write.
+    // A normal global npm install already provides a symlink to this exact CLI. It is
+    // the desired durable bin, not a foreign file and not something we should rewrite.
+    if (sameFile(shimPath, entry)) {
+      return { path: shimPath, onPath: dirOnPath(dir, env.PATH), written: false };
+    }
+    // Never clobber a foreign `pievo`; only refresh our OWN prior shim. A missing file
+    // (null) is free to write.
     const existing = readShim(shimPath);
     if (existing !== null && !existing.startsWith(SHIM_MARKER)) continue;
     try {

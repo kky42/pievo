@@ -38,7 +38,7 @@ jobs:
       # "publishConfig.access: public" plus `--access public` below.
       - uses: actions/setup-node@v6
         with:
-          node-version: 22                      # matches engines.node ">=22" (>= 22.14.0)
+          node-version: 22                      # matches engines.node (mcporter 0.9 supports Node >=20.11)
           cache: pnpm
 
       # Trusted publishing requires npm CLI >= 11.5.1; Node 22 bundles npm 10.x, so
