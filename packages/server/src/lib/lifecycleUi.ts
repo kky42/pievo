@@ -7,8 +7,8 @@ export type LoopLifecycle = 'completed' | 'deleting' | 'stopping' | 'paused-fini
 
 /** Derive product lifecycle state only from durable server facts. */
 export function deriveLoopLifecycle(job: JobSummary): LoopLifecycle {
-  if (job.completedAt != null) return 'completed'
   if (job.deleteRequestedAt != null) return 'deleting'
+  if (job.completedAt != null) return 'completed'
   const running = job.runs.find((run) => run.running)
   if (!job.enabled && running?.cancelRequested) return 'stopping'
   if (!job.enabled && (job.running || running)) return 'paused-finishing'

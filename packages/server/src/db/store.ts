@@ -1252,15 +1252,17 @@ export async function claimReadyRunForMachine(machineId: string, at = nowIso()):
       .innerJoin(loops, eq(loops.id, runs.loopId))
       .where(and(
         eq(runs.machineId, machineId), eq(runs.phase, "pending"), isNull(runs.cancelRequestedAt),
-        eq(loops.enabled, true), isNull(loops.completedAt), isNull(loops.deleteRequestedAt),
+        or(eq(loops.enabled, true), eq(runs.requestedBy, "owner")),
+        isNull(loops.completedAt), isNull(loops.deleteRequestedAt),
       ))
       .orderBy(sql`case ${runs.role} when 'edit' then 0 when 'evolve' then 1 else 2 end`, asc(runs.createdAt))
       .limit(1))[0];
     if (!next) return undefined;
     let loop = (await tx.select().from(loops).where(eq(loops.id, next.loop.id)).for("update"))[0];
-    if (!loop?.enabled || loop.completedAt || loop.deleteRequestedAt) return undefined;
+    const candidate = (await tx.select().from(runs).where(eq(runs.id, next.run.id)).limit(1).for("update"))[0];
+    if (!loop || !candidate || candidate.phase !== "pending" || candidate.cancelRequestedAt || loop.completedAt || loop.deleteRequestedAt || (!loop.enabled && candidate.requestedBy !== "owner")) return undefined;
     const run = (await tx.update(runs).set({ phase: "running", agent: loop.agent, heartbeatAt: null, ts: at, updatedAt: at })
-      .where(and(eq(runs.id, next.run.id), eq(runs.phase, "pending"), isNull(runs.cancelRequestedAt))).returning())[0];
+      .where(and(eq(runs.id, candidate.id), eq(runs.phase, "pending"), isNull(runs.cancelRequestedAt))).returning())[0];
     if (!run) return undefined;
     if (run.role === "exec" && loop.scheduleMode === "continuous" && loop.nextCadenceAt != null) {
       loop = (await tx.update(loops).set({ nextCadenceAt: null, updatedAt: at }).where(eq(loops.id, loop.id)).returning())[0]!;

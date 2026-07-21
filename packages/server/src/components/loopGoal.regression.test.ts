@@ -49,13 +49,13 @@ describe('LoopDetailView closed/completed states', () => {
     expect(detail).toContain('isClosed')
     expect(detail).toContain('Working toward')
     expect(detail).toMatch(/>\s*Completed\s*</)
-    // The menu's pause/enable item becomes "Reopen" when completed.
-    expect(detail).toContain("'Reopen'")
+    expect(detail).toMatch(/>Reopen<\/button>/)
     expect(detail).toContain('completionReason')
   })
 
-  it('disables Run once only while completed (running/offline may queue a follow-up)', () => {
-    expect(detail).toMatch(/disabled=\{busy \|\| completed\}/)
-    expect(detail).toContain("'Queues or coalesces one exec follow-up'")
+  it('keeps Run once visible and gates it through the lifecycle availability matrix', () => {
+    expect(detail).toContain("const canRunWork = active || paused")
+    expect(detail).toContain('disabled={actionDisabled || !canRunWork}')
+    expect(detail).toMatch(/>\s*\{pending === 'run' \? 'Queuing…' : 'Run once'\}\s*<\/button>/)
   })
 })

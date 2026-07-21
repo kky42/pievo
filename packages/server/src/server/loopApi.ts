@@ -28,6 +28,7 @@ import * as store from '../db/store.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
+import { machinePresence } from '../lib/machinePresence.js'
 import { TEMPLATES } from './templates.js'
 
 function backend() {
@@ -310,21 +311,39 @@ export const stopJob = createServerFn({ method: 'POST' })
     return { ok: true, waiting: !!stopped.running }
   })
 
-/** Delete is Stop + wait. A successful request may remove an idle loop
- * immediately; otherwise the report/sweep path calls tryDeleteLoop later. */
+/** Delete is one confirmed operation. Reachable machines get the graceful
+ * Stop-and-wait path; a machine already offline at click time cannot acknowledge
+ * Stop, so retire its execution authority and remove server data immediately.
+ * Local files are never touched by either path. */
 export const deleteJob = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<MutationResult> => {
     const { scheduler } = await backend()
     const owned = await ownedLoop(id)
     if (!owned) return { error: 'not found' }
-    if (await store.hasRunningRun(id)) {
-      const machine = await store.getMachine(owned.loop.machineId)
-      if (machine?.daemonProtocol !== 2) return { error: 'Daemon upgrade required to stop a running process' }
+    const machine = await store.getMachine(owned.loop.machineId)
+    const unreachable = machinePresence(machine?.online, machine?.lastSeen) !== 'online'
+    const actor = await requestScope()
+    const mayRetireAuthority = !owned.enforce || !!(
+      actor.userId && owned.loop.teamId &&
+      (await store.getTeamMember(owned.loop.teamId, actor.userId))?.role === 'owner'
+    )
+    if (!unreachable && await store.hasRunningRun(id) && machine?.daemonProtocol !== 2) {
+      return { error: 'Daemon upgrade required to stop a running process' }
     }
     scheduler.removeLoop(id)
     const requested = await store.requestDeleteLoop(id)
     if (!requested) return { error: 'not found' }
+    if (unreachable && mayRetireAuthority) {
+      const deleted = await store.forceDeleteLoop(id)
+      if (!deleted) return { error: 'delete failed; server data was not deleted' }
+      const { logger } = await import('../logger.js')
+      logger.child({ mod: 'loop-lifecycle' }).warn(
+        { action: 'unreachable-delete', loopId: id, actorUserId: actor.userId, machineId: owned.loop.machineId },
+        'unreachable-machine delete: retired execution authority and removed server data',
+      )
+      return { ok: true, deleted: true }
+    }
     const deleted = await store.tryDeleteLoop(id)
     return { ok: true, deleted, waiting: !deleted }
   })

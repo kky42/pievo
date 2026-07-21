@@ -24,7 +24,7 @@ function detail(summary: JobSummary, machine: Partial<JobDetail['machine']> = {}
 
 describe('Dashboard lifecycle derivation', () => {
   it('uses the specified precedence and never calls cancellation intent Canceled', () => {
-    expect(deriveLoopLifecycle(job({ completedAt: '2026-01-01T00:00:00Z', deleteRequestedAt: '2026-01-02T00:00:00Z' }))).toBe('completed')
+    expect(deriveLoopLifecycle(job({ completedAt: '2026-01-01T00:00:00Z', deleteRequestedAt: '2026-01-02T00:00:00Z' }))).toBe('deleting')
     expect(deriveLoopLifecycle(job({ deleteRequestedAt: '2026-01-02T00:00:00Z', enabled: false }))).toBe('deleting')
     expect(deriveLoopLifecycle(job({ enabled: false, running: true, runs: [run({ running: true, cancelRequested: true })] }))).toBe('stopping')
     expect(deriveLoopLifecycle(job({ enabled: false, running: true, runs: [run({ running: true })] }))).toBe('paused-finishing')

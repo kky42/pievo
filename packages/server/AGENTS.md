@@ -346,8 +346,10 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   system→owner; latest owner edit wins; a running role may retain one follow-up.
   Cross-role rows survive and claim priority is `edit > evolve > exec`.
 - `store.updateLoop` owns lifecycle/cadence atomically. Pause clears both schedule
-  facts and cancels pending system rows. Completion also clears both and cancels all
-  pending exec/evolve plus system edit, preserving only owner edit. Mode switches
+  facts and cancels pending system rows, but owner-requested exec/edit/evolve remain
+  claimable while the loop stays paused; their terminal path cannot restore cadence.
+  Completion also clears both and cancels all pending exec/evolve plus system edit,
+  preserving only owner edit. Mode switches
   never cancel queue rows: cron stores its next future occurrence; continuous stores
   null behind open exec, otherwise now. Create/resume/reopen use the same rules.
 - Claim + run-lease insert are one store transaction returning run+loop+wire token.

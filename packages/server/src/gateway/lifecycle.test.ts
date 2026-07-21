@@ -58,7 +58,7 @@ test("a machine claims only one running run across loops", async () => {
   expect(running).toHaveLength(1);
 });
 
-test("pause blocks every queued authority and leaves a running run and lease intact", async () => {
+test("pause leaves a running run and lease intact, preserving its queued owner follow-up", async () => {
   const machine = await seedMachine();
   const loop = await seedLoop(machine.id);
   const running = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
@@ -72,6 +72,32 @@ test("pause blocks every queued authority and leaves a running run and lease int
   expect(again?.enabled).toBe(false);
   expect((await store.getRun(running.id))?.phase).toBe("running");
   expect((await tokens.resolveLease(token))?.state).toBe("active");
+  expect(await store.claimReadyRunForMachine(machine.id)).toBeUndefined();
+});
+
+test("paused loops claim owner work by role priority, stay paused after exec, and block system work", async () => {
+  const machine = await seedMachine();
+  const loop = await store.createLoop({
+    userId: "u1", machineId: machine.id, name: "paused continuous", cron: "0 0 1 1 *",
+    scheduleMode: "continuous", continuousDelayMinutes: 5, enabled: false,
+  });
+  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "owner" });
+  await store.enqueueRun(loop.id, { role: "evolve", requestedBy: "owner" });
+  await store.enqueueRun(loop.id, { role: "edit", requestedBy: "owner", requestText: "owner edit" });
+
+  const edit = await store.claimReadyRunForMachine(machine.id);
+  expect(edit?.run).toMatchObject({ role: "edit", requestedBy: "owner" });
+  await store.finalizeRunningRun(loop.id, edit!.run.id, { phase: "done", outcome: "direct", ts: new Date().toISOString() }, {}, tokens.sha256(edit!.runToken));
+  const evolve = await store.claimReadyRunForMachine(machine.id);
+  expect(evolve?.run.role).toBe("evolve");
+  await store.finalizeRunningRun(loop.id, evolve!.run.id, { phase: "done", outcome: "evolve", ts: new Date().toISOString() }, {}, tokens.sha256(evolve!.runToken));
+  const exec = await store.claimReadyRunForMachine(machine.id);
+  expect(exec?.run.role).toBe("exec");
+  await store.finalizeRunningRun(loop.id, exec!.run.id, { phase: "done", outcome: "exec", ts: new Date().toISOString() }, {}, tokens.sha256(exec!.runToken));
+  expect(await store.getLoop(loop.id)).toMatchObject({ enabled: false, nextCadenceAt: null, nextRunAt: null });
+
+  const systemLoop = await seedLoop(machine.id, false);
+  await store.addRun({ loopId: systemLoop.id, userId: "u1", machineId: machine.id, phase: "pending", role: "exec", requestedBy: "system", ts: new Date().toISOString() });
   expect(await store.claimReadyRunForMachine(machine.id)).toBeUndefined();
 });
 

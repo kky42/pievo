@@ -1,5 +1,4 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Menu } from '@base-ui/react/menu'
 import { Link, useNavigate } from '@tanstack/react-router'
 import type { ChannelSummary, CodingAgent, JobDetail, RunSummary } from '../types'
 import { buildEditPrompt, loopDir } from '../lib/editPrompt'
@@ -7,7 +6,7 @@ import { cronText, dotColor, dotLabel, dur, fmt, isClosed, isCompleted, rel, tsS
 import { mergeRuns } from '../lib/runs'
 import { DAEMON_UPGRADE_REQUIRED, daemonStopSupport, deriveLoopLifecycle, lifecycleDisplay } from '../lib/lifecycleUi'
 import { setActiveTeamCookie } from '../lib/teamCookie'
-import { deleteJob, evolveJob, forceDeleteJob, getJobDetail, loadOlderRuns, patchJob, pauseJob, requestEdit, runJob, startJob, stopJob } from '../server/loopApi'
+import { deleteJob, evolveJob, getJobDetail, loadOlderRuns, patchJob, pauseJob, requestEdit, runJob, startJob, stopJob } from '../server/loopApi'
 import { listChannels } from '../server/notifyFns'
 import { LoopFilesPanel } from './LoopFilesPanel'
 import { LoopForm, type LoopFormHandle } from './LoopForm'
@@ -40,14 +39,13 @@ const LoopView = lazy(() => import('./LoopView').then((m) => ({ default: m.LoopV
  * the Runs timeline (a strip + a clickable list, each run linking to its own
  * detail route). Self-polls while open (fast while a run is live).
  *
- * Editing (2026-07 redesign): the primary path is an INLINE composer in the
- * header footer (same slot as the Push settings) - the page stays visible, so
+ * Editing (2026-07 redesign): the primary path is an INLINE composer below the
+ * always-visible action toolbar - the page stays visible, so
  * the owner describes the change while looking at the spec/dashboard it applies
  * to. Dispatch swaps the composer for a live status card under the header
  * (queued → applying → settled with report + files + a link to
  * the edit run); the page keeps polling, so the applied change surfaces around
- * the card. Only the manual field form (the raw-settings fallback) remains a
- * full-page takeover.
+ * the card. Settings remains a full-page field-form takeover.
  */
 export function LoopDetailView({ id }: { id: string }) {
   const navigate = useNavigate()
@@ -62,11 +60,9 @@ export function LoopDetailView({ id }: { id: string }) {
   const [editDispatched, setEditDispatched] = useState(false) // dispatched → the live status card watches the edit run
   const [editRunId, setEditRunId] = useState<string | null>(null)
   const editBoxRef = useRef<HTMLTextAreaElement>(null)
-  const [pushOpen, setPushOpen] = useState(false)
-  const [pushSaved, setPushSaved] = useState(false)
   const [machinesOpen, setMachinesOpen] = useState(false)
   const [pending, setPending] = useState<null | 'run' | 'evolve' | 'save' | 'lifecycle' | 'edit'>(null)
-  const [confirming, setConfirming] = useState<null | 'run' | 'evolve' | 'pause' | 'stop' | 'delete' | 'force-delete'>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [flash, setFlash] = useFlash()
   const formRef = useRef<LoopFormHandle>(null)
   const deletingRef = useRef(false)
@@ -101,7 +97,7 @@ export function LoopDetailView({ id }: { id: string }) {
     setPromptCopied(false)
     setEditDispatched(false)
     setEditRunId(null)
-    setPushOpen(false)
+    setConfirmingDelete(false)
     setOlder([])
     void load()
     void listChannels()
@@ -118,27 +114,16 @@ export function LoopDetailView({ id }: { id: string }) {
     return () => clearInterval(t)
   }, [editing, running, load])
 
-  useEffect(() => {
-    if (!pushSaved) return
-    const t = setTimeout(() => setPushSaved(false), 1800)
-    return () => clearTimeout(t)
-  }, [pushSaved])
-
   async function refreshAll() {
     await load()
   }
 
-  function onRun() {
-    if (detail?.job.exec) setConfirming('run')
-    else void doRun()
-  }
   async function doRun() {
     setActionErr(null)
     setPending('run')
     try {
       const r = await runJob({ data: id })
       if (r?.error) return setActionErr(`Run failed: ${r.error}`)
-      setConfirming(null)
       setFlash({ label: r.coalesced ? 'Already queued' : 'Queued', hold: 4000 })
       await refreshAll()
     } finally {
@@ -151,24 +136,23 @@ export function LoopDetailView({ id }: { id: string }) {
     try {
       const r = await evolveJob({ data: id })
       if (r?.error) return setActionErr(`Evolve failed: ${r.error}`)
-      setConfirming(null)
       setFlash({ label: r.coalesced ? 'Evolve already queued' : 'Evolve queued', hold: 4000 })
       await refreshAll()
     } finally {
       setPending(null)
     }
   }
-  async function doLifecycle(action: 'pause' | 'start' | 'stop' | 'delete' | 'force-delete') {
+  async function doLifecycle(action: 'pause' | 'start' | 'stop' | 'reopen' | 'delete') {
     setActionErr(null)
     setPending('lifecycle')
     try {
       const r = action === 'pause' ? await pauseJob({ data: id })
         : action === 'start' ? await startJob({ data: id })
           : action === 'stop' ? await stopJob({ data: id })
-            : action === 'delete' ? await deleteJob({ data: id })
-              : await forceDeleteJob({ data: { id, confirmation: 'delete-server-data-anyway' } })
-      if (r.error) return setActionErr(`${action === 'force-delete' ? 'Force delete' : action[0]!.toUpperCase() + action.slice(1)} failed: ${r.error}`)
-      setConfirming(null)
+            : action === 'reopen' ? await patchJob({ data: { id, patch: { enabled: true } } })
+              : await deleteJob({ data: id })
+      if (r.error) return setActionErr(`${action[0]!.toUpperCase() + action.slice(1)} failed: ${r.error}`)
+      setConfirmingDelete(false)
       if (r.deleted) {
         deletingRef.current = false
         navigate({ to: '/' })
@@ -176,17 +160,10 @@ export function LoopDetailView({ id }: { id: string }) {
       }
       if (action === 'delete') deletingRef.current = true
       await refreshAll()
-      setFlash({ label: action === 'start' ? 'Started' : action === 'pause' ? 'Paused' : action === 'stop' ? 'Stop requested' : 'Deleting' })
+      setFlash({ label: action === 'start' ? 'Started' : action === 'reopen' ? 'Reopened' : action === 'pause' ? 'Paused' : action === 'stop' ? 'Stop requested' : 'Deleting' })
     } finally {
       setPending(null)
     }
-  }
-  async function setPush(patch: { notify?: string; channelId?: string }) {
-    setActionErr(null)
-    const r = await patchJob({ data: { id, patch } })
-    if (r.error) return setActionErr(`Save failed: ${r.error}`)
-    await refreshAll()
-    setPushSaved(true)
   }
   async function onSave() {
     const payload = formRef.current?.read()
@@ -220,14 +197,6 @@ export function LoopDetailView({ id }: { id: string }) {
       setPending(null)
     }
   }
-  function onConfirm() {
-    if (confirming === 'run') void doRun()
-    else if (confirming === 'evolve') void doEvolve()
-    else if (confirming === 'pause') void doLifecycle('pause')
-    else if (confirming === 'stop') void doLifecycle('stop')
-    else if (confirming === 'delete') void doLifecycle('delete')
-    else if (confirming === 'force-delete') void doLifecycle('force-delete')
-  }
 
   const backLink = (
     <Link
@@ -254,7 +223,6 @@ export function LoopDetailView({ id }: { id: string }) {
   const { job, summary: s, runs } = detail
   const hasUi = !!job.ui
   const busy = !!pending
-  const showEvolve = true
   const online = detail.machine.online
   // A machine recently seen but not currently polling is likely just ASLEEP
   // (calm), vs genuinely offline. Manual requests still queue in either state.
@@ -291,258 +259,144 @@ export function LoopDetailView({ id }: { id: string }) {
     }
   }
 
-  const CONFIRM = {
-    run: { q: 'Run one real cycle now?', note: `Spawns the coding agent (${AGENT_LABEL[job.agent ?? 'claude-code'] ?? job.agent ?? 'Claude Code'}).`, cta: 'Run once', danger: false },
-    evolve: {
-      q: 'Trigger an evolution pass now?',
-      note: 'Re-authors the dashboard / tightens the gate from real run data.',
-      cta: 'Evolve',
-      danger: false,
-    },
-    pause: { q: 'Pause future runs? The current run will continue.', cta: 'Pause', danger: false },
-    stop: { q: 'Pause this loop, cancel queued work, and stop the current run if it is still running?', cta: 'Stop', danger: true },
-    delete: { q: 'Stop this loop and delete its Pievo history and synced artifacts? Local project files are not deleted.', cta: 'Delete', danger: true },
-    'force-delete': {
-      q: 'Delete server data anyway',
-      note: 'The machine is unreachable. Its local process may still be running. This removes Pievo authority and server data only.',
-      cta: 'Delete server data anyway',
-      danger: true,
-    },
-  } as const
-
   const flashLine = flash && (
     <div className="mb-2.5">
       <FlashLine label={flash.label} tone={flash.tone} onUndo={flash.undo} />
     </div>
   )
 
-  const c = confirming && CONFIRM[confirming]
-  const confirmLocked = busy
-  const pushSelectCls =
-    'lp-select cursor-pointer rounded-control border border-wire bg-surface py-1.5 pl-2.5 text-meta text-primary outline-none transition-colors hover:border-display focus:border-display disabled:cursor-default disabled:opacity-40'
-  const menuItem =
-    'flex w-full cursor-pointer select-none items-center px-3.5 py-2 text-body text-primary outline-none transition-colors data-[highlighted]:bg-raised data-[disabled]:cursor-default data-[disabled]:opacity-40'
-  const menuItemDanger =
-    'flex w-full cursor-pointer select-none items-center px-3.5 py-2 text-body text-accent outline-none transition-colors data-[highlighted]:bg-accent-soft data-[disabled]:cursor-default data-[disabled]:opacity-40'
+  const deleting = lifecycle === 'deleting'
+  const paused = !s.enabled && !completed && !deleting
+  const active = s.enabled && !completed && !deleting
+  const actionDisabled = busy || deleting
+  const canRunWork = active || paused
+  const canStop = canRunWork && !!s.running && protocolSupport.supported
+  const stopTitle = s.running && !protocolSupport.supported
+    ? DAEMON_UPGRADE_REQUIRED
+    : !s.running ? 'No run is currently running' : undefined
 
-  const actionBar = c ? (
-    <ConfirmBar key={confirming} prompt={c.q} note={'note' in c ? c.note : undefined} cta={c.cta} danger={c.danger} busy={confirmLocked} onConfirm={onConfirm} onCancel={() => setConfirming(null)} />
-  ) : lifecycle === 'deleting' ? (
-    <div className="flex flex-wrap items-center gap-3 rounded-md border border-wire bg-raised px-4 py-3">
-      <span className="text-body font-medium text-display">{lifecycleText}</span>
-      <span className="text-meta text-secondary">Server deletion is waiting for execution authority to end.</span>
-      {!online && (
-        <button type="button" className={btnDanger} onClick={() => setConfirming('force-delete')} disabled={busy}>
-          Delete server data anyway
+  const actionBar = (
+    <div className="min-w-0">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <button
+          className={btnPrimary}
+          disabled={actionDisabled || !canRunWork}
+          onClick={() => void doRun()}
+          title={!canRunWork ? 'Unavailable for a completed or deleting loop' : offlineHint ?? (job.exec ? 'Spends credits' : undefined)}
+          aria-label={job.exec ? 'Run once - spends credits' : 'Run once'}
+        >
+          {pending === 'run' ? 'Queuing…' : 'Run once'}
         </button>
-      )}
-    </div>
-  ) : editVia ? (
-    <div
-      onKeyDown={(e) => {
-        if (e.key === 'Escape' && pending !== 'edit') {
-          e.stopPropagation()
-          setEditVia(false)
-        }
-      }}
-    >
-      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <span className="text-body font-medium text-display">Edit with your coding agent</span>
-        <span className="text-meta text-secondary">One agent pass on {onMachine} · spends credits</span>
+        <button
+          className={btn}
+          disabled={actionDisabled || !(canRunWork || completed)}
+          title="Dispatch or copy a prompt for an owner-requested edit"
+          onClick={() => setEditVia(true)}
+        >
+          Agent edit
+        </button>
+        <button
+          className={btn}
+          disabled={actionDisabled || !canRunWork}
+          title={!canRunWork ? 'Unavailable for a completed or deleting loop' : offlineHint ?? 'Spends credits'}
+          onClick={() => void doEvolve()}
+        >
+          {pending === 'evolve' ? 'Evolving…' : 'Evolve once'}
+        </button>
+        <button className={btn} disabled={actionDisabled} onClick={() => setEditing(true)}>Settings</button>
+        <button className={btn} disabled={actionDisabled || !paused} onClick={() => void doLifecycle('start')}>Start</button>
+        <button className={btn} disabled={actionDisabled || !active} onClick={() => void doLifecycle('pause')}>Pause</button>
+        <button className={btnDanger} disabled={actionDisabled || !canStop} title={stopTitle} onClick={() => void doLifecycle('stop')}>Stop</button>
+        <button className={btn} disabled={actionDisabled || !completed} onClick={() => void doLifecycle('reopen')}>Reopen</button>
+        <button className={btnDanger} disabled={actionDisabled} onClick={() => setConfirmingDelete(true)}>
+          {deleting ? 'Deleting…' : 'Delete'}
+        </button>
       </div>
-      <textarea
-        ref={editBoxRef}
-        autoFocus
-        value={editInstruction}
-        onChange={(e) => setEditInstruction(e.target.value)}
-        onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && editInstruction.trim() && pending !== 'edit')
-            void onRequestEdit()
-        }}
-        rows={3}
-        placeholder="e.g. run at 9am on weekdays instead, and also check coffee stock"
-        className="mt-3 w-full resize-y rounded-control border border-wire bg-raised p-3 font-mono text-label leading-relaxed text-primary outline-none transition-shadow placeholder:text-disabled focus:border-transparent focus:shadow-focus"
-      />
-      {!editInstruction.trim() && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {EDIT_SEEDS.map((sd) => (
-            <button
-              key={sd.label}
-              type="button"
-              onClick={() => {
-                setEditInstruction(sd.seed)
-                editBoxRef.current?.focus()
-              }}
-              className="cursor-pointer rounded-full border border-wire bg-surface px-3 py-1 text-label font-medium text-secondary transition-colors hover:bg-raised hover:text-display"
-            >
-              {sd.label}
-            </button>
-          ))}
+
+      {confirmingDelete && !deleting && (
+        <div className="mt-3">
+          <ConfirmBar
+            prompt="Stop this loop and delete its server data?"
+            note="This stops the loop and deletes server history and synced artifacts. Local files are not deleted. If the machine is unreachable, server data is still deleted and its local process may continue running."
+            cta="Delete"
+            danger
+            busy={busy}
+            onConfirm={() => void doLifecycle('delete')}
+            onCancel={() => setConfirmingDelete(false)}
+          />
         </div>
       )}
-      <div className="mt-3.5 flex flex-wrap items-center gap-x-2.5 gap-y-2">
-        <button
-          className={btnCost}
-          disabled={pending === 'edit' || !editInstruction.trim()}
-          title={offlineHint}
-          onClick={() => void onRequestEdit()}
-        >
-          {pending === 'edit' ? 'Dispatching…' : 'Dispatch to your coding agent'}
-        </button>
-        <button
-          type="button"
-          className={btn}
-          disabled={pending === 'edit'}
-          onClick={() => void copyEditPrompt()}
-        >
-          {promptCopied ? '✓ Prompt copied' : 'Copy prompt'}
-        </button>
-        <button className={btn} disabled={pending === 'edit'} onClick={() => setEditVia(false)}>
-          Cancel
-        </button>
-        <span className="hidden text-caption text-disabled sm:inline">⌘↩ dispatch · esc cancel</span>
-        <button
-          type="button"
-          onClick={() => {
-            setEditVia(false)
-            setEditing(true)
+
+      {deleting && (
+        <div className="mt-3 rounded-md border border-wire bg-raised px-4 py-3 text-meta text-secondary">
+          Deleting… graceful stop is waiting for execution authority to end.
+        </div>
+      )}
+
+      {editVia && !deleting && (
+        <div
+          className="mt-4 border-t border-hairline pt-4"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && pending !== 'edit') {
+              e.stopPropagation()
+              setEditVia(false)
+            }
           }}
-          className="ml-auto cursor-pointer border-none bg-transparent p-0 text-label text-secondary underline underline-offset-2 transition-colors hover:text-display"
         >
-          Manual settings →
-        </button>
-      </div>
-      {/* Copy-prompt path — no dispatch, no credits: paste into your own coding
-          agent and iterate on the loop yourself. The hint names WHERE to run it. */}
-      <div className="mt-2 text-caption leading-snug text-disabled">
-        {promptCopied ? (
-          <span className="text-secondary">
-            ✓ Copied · run your coding agent{' '}
-            {editDir ? (
-              <>
-                in <code className="break-all font-mono text-primary">{editDir}</code>
-              </>
-            ) : (
-              "in the loop’s local directory on this machine"
-            )}{' '}
-            and paste the prompt to adjust the loop yourself.
-          </span>
-        ) : (
-          <>Prefer to adjust it yourself? Copy prompt drops a ready-to-paste prompt for your own coding agent - no dispatch, no credits.</>
-        )}
-      </div>
-    </div>
-  ) : pushOpen ? (
-    <div className="flex flex-wrap items-center gap-2.5">
-      <span className="text-label font-medium text-secondary">Push</span>
-      <select aria-label="Notify" className={pushSelectCls} value={job.notify} disabled={busy} onChange={(e) => void setPush({ notify: e.target.value })}>
-        {['auto', 'always', 'never'].map((n) => (
-          <option key={n} value={n}>
-            {n}
-          </option>
-        ))}
-      </select>
-      <span aria-hidden className="text-secondary">→</span>
-      <select aria-label="Push channel" className={pushSelectCls} value={job.channelId ?? ''} disabled={busy} onChange={(e) => void setPush({ channelId: e.target.value })}>
-        <option value="">none (dashboard only)</option>
-        {channels.map((ch) => (
-          <option key={ch.id} value={ch.id}>
-            {ch.name}
-          </option>
-        ))}
-      </select>
-      <div className="ml-auto flex items-center gap-2.5">
-        <span aria-hidden className={`text-[14px] leading-none text-success transition-opacity duration-200 ${pushSaved ? 'opacity-100' : 'opacity-0'}`}>
-          ✓
-        </span>
-        <button
-          type="button"
-          onClick={() => setPushOpen(false)}
-          className={btnQuiet}
-        >
-          Done
-        </button>
-      </div>
-    </div>
-  ) : (
-    <>
-    <div className="flex flex-wrap items-center gap-2">
-      <button
-        className={btnPrimary}
-        disabled={busy || completed}
-        onClick={onRun}
-        title={
-          completed
-            ? 'Loop completed - only Edit is available until it is reopened'
-            : s.running || s.queued
-              ? 'Queues or coalesces one exec follow-up'
-              : offlineHint ?? (job.exec ? 'Spends credits' : undefined)
-        }
-        aria-label={job.exec ? 'Run once - spends credits' : 'Run once'}
-      >
-        {pending === 'run' ? 'Queuing…' : s.running || s.queued ? 'Queue run' : 'Run once'}
-      </button>
-      <button
-        className={btn}
-        disabled={busy}
-        title="Queues an edit; a queued edit is updated with the latest instruction"
-        onClick={() => setEditVia(true)}
-      >
-        Edit
-      </button>
-      <Menu.Root>
-        <Menu.Trigger className={`${btn} px-2.5`} disabled={busy} aria-label="More actions">
-          <svg aria-hidden width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-            <circle cx="3" cy="8" r="1.4" />
-            <circle cx="8" cy="8" r="1.4" />
-            <circle cx="13" cy="8" r="1.4" />
-          </svg>
-        </Menu.Trigger>
-        <Menu.Portal>
-          <Menu.Positioner side="bottom" align="end" sideOffset={6} className="z-[950]">
-            <Menu.Popup className="glass-strong min-w-[176px] origin-[var(--transform-origin)] rounded-control py-1.5 outline-none transition-[opacity,transform] duration-150 data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0">
-              {showEvolve && (
-                <Menu.Item className={menuItem} disabled={busy || completed} onClick={() => setConfirming('evolve')} title={completed ? 'Completed loops only accept manual edits' : offlineHint ?? 'Spends credits'}>
-                  {pending === 'evolve' ? 'Evolving…' : 'Evolve now'}
-                </Menu.Item>
-              )}
-              <Menu.Item className={menuItem} onClick={() => setPushOpen(true)}>
-                Push…
-              </Menu.Item>
-              {completed ? (
-                <Menu.Item className={menuItem} onClick={() => void patchJob({ data: { id, patch: { enabled: true } } }).then(refreshAll)}>
-                  {'Reopen'}
-                </Menu.Item>
-              ) : lifecycle === 'paused' ? (
-                <Menu.Item className={menuItem} onClick={() => void doLifecycle('start')}>Start</Menu.Item>
-              ) : (
-                <Menu.Item className={menuItem} onClick={() => setConfirming('pause')}>Pause</Menu.Item>
-              )}
-              {!completed && lifecycle !== 'stopping' && (
-                <Menu.Item
-                  className={menuItemDanger}
-                  disabled={!!s.running && !protocolSupport.supported}
-                  title={s.running && !protocolSupport.supported ? DAEMON_UPGRADE_REQUIRED : undefined}
-                  onClick={() => setConfirming('stop')}
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            <span className="text-body font-medium text-display">Edit with your coding agent</span>
+            <span className="text-meta text-secondary">One agent pass on {onMachine} · spends credits</span>
+          </div>
+          <textarea
+            ref={editBoxRef}
+            autoFocus
+            value={editInstruction}
+            onChange={(e) => setEditInstruction(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && editInstruction.trim() && pending !== 'edit') void onRequestEdit()
+            }}
+            rows={3}
+            placeholder="e.g. run at 9am on weekdays instead, and also check coffee stock"
+            className="mt-3 w-full resize-y rounded-control border border-wire bg-raised p-3 font-mono text-label leading-relaxed text-primary outline-none transition-shadow placeholder:text-disabled focus:border-transparent focus:shadow-focus"
+          />
+          {!editInstruction.trim() && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {EDIT_SEEDS.map((sd) => (
+                <button
+                  key={sd.label}
+                  type="button"
+                  onClick={() => { setEditInstruction(sd.seed); editBoxRef.current?.focus() }}
+                  className="cursor-pointer rounded-full border border-wire bg-surface px-3 py-1 text-label font-medium text-secondary transition-colors hover:bg-raised hover:text-display"
                 >
-                  Stop
-                </Menu.Item>
-              )}
-              <Menu.Separator className="my-1.5 h-px bg-hairline" />
-              <Menu.Item
-                className={menuItemDanger}
-                disabled={!!s.running && !protocolSupport.supported}
-                title={s.running && !protocolSupport.supported ? DAEMON_UPGRADE_REQUIRED : undefined}
-                onClick={() => setConfirming('delete')}
-              >
-                Delete
-              </Menu.Item>
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      </Menu.Root>
+                  {sd.label}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="mt-3.5 flex flex-wrap items-center gap-x-2.5 gap-y-2">
+            <button className={btnCost} disabled={pending === 'edit' || !editInstruction.trim()} title={offlineHint} onClick={() => void onRequestEdit()}>
+              {pending === 'edit' ? 'Dispatching…' : 'Dispatch to your coding agent'}
+            </button>
+            <button type="button" className={btn} disabled={pending === 'edit'} onClick={() => void copyEditPrompt()}>
+              {promptCopied ? '✓ Prompt copied' : 'Copy prompt'}
+            </button>
+            <button className={btn} disabled={pending === 'edit'} onClick={() => setEditVia(false)}>Cancel</button>
+            <span className="hidden text-caption text-disabled sm:inline">⌘↩ dispatch · esc cancel</span>
+          </div>
+          <div className="mt-2 text-caption leading-snug text-disabled">
+            {promptCopied ? (
+              <span className="text-secondary">
+                ✓ Copied · run your coding agent{' '}
+                {editDir ? <>in <code className="break-all font-mono text-primary">{editDir}</code></> : "in the loop’s local directory on this machine"}{' '}
+                and paste the prompt to adjust the loop yourself.
+              </span>
+            ) : (
+              <>Prefer to adjust it yourself? Copy prompt drops a ready-to-paste prompt for your own coding agent - no dispatch, no credits.</>
+            )}
+          </div>
+        </div>
+      )}
     </div>
-    </>
   )
 
   const actionErrEl = actionErr && <ErrorBanner message={actionErr} onDismiss={() => setActionErr(null)} className="mb-2.5" />
@@ -596,7 +450,7 @@ export function LoopDetailView({ id }: { id: string }) {
     </div>
   )
 
-  // ---- manual field-form edit mode (the raw-settings fallback takeover) ----
+  // ---- Settings field-form mode ----
   if (editing) {
     return (
       <Shell back={backLink}>
@@ -631,7 +485,7 @@ export function LoopDetailView({ id }: { id: string }) {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.015em] text-display">{s.name}</h1>
-              {completed ? (
+              {lifecycle === 'completed' ? (
                 <Pill tone="success" dot="green">
                   Completed
                 </Pill>
@@ -685,7 +539,7 @@ export function LoopDetailView({ id }: { id: string }) {
               </div>
             )}
             {/* Completed: the recorded reason + when. */}
-            {completed && (
+            {lifecycle === 'completed' && (
               <div className="mt-2 text-body leading-snug text-success">
                 Completed{s.completedAt ? ` · ${fmt(s.completedAt)}` : ''}
                 {s.completionReason && <span className="text-secondary"> - {s.completionReason}</span>}
@@ -808,7 +662,7 @@ export function LoopDetailView({ id }: { id: string }) {
 }
 
 /**
- * Manual-settings page heading. The field form is an in-page mode takeover (NOT
+ * Settings page heading. The field form is an in-page mode takeover (NOT
  * a modal), so this is a plain heading - NOT `ModalHead`, whose Base UI
  * `Dialog.Title`/`Dialog.Close` require a `Dialog.Root` ancestor and throw
  * ("Cannot destructure property 'store' of 'useDialogRootContext(...)'") when
@@ -821,11 +675,11 @@ function EditHead({ name, onBack }: { name: string; onBack: () => void }) {
         <span aria-hidden>←</span> Back to loop
       </button>
       <h1 className="mt-2.5 text-[24px] font-semibold leading-tight tracking-[-0.015em] text-display">
-        Manual settings · {name}
+        Settings · {name}
       </h1>
       <p className="mt-1.5 max-w-[640px] text-meta leading-snug text-secondary">
-        The raw fields, saved directly - no agent pass, no credits. For schedule or task changes in plain words, use
-        Edit with your coding agent instead.
+        Loop configuration, notifications, and push channel, saved directly - no agent pass or credits. For changes in plain words, use
+        Agent edit instead.
       </p>
     </div>
   )

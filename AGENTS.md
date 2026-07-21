@@ -491,8 +491,9 @@ computes pure functions. Run instructions: `README.md`.
 - **Pending rows are the durable queue/inbox.** Same-role requests coalesce with a
   stable id; authority only promotes `system → owner`, latest owner edit text wins,
   and a running role may retain one pending follow-up. Pause cancels pending system
-  rows and preserves owner rows. Completion cancels every pending exec/evolve and
-  preserves only owner edit. Reports/finish/cancel/claim/reclaim share the loop lock;
+  rows while owner exec/edit/evolve rows remain claimable; the loop stays paused and
+  their terminals never restore cadence. Completion cancels every pending exec/evolve
+  and preserves only owner edit. Reports/finish/cancel/claim/reclaim share the loop lock;
   terminal run + cursor/task + continuous cadence writes are one CAS transaction.
   Auto-evolve is a system evolve requested from that terminal lifecycle. Pending
   system rows use immutable `runs.createdAt` for the 7d offline backstop;
