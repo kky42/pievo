@@ -6,7 +6,7 @@ reuses this machine's persisted device token, so no `--server-url`/`--connect-ke
 or other auth is needed.
 
 - **Schedule / delivery envelope + goal** (cadence, name, timezone, notify, model,
-  pause, goal, …) — the server owns it. Change it with `pievo edit` (below), which
+  reasoning effort, pause, goal, …) — the server owns it. Change it with `pievo edit` (below), which
   is **JSON-only**: one `--json '<patch>'` of just the fields that change.
 - **What the loop does** (its instructions, context, log) — the loop's **task file
   (`pievo/<slug>/README.md`) on this machine**. Edit it directly in the repo,
@@ -32,8 +32,8 @@ First find the loop id (only loops bound to THIS machine are listed):
 ```
 
 The default columns are `id`/`name`/`cron`/`enabled`/`nextFire`; add more with
-`--fields` (comma-separated, from `timezone`,`notify`,`model`,`goal`,`taskFile`,
-`runs`,`lastOutcome`) — an unknown field fails loud. `--json` emits the full records
+`--fields` (comma-separated, from `timezone`,`notify`,`model`,`reasoningEffort`,
+`goal`,`taskFile`,`runs`,`lastOutcome`) — an unknown field fails loud. `--json` emits the full records
 as a raw JSON array (every field, `runs`/`lastOutcome` always computed) when you need
 to parse the list instead of read it.
 
@@ -67,7 +67,8 @@ The whitelist — every key `--json` accepts:
 | `continuousDelayMinutes` | integer >= 1          | delay after each continuous exec ends (`done` or `error`) |
 | `timezone`     | IANA name                      | change the cron zone |
 | `notify`       | `always` \| `auto` \| `never`  | delivery policy |
-| `model`        | model id                       | coding-agent model |
+| `model`        | arbitrary string or `null`     | provider model; `null` uses the coding-agent CLI default |
+| `reasoningEffort` | arbitrary string or `null`  | provider reasoning effort; `null` uses the coding-agent CLI default |
 | `agent`        | `claude-code` \| `codex` | which coding agent executes this loop on the bound machine |
 | `allowControl` | boolean                        | `false` = **pin** the schedule (runs can't self-adjust) |
 | `enabled`      | boolean                        | `false` pauses; `true` resumes — or **reopens** a completed loop (clears its completion stamps; goal survives) |

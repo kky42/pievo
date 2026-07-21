@@ -1,4 +1,4 @@
-import { forwardRef, lazy, Suspense, useEffect, useImperativeHandle, useState } from 'react'
+import { forwardRef, lazy, Suspense, useEffect, useId, useImperativeHandle, useState } from 'react'
 import type { ChannelSummary, CodingAgent, ExecPayload, JobPayload, StateField } from '../types'
 import { CODING_AGENTS } from '../types'
 import { listChannels } from '../server/notifyFns'
@@ -8,20 +8,22 @@ import { inputCls, labelCls, sectionHeadCls, selectCls } from './ui'
 /**
  * Build the exec slice of a manual form save.
  *
- * Always emits so model / allowControl ride with Save even when workdir is
- * empty (common for taskFile/workflow-only loops). Empty strings stay defined
- * so patchJob can clear stored model/workdir via `trim() || null` - do not
- * coerce cleared fields to `undefined` or gate the whole object on workdir.
+ * Always emits so model / reasoningEffort / allowControl ride with Save even
+ * when workdir is empty (common for taskFile/workflow-only loops). Empty strings
+ * stay defined so patchJob can clear stored execution settings via `trim() || null` -
+ * do not coerce cleared fields to `undefined` or gate the whole object on workdir.
  */
 export function buildFormExec(f: {
   workdir: string
   model: string
+  reasoningEffort: string
   allowControl: boolean
 }): ExecPayload {
   return {
     executor: 'claude',
     workdir: f.workdir.trim(),
     model: f.model.trim(),
+    reasoningEffort: f.reasoningEffort.trim(),
     allowControl: f.allowControl,
   }
 }
@@ -49,7 +51,7 @@ export interface LoopFormSeed {
   stateSchema?: StateField[]
   ui?: string
   agent?: CodingAgent
-  exec?: { workdir?: string; model?: string; allowControl?: boolean }
+  exec?: { workdir?: string; model?: string; reasoningEffort?: string; allowControl?: boolean }
 }
 
 interface FormState {
@@ -66,6 +68,7 @@ interface FormState {
   agent: CodingAgent
   workdir: string
   model: string
+  reasoningEffort: string
   allowControl: boolean
 }
 
@@ -85,6 +88,7 @@ function initState(initial?: LoopFormSeed): FormState {
     agent: initial?.agent ?? 'claude-code',
     workdir: e?.workdir ?? '',
     model: e?.model ?? '',
+    reasoningEffort: e?.reasoningEffort ?? '',
     allowControl: !!e?.allowControl,
   }
 }
@@ -113,10 +117,12 @@ function TextField({
   ph?: string
   hint?: string
 }) {
+  const id = useId()
   return (
     <div className="min-w-0">
-      <label className={labelCls}>{label}</label>
+      <label htmlFor={id} className={labelCls}>{label}</label>
       <input
+        id={id}
         type="text"
         className={mono ? `${inputCls} font-mono` : inputCls}
         value={value}
@@ -280,7 +286,20 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
             ph="/Users/you/Workspace/project"
             hint="Project root on the machine - empty means workflow-only / agent() escalation."
           />
-          <TextField label="Model" value={f.model} onChange={(v) => set('model', v)} hint="Optional - the daemon default when empty." />
+          <TextField
+            label="Model"
+            value={f.model}
+            onChange={(v) => set('model', v)}
+            ph="default"
+            hint="Optional arbitrary model id. Empty uses the coding-agent CLI default."
+          />
+          <TextField
+            label="Reasoning effort"
+            value={f.reasoningEffort}
+            onChange={(v) => set('reasoningEffort', v)}
+            ph="default"
+            hint="Optional arbitrary effort value. Empty uses the coding-agent CLI default."
+          />
           <label className="mt-4 flex cursor-pointer items-center gap-2 text-body text-primary">
             <input
               type="checkbox"

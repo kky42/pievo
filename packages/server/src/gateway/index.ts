@@ -59,7 +59,7 @@ import {
   truncate,
   type Scalar,
 } from "./toon.js";
-import { validateSchema, validateUi, validateWorkflow } from "./validate.js";
+import { normalizeProviderSetting, validateSchema, validateUi, validateWorkflow } from "./validate.js";
 import { clipText, nowIso, stripNul, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
 
 const log = logger.child({ mod: "gateway" });
@@ -98,6 +98,7 @@ export const EDITABLE_LOOP_FIELDS = new Set([
   "timezone",
   "notify",
   "model",
+  "reasoningEffort",
   "allowControl",
   "taskFile",
   "enabled",
@@ -802,6 +803,8 @@ export class MachineGateway {
       timezone?: unknown;
       /** Optional provider model id used by the selected coding agent. */
       model?: unknown;
+      /** Optional provider reasoning effort; arbitrary text, passed through verbatim. */
+      reasoningEffort?: unknown;
       workflow?: unknown;
       workdir?: unknown;
       taskFile?: unknown;
@@ -872,7 +875,8 @@ export class MachineGateway {
     const goal = str(body.goal)?.slice(0, GOAL_CAP) ?? null;
 
     const notify = body.notify === "always" || body.notify === "never" ? body.notify : "auto";
-    const model = str(body.model);
+    const model = normalizeProviderSetting(body.model);
+    const reasoningEffort = normalizeProviderSetting(body.reasoningEffort);
     // Recorded coding agent: trust the daemon's resolved value when it's known.
     // Older daemons may omit it and generic unknown values retain the historical
     // claude-code fallback. The explicitly retired Grok executor fails loud so an
@@ -907,6 +911,7 @@ export class MachineGateway {
         taskFile: taskFile ?? null,
         workdir: str(body.workdir) ?? null,
         model: model ?? null,
+        reasoningEffort: reasoningEffort ?? null,
         // The workflow JS body can be large — report presence, not the source.
         workflow: workflow != null,
         // Ditto for the dashboard HTML — presence flag, not the markup.
@@ -1002,6 +1007,7 @@ export class MachineGateway {
       continuousDelayMinutes,
       timezone,
       model,
+      reasoningEffort,
       workflow,
       workdir: str(body.workdir),
       taskFile,
@@ -1090,6 +1096,7 @@ export class MachineGateway {
           enabled: l.enabled,
           notify: l.notify,
           model: l.model ?? null,
+          reasoningEffort: l.reasoningEffort ?? null,
           goal: l.goal ?? null,
           taskFile: l.taskFile ?? null,
           nextRunAt: l.nextRunAt,
@@ -1182,6 +1189,7 @@ export class MachineGateway {
       timezone?: unknown;
       notify?: unknown;
       model?: unknown;
+      reasoningEffort?: unknown;
       allowControl?: unknown;
       taskFile?: unknown;
       enabled?: unknown;
@@ -1344,7 +1352,8 @@ export class MachineGateway {
       } else set("continuousDelayMinutes", delay, loop.continuousDelayMinutes);
     }
     if (p.name !== undefined) set("name", str(p.name), loop.name);
-    if (p.model !== undefined) set("model", str(p.model), loop.model);
+    if (p.model !== undefined) set("model", normalizeProviderSetting(p.model), loop.model);
+    if (p.reasoningEffort !== undefined) set("reasoningEffort", normalizeProviderSetting(p.reasoningEffort), loop.reasoningEffort);
     if (p.taskFile !== undefined) set("taskFile", str(p.taskFile), loop.taskFile);
     if (p.notify !== undefined) {
       const v = p.notify;
@@ -1884,7 +1893,7 @@ export function fmtTimeZoned(iso: string, timezone: string | null, opts: { secon
 const LIST_DEFAULT_FIELDS: string[] = ["id", "name", "cron", "enabled", "nextFire"];
 /** The optional columns `--fields` may add (the "available" set an unknown field is
  *  measured against, §4.2). `runs`/`lastOutcome` are derived per loop. */
-const LIST_OPTIONAL_FIELDS: string[] = ["timezone", "notify", "model", "goal", "taskFile", "runs", "lastOutcome"];
+const LIST_OPTIONAL_FIELDS: string[] = ["timezone", "notify", "model", "reasoningEffort", "goal", "taskFile", "runs", "lastOutcome"];
 
 /** A loop's row for `pievo loops`: every renderable cell precomputed once (so the
  *  `--fields` selection is a pure column pick). The structured `loops` body carries the
@@ -1900,6 +1909,7 @@ interface LoopListRecord {
   enabled: boolean;
   notify: string;
   model: string | null;
+  reasoningEffort: string | null;
   goal: string | null;
   taskFile: string | null;
   nextRunAt: string | null;
@@ -1923,6 +1933,7 @@ function loopCell(rec: LoopListRecord, field: string): Scalar {
     case "timezone": return rec.timezone;
     case "notify": return rec.notify;
     case "model": return rec.model;
+    case "reasoningEffort": return rec.reasoningEffort;
     case "goal": return rec.goal;
     case "taskFile": return rec.taskFile;
     case "runs": return rec.runs;
@@ -2064,7 +2075,7 @@ function renderReplayText(name: string, loopId: string, goal: string | null): st
 
 /** `pievo new --dry-run` — the normalized config + fire preview (no persistence). */
 function renderCreateDryRunText(
-  config: { name: string | null; cron: string; scheduleMode: "cron" | "continuous"; continuousDelayMinutes: number; timezone: string | null; taskFile: string | null; model: string | null; workflow: boolean; ui: boolean; goal: string | null; notify: string },
+  config: { name: string | null; cron: string; scheduleMode: "cron" | "continuous"; continuousDelayMinutes: number; timezone: string | null; taskFile: string | null; model: string | null; reasoningEffort: string | null; workflow: boolean; ui: boolean; goal: string | null; notify: string },
   nextRuns: string[],
   warning: string | undefined,
 ): string {
@@ -2076,7 +2087,8 @@ function renderCreateDryRunText(
       ["continuousDelayMinutes", config.continuousDelayMinutes],
       ["timezone", config.timezone],
       ["taskFile", config.taskFile],
-      ["model", config.model],
+      ["model", config.model ?? { raw: "default" }],
+      ["reasoningEffort", config.reasoningEffort ?? { raw: "default" }],
       ["workflow", config.workflow ? "present" : "absent"],
       ["ui", config.ui ? "present" : "absent"],
       ["goal", config.goal],

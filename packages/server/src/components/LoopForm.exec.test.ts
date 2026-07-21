@@ -15,59 +15,70 @@ describe('LoopForm.read exec wiring', () => {
     // The old bug: `const exec = f.workdir.trim() ? { ... model } : undefined`
     expect(formSrc).not.toMatch(/const exec = f\.workdir\.trim\(\)\s*\?/)
     expect(formSrc).toMatch(/exec:\s*buildFormExec\(f\)/)
-    // Cleared model must stay a defined string, never `|| undefined`
+    // Cleared execution settings must stay defined strings, never `|| undefined`.
     const helper = formSrc.slice(formSrc.indexOf('export function buildFormExec'))
-    const body = helper.slice(0, helper.indexOf('export interface') > 0 ? helper.indexOf('export interface') : 400)
+    const body = helper.slice(0, helper.indexOf('export interface') > 0 ? helper.indexOf('export interface') : 500)
     expect(body).not.toMatch(/model:.*\|\|\s*undefined/)
+    expect(body).not.toMatch(/reasoningEffort:.*\|\|\s*undefined/)
+    expect(formSrc).toContain('label="Reasoning effort"')
+    expect(formSrc).toContain('ph="default"')
   })
 })
 
 describe('buildFormExec (manual form save payload)', () => {
-  it('emits exec.model when workdir is empty so model edits still patch', () => {
+  it('emits model and reasoning effort when workdir is empty so execution edits still patch', () => {
     const exec = buildFormExec({
       workdir: '',
       model: 'claude-opus-4-20250514',
+      reasoningEffort: 'high',
       allowControl: true,
     })
     expect(exec).toEqual({
       executor: 'claude',
       workdir: '',
       model: 'claude-opus-4-20250514',
+      reasoningEffort: 'high',
       allowControl: true,
     })
-    // patchJob gates on !== undefined — a defined empty string is what clears
     expect(exec.model).toBeDefined()
+    expect(exec.reasoningEffort).toBeDefined()
   })
 
-  it('emits a defined empty model string so clearing model is patchable', () => {
+  it('emits defined empty strings so clearing model and reasoning effort is patchable', () => {
     const exec = buildFormExec({
       workdir: '/tmp/proj',
       model: '   ',
+      reasoningEffort: '   ',
       allowControl: false,
     })
     expect(exec.model).toBe('')
     expect(exec.model).toBeDefined()
+    expect(exec.reasoningEffort).toBe('')
+    expect(exec.reasoningEffort).toBeDefined()
     expect(exec.workdir).toBe('/tmp/proj')
     expect(exec.allowControl).toBe(false)
   })
 
-  it('trims workdir and model but never drops the exec object', () => {
+  it('trims workdir, model, and reasoning effort but never drops the exec object', () => {
     const exec = buildFormExec({
       workdir: '  /home/me/app  ',
       model: '  sonnet  ',
+      reasoningEffort: '  custom-max  ',
       allowControl: true,
     })
     expect(exec.workdir).toBe('/home/me/app')
     expect(exec.model).toBe('sonnet')
+    expect(exec.reasoningEffort).toBe('custom-max')
     expect(exec.executor).toBe('claude')
   })
 
-  it('still carries allowControl with empty workdir and empty model', () => {
-    const exec = buildFormExec({ workdir: '', model: '', allowControl: false })
+  it('still carries allowControl with empty workdir and default execution settings', () => {
+    const exec = buildFormExec({ workdir: '', model: '', reasoningEffort: '', allowControl: false })
     expect(exec).toEqual({
       executor: 'claude',
       workdir: '',
       model: '',
+      reasoningEffort: '',
       allowControl: false,
     })
   })

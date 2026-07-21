@@ -12,6 +12,15 @@
 import * as store from "../db/store.js";
 import type { StateField } from "../db/schema.js";
 
+/** Normalize an optional provider-owned setting without validating its vocabulary.
+ * Pievo deliberately treats model ids and reasoning efforts as opaque text; null or
+ * blank delegates selection to the coding-agent CLI. */
+export function normalizeProviderSetting(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  const value = input.replaceAll("\0", "").trim();
+  return value || null;
+}
+
 /** Sanitize/normalize dashboard HTML → the stored value (or null to clear). */
 export function validateUi(html: string): { ok: true; value: string | null } {
   return { ok: true, value: store.coerceUi(html) ?? null };

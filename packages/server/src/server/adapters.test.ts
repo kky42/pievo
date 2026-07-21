@@ -55,6 +55,19 @@ test("an exec loop's recorded agent maps onto executor, JobFull.agent, and the k
   expect(detail.summary.kind).toBe("exec:codex");
 });
 
+test("execution model and reasoning effort map to dashboard detail without defaults", async () => {
+  const loop = await seed("codex");
+  await store.updateLoop(loop.id, { model: "gpt-custom", reasoningEffort: "custom-high" });
+  const configured = await adapters.toJobDetail((await store.getLoop(loop.id))!);
+  expect(configured.job.exec?.model).toBe("gpt-custom");
+  expect(configured.job.exec?.reasoningEffort).toBe("custom-high");
+
+  await store.updateLoop(loop.id, { model: null, reasoningEffort: null });
+  const defaults = await adapters.toJobDetail((await store.getLoop(loop.id))!);
+  expect(defaults.job.exec?.model).toBeUndefined();
+  expect(defaults.job.exec?.reasoningEffort).toBeUndefined();
+});
+
 test("a claude-code loop maps to exec:claude-code (no longer the hardcoded \"claude\")", async () => {
   const loop = await seed("claude-code");
   const detail = await adapters.toJobDetail(loop);

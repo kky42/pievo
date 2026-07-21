@@ -28,6 +28,7 @@ import * as store from '../db/store.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
+import { normalizeProviderSetting } from '../gateway/validate.js'
 import { machinePresence } from '../lib/machinePresence.js'
 import { TEMPLATES } from './templates.js'
 
@@ -257,7 +258,8 @@ export const patchJob = createServerFn({ method: 'POST' })
       ...(p.stateSchema !== undefined ? { stateSchema: store.coerceStateSchema(p.stateSchema) ?? null } : {}),
       ...(p.ui !== undefined ? { ui: store.coerceUi(p.ui) ?? null } : {}),
       ...(p.exec?.workdir !== undefined ? { workdir: p.exec.workdir.trim() || null } : {}),
-      ...(p.exec?.model !== undefined ? { model: p.exec.model.trim() || null } : {}),
+      ...(p.exec?.model !== undefined ? { model: normalizeProviderSetting(p.exec.model) } : {}),
+      ...(p.exec?.reasoningEffort !== undefined ? { reasoningEffort: normalizeProviderSetting(p.exec.reasoningEffort) } : {}),
       ...(p.exec?.allowControl !== undefined ? { allowControl: !!p.exec.allowControl } : {}),
     })
     if (!loop) return { error: 'not found' }

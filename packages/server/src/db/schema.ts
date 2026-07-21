@@ -188,7 +188,10 @@ export const loops = pgTable(
     deleteRequestedAt: timestamp("delete_requested_at", { withTimezone: true, mode: "string" }),
     /** One-line reason recorded at completion (the finishing run's summary). */
     completionReason: text("completion_reason"),
+    /** Optional provider model id. Null delegates model selection to the coding-agent CLI. */
     model: text("model"),
+    /** Optional provider reasoning-effort value. Null delegates to the coding-agent CLI. */
+    reasoningEffort: text("reasoning_effort"),
     /** Coding agent this loop is BOUND TO and EXECUTED with: the daemon's
      *  `buildAgentSpawn` branches on this value (`claude-code` → claude,
      *  `codex` → `codex exec`). Measured from the creating CLI's env when

@@ -559,8 +559,10 @@ computes pure functions. Run instructions: `README.md`.
   `EDITABLE_LOOP_FIELDS` are rejected with a 400 listing the allowed set. Both
   `pievo new` and `pievo edit` support `--dry-run` (server validate-only, zero
   persistence).
-- **`createLoop` accepts optional `model` and `ui`**. `model` persists at create so
-  the immediate first run cannot race a corrective edit; create `--dry-run` echoes it.
+- **`createLoop` accepts optional `model`, `reasoningEffort`, and `ui`**. The two
+  provider settings are arbitrary text with no Pievo-side validity check; null is
+  the default and means the coding-agent CLI chooses. They persist at create so the
+  immediate first run cannot race a corrective edit; create `--dry-run` echoes them.
   `ui` uses the same `validateUi` + `WIRE_TEXT_CAP` clip as `set-ui`/`editLoop`, so a
   template-driven loop ships a **day-one dashboard** instead of waiting for an evolve
   pass. The daemon `pievo new` spreads the whole `--json` config, so both pass through
@@ -627,10 +629,12 @@ computes pure functions. Run instructions: `README.md`.
   --json`/`show` roundtrip, and the web `LoopForm` agent select (the next run picks
   up a changed agent). `runner.ts buildAgentSpawn` branches on `d.loop.agent`
   (delivered by server `gateway/delivery.ts`):
-  - `claude-code` → `claude` (`PIEVO_CLAUDE_BIN`) with stream-json + bypassPermissions
+  - `claude-code` → `claude` (`PIEVO_CLAUDE_BIN`) with stream-json + bypassPermissions;
+    optional model/effort become `--model`/`--effort` only when set
   - `codex` → `codex exec` (`PIEVO_CODEX_BIN`): `--json`,
     `--dangerously-bypass-approvals-and-sandbox`, `--skip-git-repo-check`,
-    `-c shell_environment_policy.inherit=all`, optional `-m`; the inherit override is
+    `-c shell_environment_policy.inherit=all`, optional `-m`, and optional
+    `-c model_reasoning_effort=<JSON string>`; the inherit override is
     load-bearing because Codex otherwise may replace the daemon-prepended PATH and run
     a stale global `pievo` instead of the run-token callback shim. `execEnv("codex")`
     forwards `OPENAI_API_KEY`/`CODEX_API_KEY`/`CODEX_HOME` (session/config under

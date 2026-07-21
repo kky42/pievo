@@ -90,12 +90,17 @@ export function LoopCard({
           </Pill>
         )}
         {!completed && lifecycle === 'paused' && <Pill>Paused</Pill>}
-        <div className="ml-auto whitespace-nowrap text-meta text-secondary">
-          <span className="text-primary" title={job.cron}>
-            {job.scheduleMode === 'continuous' ? `continuous · ${job.continuousDelayMinutes}m` : cronText(job.cron)}
-          </span>
-          <span className="mx-2.5 text-wire">·</span>
-          {job.kind}
+        <div className="ml-auto min-w-0 text-right text-meta text-secondary">
+          <div className="whitespace-nowrap">
+            <span className="text-primary" title={job.cron}>
+              {job.scheduleMode === 'continuous' ? `continuous · ${job.continuousDelayMinutes}m` : cronText(job.cron)}
+            </span>
+            <span className="mx-2.5 text-wire">·</span>
+            {job.kind}
+          </div>
+          <div className="mt-1 truncate text-caption text-disabled" title={`Model: ${job.model || 'default'} · Reasoning: ${job.reasoningEffort || 'default'}`}>
+            Model: {job.model || 'default'} · Reasoning: {job.reasoningEffort || 'default'}
+          </div>
         </div>
       </div>
 

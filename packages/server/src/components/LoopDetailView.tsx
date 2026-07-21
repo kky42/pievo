@@ -475,6 +475,8 @@ export function LoopDetailView({ id }: { id: string }) {
 
   // ---- read mode (the page) ----
   const agentLabel = AGENT_LABEL[job.agent ?? 'claude-code'] ?? job.agent ?? 'Claude Code'
+  const modelLabel = job.exec?.model?.trim() || 'default'
+  const reasoningEffortLabel = job.exec?.reasoningEffort?.trim() || 'default'
   const metaDot = <span className="text-wire">·</span>
 
   return (
@@ -506,6 +508,12 @@ export function LoopDetailView({ id }: { id: string }) {
                   a quiet, unobtrusive chip, not a status pill. */}
               <Pill tone="outline" title="Recorded coding agent">
                 {agentLabel}
+              </Pill>
+              <Pill tone="outline" title={`Model: ${modelLabel}`}>
+                <span className="max-w-72 truncate">Model: {modelLabel}</span>
+              </Pill>
+              <Pill tone="outline" title={`Reasoning: ${reasoningEffortLabel}`}>
+                <span className="max-w-72 truncate">Reasoning: {reasoningEffortLabel}</span>
               </Pill>
               {/* Cross-team context: this loop belongs to another of your teams,
                   not your active one. A quiet chip; the switch is offered below. */}

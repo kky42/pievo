@@ -27,6 +27,7 @@ export interface Delivery {
     /** Zero-LLM gate JS (run on the machine before escalating). */
     workflow: string | null;
     model: string | null;
+    reasoningEffort: string | null;
     allowControl: boolean;
     /** Coding agent to EXECUTE this loop with (the daemon branches spawn +
      *  credentials on this — claude-code | codex). */
@@ -73,6 +74,7 @@ export async function buildDelivery(loop: Loop, queuedRun: Run, runToken: string
       taskFile: loop.taskFile ?? null,
       workflow: loop.workflow ?? null,
       model: loop.model ?? null,
+      reasoningEffort: loop.reasoningEffort ?? null,
       allowControl: loop.allowControl,
       agent: loop.agent,
     },

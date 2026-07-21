@@ -34,6 +34,8 @@ export interface Delivery {
     taskFile: string | null;
     workflow: string | null;
     model: string | null;
+    /** Absent on older servers; unset delegates to the provider CLI default. */
+    reasoningEffort?: string | null;
     allowControl: boolean;
     /** Coding agent to EXECUTE this loop with. Absent on an older server is
      *  treated as claude-code. The daemon branches spawn + credentials on this
@@ -101,20 +103,23 @@ export function buildAgentSpawn(opts: {
   agent: CodingAgent;
   prompt: string;
   model?: string | null;
+  reasoningEffort?: string | null;
   /** claude-only: the system-prompt file path (falsy ⇒ flag omitted). */
   sysFile?: string;
 }): AgentSpawn {
-  const { agent, prompt, model, sysFile } = opts;
+  const { agent, prompt, model, reasoningEffort, sysFile } = opts;
   if (agent === "codex") {
     // Codex surface is `codex exec [OPTIONS] [PROMPT]` — never Claude's
     // `-p` / stream-json flags and never a session resume.
     const modelArgs = model ? ["-m", model] : [];
+    const reasoningArgs = reasoningEffort ? ["-c", `model_reasoning_effort=${JSON.stringify(reasoningEffort)}`] : [];
     const unattended = [
       "--json",
       "--dangerously-bypass-approvals-and-sandbox",
       "--skip-git-repo-check",
       "-c", "shell_environment_policy.inherit=all",
       ...modelArgs,
+      ...reasoningArgs,
     ];
     return {
       bin: process.env.PIEVO_CODEX_BIN || "codex",
@@ -122,6 +127,7 @@ export function buildAgentSpawn(opts: {
     };
   }
   const modelArgs = model ? ["--model", model] : [];
+  const reasoningArgs = reasoningEffort ? ["--effort", reasoningEffort] : [];
   return {
     bin: process.env.PIEVO_CLAUDE_BIN || "claude",
     args: [
@@ -132,6 +138,7 @@ export function buildAgentSpawn(opts: {
       ...(sysFile ? ["--append-system-prompt-file", sysFile] : []),
       "--disallowed-tools", SELF_SCHEDULING_TOOLS,
       ...modelArgs,
+      ...reasoningArgs,
     ],
   };
 }
@@ -275,6 +282,7 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
       agent,
       prompt: task,
       model: d.loop.model,
+      reasoningEffort: d.loop.reasoningEffort,
       sysFile: hasSystemPrompt ? sysFile : undefined,
     });
 

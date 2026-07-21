@@ -128,6 +128,10 @@ export interface JobSummary {
   scheduleMode?: 'cron' | 'continuous'
   continuousDelayMinutes?: number
   kind: string
+  /** Unset means the coding-agent CLI chooses its own default. */
+  model?: string | null
+  /** Unset means the coding-agent CLI chooses its own default. */
+  reasoningEffort?: string | null
   /** True when the job carries an agent-authored generative-UI template (Job.ui). */
   hasUi?: boolean
   enabled: boolean
@@ -198,6 +202,7 @@ export interface JobFull {
     executor: string
     workdir: string
     model?: string
+    reasoningEffort?: string
     report?: 'viaAgent' | 'direct'
     allowControl?: boolean
     timeoutMs?: number
@@ -294,6 +299,7 @@ export interface ExecPayload {
   report?: 'viaAgent' | 'direct'
   allowControl?: boolean
   model?: string
+  reasoningEffort?: string
 }
 
 /** The create/edit payload the form POSTs/PATCHes to the daemon. */

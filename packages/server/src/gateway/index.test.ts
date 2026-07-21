@@ -2587,19 +2587,21 @@ test("cli device credential: new/edit/loops/log/show route to the existing gatew
   const { deviceToken, machineId } = (await seededCli());
   const gw = gateway();
   // new → createLoop
-  const created = (await gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Daily", cron: "0 8 * * *", taskFile: "pievo/x/README.md", model: "gpt-5.6-luna" })]));
+  const created = (await gw.cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Daily", cron: "0 8 * * *", taskFile: "pievo/x/README.md", model: "gpt-5.6-luna", reasoningEffort: "custom-high" })]));
   expect(created.status).toBe(200);
   const newId = idIn(created);
   expect((await store.getLoop(newId))!.machineId).toBe(machineId);
   expect((await store.getLoop(newId))!.model).toBe("gpt-5.6-luna");
+  expect((await store.getLoop(newId))!.reasoningEffort).toBe("custom-high");
   // loops → listLoops (includes the just-created loop; the `loops` channel is retained)
   const loops = (await gw.cli(deviceToken, ["loops"]));
   expect((loops.body as any).loops.map((l: any) => l.id)).toContain(newId);
   // edit → editLoop (positional loop id + --json patch)
-  const edited = (await gw.cli(deviceToken, ["edit", newId, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "always" })]));
+  const edited = (await gw.cli(deviceToken, ["edit", newId, "--json", JSON.stringify({ cron: "0 9 * * *", notify: "always", reasoningEffort: "maximum" })]));
   expect(edited.status).toBe(200);
   expect((await store.getLoop(newId))!.cron).toBe("0 9 * * *");
   expect((await store.getLoop(newId))!.notify).toBe("always");
+  expect((await store.getLoop(newId))!.reasoningEffort).toBe("maximum");
   // log → loopLog for that loop
   const log = (await gw.cli(deviceToken, ["log", newId]));
   expect(log.status).toBe(200);
@@ -2743,6 +2745,8 @@ test("cli show [D]: text is the config detail with exitCode 0", async () => {
   const res = (await gateway().cli(deviceToken, ["show", loop.id]));
   expect(res.status).toBe(200);
   expect(textOf(res)).toContain(`cron: "${loop.cron}"`);
+  expect(textOf(res)).toContain("model: default");
+  expect(textOf(res)).toContain("reasoningEffort: default");
   expect((res.body as { exitCode: number }).exitCode).toBe(0);
 });
 
@@ -2766,6 +2770,7 @@ async function seededRichLoop() {
       taskFile: "pievo/docs-sweep/README.md",
       goal: "ship v1",
       model: "opus",
+      reasoningEffort: "high",
       workflow: "return { state: prev };",
       ui: "<div id=\"dash\">hello dashboard body that is comfortably over the size hint threshold</div>",
       stateSchema: [{ key: "drift", label: "Drift", unit: "files" }],
@@ -2789,10 +2794,11 @@ test("show --json → edit --dry-run roundtrip: the envelope minus id is a no-op
   const env = JSON.parse((show.body as { text: string }).text) as Record<string, unknown>;
   // Keyed EXACTLY as edit --json accepts: id + every EDITABLE_LOOP_FIELDS key.
   expect(Object.keys(env).sort()).toEqual(
-    ["agent", "allowControl", "continuousDelayMinutes", "cron", "enabled", "goal", "id", "model", "name", "notify", "runAt", "scheduleMode", "stateSchema", "taskFile", "timezone", "ui", "workflow"].sort(),
+    ["agent", "allowControl", "continuousDelayMinutes", "cron", "enabled", "goal", "id", "model", "name", "notify", "reasoningEffort", "runAt", "scheduleMode", "stateSchema", "taskFile", "timezone", "ui", "workflow"].sort(),
   );
   // Values set through both create and edit roundtrip through the envelope.
   expect(env.model).toBe("opus");
+  expect(env.reasoningEffort).toBe("high");
   expect(env.agent).toBe("codex");
   expect(env.id).toBe(id);
   // No derived read-only aggregates leak into the editable envelope.
@@ -2912,12 +2918,13 @@ test("cli new: a closed loop reads classification closed; a provided-but-dropped
 
 test("cli new --dry-run: text is the normalized config detail + fire preview (structured config retired)", async () => {
   const { deviceToken } = (await seededCli());
-  const res = (await gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "pievo/x/README.md", model: "gpt-5.6-luna" }), "--dry-run"]));
+  const res = (await gateway().cli(deviceToken, ["new", "--json", JSON.stringify({ name: "Docs Sweep", cron: "0 6 * * 1", taskFile: "pievo/x/README.md", model: "gpt-5.6-luna", reasoningEffort: "custom-high" }), "--dry-run"]));
   expect(res.status).toBe(200);
   const body = res.body as { text: string };
   expect(body.text).toContain("dry-run:");
   expect(body.text).toContain('cron: "0 6 * * 1"');
   expect(body.text).toContain("model: gpt-5.6-luna");
+  expect(body.text).toContain("reasoningEffort: custom-high");
   expect(body.text).toContain("nextRuns[3]:");
 });
 
@@ -3127,7 +3134,7 @@ test("cli loops --fields: an unknown field fails loud (VALIDATION_ERROR, exit 1,
   expect(res.status).toBe(400);
   const text = textOf(res);
   expect(text).toContain("unknown field(s): bogus");
-  expect(text).toContain("available: timezone, notify, model, goal, taskFile, runs, lastOutcome");
+  expect(text).toContain("available: timezone, notify, model, reasoningEffort, goal, taskFile, runs, lastOutcome");
   expect(text).toContain("code: VALIDATION_ERROR");
   expect((res.body as { exitCode: number }).exitCode).toBe(1);
 });

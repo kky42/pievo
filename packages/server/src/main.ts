@@ -125,6 +125,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
       notify: b.notify ?? "auto",
       allowControl: !!b.allowControl,
       model: b.model ?? null,
+      reasoningEffort: b.reasoningEffort ?? null,
       enabled: b.enabled ?? true,
       nextRunAt: b.nextRunAt ?? null,
     });

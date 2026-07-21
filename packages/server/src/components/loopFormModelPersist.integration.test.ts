@@ -30,7 +30,8 @@ let store: typeof import('../db/store.js')
 function execUpdate(p: JobPayload): Partial<NewLoop> {
   return {
     ...(p.exec?.workdir !== undefined ? { workdir: p.exec.workdir.trim() || null } : {}),
-    ...(p.exec?.model !== undefined ? { model: p.exec.model.trim() || null } : {}),
+    ...(p.exec?.model !== undefined ? { model: p.exec.model.replaceAll('\0', '').trim() || null } : {}),
+    ...(p.exec?.reasoningEffort !== undefined ? { reasoningEffort: p.exec.reasoningEffort.replaceAll('\0', '').trim() || null } : {}),
     ...(p.exec?.allowControl !== undefined ? { allowControl: !!p.exec.allowControl } : {}),
   }
 }
@@ -72,7 +73,7 @@ test('FIXED: a model edit persists for an empty-workdir (workflow-only) loop', a
   const loop = await store.createLoop({
     userId: 'u1', teamId: 't1', machineId: 'm1', name: 'Workflow-only', cron: '0 6 * * *', model: 'claude-sonnet-4-20250514',
   })
-  const exec = buildFormExec({ workdir: '', model: 'claude-opus-4-20250514', allowControl: true })
+  const exec = buildFormExec({ workdir: '', model: 'claude-opus-4-20250514', reasoningEffort: '', allowControl: true })
   const updated = await store.updateLoop(loop.id, execUpdate({ exec }))
   // The new model is persisted despite the empty workdir.
   expect(updated!.model).toBe('claude-opus-4-20250514')
@@ -84,7 +85,7 @@ test('FIXED: clearing the Model field persists as a NULL model', async () => {
     userId: 'u1', teamId: 't1', machineId: 'm1', name: 'Pinned model', cron: '0 6 * * *', model: 'claude-opus-4-20250514',
   })
   // Owner blanks the Model field (whitespace only) and Saves.
-  const exec = buildFormExec({ workdir: '', model: '   ', allowControl: true })
+  const exec = buildFormExec({ workdir: '', model: '   ', reasoningEffort: '', allowControl: true })
   const updated = await store.updateLoop(loop.id, execUpdate({ exec }))
   expect(updated!.model).toBeNull() // the clear path (trim() || null) is reached
 })
@@ -93,9 +94,22 @@ test('FIXED: a model edit persists for a non-empty-workdir loop too (no regressi
   const loop = await store.createLoop({
     userId: 'u1', teamId: 't1', machineId: 'm1', name: 'Workdir loop', cron: '0 6 * * *', workdir: '/tmp/old', model: 'claude-sonnet-4-20250514',
   })
-  const exec = buildFormExec({ workdir: '/home/me/app', model: 'claude-opus-4-20250514', allowControl: false })
+  const exec = buildFormExec({ workdir: '/home/me/app', model: 'claude-opus-4-20250514', reasoningEffort: '', allowControl: false })
   const updated = await store.updateLoop(loop.id, execUpdate({ exec }))
   expect(updated!.model).toBe('claude-opus-4-20250514')
   expect(updated!.workdir).toBe('/home/me/app')
   expect(updated!.allowControl).toBe(false)
+})
+
+test('reasoning effort persists as arbitrary text and clears back to NULL', async () => {
+  const loop = await store.createLoop({
+    userId: 'u1', teamId: 't1', machineId: 'm1', name: 'Custom effort', cron: '0 6 * * *', reasoningEffort: null,
+  })
+  const setPayload = buildFormExec({ workdir: '', model: '', reasoningEffort: 'custom-ultra', allowControl: true })
+  const set = await store.updateLoop(loop.id, execUpdate({ exec: setPayload }))
+  expect(set!.reasoningEffort).toBe('custom-ultra')
+
+  const clearPayload = buildFormExec({ workdir: '', model: '', reasoningEffort: '   ', allowControl: true })
+  const cleared = await store.updateLoop(loop.id, execUpdate({ exec: clearPayload }))
+  expect(cleared!.reasoningEffort).toBeNull()
 })

@@ -86,8 +86,8 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 - **`show` emits the FULL editable envelope** keyed EXACTLY as `edit --json` accepts
   (`loopEnvelope(loop)`: id + every `EDITABLE_LOOP_FIELDS` key — name, cron, timezone,
-  notify, model, agent, allowControl, taskFile, enabled, runAt, goal, workflow, ui,
-  stateSchema) PLUS the derived read-only aggregates `nextFire`/`classification`/`runs`.
+  notify, model, reasoningEffort, agent, allowControl, taskFile, enabled, runAt,
+  goal, workflow, ui, stateSchema) PLUS the derived read-only aggregates `nextFire`/`classification`/`runs`.
   `renderShowText` is the pure TOON renderer; `describe(loopId, {allowControl, canFinish,
   full})` wraps it with the loop lookup + runs tally. Large fields (`ui`/`workflow`)
   render as `present, N bytes — use --full to see` (or `absent`); `stateSchema` renders
@@ -117,7 +117,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 - **`loops` `--fields`**: default columns are the minimal `{id,name,cron,enabled,nextFire}`
   (`LIST_DEFAULT_FIELDS`); `--fields` EXTENDS them from the optional set
-  `LIST_OPTIONAL_FIELDS` = `{timezone,notify,model,goal,taskFile,runs,lastOutcome}`
+  `LIST_OPTIONAL_FIELDS` = `{timezone,notify,model,reasoningEffort,goal,taskFile,runs,lastOutcome}`
   (request order, deduped, never re-listing a default). An unknown field — including
   a DEFAULT column requested as an extra — fails loud: 400 `VALIDATION_ERROR`,
   `unknown field(s): … — available: <optional set>`, exit 1. `listLoops(deviceToken,

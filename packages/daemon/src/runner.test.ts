@@ -222,6 +222,15 @@ describe("buildAgentSpawn", () => {
     expect(args.slice(-2)).toEqual(["--model", "opus"]);
   });
 
+  test("claude-code: passes an explicitly configured reasoning effort verbatim", () => {
+    const { args } = buildAgentSpawn({
+      agent: "claude-code",
+      prompt: "do it",
+      reasoningEffort: "custom-high",
+    });
+    expect(args.slice(-2)).toEqual(["--effort", "custom-high"]);
+  });
+
   test("codex: codex exec arm — not claude flags; unattended + json + skip-git", () => {
     // A sysFile is passed but codex has no Claude sys-prompt-file flag — drop it.
     const { bin, args } = buildAgentSpawn({ agent: "codex", prompt: "do it", sysFile: "/tmp/sys.md" });
@@ -241,6 +250,15 @@ describe("buildAgentSpawn", () => {
     expect(args).not.toContain("stream-json");
     expect(args).not.toContain("--permission-mode");
     expect(args).not.toContain("--disallowed-tools");
+  });
+
+  test("codex: passes an explicitly configured reasoning effort verbatim", () => {
+    const { args } = buildAgentSpawn({
+      agent: "codex",
+      prompt: "do it",
+      reasoningEffort: "custom-high",
+    });
+    expect(args).toContain('model_reasoning_effort="custom-high"');
   });
 
   test("codex: PIEVO_CODEX_BIN escape hatch + model, with no resume subcommand", () => {
@@ -323,6 +341,7 @@ function delivery(overrides: Partial<Delivery> = {}): Delivery {
       taskFile: null,
       workflow: `await tools.call("posthog.projects-get", {}); return { message: "should not reach" };`,
       model: null,
+      reasoningEffort: null,
       allowControl: false,
     },
     prevState: null,
