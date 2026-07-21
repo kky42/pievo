@@ -143,13 +143,17 @@ export function buildAgentSpawn(opts: {
   };
 }
 
-// The coding-agent child runs with NO wall-clock timeout by default — a real run
-// can legitimately take a long time, and the server's inactivity-based sweep is the
-// guard against a machine that disappears. `PIEVO_EXEC_TIMEOUT_MS` is an opt-in
-// override: a positive number arms the timer; unset/0/invalid/negative ⇒ unlimited
-// (runProcess treats a falsy/≤0 timeoutMs as "no timeout").
-const rawExecTimeout = Number(process.env.PIEVO_EXEC_TIMEOUT_MS);
-const TIMEOUT_MS = Number.isFinite(rawExecTimeout) && rawExecTimeout > 0 ? rawExecTimeout : 0;
+// Bound coding-agent wall-clock runtime to 12 hours by default. Operators may
+// override it with a positive PIEVO_EXEC_TIMEOUT_MS value; missing or invalid
+// values fail safe to the default rather than allowing an unbounded child.
+export const DEFAULT_EXEC_TIMEOUT_MS = 12 * 60 * 60 * 1000;
+export function resolveExecTimeoutMs(value: string | undefined): number {
+  const parsed = Number(value);
+  return value?.trim() && Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_EXEC_TIMEOUT_MS;
+}
+const TIMEOUT_MS = resolveExecTimeoutMs(process.env.PIEVO_EXEC_TIMEOUT_MS);
 /** Hard cap on the pre-report flush so a slow/hung server can't delay reporting. */
 const FLUSH_TIMEOUT_MS = 2500;
 

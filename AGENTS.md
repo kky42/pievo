@@ -432,8 +432,9 @@ computes pure functions. Run instructions: `README.md`.
   prefix check. Child env is allowlisted everywhere (`spawn.ts`); the workflow
   subprocess gets extra keys only via `PIEVO_WORKFLOW_ENV=KEY1,KEY2`. All daemon
   fetches go through `boundedFetch`; kills take the whole process group.
-- Exec timeout is OPT-IN (`PIEVO_EXEC_TIMEOUT_MS`; default unlimited). The guard
-  against a vanished machine is the SERVER's inactivity-based sweep: protocol-v2
+- Exec timeout defaults to 12 hours and accepts a positive millisecond override via
+  `PIEVO_EXEC_TIMEOUT_MS` (missing/zero/invalid/negative falls back to 12h). The guard
+  against a vanished machine is also the SERVER's inactivity-based sweep: protocol-v2
   polls carry one provider-neutral `currentRun` (`executing|reporting`), refreshing
   its `heartbeatAt`; a run is reclaimed only after `RUN_TIMEOUT_MS` of silence.
   Cancellation intent is durable and does not terminalize a running run; only the

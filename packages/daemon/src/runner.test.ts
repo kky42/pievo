@@ -15,7 +15,7 @@ import { pathToFileURL } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { buildAgentSpawn, buildWorkflowFallbackTask, dateStamp, foldEscalation, runDelivery, type Delivery } from "./runner.js";
+import { buildAgentSpawn, buildWorkflowFallbackTask, dateStamp, foldEscalation, resolveExecTimeoutMs, runDelivery, type Delivery } from "./runner.js";
 import { makeTerminalCollector } from "./telemetry.js";
 
 describe("dateStamp", () => {
@@ -403,37 +403,18 @@ describe("runDelivery — a timed-out run keeps its session pointer", () => {
   }, 30000);
 });
 
-describe("runDelivery — the exec timeout is opt-in (unlimited by default)", () => {
-  test("with PIEVO_EXEC_TIMEOUT_MS unset, no timer is armed — a slow claude completes ok", async () => {
-    // Fresh runner import so the module-load timeout read sees the env UNSET (0 ⇒ unlimited).
-    vi.resetModules();
-    delete process.env.PIEVO_EXEC_TIMEOUT_MS;
-    const { runDelivery: run } = await import("./runner.js");
+describe("resolveExecTimeoutMs", () => {
+  test("defaults to 12 hours when PIEVO_EXEC_TIMEOUT_MS is unset", () => {
+    expect(resolveExecTimeoutMs(undefined)).toBe(12 * 60 * 60 * 1000);
+  });
 
-    // A fake claude that sleeps well past the old default (and past the 1500ms override
-    // used in the timeout test) before finishing cleanly. If a timer were armed by default
-    // this would report a timeout; with no timer it reports a normal success.
-    const bin = path.join(root, "slow-ok-claude.sh");
-    fs.writeFileSync(
-      bin,
-      [
-        "#!/bin/sh",
-        `echo '{"type":"system","session_id":"sess-unlimited"}'`,
-        "sleep 2",
-        `echo '{"type":"result","is_error":false,"subtype":"success","result":"delivered","session_id":"sess-unlimited"}'`,
-        "exit 0",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    fs.chmodSync(bin, 0o755);
-    process.env.PIEVO_CLAUDE_BIN = bin;
+  test("accepts a positive user override", () => {
+    expect(resolveExecTimeoutMs("7200000")).toBe(2 * 60 * 60 * 1000);
+  });
 
-    const rep = await run(delivery({ loop: { ...delivery().loop, workflow: null } }), "https://unused.test", []);
-    expect(rep).toBeTruthy();
-    expect(rep.ok).toBe(true);
-    expect(rep.error).toBeUndefined();
-  }, 30000);
+  test.each(["", "0", "-1", "not-a-number"])("falls back to 12 hours for %j", (value) => {
+    expect(resolveExecTimeoutMs(value)).toBe(12 * 60 * 60 * 1000);
+  });
 });
 
 /** A fake claude that records EVERY arg it was handed (one per line) to
