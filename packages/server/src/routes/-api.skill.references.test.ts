@@ -37,6 +37,15 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('pievo new')
   })
 
+  test('update.md gives evidence-first terminal-report diagnostics', async () => {
+    const body = flat(await (await call('/api/skill/references/update.md')).text())
+    expect(body).toContain('<pievo-cli> show')
+    expect(body).toContain('<pievo-cli> log')
+    expect(body).toContain('npm install -g @kky42/pievo@latest')
+    expect(body).toContain('pievo daemon restart')
+    expect(body).toContain('only when those diagnostics point to a workflow/config problem')
+  })
+
   test('create.md carries the §2 propose → confirm → build guidance', async () => {
     const body = flat(await (await call('/api/skill/references/create.md')).text())
     // The new constraint: never silently guess cadence/output — propose, confirm, then build.

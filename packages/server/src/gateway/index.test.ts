@@ -32,7 +32,7 @@ afterAll(() => {
 });
 
 beforeEach(async () => {
-  await (db.client as any).exec("DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
+  await (db.client as any).exec("DELETE FROM terminal_report_incidents; DELETE FROM run_report_receipts; DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
 /** The core gateway MERGED with the CLI verb surface (`agentApi`/`cli` moved to
@@ -276,13 +276,15 @@ test("report persists normalized terminal telemetry without cost or transcript f
   expect(stored && "transcript" in stored).toBe(false);
 });
 
-test("report rejects a runId that does not match its lease", async () => {
+test("report terminalizes the leased run when payload runId does not match", async () => {
   const { loop, machine, run } = await seededLoop();
   const token = await tokens.registerRunLease({
     runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false,
   });
-  expect((await gateway().report(token, { runId: "run-other", ok: true })).status).toBe(403);
-  expect((await store.getRun(run.id))?.phase).toBe("running");
+  const response = await gateway().report(token, { runId: "run-other", ok: true });
+  expect(response).toMatchObject({ status: 200, body: { accepted: false, code: "REPORT_INVALID", disposition: "run-error" } });
+  expect(await store.getRun(run.id)).toMatchObject({ phase: "error", reportIncident: { code: "REPORT_INVALID" } });
+  expect(await tokens.resolveLease(token)).toBeUndefined();
 });
 
 test("report syncs the machine's task file content onto the loop", async () => {
@@ -2535,7 +2537,7 @@ test("per-verb --help (device credential): owner verbs print full syntax + templ
   expect(edit.status).toBe(200);
   const et = (edit.body as { text: string }).text;
   expect(et).toContain("verb: edit");
-  expect(et).toContain("edit <id> --json '<patch>'");
+  expect(et).toContain("edit <id> [--json '<patch>']");
   // The owner surface lists the editable envelope keys (discoverable without failing).
   expect(et).toContain("cron");
   expect(et).toContain("taskFile");
@@ -2879,6 +2881,25 @@ test("show: derived aggregates (nextFire/classification/runs) accompany the enve
   // Closed loop (has a goal).
   expect(text).toContain("classification: closed (has goal");
   expect(text).toMatch(/^runs: \d+ total/m);
+});
+
+test("show derives pause/incident diagnostics without changing the editable JSON envelope", async () => {
+  const { deviceToken, loop, run } = await seededCli();
+  const incident = {
+    at: new Date().toISOString(), code: "REPORT_INVALID" as const, reason: "Terminal report rejected.",
+    issues: ["invalid result"], reportId: "report-cli", payloadDigest: "digest",
+    faultDomain: "compatibility" as const, recommendedAction: "Upgrade and restart the daemon.",
+  };
+  await store.updateRun(run.id, { phase: "error", outcome: "error", error: incident.reason, reportIncident: incident });
+  await store.updateLoop(loop.id, { enabled: false, pauseCause: { kind: "failure-streak", at: incident.at, runId: run.id, count: 3 } });
+
+  const text = textOf(await gateway().cli(deviceToken, ["show", loop.id]));
+  expect(text).toContain(`pauseCause: "failure-streak (run ${run.id}, count 3)"`);
+  expect(text).toContain("reportIncident:");
+  expect(text).toContain("REPORT_INVALID");
+  const env = JSON.parse(textOf(await gateway().cli(deviceToken, ["show", loop.id, "--json"])));
+  expect(env).not.toHaveProperty("pauseCause");
+  expect(env).not.toHaveProperty("reportIncident");
 });
 
 test("show --json [R]: the run credential emits the same envelope, scoped to its own loop", async () => {

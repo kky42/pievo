@@ -280,6 +280,20 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
             </Card>
           ) : run.running ? <RunningState run={run} /> : null}
 
+          {run.reportIncident && (
+            <Card label="Terminal report rejected">
+              <div className="space-y-3 text-body text-primary">
+                <div className="font-medium">{run.reportIncident.code}</div>
+                <div className="break-words text-secondary">{run.reportIncident.reason}</div>
+                <dl className="grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-label">
+                  <dt className="text-secondary">Fault domain</dt><dd>{run.reportIncident.faultDomain}</dd>
+                  <dt className="text-secondary">Recommended action</dt><dd className="break-words">{run.reportIncident.recommendedAction}</dd>
+                  <dt className="text-secondary">Report ID</dt><dd className="break-all font-mono">{run.reportIncident.reportId}</dd>
+                </dl>
+              </div>
+            </Card>
+          )}
+
           {run.message && (
             <Card label="Report">
               <div className="whitespace-pre-wrap break-words rounded-control border border-hairline bg-raised px-4 py-3.5 text-body leading-relaxed text-primary">

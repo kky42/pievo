@@ -45,6 +45,7 @@ export function toRunSummary(r: Run): RunSummary {
     state: (r.state as RunSummary["state"]) ?? null,
     control: (r.control as RunSummary["control"]) ?? null,
     sessionId: r.sessionId ?? null,
+    reportIncident: r.reportIncident ?? null,
   };
 }
 
@@ -86,6 +87,7 @@ export async function toJobSummary(loop: Loop): Promise<JobSummary> {
     completedAt: loop.completedAt ?? null,
     completionReason: loop.completionReason ?? null,
     deleteRequestedAt: loop.deleteRequestedAt ?? null,
+    pauseCause: loop.pauseCause ?? null,
     runs,
     runCount: await store.countRuns(loop.id),
   };
@@ -103,6 +105,7 @@ function toJobFull(loop: Loop): JobFull {
     goal: loop.goal ?? null,
     completedAt: loop.completedAt ?? null,
     completionReason: loop.completionReason ?? null,
+    pauseCause: loop.pauseCause ?? null,
     taskFile: loop.taskFile ?? undefined,
     workflow: loop.workflow ?? undefined,
     stateSchema: loop.stateSchema ?? undefined,

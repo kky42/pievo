@@ -36,6 +36,8 @@ export function LoopCard({
     () => (older.length ? mergeRuns(job.runs ?? [], older) : (job.runs ?? [])),
     [job.runs, older],
   )
+  const newestRun = runs.at(-1)
+  const latestIncidentRun = newestRun?.reportIncident ? newestRun : undefined
 
   const loadMore = async (): Promise<number> => {
     const oldest = runs[0]
@@ -52,7 +54,7 @@ export function LoopCard({
     <div
       onClick={() => onOpen(job.id)}
       className={`mb-[18px] cursor-pointer rounded-card border border-hairline bg-surface px-[26px] pb-5 pt-[22px] shadow-card transition-colors hover:border-wire ${
-        en ? '' : 'opacity-60'
+        en || latestIncidentRun?.reportIncident || job.pauseCause?.kind === 'failure-streak' ? '' : 'opacity-60'
       }`}
       style={{ animation: 'fadeIn .25s cubic-bezier(0.25,0.1,0.25,1) both' }}
     >
@@ -70,7 +72,7 @@ export function LoopCard({
         {lifecycle === 'stopping' ? (
           <Pill tone="running" dot="pulse">Stopping</Pill>
         ) : lifecycle === 'paused-finishing' ? (
-          <Pill>Paused · current run finishing</Pill>
+          <Pill>{job.pauseCause?.kind === 'owner' ? 'Paused by owner · current run finishing' : 'Paused · current run finishing'}</Pill>
         ) : lifecycle === 'deleting' ? (
           <Pill>Deleting</Pill>
         ) : job.running ? (
@@ -89,7 +91,9 @@ export function LoopCard({
             Goal
           </Pill>
         )}
-        {!completed && lifecycle === 'paused' && <Pill>Paused</Pill>}
+        {!completed && lifecycle === 'paused' && (
+          <Pill>{job.pauseCause?.kind === 'failure-streak' ? 'Paused automatically' : job.pauseCause?.kind === 'owner' ? 'Paused by owner' : 'Paused'}</Pill>
+        )}
         <div className="ml-auto min-w-0 text-right text-meta text-secondary">
           <div className="whitespace-nowrap">
             <span className="text-primary" title={job.cron}>
@@ -121,6 +125,12 @@ export function LoopCard({
           </span>
         )}
       </div>
+
+      {latestIncidentRun?.reportIncident && (
+        <div className="mt-1.5 text-label text-secondary">
+          {latestIncidentRun.outcome === 'error' ? 'Last run failed · Terminal report rejected' : 'Last run telemetry warning · Terminal report rejected'}
+        </div>
+      )}
 
       {completed && (
         <div className="mt-1.5 text-label text-success">

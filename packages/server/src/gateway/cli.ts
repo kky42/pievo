@@ -20,7 +20,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 
 import * as store from "../db/store.js";
-import type { Loop, NewLoop, NewRun, NotifyPolicy, RunRole, RunStatus, StateField } from "../db/schema.js";
+import type { Loop, NewLoop, NewRun, NotifyPolicy, Run, RunRole, RunStatus, StateField } from "../db/schema.js";
 import { machinePresence, type MachinePresence } from "../lib/machinePresence.js";
 import { logger } from "../logger.js";
 import { selfCronFloorMinutes, selfRescheduleFloorMinutes } from "../env.js";
@@ -1242,7 +1242,7 @@ function renderShowText(
   loop: Loop,
   env: Record<string, unknown>,
   totalRuns: number,
-  lastExec: { phase: string; outcome: string | null; status: string | null; ts: string } | null,
+  lastExec: Pick<Run, "phase" | "outcome" | "status" | "ts" | "error" | "reportIncident"> | null,
   opts: { allowControl?: boolean; canFinish?: boolean; full?: boolean } = {},
 ): string {
   const full = opts.full === true;
@@ -1294,6 +1294,14 @@ function renderShowText(
     kvLine("nextFire", nextFireDisplay(loop)),
     `classification: ${classification}`,
     `runs: ${runsTally}`,
+    !loop.enabled && !loop.completedAt
+      ? kvLine("pauseCause", loop.pauseCause?.kind === "failure-streak"
+          ? `failure-streak (run ${loop.pauseCause.runId}, count ${loop.pauseCause.count})`
+          : loop.pauseCause?.kind === "owner" ? "owner" : "unknown")
+      : null,
+    lastExec?.reportIncident
+      ? kvLine("reportIncident", `${lastExec.reportIncident.code} · ${lastExec.reportIncident.faultDomain} · ${lastExec.reportIncident.reason}`)
+      : null,
     // EFFECTIVE run capabilities (camelCase, replacing the old self-schedule/
     // self-finish display keys): whether this run may self-reschedule, and whether it
     // may declare the goal met (exec-on-closed-loop).

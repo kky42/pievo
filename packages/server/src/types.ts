@@ -37,6 +37,27 @@ export function coerceCodingAgent(value: unknown): CodingAgent | null {
   return typeof value === 'string' && (CODING_AGENTS as readonly string[]).includes(value) ? (value as CodingAgent) : null
 }
 
+export type ReportIncidentCode = 'REPORT_INVALID' | 'REPORT_CONFLICT'
+export type ReportIncidentFaultDomain = 'daemon' | 'compatibility' | 'internal'
+export type ReportIncidentDisposition = 'run-error' | 'telemetry-rejected'
+
+/** Durable, client-safe diagnosis for a terminal report the server rejected. */
+export interface ReportIncident {
+  at: string
+  code: ReportIncidentCode
+  reason: string
+  issues: string[]
+  reportId: string
+  payloadDigest: string
+  faultDomain: ReportIncidentFaultDomain
+  recommendedAction: string
+}
+
+/** Why a non-completed loop is paused. This annotates lifecycle; it is not a new state. */
+export type PauseCause =
+  | { kind: 'owner'; at: string }
+  | { kind: 'failure-streak'; at: string; runId: string; count: number }
+
 export type RunOutcome = 'error' | 'silent' | 'exec' | 'agent' | 'direct' | string
 export type RunStatus =
   | 'nothing-new'
@@ -82,6 +103,7 @@ export interface RunSummary {
   state: Record<string, Json> | null
   control: Array<{ command: string; args: Json; result: string; detail?: string }> | null
   sessionId: string | null
+  reportIncident?: ReportIncident | null
 }
 
 /** A push channel for the Notifications panel + the loop channel picker. Secrets
@@ -152,6 +174,7 @@ export interface JobSummary {
   completionReason?: string | null
   /** Durable Stop-before-delete marker. Non-null means server deletion is waiting. */
   deleteRequestedAt?: string | null
+  pauseCause?: PauseCause | null
   /** The newest page of runs (chronological, capped) — the card seeds its
    *  timeline from this and lazy-loads older pages via loadOlderRuns. */
   runs: RunSummary[]
@@ -181,6 +204,7 @@ export interface JobFull {
   /** Terminal stamps (set when the loop's goal is declared met). */
   completedAt?: string | null
   completionReason?: string | null
+  pauseCause?: PauseCause | null
   taskFile?: string
   workflow?: string
   stateSchema?: StateField[]

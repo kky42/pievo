@@ -477,6 +477,8 @@ export function LoopDetailView({ id }: { id: string }) {
   const agentLabel = AGENT_LABEL[job.agent ?? 'claude-code'] ?? job.agent ?? 'Claude Code'
   const modelLabel = job.exec?.model?.trim() || 'default'
   const reasoningEffortLabel = job.exec?.reasoningEffort?.trim() || 'default'
+  const newestRun = runs.at(-1)
+  const latestIncidentRun = newestRun?.reportIncident ? newestRun : undefined
   const metaDot = <span className="text-wire">·</span>
 
   return (
@@ -551,6 +553,13 @@ export function LoopDetailView({ id }: { id: string }) {
               <div className="mt-2 text-body leading-snug text-success">
                 Completed{s.completedAt ? ` · ${fmt(s.completedAt)}` : ''}
                 {s.completionReason && <span className="text-secondary"> - {s.completionReason}</span>}
+              </div>
+            )}
+            {latestIncidentRun?.reportIncident && (
+              <div className="mt-2 text-body leading-snug text-secondary">
+                {latestIncidentRun.outcome === 'error'
+                  ? 'Last run failed · Terminal report rejected'
+                  : 'Last run telemetry warning · Terminal report rejected'}
               </div>
             )}
           </div>

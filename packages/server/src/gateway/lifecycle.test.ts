@@ -23,13 +23,13 @@ beforeAll(async () => {
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 beforeEach(async () => {
-  await (db.client as any).exec("DELETE FROM run_report_receipts; DELETE FROM run_leases; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
+  await (db.client as any).exec("DELETE FROM terminal_report_incidents; DELETE FROM run_report_receipts; DELETE FROM run_leases; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
-function gateway() {
+function gateway(notify?: (loop: any, message: string) => Promise<void>) {
   return new gatewayMod.MachineGateway({
     advanceDueSchedules(): never[] { return []; }, enqueueInitialExec(): void {}, addLoop(): void {}, removeLoop(): void {}, runNow(): void {},
-  } as any);
+  } as any, undefined, notify);
 }
 
 async function seedMachine(id = "m-life") {
@@ -68,11 +68,22 @@ test("pause leaves a running run and lease intact, preserving its queued owner f
   const paused = await store.pauseLoop(loop.id);
   const again = await store.pauseLoop(loop.id);
 
-  expect(paused?.enabled).toBe(false);
-  expect(again?.enabled).toBe(false);
+  expect(paused).toMatchObject({ enabled: false, pauseCause: { kind: "owner" } });
+  expect(again).toMatchObject({ enabled: false, pauseCause: { kind: "owner" } });
   expect((await store.getRun(running.id))?.phase).toBe("running");
   expect((await tokens.resolveLease(token))?.state).toBe("active");
   expect(await store.claimReadyRunForMachine(machine.id)).toBeUndefined();
+});
+
+test("start clears an owner pause cause and completion clears pause annotations", async () => {
+  const machine = await seedMachine();
+  const loop = await seedLoop(machine.id);
+  await store.pauseLoop(loop.id);
+  expect((await store.getLoop(loop.id))?.pauseCause).toMatchObject({ kind: "owner" });
+  await store.startLoop(loop.id);
+  expect((await store.getLoop(loop.id))?.pauseCause).toBeNull();
+  await store.updateLoop(loop.id, { goal: "done", completedAt: new Date().toISOString(), completionReason: "done" });
+  expect(await store.getLoop(loop.id)).toMatchObject({ enabled: false, pauseCause: null });
 });
 
 test("paused loops claim owner work by role priority, stay paused after exec, and block system work", async () => {
@@ -114,7 +125,7 @@ test("stop atomically pauses, clears facts, cancels all pending work, and only r
   const repeated = await store.stopLoop(loop.id);
   const rows = await store.listRuns(loop.id);
 
-  expect(stopped?.loop.enabled).toBe(false);
+  expect(stopped?.loop).toMatchObject({ enabled: false, pauseCause: { kind: "owner" } });
   expect(stopped?.loop.nextRunAt).toBeNull();
   expect(stopped?.loop.nextCadenceAt).toBeNull();
   expect(rows.filter((r) => r.phase === "pending")).toHaveLength(0);
@@ -181,30 +192,63 @@ test("protocol v2 is explicit, single-flight, and repeats cancellation", async (
   expect(blocked.body).toMatchObject({ delivery: null, blockedRunId: run.id });
 });
 
-test("protocol-v2 terminal reports require valid reportId and matching runId before mutation", async () => {
+test("report authentication precedes invalid handling; uncorrelatable ids stay nonterminal", async () => {
   const machine = await seedMachine();
   const loop = await seedLoop(machine.id);
   const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
   const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false });
   const gw = gateway();
 
-  expect((await gw.report(token, { runId: run.id, result: "success" })).status).toBe(400);
-  expect(await gw.report(token, { reportId: "not-a-uuid", runId: run.id, result: "success" })).toMatchObject({ status: 422, body: { code: "REPORT_INVALID", reportId: "not-a-uuid" } });
-  expect(await gw.report(token, { reportId: "018f47a2-9c2b-7d11-8f52-123456789aa1", result: "success" })).toMatchObject({ status: 422, body: { code: "REPORT_INVALID", reportId: "018f47a2-9c2b-7d11-8f52-123456789aa1" } });
-  expect((await gw.report(token, { reportId: "018f47a2-9c2b-7d11-8f52-123456789aa2", runId: "other", result: "success" })).status).toBe(403);
-  for (const [reportId, invalid] of [
-    ["018f47a2-9c2b-7d11-8f52-123456789aa8", { result: "bogus" }],
-    ["018f47a2-9c2b-7d11-8f52-123456789aa9", { result: "success", durationMs: -1 }],
-    ["018f47a2-9c2b-7d11-8f52-123456789aaa", { result: "success", exitCode: 1.5 }],
-  ] as const) {
-    expect(await gw.report(token, { reportId, runId: run.id, ...invalid } as any)).toMatchObject({
-      status: 422,
-      body: { code: "REPORT_INVALID", reportId },
-    });
-  }
+  expect((await gw.report("rk_forged", { reportId: "not-a-uuid", runId: run.id, result: "success" })).status).toBe(401);
+  for (const body of [
+    { runId: run.id, result: "success" },
+    { reportId: 42, runId: run.id, result: "success" },
+    { reportId: `x${"a".repeat(200)}`, runId: run.id, result: "success" },
+    { reportId: "bad\0id", runId: run.id, result: "success" },
+  ]) expect((await gw.report(token, body as any)).status).toBe(400);
+
   expect((await store.getRun(run.id))?.phase).toBe("running");
   expect((await tokens.resolveLease(token))?.state).toBe("active");
-  expect(await store.countReportReceipts()).toBe(0);
+  expect(await store.countTerminalReportIncidents()).toBe(0);
+});
+
+test("active semantic-invalid report becomes a stable 2xx terminal incident and replays after deletion", async () => {
+  const machine = await seedMachine();
+  const loop = await seedLoop(machine.id);
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false });
+  const payload = { reportId: "not-a-uuid", runId: run.id, result: "success" as const, cursor: { untrusted: true }, taskFileContent: "do not persist" };
+
+  const first = await gateway().report(token, payload);
+  expect(first).toMatchObject({ status: 200, body: { ok: true, accepted: false, terminal: true, reportId: payload.reportId, code: "REPORT_INVALID", disposition: "run-error", payloadDigest: tokens.sha256(JSON.stringify(payload)) } });
+  expect(await store.getRun(run.id)).toMatchObject({ phase: "error", reportIncident: { code: "REPORT_INVALID", reportId: payload.reportId } });
+  expect((await store.getLoop(loop.id))?.state).toBeNull();
+  expect((await store.getLoop(loop.id))?.taskFileContent).toBeNull();
+  expect(await tokens.resolveLease(token)).toBeUndefined();
+  expect(await store.countTerminalReportIncidents()).toBe(1);
+
+  await store.forceDeleteLoop(loop.id);
+  expect(await gateway().report(token, payload)).toEqual(first);
+  expect(await store.countTerminalReportIncidents()).toBe(1);
+});
+
+test.each([
+  ["missing runId", { result: "success" }, "runId is required"],
+  ["mismatched runId", { runId: "another-run", result: "success" }, "runId does not match"],
+  ["invalid result", { result: "bogus" }, "result must be"],
+  ["invalid duration", { result: "success", durationMs: -1 }, "durationMs must be"],
+  ["invalid exit code", { result: "success", exitCode: 1.5 }, "exitCode must be"],
+] as const)("semantic invalid: %s is terminally acknowledged", async (_label, invalid, issue) => {
+  const machine = await seedMachine(`m-${_label.replaceAll(" ", "-")}`);
+  const loop = await seedLoop(machine.id);
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false });
+  const reportId = `018f47a2-9c2b-7d11-8f52-${tokens.sha256(_label).slice(0, 12)}`;
+  const result = await gateway().report(token, { reportId, ...invalid } as any);
+  expect(result).toMatchObject({ status: 200, body: { accepted: false, terminal: true, code: "REPORT_INVALID", disposition: "run-error" } });
+  expect((result.body as any).issues.join(" ")).toContain(issue);
+  expect((await store.getRun(run.id))?.phase).toBe("error");
+  expect(await tokens.resolveLease(token)).toBeUndefined();
 });
 
 test("a committed receipt replays before newer semantic validation", async () => {
@@ -222,7 +266,25 @@ test("a committed receipt replays before newer semantic validation", async () =>
   });
 
   expect(await gateway().report("rk_no-longer-needed", payload as any)).toEqual({ status: 200, body: { ok: true, reportId } });
-  expect(await gateway().report("rk_no-longer-needed", { ...payload, result: "different" } as any)).toMatchObject({ status: 409, body: { code: "REPORT_CONFLICT", reportId } });
+  expect(await gateway().report("rk_no-longer-needed", { ...payload, result: "different" } as any)).toEqual({ status: 200, body: { ok: true, reportId } });
+});
+
+test("a live lease cannot replay another run's receipt by lying about body.runId", async () => {
+  const aMachine = await seedMachine("m-evidence-a");
+  const bMachine = await seedMachine("m-evidence-b");
+  const aLoop = await seedLoop(aMachine.id);
+  const bLoop = await seedLoop(bMachine.id);
+  const a = await store.addRun({ loopId: aLoop.id, userId: "u1", machineId: aMachine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const b = await store.addRun({ loopId: bLoop.id, userId: "u1", machineId: bMachine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const aToken = await tokens.registerRunLease({ runId: a.id, loopId: aLoop.id, machineId: aMachine.id, role: "exec", allowControl: false });
+  const bToken = await tokens.registerRunLease({ runId: b.id, loopId: bLoop.id, machineId: bMachine.id, role: "exec", allowControl: false });
+  const reportId = "018f47a2-9c2b-7d11-8f52-123456789b09";
+  expect((await gateway().report(aToken, { reportId, runId: a.id, result: "success" })).status).toBe(200);
+
+  const response = await gateway().report(bToken, { reportId, runId: a.id, result: "success" });
+  expect(response).toMatchObject({ status: 200, body: { accepted: false, code: "REPORT_CONFLICT", disposition: "run-error" } });
+  expect(await store.getRun(b.id)).toMatchObject({ phase: "error", reportIncident: { code: "REPORT_CONFLICT" } });
+  expect(await tokens.resolveLease(bToken)).toBeUndefined();
 });
 
 test("terminal reports are idempotent, conflict-safe, and preserve actual post-cancel result", async () => {
@@ -241,7 +303,7 @@ test("terminal reports are idempotent, conflict-safe, and preserve actual post-c
 
   expect(first.status).toBe(200);
   expect(duplicate).toEqual(first);
-  expect(conflict).toMatchObject({ status: 409, body: { code: "REPORT_CONFLICT", reportId } });
+  expect(conflict).toEqual(first);
   expect((await store.getRun(run.id))?.phase).toBe("done");
   expect(await store.countReportReceipts()).toBe(1);
 });
@@ -263,15 +325,88 @@ test("same reportId is bound to runId and concurrent cross-loop reports finalize
   ]);
   expect(settled.every((result) => result.status === "fulfilled")).toBe(true);
   const responses = settled.map((result) => (result as PromiseFulfilledResult<any>).value);
-  expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+  expect(responses.map((response) => response.status).sort()).toEqual([200, 200]);
+  const conflict = responses.find((response) => (response.body as any).code === "REPORT_CONFLICT");
+  expect(conflict).toMatchObject({ body: { accepted: false, terminal: true, disposition: "run-error" } });
   const finalRuns = await Promise.all([store.getRun(a.id), store.getRun(b.id)]);
   expect(finalRuns.filter((run) => run?.phase === "done")).toHaveLength(1);
-  expect(finalRuns.filter((run) => run?.phase === "running")).toHaveLength(1);
+  expect(finalRuns.filter((run) => run?.phase === "error" && run.reportIncident?.code === "REPORT_CONFLICT")).toHaveLength(1);
   expect(await store.countReportReceipts()).toBe(1);
-  const receipt = await store.getReportReceipt(reportId);
-  expect([a.id, b.id]).toContain(receipt?.runId);
-  const losingToken = receipt?.runId === a.id ? bToken : aToken;
-  expect((await tokens.resolveLease(losingToken))?.state).toBe("active");
+  expect(await store.countTerminalReportIncidents()).toBe(1);
+  expect(await tokens.resolveLease(aToken)).toBeUndefined();
+  expect(await tokens.resolveLease(bToken)).toBeUndefined();
+});
+
+test("semantic-invalid terminal-grace telemetry preserves the completed outcome", async () => {
+  const machine = await seedMachine();
+  const loop = await store.createLoop({ userId: "u1", machineId: machine.id, name: "closed", cron: "0 0 1 1 *", goal: "done", enabled: true });
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false, canFinish: true });
+  const finished = await store.finishLoopRun(loop.id, run.id, tokens.sha256(token), { ts: new Date().toISOString(), reason: "goal met" });
+  expect(finished.state).toBe("finished");
+  const completedAt = (await store.getLoop(loop.id))!.completedAt;
+
+  const result = await gateway().report(token, {
+    reportId: "018f47a2-9c2b-7d11-8f52-123456789b01",
+    runId: run.id,
+    result: "success",
+    durationMs: -1,
+  });
+  expect(result).toMatchObject({ status: 200, body: { accepted: false, disposition: "telemetry-rejected" } });
+  expect(await store.getRun(run.id)).toMatchObject({ phase: "done", reportIncident: { code: "REPORT_INVALID" } });
+  expect((await store.getLoop(loop.id))?.completedAt).toBe(completedAt);
+  expect((await store.getLoop(loop.id))?.completionReason).toBe("goal met");
+  expect(await tokens.resolveLease(token)).toBeUndefined();
+});
+
+test("invalid terminal-grace telemetry preserves a canceled outcome", async () => {
+  const machine = await seedMachine("m-canceled-telemetry");
+  const loop = await seedLoop(machine.id);
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "canceled", outcome: "skipped", role: "exec", ts: new Date().toISOString() });
+  const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false });
+  await tokens.terminalizeLease(run.id);
+
+  const response = await gateway().report(token, {
+    reportId: "018f47a2-9c2b-7d11-8f52-123456789b11",
+    runId: run.id,
+    result: "success",
+    durationMs: -1,
+  });
+  expect(response).toMatchObject({ status: 200, body: { accepted: false, disposition: "telemetry-rejected" } });
+  expect(await store.getRun(run.id)).toMatchObject({ phase: "canceled", reportIncident: { code: "REPORT_INVALID" } });
+  expect(await tokens.resolveLease(token)).toBeUndefined();
+});
+
+test("invalid exec participates in streak/autopause, preserves owner queue, and notifies only on first handling", async () => {
+  const machine = await seedMachine();
+  const loop = await seedLoop(machine.id);
+  const base = Date.now() - 60_000;
+  for (let i = 0; i < 2; i++) await store.addRun({
+    loopId: loop.id, userId: "u1", machineId: machine.id, phase: "error", outcome: "error", role: "exec", ts: new Date(base + i).toISOString(),
+  });
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
+  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });
+  await store.enqueueRun(loop.id, { role: "edit", requestedBy: "owner", requestText: "keep me" });
+  const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false });
+  const sent: string[] = [];
+  const gw = gateway(async (_loop, message) => { sent.push(message); });
+  const payload = { reportId: "018f47a2-9c2b-7d11-8f52-123456789b02", runId: run.id, result: "bogus" as any };
+
+  const first = await gw.report(token, payload);
+  await Promise.resolve();
+  expect(first.status).toBe(200);
+  expect(await store.getLoop(loop.id)).toMatchObject({ enabled: false, pauseCause: { kind: "failure-streak", runId: run.id, count: 3 } });
+  await store.updateLoop(loop.id, { enabled: false });
+  expect(await store.getLoop(loop.id)).toMatchObject({ pauseCause: { kind: "failure-streak", runId: run.id, count: 3 } });
+  const queued = await store.openRunsForLoop(loop.id);
+  expect(queued.find((item) => item.role === "exec")).toBeUndefined();
+  expect(queued.find((item) => item.role === "edit" && item.requestedBy === "owner")).toBeTruthy();
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toMatch(/paused automatically/i);
+
+  expect(await gw.report(token, payload)).toEqual(first);
+  await Promise.resolve();
+  expect(sent).toHaveLength(1);
 });
 
 test("delete completes after terminal report and leaves its durable receipt", async () => {
@@ -326,6 +461,26 @@ test("force-delete winning after report pre-resolution persists 410 and consumes
   expect(await tokens.resolveLease(token)).toBeUndefined();
   expect((await store.getReportReceipt(reportId))?.ackStatus).toBe(410);
   vi.restoreAllMocks();
+});
+
+test("a retired lease with a foreign reportId gets a stable incident ACK", async () => {
+  const aMachine = await seedMachine("m-retired-conflict-a");
+  const bMachine = await seedMachine("m-retired-conflict-b");
+  const aLoop = await seedLoop(aMachine.id);
+  const bLoop = await seedLoop(bMachine.id);
+  const a = await store.addRun({ loopId: aLoop.id, userId: "u1", machineId: aMachine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const b = await store.addRun({ loopId: bLoop.id, userId: "u1", machineId: bMachine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const aToken = await tokens.registerRunLease({ runId: a.id, loopId: aLoop.id, machineId: aMachine.id, role: "exec", allowControl: false });
+  const bToken = await tokens.registerRunLease({ runId: b.id, loopId: bLoop.id, machineId: bMachine.id, role: "exec", allowControl: false });
+  const reportId = "018f47a2-9c2b-7d11-8f52-123456789b10";
+  expect((await gateway().report(aToken, { reportId, runId: a.id, result: "success" })).status).toBe(200);
+  expect(await store.forceDeleteLoop(bLoop.id)).toBe(true);
+  const payload = { reportId, runId: b.id, result: "success" as const };
+
+  const first = await gateway().report(bToken, payload);
+  expect(first).toMatchObject({ status: 200, body: { accepted: false, code: "REPORT_CONFLICT", disposition: "telemetry-rejected" } });
+  expect(await tokens.resolveLease(bToken)).toBeUndefined();
+  expect(await gateway().report(bToken, payload)).toEqual(first);
 });
 
 test("finish crash leaves bounded grace, then unblocks the machine and rejects late enrichment definitively", async () => {

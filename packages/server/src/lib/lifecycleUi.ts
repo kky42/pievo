@@ -36,8 +36,8 @@ export function lifecycleDisplay(detail: JobDetail): string {
     case 'completed': return 'Completed'
     case 'deleting': return 'Deleting'
     case 'stopping': return 'Stopping'
-    case 'paused-finishing': return 'Paused · current run finishing'
-    case 'paused': return 'Paused'
+    case 'paused-finishing': return detail.summary.pauseCause?.kind === 'owner' ? 'Paused by owner · current run finishing' : 'Paused · current run finishing'
+    case 'paused': return detail.summary.pauseCause?.kind === 'failure-streak' ? 'Paused automatically' : detail.summary.pauseCause?.kind === 'owner' ? 'Paused by owner' : 'Paused'
     case 'active': return 'Active'
   }
 }

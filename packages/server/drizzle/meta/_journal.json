@@ -71,6 +71,13 @@
       "when": 1784567223053,
       "tag": "0009_ordinary_electro",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784614802754,
+      "tag": "0010_workable_rage",
+      "breakpoints": true
     }
   ]
 }

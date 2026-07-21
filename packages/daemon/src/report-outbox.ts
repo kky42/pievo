@@ -129,7 +129,7 @@ export async function sendTerminalReport(serverUrl: string, report: PersistedRep
       headers: { Authorization: `Bearer ${report.runToken}`, "Content-Type": "application/json" },
       body: report.payloadJson,
     });
-    let body: { reportId?: unknown; code?: unknown; issues?: unknown } = {};
+    let body: { reportId?: unknown; code?: unknown; issues?: unknown; accepted?: unknown; payloadDigest?: unknown; disposition?: unknown } = {};
     try { body = await res.json() as typeof body; } catch { /* malformed is ambiguous */ }
     if (body.reportId === report.reportId && res.status === 409 && body.code === "REPORT_CONFLICT") {
       return { kind: "conflict", reportId: report.reportId, error: "server rejected a different payload for this reportId" };
@@ -139,7 +139,16 @@ export async function sendTerminalReport(serverUrl: string, report: PersistedRep
       return { kind: "invalid", reportId: report.reportId, error: issues };
     }
     if (body.reportId === report.reportId && res.status === 410 && body.code === "RETIRED") return { kind: "retired", reportId: report.reportId };
-    if (res.ok && body.reportId === report.reportId) return { kind: "ack", reportId: report.reportId };
+    if (res.ok && body.reportId === report.reportId) {
+      // A handled rejection is a terminal transport ACK, not acceptance of the
+      // claimed outcome. Bind it to the exact durable bytes; tolerate additive
+      // response fields, but never clear the row for another payload/disposition.
+      if (body.accepted === false && (
+        body.payloadDigest !== report.payloadDigest ||
+        (body.disposition !== "run-error" && body.disposition !== "telemetry-rejected")
+      )) return { kind: "retry", error: "ambiguous handled-report acknowledgement" };
+      return { kind: "ack", reportId: report.reportId };
+    }
     return { kind: "retry", error: `ambiguous report response (${res.status})` };
   } catch (err) {
     return { kind: "retry", error: err instanceof Error ? err.message : String(err) };

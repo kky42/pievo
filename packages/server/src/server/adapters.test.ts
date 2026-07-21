@@ -137,6 +137,27 @@ test("lifecycle request markers and daemon protocol surface at the Dashboard bou
   expect(detail.machine.daemonProtocol).toBe(2);
 });
 
+test("report incidents and pause causes cross the client adapter boundary", async () => {
+  const loop = await seed("claude-code");
+  const paused = await store.pauseLoop(loop.id);
+  const incident = {
+    at: "2026-08-01T00:00:00.000Z",
+    code: "REPORT_INVALID" as const,
+    reason: "Terminal report rejected.",
+    issues: ["durationMs must be non-negative"],
+    reportId: "report-1",
+    payloadDigest: "digest",
+    faultDomain: "compatibility" as const,
+    recommendedAction: "Upgrade and restart the daemon.",
+  };
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: loop.machineId, phase: "error", role: "exec", ts: incident.at, reportIncident: incident });
+
+  const detail = await adapters.toJobDetail(paused!);
+  expect(detail.summary.pauseCause).toMatchObject({ kind: "owner" });
+  expect(detail.job.pauseCause).toMatchObject({ kind: "owner" });
+  expect(detail.runs.find((item) => item.id === run.id)?.reportIncident).toEqual(incident);
+});
+
 test("a workflow loop keeps the workflow kind regardless of recorded agent", async () => {
   await store.createMachine({ id: "m-a", userId: "u1", name: "M", tokenHash: "h", online: true });
   const loop = await store.createLoop({

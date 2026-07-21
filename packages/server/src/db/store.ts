@@ -26,6 +26,7 @@ import {
   runSnapshots,
   runLeases,
   runReportReceipts,
+  terminalReportIncidents,
   type ArtifactFile,
   type ArtifactMeta,
   type ControlAction,
@@ -46,6 +47,7 @@ import {
   type TeamMember,
   type TeamInvite,
 } from "./schema.js";
+import type { ReportIncident, ReportIncidentDisposition } from "../types.js";
 
 // ---- coercion helpers (carried from c0 store.ts) ----
 
@@ -144,6 +146,7 @@ export async function createLoop(input: Omit<NewLoop, "id" | "createdAt" | "upda
   const row: NewLoop = {
     ...input,
     enabled,
+    pauseCause: input.completedAt ? null : (input.pauseCause ?? (!enabled ? { kind: "owner", at: ts } : null)),
     nextRunAt: enabled ? (input.nextRunAt ?? null) : null,
     nextCadenceAt,
     id: input.id ?? newLoopId(),
@@ -179,7 +182,7 @@ async function completeLoopTx(
   const loop = (
     await tx
       .update(loops)
-      .set({ ...patch, enabled: false, nextCadenceAt: null, nextRunAt: null, updatedAt: at })
+      .set({ ...patch, enabled: false, pauseCause: null, nextCadenceAt: null, nextRunAt: null, updatedAt: at })
       .where(eq(loops.id, current.id))
       .returning()
   )[0]!;
@@ -204,9 +207,14 @@ async function updateLoopTx(tx: StoreTx, current: Loop, patch: Partial<NewLoop>,
     extra.completedAt = null;
     extra.completionReason = null;
   }
-  if (patch.enabled === true && patch.completedAt === undefined && current.completedAt) {
-    extra.completedAt = null;
-    extra.completionReason = null;
+  if (patch.enabled === true) {
+    extra.pauseCause = null;
+    if (patch.completedAt === undefined && current.completedAt) {
+      extra.completedAt = null;
+      extra.completionReason = null;
+    }
+  } else if (patch.enabled === false && current.enabled && patch.pauseCause === undefined && !current.completedAt) {
+    extra.pauseCause = { kind: "owner", at };
   }
 
   const completing = patch.completedAt != null;
@@ -328,7 +336,7 @@ export async function startLoop(id: string): Promise<Loop | undefined> {
 export interface StopLoopResult { loop: Loop; running?: Run }
 
 async function stopLoopTx(tx: StoreTx, current: Loop, at: string): Promise<StopLoopResult> {
-  const loop = (await tx.update(loops).set({ enabled: false, nextCadenceAt: null, nextRunAt: null, updatedAt: at })
+  const loop = (await tx.update(loops).set({ enabled: false, pauseCause: { kind: "owner", at }, nextCadenceAt: null, nextRunAt: null, updatedAt: at })
     .where(eq(loops.id, current.id)).returning())[0]!;
   await cancelPendingTx(tx, and(eq(runs.loopId, current.id), eq(runs.phase, "pending")), "canceled - loop stopped before this queued run was claimed", at);
   const running = (await tx.select().from(runs).where(and(eq(runs.loopId, current.id), eq(runs.phase, "running"))).limit(1).for("update"))[0];
@@ -534,7 +542,7 @@ async function terminalLifecycleTx(
       loop = (
         await tx
           .update(loops)
-          .set({ enabled: false, nextCadenceAt: null, nextRunAt: null, updatedAt: terminalAt })
+          .set({ enabled: false, pauseCause: { kind: "failure-streak", at: terminalAt, runId: run.id, count: failureStreak }, nextCadenceAt: null, nextRunAt: null, updatedAt: terminalAt })
           .where(eq(loops.id, currentLoop.id))
           .returning()
       )[0]!;
@@ -597,6 +605,50 @@ export async function getReportReceipt(reportId: string) {
   return (await db.select().from(runReportReceipts).where(eq(runReportReceipts.reportId, reportId)))[0];
 }
 
+/** Deterministic primary key for exact rejected-payload replay evidence. */
+export function terminalIncidentReceiptId(reportId: string, payloadDigest: string): string {
+  return createHash("sha256").update(reportId + payloadDigest).digest("hex");
+}
+
+export async function getTerminalReportIncidents(reportId: string) {
+  return db.select().from(terminalReportIncidents)
+    .where(eq(terminalReportIncidents.reportId, reportId)).orderBy(asc(terminalReportIncidents.createdAt));
+}
+
+export async function getExactTerminalReportIncident(reportId: string, payloadDigest: string) {
+  return (await db.select().from(terminalReportIncidents)
+    .where(eq(terminalReportIncidents.id, terminalIncidentReceiptId(reportId, payloadDigest))))[0];
+}
+
+export async function putTerminalReportIncidentIfAbsent(input: {
+  runId: string;
+  reportId: string;
+  payloadDigest: string;
+  disposition: ReportIncidentDisposition;
+  ackBody: Record<string, unknown>;
+}) {
+  return db.transaction(async (tx) => {
+    await lockReportIdTx(tx, input.reportId);
+    const id = terminalIncidentReceiptId(input.reportId, input.payloadDigest);
+    const existing = (await tx.select().from(terminalReportIncidents).where(eq(terminalReportIncidents.id, id)).limit(1))[0];
+    if (existing) return existing;
+    return (await tx.insert(terminalReportIncidents).values({ id, ...input, createdAt: nowIso() }).returning())[0]!;
+  });
+}
+
+export async function countTerminalReportIncidents(): Promise<number> {
+  const row = (await db.select({ n: sql<number>`count(*)` }).from(terminalReportIncidents))[0];
+  return Number(row?.n ?? 0);
+}
+
+/** Serialize all terminal handling for one reportId, even when the competing
+ * runs belong to different loop locks or one outcome lands in the incident table. */
+async function lockReportIdTx(tx: StoreTx, reportId: string): Promise<void> {
+  const unsigned = BigInt(`0x${createHash("sha256").update(reportId).digest("hex").slice(0, 16)}`);
+  const key = BigInt.asIntN(64, unsigned).toString();
+  await tx.execute(sql`select pg_advisory_xact_lock(${key}::bigint)`);
+}
+
 export async function insertReportReceipt(input: typeof runReportReceipts.$inferInsert): Promise<void> {
   await db.insert(runReportReceipts).values(input);
 }
@@ -604,9 +656,12 @@ export async function insertReportReceipt(input: typeof runReportReceipts.$infer
 /** Race-safe receipt reservation for definitive non-finalization ACKs (RETIRED).
  * Returns the row that owns reportId, whether inserted here or concurrently. */
 export async function putReportReceiptIfAbsent(input: typeof runReportReceipts.$inferInsert) {
-  const inserted = await db.insert(runReportReceipts).values(input)
-    .onConflictDoNothing({ target: runReportReceipts.reportId }).returning();
-  return inserted[0] ?? getReportReceipt(input.reportId);
+  return db.transaction(async (tx) => {
+    await lockReportIdTx(tx, input.reportId);
+    const inserted = await tx.insert(runReportReceipts).values(input)
+      .onConflictDoNothing({ target: runReportReceipts.reportId }).returning();
+    return inserted[0] ?? (await tx.select().from(runReportReceipts).where(eq(runReportReceipts.reportId, input.reportId)))[0];
+  });
 }
 
 export async function countReportReceipts(): Promise<number> {
@@ -635,6 +690,7 @@ export async function acknowledgeRetiredReport(
   input: typeof runReportReceipts.$inferInsert,
 ) {
   return db.transaction(async (tx) => {
+    await lockReportIdTx(tx, input.reportId);
     const lease = (await tx.select().from(runLeases)
       .where(and(eq(runLeases.tokenHash, leaseTokenHash), eq(runLeases.state, "retired")))
       .limit(1).for("update"))[0];
@@ -849,6 +905,140 @@ export interface FinalizeRunningRunResult {
   autoPaused: boolean;
 }
 
+/** Consume a retired tombstone when its reportId is owned by another run.
+ * The run/loop may already be deleted, so only the exact incident receipt and
+ * lease tombstone participate in this transaction. */
+export async function acknowledgeRetiredTerminalIncident(input: {
+  runId: string;
+  leaseTokenHash: string;
+  reportId: string;
+  payloadDigest: string;
+  ackBody: Record<string, unknown>;
+}): Promise<typeof terminalReportIncidents.$inferSelect | undefined> {
+  return db.transaction(async (tx) => {
+    await lockReportIdTx(tx, input.reportId);
+    const id = terminalIncidentReceiptId(input.reportId, input.payloadDigest);
+    const replay = (await tx.select().from(terminalReportIncidents).where(eq(terminalReportIncidents.id, id)).limit(1))[0];
+    const lease = (await tx.select({ tokenHash: runLeases.tokenHash }).from(runLeases)
+      .where(and(
+        eq(runLeases.tokenHash, input.leaseTokenHash),
+        eq(runLeases.runId, input.runId),
+        eq(runLeases.state, "retired"),
+      )).limit(1).for("update"))[0];
+    if (!lease) return undefined;
+    if (replay) {
+      await tx.delete(runLeases).where(eq(runLeases.tokenHash, lease.tokenHash));
+      return replay;
+    }
+    const receipt = (await tx.insert(terminalReportIncidents).values({
+      id,
+      runId: input.runId,
+      reportId: input.reportId,
+      payloadDigest: input.payloadDigest,
+      disposition: "telemetry-rejected",
+      ackBody: input.ackBody,
+      createdAt: nowIso(),
+    }).returning())[0]!;
+    await tx.delete(runLeases).where(eq(runLeases.tokenHash, lease.tokenHash));
+    return receipt;
+  });
+}
+
+export type RejectTerminalReportResult =
+  | ({ state: "run-error"; receipt: typeof terminalReportIncidents.$inferSelect } & FinalizeRunningRunResult)
+  | { state: "telemetry-rejected"; run: Run; loop: Loop; receipt: typeof terminalReportIncidents.$inferSelect; failureStreak: 0; autoPaused: false }
+  | { state: "normal-replay"; receipt: typeof runReportReceipts.$inferSelect }
+  | { state: "incident-replay"; receipt: typeof terminalReportIncidents.$inferSelect }
+  | { state: "invalid-lease" | "missing-loop" | "run-not-terminalizable" };
+
+/** Reject one correlatable terminal attempt as a durable terminal fact. Authority,
+ * run/loop lifecycle, incident receipt, and lease consumption share one transaction.
+ * No payload-authored cursor/task/message field is accepted here. */
+export async function rejectTerminalReport(input: {
+  loopId: string;
+  runId: string;
+  leaseTokenHash: string;
+  leaseState: "active" | "terminal-grace";
+  reportId: string;
+  payloadDigest: string;
+  disposition: ReportIncidentDisposition;
+  incident: ReportIncident;
+  ackBody: Record<string, unknown>;
+  failureAutopauseStreak?: number;
+}): Promise<RejectTerminalReportResult> {
+  return db.transaction(async (tx) => {
+    await lockReportIdTx(tx, input.reportId);
+    const current = (await tx.select().from(loops).where(eq(loops.id, input.loopId)).for("update"))[0];
+    if (!current) return { state: "missing-loop" as const };
+
+    // A normal finalize that won before this transaction is authoritative. The
+    // gateway decides same-run replay vs cross-run conflict from this row.
+    const normal = (await tx.select().from(runReportReceipts).where(eq(runReportReceipts.reportId, input.reportId)))[0];
+    if (normal?.runId === input.runId) return { state: "normal-replay" as const, receipt: normal };
+    const priorIncident = (await tx.select().from(terminalReportIncidents)
+      .where(eq(terminalReportIncidents.id, terminalIncidentReceiptId(input.reportId, input.payloadDigest)))
+      .limit(1))[0];
+    if (priorIncident?.runId === input.runId) return { state: "incident-replay" as const, receipt: priorIncident };
+
+    const now = nowIso();
+    const leaseConditions = [
+      eq(runLeases.tokenHash, input.leaseTokenHash),
+      eq(runLeases.runId, input.runId),
+      eq(runLeases.loopId, input.loopId),
+      eq(runLeases.state, input.leaseState),
+    ];
+    if (input.leaseState === "terminal-grace") leaseConditions.push(gt(runLeases.expiresAt, now));
+    const lease = (await tx.select().from(runLeases).where(and(...leaseConditions)).limit(1).for("update"))[0];
+    if (!lease) return { state: "invalid-lease" as const };
+
+    const receiptInput: typeof terminalReportIncidents.$inferInsert = {
+      id: terminalIncidentReceiptId(input.reportId, input.payloadDigest),
+      runId: input.runId,
+      reportId: input.reportId,
+      payloadDigest: input.payloadDigest,
+      disposition: input.disposition,
+      ackBody: input.ackBody,
+      createdAt: input.incident.at,
+    };
+
+    if (input.leaseState === "terminal-grace") {
+      const run = (await tx.update(runs)
+        .set({ reportIncident: input.incident, updatedAt: input.incident.at })
+        .where(and(eq(runs.id, input.runId), eq(runs.loopId, input.loopId), inArray(runs.phase, ["done", "error", "canceled"])))
+        .returning())[0];
+      if (!run) return { state: "run-not-terminalizable" as const };
+      await tx.delete(runLeases).where(eq(runLeases.tokenHash, input.leaseTokenHash));
+      const receipt = priorIncident ?? (await tx.insert(terminalReportIncidents).values(receiptInput).returning())[0]!;
+      return { state: "telemetry-rejected" as const, run, loop: current, receipt, failureStreak: 0 as const, autoPaused: false as const };
+    }
+
+    const run = (await tx.update(runs)
+      .set({
+        phase: "error",
+        outcome: "error",
+        error: input.incident.reason,
+        reportIncident: input.incident,
+        ts: input.incident.at,
+        updatedAt: input.incident.at,
+      })
+      .where(and(eq(runs.id, input.runId), eq(runs.loopId, input.loopId), eq(runs.phase, "running")))
+      .returning())[0];
+    if (!run) return { state: "run-not-terminalizable" as const };
+    const lifecycle = await terminalLifecycleTx(
+      tx,
+      current,
+      run,
+      input.incident.at,
+      {},
+      false,
+      input.failureAutopauseStreak ?? 0,
+    );
+    await tx.delete(runLeases).where(eq(runLeases.tokenHash, input.leaseTokenHash));
+    const receipt = priorIncident ?? (await tx.insert(terminalReportIncidents).values(receiptInput).returning())[0]!;
+    return { state: "run-error" as const, run, ...lifecycle, receipt };
+  });
+}
+
 /** Atomically CAS running→terminal and apply the report's loop cursor/task patch.
  * The loop patch is unreachable when cancel/reclaim/another report won. */
 export async function finalizeRunningRun(
@@ -861,8 +1051,14 @@ export async function finalizeRunningRun(
   receipt?: typeof runReportReceipts.$inferInsert,
 ): Promise<FinalizeRunningRunResult | undefined> {
   return db.transaction(async (tx) => {
+    if (receipt) await lockReportIdTx(tx, receipt.reportId);
     const current = (await tx.select().from(loops).where(eq(loops.id, loopId)).for("update"))[0];
     if (!current) return undefined;
+    if (receipt) {
+      const incident = (await tx.select({ id: terminalReportIncidents.id }).from(terminalReportIncidents)
+        .where(eq(terminalReportIncidents.reportId, receipt.reportId)).limit(1))[0];
+      if (incident) return undefined;
+    }
     if (leaseTokenHash) {
       const active = await activeRunForMutationTx(tx, loopId, runId, leaseTokenHash, "report");
       if (active.state !== "active") return undefined;
@@ -894,8 +1090,14 @@ export async function enrichFinishedRun(
   receipt?: typeof runReportReceipts.$inferInsert,
 ): Promise<Run | undefined> {
   return db.transaction(async (tx) => {
+    if (receipt) await lockReportIdTx(tx, receipt.reportId);
     const loop = (await tx.select({ id: loops.id }).from(loops).where(eq(loops.id, loopId)).for("update"))[0];
     if (!loop) return undefined;
+    if (receipt) {
+      const incident = (await tx.select({ id: terminalReportIncidents.id }).from(terminalReportIncidents)
+        .where(eq(terminalReportIncidents.reportId, receipt.reportId)).limit(1))[0];
+      if (incident) return undefined;
+    }
     const leaseNow = nowIso();
     const lease = (
       await tx
@@ -995,8 +1197,14 @@ export async function reconcileReclaimedRun(
   receipt?: typeof runReportReceipts.$inferInsert,
 ): Promise<FinalizeRunningRunResult | undefined> {
   return db.transaction(async (tx) => {
+    if (receipt) await lockReportIdTx(tx, receipt.reportId);
     const current = (await tx.select().from(loops).where(eq(loops.id, loopId)).for("update"))[0];
     if (!current) return undefined;
+    if (receipt) {
+      const incident = (await tx.select({ id: terminalReportIncidents.id }).from(terminalReportIncidents)
+        .where(eq(terminalReportIncidents.reportId, receipt.reportId)).limit(1))[0];
+      if (incident) return undefined;
+    }
     // Resolve expiry from a fresh clock read after acquiring the loop lock. A
     // gateway precheck may have happened before the grace window elapsed or a
     // successor claim; it is never authority for this write.

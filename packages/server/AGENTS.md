@@ -302,6 +302,7 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
 
 - Poll liveness is provider-neutral: a protocol-v2 daemon sends its one `currentRun` and stage (`executing|reporting`); the machine/phase-scoped update refreshes that run's `heartbeatAt` (claim `ts` is the pre-first-heartbeat fallback). Offline pending notification dedup uses separate `runs.deferredAt`.
 - Claim atomically copies `loops.agent` to nullable `runs.agent`, preserving the actual executor as run history even after an owner edits the loop agent. Final reports store normalized `exitCode`, `durationMs`, `sessionId`, `finalText`, `error`, and provider-neutral token `usage`; each run has exactly one provider invocation. `sessionId` is metadata for future use — there is no current resume UI or command generation. Dollar cost, provider activity/progress, slim transcripts, and transcript-derived run artifacts are not stored or rendered. Live artifact sync + `artifact_files`/`blobs`/`run_snapshots` remain the file/diff authority.
+- `/machine/report` treats a correlatable but semantically invalid terminal payload as a durable terminal attempt, never a poison retry: after lease auth, `store.rejectTerminalReport` loop-locks, rechecks the hashed lease, writes `runs.reportIncident`, applies the ordinary failure lifecycle (or preserves a terminal-grace outcome), consumes the lease, and inserts the exact 200 ACK in `terminal_report_incidents`. The receipt key is `sha256(reportId + daemon-byte-compatible JSON payload digest)` and survives loop deletion; payload drift after a normal same-run commit replays that authoritative ACK, while rejected attempts replay only on an exact digest and a cross-run reportId conflict terminalizes the currently leased run. Missing/non-string/NUL/over-cap reportIds remain authenticated, mutation-free 400s. Per-reportId transaction advisory locking serializes normal and incident receipts across different loop locks.
 
 ## Poll transport (long-poll + hot-path budget)
 
@@ -345,7 +346,7 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   index enforces one pending row per loop+role. Coalescing only promotes
   system→owner; latest owner edit wins; a running role may retain one follow-up.
   Cross-role rows survive and claim priority is `edit > evolve > exec`.
-- `store.updateLoop` owns lifecycle/cadence atomically. Pause clears both schedule
+- `store.updateLoop` owns lifecycle/cadence atomically. `loops.pauseCause` annotates an ordinary owner pause/stop vs circuit-breaker `failure-streak` (run/count); explicit start/reopen clears it and completion is not a pause, so clears it too. Pause clears both schedule
   facts and cancels pending system rows, but owner-requested exec/edit/evolve remain
   claimable while the loop stays paused; their terminal path cannot restore cadence.
   Completion also clears both and cancels all pending exec/evolve plus system edit,

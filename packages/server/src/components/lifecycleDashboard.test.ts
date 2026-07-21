@@ -116,6 +116,39 @@ describe('LoopDetailView flat lifecycle actions', () => {
     expect(h.del).toHaveBeenCalledOnce()
   })
 
+  it('distinguishes owner and automatic pauses', async () => {
+    const owner = makeDetail({ state: 'paused' })
+    owner.summary.pauseCause = { kind: 'owner', at: '2026-01-01T00:00:00Z' }
+    await mount(owner)
+    expect(host!.textContent).toContain('Paused by owner')
+    await act(async () => { root!.unmount() }); root = null; host!.remove(); host = null
+    const automatic = makeDetail({ state: 'paused' })
+    automatic.summary.pauseCause = { kind: 'failure-streak', at: '2026-01-01T00:00:00Z', runId: 'r1', count: 3 }
+    await mount(automatic)
+    expect(host!.textContent).toContain('Paused automatically')
+  })
+
+  it('renders terminal report diagnostics on the run page', async () => {
+    const d = makeDetail({ state: 'active', running: true })
+    const run = d.runs[0]!
+    run.running = false
+    run.error = 'Terminal report rejected.'
+    run.reportIncident = {
+      at: '2026-01-01T00:00:00Z', code: 'REPORT_INVALID', reason: run.error,
+      issues: ['durationMs must be non-negative'], reportId: 'report-1', payloadDigest: 'digest',
+      faultDomain: 'compatibility', recommendedAction: 'Upgrade and restart the daemon.',
+    }
+    h.detail = d
+    host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host)
+    await act(async () => { root!.render(createElement(RunDetailView, { loopId: 'l1', runId: 'r1' })) })
+    await act(async () => { await Promise.resolve() })
+    expect(host!.textContent).toContain('Terminal report rejected')
+    expect(host!.textContent).toContain('REPORT_INVALID')
+    expect(host!.textContent).toContain('compatibility')
+    expect(host!.textContent).toContain('Upgrade and restart the daemon.')
+    expect(host!.textContent).toContain('report-1')
+  })
+
   it('keeps truthful paused/stopping and RunView protocol wording', async () => {
     await mount(makeDetail({ state: 'paused', online: false, running: true, cancelRequested: true }))
     expect(host!.textContent).toContain('Stopping · waiting for MacBook Pro')

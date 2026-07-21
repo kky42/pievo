@@ -21,6 +21,7 @@ import type { ArtifactMeta } from "../server/frontmatter.js";
 // to `CODING_AGENTS` with no change here. `../types` imports nothing at runtime, so
 // this introduces no import cycle.
 import { CODING_AGENTS } from "../types.js";
+import type { PauseCause, ReportIncident, ReportIncidentDisposition } from "../types.js";
 
 export type { ArtifactMeta } from "../server/frontmatter.js";
 
@@ -188,6 +189,8 @@ export const loops = pgTable(
     deleteRequestedAt: timestamp("delete_requested_at", { withTimezone: true, mode: "string" }),
     /** One-line reason recorded at completion (the finishing run's summary). */
     completionReason: text("completion_reason"),
+    /** Diagnostic annotation for a paused loop; completion always clears it. */
+    pauseCause: jsonb("pause_cause").$type<PauseCause>(),
     /** Optional provider model id. Null delegates model selection to the coding-agent CLI. */
     model: text("model"),
     /** Optional provider reasoning-effort value. Null delegates to the coding-agent CLI. */
@@ -275,6 +278,8 @@ export const runs = pgTable(
     heartbeatAt: text("heartbeat_at"),
     /** One-shot marker for the offline deferred notification; separate from heartbeat. */
     deferredAt: text("deferred_at"),
+    /** Latest rejected terminal-report diagnosis, if any. */
+    reportIncident: jsonb("report_incident").$type<ReportIncident>(),
   },
   (t) => [
     index("runs_loop_idx").on(t.loopId),
@@ -338,6 +343,26 @@ export const runReportReceipts = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
   },
   (t) => [index("report_receipts_created").on(t.createdAt)],
+);
+
+/** Durable evidence for a rejected terminal attempt. It is keyed by
+ * sha256(reportId + canonical-payload-digest), is never loop-owned, and therefore
+ * survives loop deletion just like normal report receipts. */
+export const terminalReportIncidents = pgTable(
+  "terminal_report_incidents",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    reportId: text("report_id").notNull(),
+    payloadDigest: text("payload_digest").notNull(),
+    disposition: text("disposition", { enum: ["run-error", "telemetry-rejected"] }).$type<ReportIncidentDisposition>().notNull(),
+    ackBody: jsonb("ack_body").$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+  },
+  (t) => [
+    index("terminal_report_incidents_report_id").on(t.reportId),
+    index("terminal_report_incidents_created").on(t.createdAt),
+  ],
 );
 
 // ---- connect_keys: a minted connect-key's owner + team binding (durable) ----
@@ -552,9 +577,10 @@ export type NewRunSnapshot = typeof runSnapshots.$inferInsert;
 export type RunLeaseRow = typeof runLeases.$inferSelect;
 export type ConnectKeyRow = typeof connectKeys.$inferSelect;
 export type RunReportReceipt = typeof runReportReceipts.$inferSelect;
+export type TerminalReportIncidentReceipt = typeof terminalReportIncidents.$inferSelect;
 
 /** Drizzle table bag (also used by the Better Auth drizzle adapter once auth lands). */
-export const businessSchema = { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runSnapshots, runLeases, runReportReceipts, connectKeys };
+export const businessSchema = { machines, loops, runs, teams, teamMembers, teamInvites, notificationChannels, blobs, artifactFiles, runSnapshots, runLeases, runReportReceipts, terminalReportIncidents, connectKeys };
 
 // Keep a default no-op SQL reference so `sql` import isn't flagged before use.
 export const _schemaVersion = sql`1`;

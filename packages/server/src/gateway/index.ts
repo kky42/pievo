@@ -21,6 +21,7 @@ import { logger } from "../logger.js";
 import * as store from "../db/store.js";
 import type { CodingAgent, Loop, NewLoop, NewRun, Run, RunRole, RunUsage } from "../db/schema.js";
 import { CODING_AGENTS, coerceCodingAgent } from "../types.js";
+import type { ReportIncident, ReportIncidentCode, ReportIncidentFaultDomain } from "../types.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
 import { autopauseMessage, completionMessage, deferredMessage, dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
@@ -172,6 +173,7 @@ const RUN_OUTCOMES = new Set(["direct", "silent", "exec", "evolve"]);
 export const LOG_RUNS_DEFAULT = 8;
 const LOG_RUNS_MAX = 20;
 const USAGE_MAX = 1e12;
+const REPORT_ID_CAP = 200;
 
 /** Resolve the user-facing run summary across both execution paths. A pure
  * workflow returns `body.message`; an agent may already have persisted its message
@@ -192,10 +194,61 @@ function receiptResponse(
   receipt: Awaited<ReturnType<typeof store.getReportReceipt>>,
   expected: NonNullable<ReturnType<typeof receiptFor>>,
 ): HttpResult | undefined {
-  if (!receipt) return undefined;
-  return receipt.runId === expected.runId && receipt.payloadDigest === expected.payloadDigest
-    ? { status: receipt.ackStatus, body: receipt.ackBody }
-    : { status: 409, body: { error: "reportId was already used for another run or payload", code: "REPORT_CONFLICT", reportId: expected.reportId } };
+  if (!receipt || receipt.runId !== expected.runId) return undefined;
+  if (receipt.payloadDigest !== expected.payloadDigest) {
+    log.warn({ reportId: expected.reportId, runId: expected.runId }, "report: same-run payload changed after commit; replaying authoritative ACK");
+  }
+  return { status: receipt.ackStatus, body: receipt.ackBody };
+}
+
+function incidentReceiptResponse(
+  receipt: Awaited<ReturnType<typeof store.getExactTerminalReportIncident>> | undefined,
+): HttpResult | undefined {
+  return receipt ? { status: 200, body: receipt.ackBody } : undefined;
+}
+
+async function committedReportEvidence(
+  reportId: string,
+  payloadDigest: string,
+  authoritativeRunId: unknown,
+  allowExactIncidentReplay = false,
+): Promise<{ response?: HttpResult; foreignRun: boolean }> {
+  const normal = await store.getReportReceipt(reportId);
+  const exactIncident = await store.getExactTerminalReportIncident(reportId, payloadDigest);
+  if (allowExactIncidentReplay && exactIncident) return { response: incidentReceiptResponse(exactIncident), foreignRun: false };
+  if (typeof authoritativeRunId === "string") {
+    if (exactIncident?.runId === authoritativeRunId) return { response: incidentReceiptResponse(exactIncident), foreignRun: false };
+    if (normal?.runId === authoritativeRunId) {
+      if (normal.payloadDigest !== payloadDigest) {
+        log.warn({ reportId, runId: authoritativeRunId }, "report: same-run payload changed after commit; replaying authoritative ACK");
+      }
+      return { response: { status: normal.ackStatus, body: normal.ackBody }, foreignRun: false };
+    }
+  }
+  const incidents = await store.getTerminalReportIncidents(reportId);
+  return { foreignRun: !!normal || !!exactIncident || incidents.length > 0 };
+}
+
+function correlatableReportId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= REPORT_ID_CAP && !value.includes("\0");
+}
+
+function incidentDiagnosis(
+  code: ReportIncidentCode,
+  issues: string[],
+  reportId: string,
+  payloadDigest: string,
+): ReportIncident {
+  const faultDomain: ReportIncidentFaultDomain = code === "REPORT_CONFLICT"
+    ? "internal"
+    : issues.some((issue) => issue.includes("runId does not match")) ? "daemon" : "compatibility";
+  const reason = code === "REPORT_CONFLICT"
+    ? "Terminal report rejected because its reportId was already committed for another run."
+    : `Terminal report rejected: ${issues.join("; ")}.`;
+  const recommendedAction = faultDomain === "internal"
+    ? "Inspect pievo show and pievo log; retry only after confirming the daemon and server agree on the active run."
+    : "Upgrade Pievo to the latest version and restart the daemon, then inspect pievo show and pievo log.";
+  return { at: nowIso(), code, reason, issues, reportId, payloadDigest, faultDomain, recommendedAction };
 }
 
 function reportMessage(body: MachineReportBody, run: Run | undefined): string | undefined {
@@ -216,11 +269,11 @@ function validateTerminalReport(body: MachineReportBody): string[] {
   } else if (typeof body.ok !== "boolean") {
     issues.push("result must be success, failure, canceled, or timeout");
   }
-  if (body.durationMs !== undefined && (typeof body.durationMs !== "number" || !Number.isFinite(body.durationMs) || body.durationMs < 0)) {
-    issues.push("durationMs must be a finite non-negative number");
+  if (body.durationMs !== undefined && (typeof body.durationMs !== "number" || !Number.isInteger(body.durationMs) || body.durationMs < 0 || body.durationMs > 2_147_483_647)) {
+    issues.push("durationMs must be a non-negative 32-bit integer");
   }
-  if (body.exitCode !== undefined && body.exitCode !== null && (typeof body.exitCode !== "number" || !Number.isInteger(body.exitCode))) {
-    issues.push("exitCode must be an integer or null");
+  if (body.exitCode !== undefined && body.exitCode !== null && (typeof body.exitCode !== "number" || !Number.isInteger(body.exitCode) || body.exitCode < 0 || body.exitCode > 2_147_483_647)) {
+    issues.push("exitCode must be a non-negative 32-bit integer or null");
   }
   return issues;
 }
@@ -1426,6 +1479,34 @@ export class MachineGateway {
 
   // ---- POST /machine/report ----
 
+  private async rejectRetiredConflict(
+    runToken: string,
+    lease: Pick<RunLease, "runId">,
+    body: MachineReportBody,
+    payloadDigest: string,
+  ): Promise<HttpResult> {
+    const ackBody = {
+      ok: true,
+      accepted: false,
+      terminal: true,
+      reportId: body.reportId!,
+      code: "REPORT_CONFLICT",
+      issues: ["reportId was already committed for another run"],
+      disposition: "telemetry-rejected",
+      payloadDigest,
+    };
+    const receipt = await store.acknowledgeRetiredTerminalIncident({
+      runId: lease.runId,
+      leaseTokenHash: sha256(runToken),
+      reportId: body.reportId!,
+      payloadDigest,
+      ackBody,
+    });
+    return receipt
+      ? { status: 200, body: receipt.ackBody }
+      : { status: 401, body: { error: "invalid or expired token" } };
+  }
+
   private async retiredReport(runToken: string, body: MachineReportBody, runId: string): Promise<HttpResult> {
     const expected = receiptFor(body, runId, 410, {
       error: "execution authority retired",
@@ -1434,8 +1515,15 @@ export class MachineGateway {
     })!;
     const stored = await store.acknowledgeRetiredReport(sha256(runToken), expected);
     if (!stored) {
-      const replay = receiptResponse(await store.getReportReceipt(expected.reportId), expected);
+      const winner = await store.getReportReceipt(expected.reportId);
+      if (winner && winner.runId !== runId) {
+        return this.rejectRetiredConflict(runToken, { runId }, body, sha256(JSON.stringify(body)));
+      }
+      const replay = receiptResponse(winner, expected);
       return replay ?? { status: 401, body: { error: "invalid or expired token" } };
+    }
+    if (stored.runId !== runId) {
+      return this.rejectRetiredConflict(runToken, { runId }, body, sha256(JSON.stringify(body)));
     }
     return receiptResponse(stored, expected)!;
   }
@@ -1443,6 +1531,29 @@ export class MachineGateway {
   private async ignoreCanceledReport(runToken: string, lease: RunLease, body: MachineReportBody): Promise<HttpResult> {
     const expected = receiptFor(body, lease.runId)!;
     const stored = await store.putReportReceiptIfAbsent(expected);
+    if (!stored) return { status: 401, body: { error: "invalid or expired token" } };
+    if (stored.runId !== lease.runId) {
+      const payloadDigest = sha256(JSON.stringify(body));
+      const ackBody = {
+        ok: true,
+        accepted: false,
+        terminal: true,
+        reportId: body.reportId!,
+        code: "REPORT_CONFLICT",
+        issues: ["reportId was already committed for another run"],
+        disposition: "telemetry-rejected",
+        payloadDigest,
+      };
+      const incident = await store.putTerminalReportIncidentIfAbsent({
+        runId: lease.runId,
+        reportId: body.reportId!,
+        payloadDigest,
+        disposition: "telemetry-rejected",
+        ackBody,
+      });
+      await retireLease(runToken);
+      return { status: 200, body: incident.ackBody };
+    }
     const response = receiptResponse(stored, expected)!;
     if (response.status < 300) await retireLease(runToken);
     log.info({ runId: lease.runId }, "report: ignored (run was canceled)");
@@ -1463,6 +1574,7 @@ export class MachineGateway {
       ...(message !== undefined ? { message } : {}),
     };
     const receipt = receiptFor(body, lease.runId);
+    const payloadDigest = sha256(JSON.stringify(body));
     let enriched: Awaited<ReturnType<typeof store.enrichFinishedRun>>;
     try {
       enriched = await store.enrichFinishedRun(
@@ -1473,15 +1585,17 @@ export class MachineGateway {
         receipt,
       );
     } catch (error) {
-      const raced = receipt && receiptResponse(await store.getReportReceipt(receipt.reportId), receipt);
-      if (raced) return raced;
+      const raced = await committedReportEvidence(body.reportId!, payloadDigest, lease.runId);
+      if (raced.response) return raced.response;
+      if (raced.foreignRun) return this.rejectTerminalAttempt(runToken, lease, body, payloadDigest, "REPORT_CONFLICT", ["reportId was already committed for another run"]);
       throw error;
     }
     if (!enriched) {
+      const raced = await committedReportEvidence(body.reportId!, payloadDigest, lease.runId);
+      if (raced.response) return raced.response;
+      if (raced.foreignRun) return this.rejectTerminalAttempt(runToken, lease, body, payloadDigest, "REPORT_CONFLICT", ["reportId was already committed for another run"]);
       const refreshed = await resolveLease(runToken);
       if (refreshed?.state === "retired") return this.retiredReport(runToken, body, lease.runId);
-      const raced = receipt && receiptResponse(await store.getReportReceipt(receipt.reportId), receipt);
-      if (raced) return raced;
       return { status: 409, body: { error: "terminal report was not finalized", code: "REPORT_NOT_FINALIZED", reportId: body.reportId } };
     }
     if (enriched && (await store.getLoop(lease.loopId))?.deleteRequestedAt) {
@@ -1525,6 +1639,7 @@ export class MachineGateway {
         : {}),
     };
     const receipt = receiptFor(body, lease.runId)!;
+    const payloadDigest = sha256(JSON.stringify(body));
     let reconciled: Awaited<ReturnType<typeof store.reconcileReclaimedRun>>;
     try {
       reconciled = await store.reconcileReclaimedRun(
@@ -1549,15 +1664,17 @@ export class MachineGateway {
         receipt,
       );
     } catch (error) {
-      const raced = receiptResponse(await store.getReportReceipt(receipt.reportId), receipt);
-      if (raced) return raced;
+      const raced = await committedReportEvidence(receipt.reportId, payloadDigest, lease.runId);
+      if (raced.response) return raced.response;
+      if (raced.foreignRun) return this.rejectTerminalAttempt(runToken, lease, body, payloadDigest, "REPORT_CONFLICT", ["reportId was already committed for another run"]);
       throw error;
     }
     if (!reconciled) {
       // Another terminal actor consumed the lease/phase. Handle the observed
       // winner once, without recursive report() retries.
-      const raced = receiptResponse(await store.getReportReceipt(receipt.reportId), receipt);
-      if (raced) return raced;
+      const raced = await committedReportEvidence(receipt.reportId, payloadDigest, lease.runId);
+      if (raced.response) return raced.response;
+      if (raced.foreignRun) return this.rejectTerminalAttempt(runToken, lease, body, payloadDigest, "REPORT_CONFLICT", ["reportId was already committed for another run"]);
       const fresh = await store.getRun(lease.runId);
       if (fresh?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease, body);
       if (fresh?.phase === "done") return this.enrichFinishedReport(runToken, lease, body);
@@ -1599,33 +1716,107 @@ export class MachineGateway {
     return { status: 200, body: body.reportId ? { ok: true, reportId: body.reportId } : { ok: true, reconciled: true } };
   }
 
+  private async rejectTerminalAttempt(
+    runToken: string,
+    lease: RunLease,
+    body: MachineReportBody,
+    payloadDigest: string,
+    code: ReportIncidentCode,
+    issues: string[],
+  ): Promise<HttpResult> {
+    const reportId = body.reportId!;
+    const run = await store.getRun(lease.runId);
+    const telemetryOnly = lease.state === "terminal-grace" && (run?.phase === "done" || run?.phase === "error" || run?.phase === "canceled");
+    const disposition = telemetryOnly ? "telemetry-rejected" as const : "run-error" as const;
+    const incident = incidentDiagnosis(code, issues, reportId, payloadDigest);
+    const ackBody = {
+      ok: true,
+      accepted: false,
+      terminal: true,
+      reportId,
+      code,
+      issues,
+      disposition,
+      payloadDigest,
+    };
+    if (lease.state === "retired") return this.retiredReport(runToken, body, lease.runId);
+    const rejected = await store.rejectTerminalReport({
+      loopId: lease.loopId,
+      runId: lease.runId,
+      leaseTokenHash: sha256(runToken),
+      leaseState: lease.state,
+      reportId,
+      payloadDigest,
+      disposition,
+      incident,
+      ackBody,
+      failureAutopauseStreak: AUTOPAUSE_STREAK,
+    });
+    if (rejected.state === "normal-replay") {
+      return { status: rejected.receipt.ackStatus, body: rejected.receipt.ackBody };
+    }
+    if (rejected.state === "incident-replay") {
+      return { status: 200, body: rejected.receipt.ackBody };
+    }
+    if (rejected.state === "run-error" || rejected.state === "telemetry-rejected") {
+      this.scheduler.addLoop(rejected.loop);
+      if (rejected.state === "run-error" && lease.role === "exec") {
+        await this.notifyRunFailure(lease.loopId, lease.role, incident.reason, rejected);
+      }
+      if (rejected.loop.deleteRequestedAt) await store.tryDeleteLoop(lease.loopId);
+      log.warn({ runId: lease.runId, reportId, code, disposition }, "report: rejected terminal attempt durably handled");
+      return { status: 200, body: rejected.receipt.ackBody };
+    }
+    const evidence = await committedReportEvidence(reportId, payloadDigest, body.runId);
+    if (evidence.response) return evidence.response;
+    const refreshed = await resolveLease(runToken);
+    if (refreshed?.state === "retired") return this.retiredReport(runToken, body, lease.runId);
+    return { status: 401, body: { error: "invalid or expired token" } };
+  }
+
   async report(runToken: string, body: MachineReportBody): Promise<HttpResult> {
-    if (typeof body.reportId !== "string") {
-      return { status: 400, body: { error: "reportId is required", code: "VALIDATION_ERROR" } };
-    }
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.reportId)) {
-      return { status: 422, body: { error: "invalid terminal report", code: "REPORT_INVALID", reportId: body.reportId, issues: ["reportId must be a valid UUID"] } };
-    }
-    if (typeof body.runId !== "string" || !body.runId) {
-      return { status: 422, body: { error: "invalid terminal report", code: "REPORT_INVALID", reportId: body.reportId, issues: ["runId is required"] } };
+    // An uncorrelatable id can never be acknowledged by the daemon's durable
+    // outbox. Authenticate it, but keep it safely nonterminal and mutation-free.
+    if (!correlatableReportId(body.reportId)) {
+      if (!(await resolveLease(runToken))) return { status: 401, body: { error: "invalid or expired token" } };
+      return { status: 400, body: { error: "reportId must be a non-empty NUL-free string of at most 200 characters", code: "VALIDATION_ERROR" } };
     }
     const reportId = body.reportId;
-    const expected = receiptFor(body, body.runId)!;
-    // A committed fact wins over validators introduced by a later deployment.
-    // Replays need only the id/digest binding; semantic validation gates NEW writes.
-    const replay = receiptResponse(await store.getReportReceipt(reportId), expected);
-    if (replay) return replay;
-    const issues = validateTerminalReport(body);
-    if (issues.length) {
-      return { status: 422, body: { error: "invalid terminal report", code: "REPORT_INVALID", reportId: body.reportId, issues } };
+    // The daemon hashes its exact JSON.stringify payload bytes. The machine route
+    // parses that JSON once, and stringify preserves insertion order, giving both
+    // sides the same digest without conflating it with canonical normal receipts.
+    const payloadDigest = sha256(JSON.stringify(body));
+    const lease = await resolveLease(runToken);
+    if (!lease) {
+      // A consumed lease cannot authenticate a replay. Exact incident evidence or
+      // an authoritative normal receipt for the claimed run is the durable proof.
+      const replay = await committedReportEvidence(reportId, payloadDigest, body.runId, true);
+      return replay.response ?? { status: 401, body: { error: "invalid or expired token" } };
+    }
+    // With live authority, the lease's run is authoritative; never let an
+    // attacker-controlled body.runId replay another run's ACK and strand this one.
+    const evidence = await committedReportEvidence(reportId, payloadDigest, lease.runId);
+    if (evidence.response) return evidence.response;
+    if (lease.state === "retired") {
+      if (evidence.foreignRun) return this.rejectRetiredConflict(runToken, lease, body, payloadDigest);
+      return this.retiredReport(runToken, body, lease.runId);
     }
 
-    const lease = await resolveLease(runToken);
-    if (!lease) return { status: 401, body: { error: "invalid or expired token" } };
-    if (body.runId !== lease.runId) {
-      return { status: 403, body: { error: "report runId does not match this run lease" } };
+    const issues: string[] = [];
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(reportId)) {
+      issues.push("reportId must be a valid UUID");
     }
-    if (lease.state === "retired") return this.retiredReport(runToken, body, lease.runId);
+    if (typeof body.runId !== "string" || !body.runId) issues.push("runId is required");
+    else if (body.runId !== lease.runId) issues.push("runId does not match this run lease");
+    issues.push(...validateTerminalReport(body));
+    if (evidence.foreignRun) {
+      return this.rejectTerminalAttempt(runToken, lease, body, payloadDigest, "REPORT_CONFLICT", ["reportId was already committed for another run"]);
+    }
+    if (issues.length) {
+      return this.rejectTerminalAttempt(runToken, lease, body, payloadDigest, "REPORT_INVALID", issues);
+    }
+
+    const expected = receiptFor(body, lease.runId)!;
     const ok = body.result !== undefined ? body.result === "success" : body.ok === true;
     const canceled = body.result === "canceled";
 
@@ -1701,15 +1892,21 @@ export class MachineGateway {
       // A different loop may win the reportId unique race while this transaction
       // waits. Its insert rolls this finalization back; convert the collision to a
       // replay/conflict only after observing the durable winning receipt.
-      const raced = receiptResponse(await store.getReportReceipt(reportId), expected);
-      if (raced) return raced;
+      const raced = await committedReportEvidence(reportId, payloadDigest, lease.runId);
+      if (raced.response) return raced.response;
+      if (raced.foreignRun) {
+        return this.rejectTerminalAttempt(runToken, lease, body, payloadDigest, "REPORT_CONFLICT", ["reportId was already committed for another run"]);
+      }
       throw error;
     }
     if (!terminal) {
       // A concurrent report may have passed the pre-lock receipt read. Re-read
       // after the loop-lock winner commits before considering legacy loser paths.
-      const raced = receiptResponse(await store.getReportReceipt(reportId), expected);
-      if (raced) return raced;
+      const raced = await committedReportEvidence(reportId, payloadDigest, lease.runId);
+      if (raced.response) return raced.response;
+      if (raced.foreignRun) {
+        return this.rejectTerminalAttempt(runToken, lease, body, payloadDigest, "REPORT_CONFLICT", ["reportId was already committed for another run"]);
+      }
       const fresh = await store.getRun(lease.runId);
       if (fresh?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease, body);
       if (fresh?.phase === "done") return this.enrichFinishedReport(runToken, lease, body);

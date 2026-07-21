@@ -68,7 +68,13 @@ computes pure functions. Run instructions: `README.md`.
   and receives no delivery. Timers/Dispatcher wakeups are latency hints, while DB
   facts + poll advancement are authoritative. Terminal reports persist first in the
   daemon SQLite outbox and finalize idempotently by `reportId`; synced files + run
-  snapshots remain the artifact/diff authority.
+  snapshots remain the artifact/diff authority. A correlatable but semantically invalid
+  terminal payload is handled on that SAME `/machine/report` seam after lease auth: the
+  server atomically records a structured run incident, terminalizes an active run as
+  error (or preserves a terminal-grace outcome), consumes the lease, and stores an
+  exact-digest durable 200 ACK. This frees the daemon slot without a second poll protocol;
+  exec incidents use the ordinary failure streak/circuit breaker, annotated by
+  `loops.pauseCause` when auto-paused.
 - Run roles: `exec` (scheduled/manual work), `evolve` (self-improvement pass),
   `edit` (owner-requested change). There is at most one running run per loop and
   one pending row per loop+role; same-role requests coalesce (latest edit text

@@ -112,3 +112,11 @@ is on a different machine than the one running the loop.
 > Pausing, reopening, or running a loop now are also one-click in the Pievo web
 > dashboard. Manual run/evolve/edit requests may be queued while paused or offline;
 > completed loops accept only manual edit until reopened.
+
+## Diagnose a rejected terminal report
+
+Use `<pievo-cli> show <loop-id>` and `<pievo-cli> log <loop-id>` first. If the
+incident names the daemon or compatibility fault domain, upgrade Pievo and restart
+the daemon (`npm install -g @kky42/pievo@latest`, then `pievo daemon restart`).
+Edit the workflow or loop configuration only when those diagnostics point to a
+workflow/config problem; do not guess at a repair from the rejection alone.

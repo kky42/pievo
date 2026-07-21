@@ -49,6 +49,24 @@ describe("PendingReportOutbox", () => {
     box.close();
   });
 
+  test("a handled rejection ACK must match the exact payload digest and disposition", async () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-outbox-"));
+    const box = new PendingReportOutbox(path.join(root, "pending.sqlite"));
+    box.put("rk_secret", report());
+    const pending = box.peek()!;
+    const response = (payloadDigest: string, disposition: string) => new Response(JSON.stringify({
+      ok: true, accepted: false, terminal: true, reportId: pending.reportId, payloadDigest, disposition, extra: "additive-ok",
+    }), { status: 200 });
+
+    box.applyAck(await sendTerminalReport("https://example.test", pending, async () => response("wrong", "run-error")));
+    expect(box.peek()).toBeDefined();
+    box.applyAck(await sendTerminalReport("https://example.test", pending, async () => response(pending.payloadDigest, "unknown")));
+    expect(box.peek()).toBeDefined();
+    box.applyAck(await sendTerminalReport("https://example.test", pending, async () => response(pending.payloadDigest, "run-error")));
+    expect(box.peek()).toBeUndefined();
+    box.close();
+  });
+
   test("a lost ACK retries the byte-identical report without losing it", async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-outbox-"));
     const box = new PendingReportOutbox(path.join(root, "pending.sqlite"));
