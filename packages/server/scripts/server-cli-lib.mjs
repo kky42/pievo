@@ -23,6 +23,7 @@ Options:
   --port <port>          bind port (default: PORT/NITRO_PORT/PIEVO_PORT or 3000)
   --data-dir <path>      select the instance (database, blobs, pid, lock, and log)
   -h, --help             show this help
+  -v, --version          print the server version and exit
 
 Restart preserves the recorded instance host/port unless a flag or bind environment
 variable overrides it. The default bind is local-only. Set --host 0.0.0.0 only with
@@ -31,6 +32,7 @@ appropriate auth and network controls.`;
 
 export function parseArgs(argv) {
   if (argv.includes("--help") || argv.includes("-h") || argv[0] === "help") return { command: "help" };
+  if (argv[0] === "--version" || argv[0] === "-v") return { command: "version" };
   const command = argv[0];
   if (!["start", "status", "restart", "stop", "_serve"].includes(command)) {
     throw new Error(command ? `unknown command: ${command}` : "a command is required");

@@ -126,9 +126,10 @@ export function buildPatch(flags: Flags): Record<string, unknown> {
 const USAGE =
   "pievo: usage: pievo edit <loop-id> [options]\n" +
   "  --json '<json-object>'      the whole patch — e.g. '{\"cron\":\"0 9 * * *\",\"goal\":\"ship v1\"}'\n" +
-  "                              (envelope: name/cron/timezone/notify/model/allowControl/taskFile/\n" +
-  "                               enabled/runAt/goal · {\"goal\":null} clears it, {\"enabled\":true}\n" +
-  "                               reopens a completed loop)\n" +
+  "                              (fields: name/cron/scheduleMode/continuousDelayMinutes/timezone/\n" +
+  "                               notify/model/agent/allowControl/taskFile/enabled/\n" +
+  "                               runAt/workflow/ui/stateSchema/goal · {\"goal\":null} clears it;\n" +
+  "                               {\"enabled\":true} reopens a completed loop)\n" +
   "  --workflow-file <path>      set the deterministic pre-stage JS from a file\n" +
   "  --ui-file <path>            set the dashboard HTML from a file\n" +
   "  --schema-file <path.json>   set the metric schema (JSON array) from a file\n" +

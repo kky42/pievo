@@ -990,7 +990,7 @@ const alwaysAvail = (): string => "always available";
 /** RUN-credential verb help (in-run `rk_` lease). */
 const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
   report: {
-    syntax: "report [--status new|resolved|nothing-new] [--message <s>] [--state '{\"k\":n}' | --state-file <path>]",
+    syntax: "report [--status new|resolved|nothing-new] [--message <text> | --message-file <path>] [--state '<json>' | --state-file <path>]",
     summary: "record this run's outcome + metrics (state keys must match the loop's schema)",
     avail: alwaysAvail,
     help: [
@@ -999,22 +999,22 @@ const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
     ],
   },
   finish: {
-    syntax: 'finish --message "<achieved>" [--reason "<one line>"]',
+    syntax: 'finish [--message <text> | --message-file <path>] [--reason "<one line>"] [--state \'<json>\' | --state-file <path>]',
     summary: "declare the goal met — completes this closed loop",
     avail: (l) => (l.canFinish ? "available — declare the goal met" : `exec run on a goal (closed) loop only — this run is "${l.role}"`),
     help: ['Run `pievo finish --message "<what was achieved>" --reason "<one line>"` to complete the loop'],
   },
   show: {
-    syntax: "show",
+    syntax: "show [--full] [--json]",
     summary: "print this loop's current config + recent state",
     avail: alwaysAvail,
-    help: ["Run `pievo log` to see this loop's recent runs"],
+    help: ["Run `pievo show --full` to include full workflow and dashboard content", "Run `pievo show --json` for the editable JSON envelope"],
   },
   log: {
-    syntax: "log [--limit <n>] [--json]",
+    syntax: "log [--limit <n>]",
     summary: "recent run survey for this loop (session ids + metrics)",
     avail: alwaysAvail,
-    help: ["Run `pievo log --json` for normalized run fields and token usage"],
+    help: ["Run `pievo log --limit 20` to show more recent runs"],
   },
   reschedule: {
     syntax: "reschedule --run-at <30m|2h|ISO>",
@@ -1023,8 +1023,8 @@ const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
     help: ["Run `pievo reschedule --run-at 2h` to run again in two hours"],
   },
   "set-cron": {
-    syntax: 'set-cron "<5-field cron>"',
-    summary: "change the retained cron (floor applies)",
+    syntax: 'set-cron "<Croner expression>"',
+    summary: "change the retained cron expression (minimum interval and run floor apply)",
     avail: controlAvail,
     help: ['Run `pievo set-cron "0 7 * * 1"` to change the cron cadence'],
   },
@@ -1072,30 +1072,35 @@ const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
   },
   "set-name": {
     syntax: 'set-name "<name>"',
-    summary: "rename this loop",
+    summary: "rename this loop; pass an empty string to clear the name",
     avail: controlAvail,
     help: ['Run `pievo set-name "Docs Sweep"` to rename the loop'],
   },
   "set-tz": {
     syntax: "set-tz <IANA zone>",
-    summary: "set the loop's timezone (the cron fires in it)",
+    summary: "set the loop's timezone (the cron fires in it); pass an empty string to clear it",
     avail: controlAvail,
     help: ["Run `pievo set-tz America/Los_Angeles` to change the timezone"],
   },
   "set-model": {
     syntax: "set-model <model>",
-    summary: "pin the coding-agent model for this loop",
+    summary: "pin the coding-agent model for this loop; pass an empty string to clear it",
     avail: controlAvail,
     help: ["Run `pievo set-model claude-opus-4-8` to pin the model"],
   },
 };
-// `complete` is a documented alias of `finish` (§6.2).
-RUN_VERB_HELP.complete = RUN_VERB_HELP.finish!;
+// `complete` is a documented alias of `finish` (§6.2), with its own truthful syntax.
+RUN_VERB_HELP.complete = {
+  ...RUN_VERB_HELP.finish!,
+  syntax: RUN_VERB_HELP.finish!.syntax.replace(/^finish/, "complete"),
+  summary: "alias of finish — declare the goal met and complete this closed loop",
+  help: ['Run `pievo complete --message "<what was achieved>" --reason "<one line>"` to complete the loop'],
+};
 
 /** DEVICE-credential verb help (owner `dk_` device token). */
 const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
   new: {
-    syntax: "new --json '<config>' [--dry-run]",
+    syntax: "new --json '<config>' [--dry-run] [--connect-key <dk_…>] [--server-url <url>] [--tz <IANA>] [--agent claude-code|codex]",
     summary: `create a loop (keys: ${[...EDITABLE_LOOP_FIELDS].join(", ")}; cron + taskFile|workflow required)`,
     help: [
       "Run `pievo new --json '{\"cron\":\"0 8 * * *\",\"taskFile\":\"<path>\"}'` to create a loop",
@@ -1103,21 +1108,21 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
     ],
   },
   loops: {
-    syntax: "loops",
+    syntax: "loops [--fields a,b] [--json]",
     summary: "list every loop bound to this machine",
     help: ["Run `pievo show <id>` to see a loop's full config", "Run `pievo log <id>` to see a loop's recent runs"],
   },
   edit: {
-    syntax: "edit <id> --json '<patch>' [--dry-run]",
-    summary: `change a loop's config (keys: ${[...EDITABLE_LOOP_FIELDS].join(", ")})`,
+    syntax: "edit <id> [--json '<patch>'] [--workflow-file <path>] [--ui-file <path>] [--schema-file <path.json>] [--dry-run]",
+    summary: `change a loop's config using at least one patch/file input (keys: ${[...EDITABLE_LOOP_FIELDS].join(", ")})`,
     help: [
       "Run `pievo edit <id> --json '{\"cron\":\"0 7 * * 1\"}'` to change the schedule",
       "Run `pievo edit <id> --json '{...}' --dry-run` to preview the change",
     ],
   },
   show: {
-    syntax: "show <id>",
-    summary: "print a loop's full config + recent state",
+    syntax: "show [<id|unique-name>] [--full] [--json]",
+    summary: "print a loop's full config + recent state (defaults from the current directory)",
     help: ["Run `pievo loops` to list loops on this machine", "Run `pievo log <id>` to see the loop's recent runs"],
   },
   pause: {

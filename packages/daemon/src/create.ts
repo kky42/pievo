@@ -153,7 +153,7 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   const jsonArg = flag(args, "json");
   const dryRun = args.includes("--dry-run");
   if (jsonArg === undefined) {
-    process.stderr.write("pievo: usage: pievo new --json '<config>' [--dry-run] [--connect-key dk_…] [--tz <IANA>] [--agent claude-code|codex]\n");
+    process.stderr.write("pievo: usage: pievo new --json '<config>' [--dry-run] [--connect-key dk_…] [--server-url <url>] [--tz <IANA>] [--agent claude-code|codex]\n");
     return 2;
   }
 

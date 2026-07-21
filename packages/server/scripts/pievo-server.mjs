@@ -26,6 +26,7 @@ import {
 
 const scriptFile = fileURLToPath(import.meta.url);
 const packageRoot = path.resolve(path.dirname(scriptFile), "..");
+const packageVersion = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8")).version;
 const READY_TIMEOUT_MS = 60_000;
 const DETACHED_LAUNCH_TIMEOUT_MS = 120_000;
 const STOP_TIMEOUT_MS = 10_000;
@@ -351,6 +352,10 @@ async function main() {
   }
   if (options.command === "help") {
     console.log(usage());
+    return;
+  }
+  if (options.command === "version") {
+    console.log(`pievo-server v${packageVersion}`);
     return;
   }
 

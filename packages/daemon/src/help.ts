@@ -19,21 +19,29 @@ Install and daemon lifecycle
   daemon status           Show local daemon and connection diagnostics.
 
 Loop setup and management
-  new --json '<config>' [--dry-run]
-                          Create a loop (--json - reads stdin).
+  new --json '<config>' [--dry-run] [--tz <IANA>] [--agent claude-code|codex]
+                          Create a loop (--json - reads stdin). Connection overrides:
+                          --server-url <url>, --connect-key <dk_…>.
   skill [status|install] [--project]
-                          Manage the Pievo agent skill installation.
+                          Install or inspect the Pievo skill; user scope is default.
   pause <loop>            Pause future runs; the current run continues.
   start <loop>            Start a paused loop using its existing cadence.
   stop <loop>             Pause, cancel queued work, and request run termination.
   delete <loop> [--force] Stop first, then delete server history and synced metadata.
   run stop <run>          Stop one run without pausing its loop.
-  show [<id>]             Show a loop's editable config and recent state.
+  show [<loop>]           Show editable config and recent state (--full, --json).
   log [<loop>]            Show recent runs (--json, --limit N).
   loops [--fields a,b] [--json]
                           List loops on this machine.
-  edit <id> --json '<obj>' [--dry-run]
-                          Edit a loop; content-file flags are also supported.
+  edit <loop> [--json '<obj>'] [content-file flags] [--dry-run]
+                          Apply a JSON patch and/or workflow/UI/schema files.
+
+In-run completion
+  report [--status new|resolved|nothing-new] [--message <text>]
+                          Record this run's outcome and optional state metrics.
+  finish [--message <text>] [--reason <text>]
+                          Complete a closed loop whose goal was achieved.
+  complete                Alias of finish.
 
 Upgrade
   npm install -g @kky42/pievo@latest
@@ -46,23 +54,23 @@ Upgrade
 const VERB_USAGE: Record<string, string> = {
   daemon: "pievo daemon <start|stop|restart|status>\n  Manage this machine's Pievo daemon.",
   "daemon start": "pievo daemon start [--foreground] [--server-url <url>] [--connect-key <dk_…>]\n  Start detached by default (idempotent), or run attached with --foreground.",
-  "daemon stop": "pievo daemon stop [--force]\n  Stop the daemon. Default waits for terminal-report durability; --force bounds the wait.",
+  "daemon stop": "pievo daemon stop [--force]\n  Stop the daemon. Default waits for terminal-report durability; --force bounds the wait and may discard an unpersisted terminal result.",
   "daemon restart": "pievo daemon restart [--force]\n  Stop then start the currently installed version. --force applies only to stop.",
   "daemon status": "pievo daemon status\n  Show local daemon, server connectivity, run, and report diagnostics.",
-  new: "pievo new --json '<config>' [--dry-run]\n  Create a loop (--json - reads stdin); --dry-run validates without persistence.",
-  skill: "pievo skill [status|install] [--project]\n  Manage the Pievo agent skill installation.",
+  new: "pievo new --json '<config>' [--dry-run] [--connect-key <dk_…>] [--server-url <url>] [--tz <IANA>] [--agent claude-code|codex]\n  Create a loop (--json - reads stdin); --dry-run validates without persistence. The detected coding agent takes precedence over --agent.",
+  skill: "pievo skill [status|install] [--project]\n  Install for every supported coding agent or inspect installation status. User scope is the default; --project targets the current directory.",
   pause: "pievo pause <loop>\n  Pause future runs. The current run continues.",
   start: "pievo start <loop>\n  Start a paused loop and re-arm its cadence.",
   stop: "pievo stop <loop>\n  Pause the loop, cancel queued work, and request current-run termination.",
-  delete: "pievo delete <loop> [--force]\n  Stop then delete server history and synced metadata; local project files remain.",
+  delete: "pievo delete <loop> [--force]\n  Stop then delete server history and synced metadata; local files remain. --force requires a prior ordinary delete request plus an interactive confirmation, and may remove server authority while the local process is still running.",
   run: "pievo run stop <run>\n  Stop one pending or running run without pausing its loop.",
-  log: "pievo log [<loop>] [--json] [--limit N]\n  Show recent runs. Defaults to the loop for the current directory.",
-  show: "pievo show [<id>] [--full] [--json]\n  Show a loop's editable config and recent state.",
-  loops: "pievo loops [--fields a,b] [--json]\n  List loops on this machine.",
-  edit: "pievo edit <id> --json '<obj>' [--dry-run] [content-file flags]\n  Edit a loop; --dry-run previews before/after.",
-  report: "pievo report ...\n  In-run only: record this run's result.",
-  finish: "pievo finish ...\n  In-run only: mark a closed loop's goal met.",
-  complete: "pievo complete ...\n  In-run only alias of finish.",
+  log: "pievo log [<loop>] [--json] [--limit N]\n  Show recent runs. <loop> may be an id or unique name; defaults to the loop for the current directory.",
+  show: "pievo show [<loop>] [--full] [--json]\n  Show editable config and recent state. <loop> may be an id or unique name; defaults to the loop for the current directory.",
+  loops: "pievo loops [--fields a,b] [--json]\n  List loops on this machine. Fields: timezone,notify,model,goal,taskFile,runs,lastOutcome.",
+  edit: "pievo edit <loop> [--json '<obj>'] [--workflow-file <path>] [--ui-file <path>] [--schema-file <path.json>] [--dry-run]\n  Apply a JSON patch and/or one or more content files; at least one edit input is required. --dry-run previews before/after.",
+  report: "pievo report [--status new|resolved|nothing-new] [--message <text> | --message-file <path>] [--state '<json>' | --state-file <path>]\n  In-run only: record this run's outcome and optional schema-validated metrics.",
+  finish: "pievo finish [--message <text> | --message-file <path>] [--reason <text>] [--state '<json>' | --state-file <path>]\n  In-run only: mark an exec run's closed-loop goal met.",
+  complete: "pievo complete [--message <text> | --message-file <path>] [--reason <text>] [--state '<json>' | --state-file <path>]\n  In-run only alias of finish.",
 };
 
 function versionLabel(version: string | undefined): string {
