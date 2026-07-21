@@ -18,9 +18,7 @@
  * on every existing daemon (so this ships server-first, no daemon change). exec-core
  * is the self-sufficient CORE (identity + untrusted-data guard + the non-negotiable
  * fallback core + per-run trigger + a pointer to the installable pievo skill for
- * the deep protocol); the deep protocol itself moves to the skill in a later batch.
- * The old standing system prompt (exec-loop.md) is retained as that batch's source
- * but is no longer imported or delivered.
+ * the deep protocol). The public runtime depth lives in references/run.md.
  *
  * Batch 2 extends the same move to the EVOLVE and EDIT runs, and trims the inlined
  * run history. `buildEvolvePrompt`/`buildEditPrompt` now return "" (empty system

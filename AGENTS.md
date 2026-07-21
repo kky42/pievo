@@ -108,9 +108,8 @@ computes pure functions. Run instructions: `README.md`.
   harmless no-op, so batches 1-2 shipped server-first with no daemon change), and the
   current daemon skips the flag entirely when the delivered `systemPrompt` is empty (the
   batch-5 `runner.ts` note under "Daemon gotchas"). A closed loop's goal is prompt-injected
-  as `Goal (finish line): <goal>` (an own-line fill, `{{goalLine}}`). The old standing
-  system prompt `skill/run/exec-loop.md` is retained as the source for the later
-  skill-side `references/run.md` batch but is no longer imported or delivered.
+  as `Goal (finish line): <goal>` (an own-line fill, `{{goalLine}}`). Public runtime
+  depth lives in `skill/references/run.md`.
 - The EVOLVE and EDIT runs follow the SAME first-user-turn model (Batch 2):
   `buildEvolvePrompt`/`buildEditPrompt` both return `""` (empty system prompt, same
   harmless-no-op rationale as exec), and the standing prose ships in the user turn -
@@ -146,9 +145,8 @@ computes pure functions. Run instructions: `README.md`.
      adding an agent is a one-line list edit.
   3. `skill/run/{exec-core,edit}.md` - INTERNAL run prompts, imported `?raw` by
      `gateway/prompt.ts`; never served, never bundled. `exec-core.md` is the exec
-     run's full first-user-turn CORE (folds the former `exec-trigger.md`, deleted);
-     the former standing prompt `exec-loop.md` still sits in `skill/run/` (Batch-3
-     source for `references/run.md`) but is imported by nothing. `run/edit.md`
+     run's full first-user-turn CORE (folds the former `exec-trigger.md`, deleted).
+     `run/edit.md`
      stays SEPARATE from `references/update.md` on purpose: the edit RUN uses
      run-token verbs on the current loop (`pievo set-cron`/`set-ui` ..., no id)
      and must be self-contained (skill install is best-effort), while update.md is
@@ -156,9 +154,9 @@ computes pure functions. Run instructions: `README.md`.
      run-token instructions in the public bundle.
 - `references/evolve.md` doubles as the evolve RUN prompt (same `?raw` import), so
   skill and run-dispatch cannot drift. `references/run.md` is the PUBLIC runtime
-  protocol (dual-audience: in-run enrichment + owner docs) - the depth extracted
-  from `run/exec-loop.md` §1-§4 (task-file discipline, report/finish grammar + finish
-  bar, schedule levers, front-matter conventions); the server-injected exec CORE stays
+  protocol (dual-audience: in-run enrichment + owner docs) - task-file discipline,
+  report/finish grammar + finish bar, schedule levers, and front-matter conventions;
+  the server-injected exec CORE stays
   authoritative and self-sufficient, so run.md is enrichment, never a dependency.
 - **HARD GUARDRAIL**: `packages/daemon/scripts/sync-skill.mjs` is a SELECTIVE
   whitelist copy (exactly `SKILL.md` + the 4 references). Never make it recursive -

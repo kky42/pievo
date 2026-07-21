@@ -95,7 +95,7 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('`ui` is optional')
   })
 
-  test('run.md carries the runtime protocol depth (batch 3: extracted from exec-loop §1-§4)', async () => {
+  test('run.md carries the public runtime protocol depth', async () => {
     const body = flat(await (await call('/api/skill/references/run.md')).text())
     // The task file is the loop's memory, with its three standing sections.
     expect(body).toContain('## Spec')
@@ -161,9 +161,9 @@ describe('/api/skill/references/$', () => {
   })
 
   test('internal run prompts are NOT served (public surface = create/update/evolve only)', async () => {
-    // exec-loop.md / edit.md live under skill/run/ — internal run-dispatch only. They
+    // exec-core.md / edit.md live under skill/run/ — internal run-dispatch only. They
     // must never leak through the public references route (or the npm bundle).
-    for (const name of ['exec-loop.md', 'edit.md', 'control-on.md', 'control-off.md']) {
+    for (const name of ['exec-core.md', 'edit.md', 'control-on.md', 'control-off.md']) {
       const res = await call(`/api/skill/references/${name}`)
       expect(res.status).toBe(404)
     }
