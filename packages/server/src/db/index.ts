@@ -166,14 +166,19 @@ export async function runMigrations(): Promise<void> {
 }
 
 /**
- * Best-effort clean shutdown of the runtime postgres pool (called from the boot
- * AbortController on SIGINT/SIGTERM). No-op for pglite (its file handle closes
- * with the process). Never throws — shutdown must not wedge on a slow drain.
+ * Best-effort clean shutdown of the runtime database client (called from the
+ * boot AbortController on SIGINT/SIGTERM). PGlite must be closed explicitly:
+ * after migrations it owns a referenced WASM timer that otherwise keeps Node
+ * alive until the managed launcher's graceful-stop deadline. Never throws —
+ * shutdown must not wedge on a slow drain.
  */
 export async function closeClient(): Promise<void> {
-  if (opened.driver !== "postgres") return;
   try {
-    await (opened.client as Sql).end({ timeout: 5 });
+    if (opened.driver === "postgres") {
+      await (opened.client as Sql).end({ timeout: 5 });
+    } else {
+      await (opened.client as PGlite).close();
+    }
   } catch {
     // ignore — process is exiting
   }
