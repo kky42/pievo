@@ -48,16 +48,18 @@ export async function fetchLiveData(teamId?: string) {
  * team switch (a `/t/<id>` navigation) re-seeds state from the new loader data.
  */
 export function DashboardView({ teamId, initial }: { teamId?: string; initial: DashboardData }) {
-  // Loader data seeds the page; the poll refreshes via fetch-then-set below
-  // (never router.invalidate — a loader re-run throws the whole page on a blip),
-  // so this state is the single source the page renders from.
-  const [data, setData] = useState(() => ({
-    jobs: initial?.jobs ?? [],
-    templates: initial?.templates ?? [],
-    machines: initial?.machines ?? [],
-    teams: initial?.teams,
-  }))
-  const { jobs, templates, machines, teams } = data
+  // Render loader data until the first successful in-page refresh. This matters
+  // when TanStack Router re-enters with cached data and then supplies its fresh
+  // loader result: copying `initial` into a one-time state seed would ignore that
+  // result and leave deleted loops visible until the next poll. Once fetched,
+  // live data stays authoritative so an older loader result cannot roll it back.
+  const [live, setLive] = useState<{
+    jobs: JobSummary[]
+    machines: MachineSummary[]
+    teams: TeamsView | undefined
+  } | null>(null)
+  const { jobs, machines, teams } = live ?? initial
+  const templates = initial.templates
   const online = machines.filter((m) => m.online).length
   const navigate = useNavigate()
   // Compose carries an optional template: null = blank New Loop; a TemplateInfo =
@@ -77,9 +79,7 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
   // keeps the stale data on screen; the next tick retries.
   const refetch = useCallback(async () => {
     try {
-      const live = await fetchLiveData(teamId)
-      // Keep the loader's templates - static per deploy, never re-polled.
-      setData((prev) => ({ ...prev, ...live }))
+      setLive(await fetchLiveData(teamId))
     } catch {
       /* keep what we have; the next tick retries */
     }

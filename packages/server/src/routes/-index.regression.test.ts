@@ -41,7 +41,7 @@ describe('dashboard poll resilience', () => {
     const refetch = /const refetch = useCallback\(async \(\) => \{[\s\S]*?\}, \[teamId\]\)/.exec(view)?.[0]
     expect(refetch, 'the refetch callback should exist').toBeTruthy()
     expect(refetch).toContain('catch')
-    expect(refetch).toContain('setData')
+    expect(refetch).toContain('setLive')
     // The interval tick calls refetch; the only invalidate left is the
     // errorComponent's explicit Retry (which re-runs the loader on purpose).
     const tick = /setInterval\(\s*\(\) => \{[\s\S]*?\},\s*anyRunning/.exec(view)?.[0]
@@ -51,10 +51,10 @@ describe('dashboard poll resilience', () => {
   })
 
   it('team switch NAVIGATES to /t/<id>, never router.invalidate', () => {
-    // The dashboard renders from its own fetch-then-set state (seeded once from
-    // the loader), so router.invalidate would leave the visible data stale. Phase
+    // The dashboard renders loader data until its first successful live fetch;
+    // router.invalidate could still replace the whole page on a loader blip. Phase
     // 2: switching NAVIGATES to the team's explicit URL (the loader re-scopes),
-    // and the /t/$teamId route re-seeds via key={teamId}.
+    // and the /t/$teamId route resets live state via key={teamId}.
     expect(view).toContain('<TeamSwitcher data={teams} />')
     expect(teamRoute).toContain('key={loaded!.teamId}')
     expect(switcher).toContain("to: '/t/$teamId'")
