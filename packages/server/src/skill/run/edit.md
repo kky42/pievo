@@ -30,8 +30,10 @@ names and rules here are sufficient.
   `pievo set-ui --file <path>` (the panel as small plain HTML — no
   `<script>`/handlers/`<svg>`), `pievo set-schema --file <path>` (a JSON array of
   `{key, label?, unit?}`, additive), `pievo set-workflow --file <path>` (the
-  deterministic pre-stage JS). The skill documents the panel HTML, schema shape, and
-  workflow syntax; leave any of these untouched unless the change explicitly asks.
+  deterministic pre-stage JS). For `<loop-kanban>`, preserve `columns` values during
+  display-only edits: they are case-sensitive front-matter `type` keys, not display
+  labels. The skill documents the panel HTML, schema shape, and workflow syntax; leave
+  any of these untouched unless the change explicitly asks.
 
 Changing the loop's goal or reopening a completed loop is an owner action — there is
 no `set-goal` verb here. If asked, say so in your report so the owner can run

@@ -20,6 +20,8 @@ or other auth is needed.
   explicitly asks. Then push them with the content-file flags (below); the server
   validates with the same rules as the run-time `set-*` verbs (schema stays
   additive — never drop a key still bound by the UI or reported by recent runs).
+  For `<loop-kanban>`, preserve `columns` values during display-only edits: they
+  are case-sensitive front-matter `type` keys, not display labels.
 
 First find the loop id (only loops bound to THIS machine are listed):
 
