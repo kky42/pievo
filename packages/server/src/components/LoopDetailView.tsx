@@ -477,7 +477,7 @@ export function LoopDetailView({ id }: { id: string }) {
   const agentLabel = AGENT_LABEL[job.agent ?? 'claude-code'] ?? job.agent ?? 'Claude Code'
   const modelLabel = job.exec?.model?.trim() || 'default'
   const reasoningEffortLabel = job.exec?.reasoningEffort?.trim() || 'default'
-  const newestRun = runs.at(-1)
+  const newestRun = runs[0]
   const latestIncidentRun = newestRun?.reportIncident ? newestRun : undefined
   const metaDot = <span className="text-wire">·</span>
 

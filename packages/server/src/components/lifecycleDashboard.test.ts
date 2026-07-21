@@ -128,6 +128,22 @@ describe('LoopDetailView flat lifecycle actions', () => {
     expect(host!.textContent).toContain('Paused automatically')
   })
 
+  it('renders the latest run terminal report warning on the loop page', async () => {
+    const d = makeDetail({ state: 'active' })
+    const latest: RunSummary = { ...runningRun(), id: 'newest', ts: '2026-01-02T00:00:00Z', running: false }
+    latest.reportIncident = {
+      at: '2026-01-02T00:00:00Z', code: 'REPORT_INVALID', reason: 'Terminal report rejected.',
+      issues: ['durationMs must be non-negative'], reportId: 'report-newest', payloadDigest: 'digest',
+      faultDomain: 'compatibility', recommendedAction: 'Upgrade and restart the daemon.',
+    }
+    const oldest: RunSummary = { ...runningRun(), id: 'oldest', ts: '2026-01-01T00:00:00Z', running: false }
+    d.runs = [latest, oldest]
+    d.summary.runs = d.runs
+    d.summary.runCount = d.runs.length
+    await mount(d)
+    expect(host!.textContent).toContain('Last run telemetry warning · Terminal report rejected')
+  })
+
   it('renders terminal report diagnostics on the run page', async () => {
     const d = makeDetail({ state: 'active', running: true })
     const run = d.runs[0]!
