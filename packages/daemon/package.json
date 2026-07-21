@@ -1,6 +1,6 @@
 {
   "name": "@kky42/pievo",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Pievo daemon — runs on your machine, connects to a Pievo server, and executes scheduled loops via your local coding agent (Claude Code or Codex). One binary, two roles (daemon / loop callback).",
   "license": "MIT",
   "repository": {
