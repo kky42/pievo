@@ -13,7 +13,7 @@
  * through the injected `MachineGateway`, so floors/allowControl/canFinish and
  * the flat-404 scoping flow through unchanged. The agent-api verb dispatch is a
  * compact port of c0's control.ts: report/show + the allowControl schedule
- * mutations, plus set-ui/schema/workflow gated to the evolution pass (the
+ * mutations, plus set-ui/schema gated to the evolution pass (the
  * evolve run-token carries the canSet* caps).
  */
 import { createHash } from "node:crypto";
@@ -57,7 +57,7 @@ import {
   type Applied,
   type MachineGateway,
 } from "./index.js";
-import { validateSchema, validateUi, validateWorkflow } from "./validate.js";
+import { validateSchema, validateUi } from "./validate.js";
 import { nowIso, stripNul, type HttpResult } from "./http.js";
 
 export interface CliGatewayDeps {
@@ -478,13 +478,6 @@ export class CliGateway {
         const r = await this.applySetSchema(lease, leaseTokenHash, json);
         return r.ok ? { code: 200, text: r.detail ?? "schema updated" } : derr(r.status ?? 400, r.detail ?? "rejected", r.code ?? "VALIDATION_ERROR");
       }
-      case "set-workflow": {
-        if (!lease.canSetWorkflow) return derr(403, "only the evolution or edit pass may set the workflow", "FORBIDDEN");
-        const body = str("body") ?? str("file-content");
-        if (!body) return derr(400, "set-workflow needs --file <path> (shim inlines it)", "VALIDATION_ERROR");
-        const r = await this.applySetWorkflow(lease, leaseTokenHash, body);
-        return r.ok ? { code: 200, text: r.detail ?? "workflow updated" } : derr(r.status ?? 400, r.detail ?? "rejected", r.code ?? "VALIDATION_ERROR");
-      }
     }
 
     if (MUTATION_VERBS.has(verb ?? "")) {
@@ -549,7 +542,7 @@ export class CliGateway {
       "verbs:",
       always,
       `  finish: ${finishTag}`,
-      `  dashboard/gate: ${structural}`,
+      `  dashboard: ${structural}`,
       schedule,
       helpBlock([
         "Run `pievo show` to read the current config before changing it",
@@ -561,7 +554,7 @@ export class CliGateway {
   private async applyAuthorizedMutation(
     lease: RunLease,
     leaseTokenHash: string,
-    capability: "always" | "control" | "set-ui" | "set-schema" | "set-workflow",
+    capability: "always" | "control" | "set-ui" | "set-schema",
     command: string,
     args: Record<string, string>,
     patch: {
@@ -758,13 +751,6 @@ export class CliGateway {
     return this.applyAuthorizedMutation(lease, leaseTokenHash, "set-ui", "set-ui", { bytes: String(html.length) }, { loopPatch: { ui } }, detail);
   }
 
-  private async applySetWorkflow(lease: RunLease, leaseTokenHash: string, body: string): Promise<Applied> {
-    const v = validateWorkflow(body);
-    if (!v.ok) return this.applyAuthorizedMutation(lease, leaseTokenHash, "set-workflow", "set-workflow", { bytes: String(body.length) }, {}, v.detail, "rejected");
-    const detail = v.value ? `workflow updated (${v.value.length} bytes)` : "workflow cleared";
-    return this.applyAuthorizedMutation(lease, leaseTokenHash, "set-workflow", "set-workflow", { bytes: String(body.length) }, { loopPatch: { workflow: v.value } }, detail);
-  }
-
   private async applySetSchema(lease: RunLease, leaseTokenHash: string, json: string): Promise<Applied> {
     const v = await validateSchema(lease.loopId, json);
     if (!v.ok) return this.applyAuthorizedMutation(lease, leaseTokenHash, "set-schema", "set-schema", { bytes: String(json.length) }, {}, v.detail, "rejected");
@@ -774,7 +760,7 @@ export class CliGateway {
 
   // The full editable envelope (F1/F6, §4.1 batch 2): every EDITABLE_LOOP_FIELDS key
   // keyed EXACTLY as `edit --json` accepts, PLUS the read-only derived aggregates
-  // (nextFire/classification/runs). Large content (ui/workflow) shows a presence+size
+  // (nextFire/classification/runs). Large content (ui) shows a presence+size
   // hint by default and inlines under `--full`; stateSchema renders structurally.
   //
   // `opts.allowControl`/`opts.canFinish` are a RUN caller's EFFECTIVE capabilities
@@ -982,7 +968,7 @@ interface VerbHelpSpec {
 
 /** Availability of a schedule/control mutation for a run: gated by `allowControl`. */
 const controlAvail = (l: RunLease): string => (l.allowControl ? "available to this run" : "needs allowControl (off for this loop)");
-/** Availability of a structural (set-ui/schema/workflow) verb: evolve/edit pass only. */
+/** Availability of a structural (set-ui/schema) verb: evolve/edit pass only. */
 const gateAvail = (has: (l: RunLease) => boolean | undefined) => (l: RunLease): string =>
   has(l) ? "available to this run (evolve/edit pass)" : `evolve/edit pass only — this run is "${l.role}"`;
 const alwaysAvail = (): string => "always available";
@@ -1008,7 +994,7 @@ const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
     syntax: "show [--full] [--json]",
     summary: "print this loop's current config + recent state",
     avail: alwaysAvail,
-    help: ["Run `pievo show --full` to include full workflow and dashboard content", "Run `pievo show --json` for the editable JSON envelope"],
+    help: ["Run `pievo show --full` to include full dashboard content", "Run `pievo show --json` for the editable JSON envelope"],
   },
   log: {
     syntax: "log [--limit <n>]",
@@ -1045,12 +1031,6 @@ const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
     summary: "declare metrics — a JSON array of {key, label?, unit?}",
     avail: gateAvail((l) => l.canSetSchema),
     help: ["Run `pievo set-schema --file schema.json` to declare the loop's metrics"],
-  },
-  "set-workflow": {
-    syntax: "set-workflow --file <path>",
-    summary: "replace the deterministic pre-stage JS",
-    avail: gateAvail((l) => l.canSetWorkflow),
-    help: ["Run `pievo set-workflow --file workflow.js` to replace the pre-stage"],
   },
   pause: {
     syntax: "pause",
@@ -1101,7 +1081,7 @@ RUN_VERB_HELP.complete = {
 const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
   new: {
     syntax: "new --json '<config>' [--dry-run] [--connect-key <dk_…>] [--server-url <url>] [--tz <IANA>] [--agent claude-code|codex]",
-    summary: `create a loop (keys: ${[...EDITABLE_LOOP_FIELDS].join(", ")}; cron + taskFile|workflow required)`,
+    summary: `create a loop (keys: ${[...EDITABLE_LOOP_FIELDS].join(", ")}; cron + taskFile required)`,
     help: [
       "Run `pievo new --json '{\"cron\":\"0 8 * * *\",\"taskFile\":\"<path>\"}'` to create a loop",
       "Run `pievo new --json '{...}' --dry-run` to validate without creating",
@@ -1113,7 +1093,7 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
     help: ["Run `pievo show <id>` to see a loop's full config", "Run `pievo log <id>` to see a loop's recent runs"],
   },
   edit: {
-    syntax: "edit <id> [--json '<patch>'] [--workflow-file <path>] [--ui-file <path>] [--schema-file <path.json>] [--dry-run]",
+    syntax: "edit <id> [--json '<patch>'] [--ui-file <path>] [--schema-file <path.json>] [--dry-run]",
     summary: `change a loop's config using at least one patch/file input (keys: ${[...EDITABLE_LOOP_FIELDS].join(", ")})`,
     help: [
       "Run `pievo edit <id> --json '{\"cron\":\"0 7 * * 1\"}'` to change the schedule",
@@ -1197,13 +1177,12 @@ function loopEnvelope(loop: Loop): Record<string, unknown> {
     enabled: loop.enabled,
     runAt: loop.nextRunAt ?? null,
     goal: loop.goal ?? null,
-    workflow: loop.workflow ?? null,
     ui: loop.ui ?? null,
     stateSchema: loop.stateSchema ?? null,
   };
 }
 
-/** Render a large content field (ui/workflow) for the `show` detail block: `absent`
+/** Render a large content field (ui) for the `show` detail block: `absent`
  *  when unset, the full body (scalar-quoted) under `--full`, else a presence + size
  *  hint (P3 / feedback #2 — never a char-clipped body). */
 function contentField(value: string | null, full: boolean): Scalar | { raw: string } {
@@ -1264,7 +1243,6 @@ function renderShowText(
     ["runAt", env.runAt as Scalar],
     // The setpoint: a value ⇒ CLOSED loop (finishable); em-dash ⇒ OPEN (monitor).
     ["goal", env.goal as Scalar],
-    ["workflow", contentField(loop.workflow ?? null, full)],
     ["ui", contentField(loop.ui ?? null, full)],
     [schema.key, schema.value],
   ]);
@@ -1285,7 +1263,7 @@ function renderShowText(
         'Run `pievo report --status new --message "<one line>"` to record this run',
       ]
     : [
-        `Run \`pievo show ${loop.id} --full\` to see the complete ui/workflow bodies`,
+        `Run \`pievo show ${loop.id} --full\` to see the complete ui body`,
         `Run \`pievo edit ${loop.id} --json '{"cron":"0 7 * * 1"}'\` to change the schedule`,
         `Run \`pievo log ${loop.id}\` to see recent run outcomes`,
       ];
@@ -1499,7 +1477,7 @@ function validateState(
   for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
     if (allowed && !allowed.has(k)) return { ok: false, error: `--state has unknown key "${k}". Allowed: ${[...allowed].join(", ")}` };
     // Finite number (chart point) or non-empty string (the UI binds it; chart ignores)
-    // — same contract as the widened run.state column + the workflow mirror path.
+    // — same contract as the widened run.state column.
     // NUL-strip string keys/values: a JSON-escaped \u0000 in the raw flag survives
     // parseFlags (no literal NUL yet) and only materializes at JSON.parse here -
     // and pg jsonb rejects it where SQLite tolerated it.

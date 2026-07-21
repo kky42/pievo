@@ -70,7 +70,6 @@ async function doRun(token: string, machineId: string, loopId: string, ts: strin
     allowControl: false,
     canSetUi: false,
     canSetSchema: false,
-    canSetWorkflow: false,
   });
   const manifest = files.map((f) =>
     f.oversize

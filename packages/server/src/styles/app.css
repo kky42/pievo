@@ -507,7 +507,7 @@
   .ring-logo-animated .ring-cell { animation: none; }
 }
 
-/* ─── LoopFlow — template-modal workflow diagram (components/LoopFlow.tsx) ─────
+/* ─── LoopFlow — template-modal flow diagram (components/LoopFlow.tsx) ─────
  * Absolutely-positioned HTML step nodes over an SVG wire layer; a token rides
  * the wire and lights each step in turn. Colours ride the theme vars so it
  * follows light/dark for free. The .active/.visited classes are toggled

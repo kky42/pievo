@@ -6,7 +6,7 @@ describe('parseFilenameDate', () => {
     expect(parseFilenameDate('reports/digest-2026-07-01.md')).toBe('2026-07-01')
     expect(parseFilenameDate('brief_2026_07_01.md')).toBe('2026-07-01')
     expect(parseFilenameDate('snap-20260701.png')).toBe('2026-07-01')
-    expect(parseFilenameDate('workflow-setup-2026-06-25.md')).toBe('2026-06-25')
+    expect(parseFilenameDate('report-2026-06-25.md')).toBe('2026-06-25')
   })
 
   it('rejects non-dates and digit runs that merely look like dates', () => {

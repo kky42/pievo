@@ -13,7 +13,7 @@
  * online?") and `sweep()` (mark stale machines offline, reclaim stuck runs).
  * The CLI verb dispatch (`/api/machine/cli` + `/agent-api/loop`) lives in
  * `gateway/cli.ts` (`CliGateway`), which reuses this class's methods; the
- * shared ui/workflow/schema validators live in `gateway/validate.ts`.
+ * shared ui/schema validators live in `gateway/validate.ts`.
  */
 import { Cron } from "croner";
 
@@ -60,7 +60,7 @@ import {
   truncate,
   type Scalar,
 } from "./toon.js";
-import { normalizeProviderSetting, validateSchema, validateUi, validateWorkflow } from "./validate.js";
+import { normalizeProviderSetting, validateSchema, validateUi } from "./validate.js";
 import { clipText, nowIso, stripNul, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
 
 const log = logger.child({ mod: "gateway" });
@@ -104,17 +104,13 @@ export const EDITABLE_LOOP_FIELDS = new Set([
   "taskFile",
   "enabled",
   "runAt",
-  "workflow",
   "ui",
   "stateSchema",
   "goal",
   "agent",
 ]);
 const MIN_INTERVAL_MS = 60_000;
-/** A workflow cursor bigger than this (serialized) is ignored rather than persisted
- *  onto the loop row — the run itself still records normally. */
-const CURSOR_CAP = 256 * 1024;
-/** Run messages (report --message / workflow direct message / finalText fallback).
+/** Run messages (report --message / finalText fallback).
  *  Run errors share the same cap. Exported for `cli.ts` (the report/finish verbs
  *  clip to the same budget). */
 export const MESSAGE_CAP = 2000;
@@ -153,7 +149,6 @@ interface MachineReportBody {
   message?: string;
   error?: string;
   finalText?: string;
-  cursor?: unknown;
 }
 /** How long an opted-in poll (`wait:true`) is held open for work before returning
  *  empty. Bounded under the daemon's 30s fetch timeout AND under ONLINE_TTL_MS
@@ -175,9 +170,8 @@ const LOG_RUNS_MAX = 20;
 const USAGE_MAX = 1e12;
 const REPORT_ID_CAP = 200;
 
-/** Resolve the user-facing run summary across both execution paths. A pure
- * workflow returns `body.message`; an agent may already have persisted its message
- * through `pievo report`; provider final text is only the last-resort fallback. */
+/** Resolve the user-facing run summary. An agent may already have persisted its
+ * message through `pievo report`; provider final text is only the last-resort fallback. */
 function receiptFor(body: MachineReportBody, runId: string, ackStatus = 200, ackBody?: Record<string, unknown>) {
   if (typeof body.reportId !== "string") return undefined;
   return {
@@ -858,7 +852,6 @@ export class MachineGateway {
       model?: unknown;
       /** Optional provider reasoning effort; arbitrary text, passed through verbatim. */
       reasoningEffort?: unknown;
-      workflow?: unknown;
       workdir?: unknown;
       taskFile?: unknown;
       stateSchema?: unknown;
@@ -909,21 +902,11 @@ export class MachineGateway {
     if (!cadence.ok) return { status: 400, body: { error: `invalid cron: ${cadence.detail}` } };
 
     // Untrusted wire input — clip the free-text fields defensively (same
-    // discipline as taskFileContent on report). The `task` column is GONE (batch 2):
-    // a loop's standing brief lives in its task file's Spec, and the run message is the
-    // server-composed exec CORE (see buildExecTask). So a loop needs either a
-    // deterministic workflow OR a task file to work from.
-    // Parse-check the workflow at write time (zero-exec) so a syntactically
-    // broken body — most often the Claude Code Workflow tool's `export const
-    // meta = {…}` header, which is an ES-module construct illegal in the
-    // runner's async-arrow wrapper — is rejected here with a fix-teaching
-    // message instead of failing every run. This also surfaces via `--dry-run`
-    // (the branch below runs only after this check passes).
-    const wf = validateWorkflow(str(body.workflow)?.slice(0, WIRE_TEXT_CAP) ?? "");
-    if (!wf.ok) return { status: 400, body: { error: wf.detail } };
-    const workflow = wf.value;
+    // discipline as taskFileContent on report). A loop's standing brief lives in
+    // its task file's Spec, and the run message is the server-composed exec CORE
+    // (see buildExecTask).
     const taskFile = str(body.taskFile);
-    if (!workflow && !taskFile) return { status: 400, body: { error: "provide a workflow (JS) or a taskFile (path to the loop's Spec)" } };
+    if (!taskFile) return { status: 400, body: { error: "taskFile required (path to the loop's Spec)" } };
     // Optional setpoint (clipped one-liner); absent/blank ⇒ open loop.
     const goal = str(body.goal)?.slice(0, GOAL_CAP) ?? null;
 
@@ -965,9 +948,7 @@ export class MachineGateway {
         workdir: str(body.workdir) ?? null,
         model: model ?? null,
         reasoningEffort: reasoningEffort ?? null,
-        // The workflow JS body can be large — report presence, not the source.
-        workflow: workflow != null,
-        // Ditto for the dashboard HTML — presence flag, not the markup.
+        // The dashboard HTML can be large — report presence, not the markup.
         ui: ui != null,
         goal,
         notify,
@@ -1061,7 +1042,6 @@ export class MachineGateway {
       timezone,
       model,
       reasoningEffort,
-      workflow,
       workdir: str(body.workdir),
       taskFile,
       stateSchema,
@@ -1247,7 +1227,6 @@ export class MachineGateway {
       taskFile?: unknown;
       enabled?: unknown;
       runAt?: unknown;
-      workflow?: unknown;
       ui?: unknown;
       stateSchema?: unknown;
       goal?: unknown;
@@ -1444,18 +1423,9 @@ export class MachineGateway {
     }
     // Content fields reuse the SAME validators the run-token set-* path uses, so
     // the owner edit surface can't drift from the evolve/edit run behavior. They
-    // also get the same wire clip discipline as createLoop's workflow.
+    // also get the same wire clip discipline as createLoop.
     // Content fields accept `null` as an explicit clear (what `show --json` re-feeds
     // when the field is unset — a no-op when already null, so the roundtrip holds).
-    if (p.workflow !== undefined) {
-      if (p.workflow === null) set("workflow", null, loop.workflow);
-      else if (typeof p.workflow !== "string") rejections.push({ key: "workflow", reason: "workflow must be a string (the pre-stage JS)" });
-      else {
-        const v = validateWorkflow(clipText(p.workflow, WIRE_TEXT_CAP));
-        if (!v.ok) rejections.push({ key: "workflow", reason: v.detail });
-        else set("workflow", v.value, loop.workflow);
-      }
-    }
     if (p.ui !== undefined) {
       if (p.ui === null) set("ui", null, loop.ui);
       else if (typeof p.ui !== "string") rejections.push({ key: "ui", reason: "ui must be a string (the dashboard HTML)" });
@@ -1561,7 +1531,7 @@ export class MachineGateway {
   }
 
   /** Finish already won. Enrich only run-local report data; a losing report must
-   * never write loop cursor/task state or repeat terminal side effects. */
+   * never write loop task state or repeat terminal side effects. */
   private async enrichFinishedReport(
     runToken: string,
     lease: RunLease,
@@ -1618,19 +1588,7 @@ export class MachineGateway {
     const canceled = body.result === "canceled";
     const message = reportMessage(body, run);
     const claimedOutcome = RUN_OUTCOMES.has(body.outcome as string) ? body.outcome : undefined;
-    let cursor = ok ? body.cursor : undefined;
-    if (cursor !== undefined) {
-      const serialized = JSON.stringify(cursor);
-      if ((serialized?.length ?? 0) > CURSOR_CAP) {
-        log.warn({ runId: lease.runId, bytes: serialized!.length }, "report: cursor over size cap - ignored");
-        cursor = undefined;
-      } else {
-        cursor = stripNulDeep(cursor);
-      }
-    }
-    const runState = ok && !run.state ? scalarState(cursor) : undefined;
     const loopPatch: Partial<NewLoop> = {
-      ...(cursor !== undefined ? { state: cursor } : {}),
       ...(typeof body.taskFileContent === "string"
         ? {
             taskFileContent: clipText(body.taskFileContent, WIRE_TEXT_CAP),
@@ -1650,7 +1608,6 @@ export class MachineGateway {
         phase: canceled ? "canceled" : ok ? "done" : "error",
         outcome: canceled ? "skipped" : ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
         ...coerceTelemetry(body),
-        ...(runState ? { state: runState } : {}),
         ...(message !== undefined ? { message } : {}),
         ...(canceled
           ? { error: "stopped by user" }
@@ -1827,24 +1784,9 @@ export class MachineGateway {
       return this.reconcileReclaimedReport(runToken, lease, run, body);
     }
 
-    // Persist the workflow cursor (free-form), if any — bounded by serialized size
-    // so a runaway cursor can't bloat the loop row; an over-cap cursor is dropped
-    // (the run itself still records normally).
-    let cursor = body.cursor;
-    if (cursor !== undefined) {
-      const serialized = JSON.stringify(cursor);
-      if ((serialized?.length ?? 0) > CURSOR_CAP) {
-        log.warn({ runId: lease.runId, bytes: serialized!.length }, "report: cursor over size cap — ignored");
-        cursor = undefined;
-      } else {
-        // Postgres jsonb rejects NUL — strip it from the free-form cursor's strings.
-        cursor = stripNulDeep(cursor);
-      }
-    }
     // Held until the running→terminal CAS wins. Cancel/reclaim/report losers can
     // never reach these loop-level writes.
     const loopPatch: Partial<NewLoop> = {
-      ...(cursor !== undefined ? { state: cursor } : {}),
       ...(typeof body.taskFileContent === "string"
         ? {
             taskFileContent: clipText(body.taskFileContent, WIRE_TEXT_CAP),
@@ -1853,16 +1795,9 @@ export class MachineGateway {
         : {}),
     };
 
-    // A pure workflow reports its message in this body; an agent run normally
-    // persisted one through `pievo report`. Provider final text is only fallback.
+    // An agent may already have persisted a message through `pievo report`.
+    // Provider final text is only fallback.
     const message = reportMessage(body, run);
-
-    // Mirror the workflow's returned cursor scalars onto THIS run, so the
-    // generative UI's {{latest.*}} + the trend chart bind. A pure workflow has no
-    // `pievo report --state` call (that's how exec loops set run.state), so its
-    // metrics would otherwise live only in the loop cursor and never render. Don't
-    // clobber a state the run already reported (e.g. a workflow that escalated).
-    const runState = ok && !run?.state ? scalarState(cursor) : undefined;
 
     // Whitelist the claimed outcome (untrusted wire input) — anything outside the
     // known enum falls back to the role default rather than landing in the column.
@@ -1876,7 +1811,6 @@ export class MachineGateway {
         phase: canceled ? "canceled" : ok ? "done" : "error",
         outcome: canceled ? "skipped" : ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
         ...coerceTelemetry(body),
-        ...(runState ? { state: runState } : {}),
         ...(message !== undefined ? { message } : {}),
         ...(canceled
           ? { error: "stopped by user" }
@@ -2272,7 +2206,7 @@ function renderReplayText(name: string, loopId: string, goal: string | null): st
 
 /** `pievo new --dry-run` — the normalized config + fire preview (no persistence). */
 function renderCreateDryRunText(
-  config: { name: string | null; cron: string; scheduleMode: "cron" | "continuous"; continuousDelayMinutes: number; timezone: string | null; taskFile: string | null; model: string | null; reasoningEffort: string | null; workflow: boolean; ui: boolean; goal: string | null; notify: string },
+  config: { name: string | null; cron: string; scheduleMode: "cron" | "continuous"; continuousDelayMinutes: number; timezone: string | null; taskFile: string | null; model: string | null; reasoningEffort: string | null; ui: boolean; goal: string | null; notify: string },
   nextRuns: string[],
   warning: string | undefined,
 ): string {
@@ -2286,7 +2220,6 @@ function renderCreateDryRunText(
       ["taskFile", config.taskFile],
       ["model", config.model ?? { raw: "default" }],
       ["reasoningEffort", config.reasoningEffort ?? { raw: "default" }],
-      ["workflow", config.workflow ? "present" : "absent"],
       ["ui", config.ui ? "present" : "absent"],
       ["goal", config.goal],
       ["notify", config.notify],
@@ -2340,32 +2273,6 @@ function renderEditDryRunText(
   );
 }
 
-/** Scalar (number/string) fields of a workflow's returned cursor — the run's
- *  chartable + bindable snapshot. Drops objects/arrays/booleans/null/non-finite. */
-function scalarState(cursor: unknown): Record<string, number | string> | undefined {
-  if (!cursor || typeof cursor !== "object" || Array.isArray(cursor)) return undefined;
-  const out: Record<string, number | string> = {};
-  for (const [k, v] of Object.entries(cursor as Record<string, unknown>)) {
-    if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
-    else if (typeof v === "string" && v) out[k] = v;
-  }
-  return Object.keys(out).length ? out : undefined;
-}
-
-/** Recursively strip NUL from a free-form JSON value's string keys + values — for the
- *  workflow cursor, which is stored whole into the `loop.state` jsonb column (same
- *  Postgres U+0000 constraint). Structure-preserving; non-strings pass through. */
-function stripNulDeep(v: unknown): unknown {
-  if (typeof v === "string") return stripNul(v);
-  if (Array.isArray(v)) return v.map(stripNulDeep);
-  if (v && typeof v === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [k, val] of Object.entries(v as Record<string, unknown>)) out[stripNul(k)] = stripNulDeep(val);
-    return out;
-  }
-  return v;
-}
-
 /** Trim a value to a non-empty string, or null (NUL stripped). Shared by
  *  createLoop/editLoop. */
 function str(v: unknown): string | null {
@@ -2400,8 +2307,8 @@ function canonicalJson(v: unknown): string {
 }
 
 /** Bound a value for the dry-run before→after preview: a long content string
- *  (workflow JS / dashboard HTML) is clipped so the response stays small; other
- *  scalars/arrays pass through as-is (they're already small). */
+ *  (dashboard HTML) is clipped so the response stays small; other scalars/arrays
+ *  pass through as-is (they're already small). */
 function clipPreview(v: unknown): unknown {
   const CAP = 200;
   if (typeof v === "string" && v.length > CAP) return v.slice(0, CAP) + `… (+${v.length - CAP} chars)`;

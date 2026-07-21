@@ -11,7 +11,7 @@ import { buildFormExec } from './LoopForm.js'
  * End-to-end proof of the manual-Edit model-persist bug fix, driven against a
  * real pglite store the way patchJob writes it.
  *
- * The bug: a taskFile/workflow-only loop has an EMPTY workdir. The old form
+ * The bug: a loop can have an EMPTY workdir. The old form
  * `read()` built `exec` only when workdir was non-empty, so a model edit never
  * rode the Save payload and `patchJob` (which writes model ONLY via
  * `p.exec?.model !== undefined`) silently no-op'd. The DB never updated even
@@ -59,9 +59,9 @@ afterAll(() => {
 
 test('BASELINE: the old form read() drops the model edit for an empty-workdir loop', async () => {
   const loop = await store.createLoop({
-    userId: 'u1', teamId: 't1', machineId: 'm1', name: 'Workflow-only', cron: '0 6 * * *', model: 'claude-sonnet-4-20250514',
+    userId: 'u1', teamId: 't1', machineId: 'm1', name: 'Pinned model', cron: '0 6 * * *', model: 'claude-sonnet-4-20250514',
   })
-  // Owner opens Edit on a taskFile/workflow-only loop (empty workdir) and picks a new model.
+  // Owner opens Edit on an empty-workdir loop and picks a new model.
   const exec = legacyExec({ workdir: '', model: 'claude-opus-4-20250514', allowControl: true })
   expect(exec).toBeUndefined() // <- the bug: no exec object at all
   const updated = await store.updateLoop(loop.id, execUpdate({ exec }))
@@ -69,9 +69,9 @@ test('BASELINE: the old form read() drops the model edit for an empty-workdir lo
   expect(updated!.model).toBe('claude-sonnet-4-20250514')
 })
 
-test('FIXED: a model edit persists for an empty-workdir (workflow-only) loop', async () => {
+test('FIXED: a model edit persists for an empty-workdir loop', async () => {
   const loop = await store.createLoop({
-    userId: 'u1', teamId: 't1', machineId: 'm1', name: 'Workflow-only', cron: '0 6 * * *', model: 'claude-sonnet-4-20250514',
+    userId: 'u1', teamId: 't1', machineId: 'm1', name: 'Pinned model', cron: '0 6 * * *', model: 'claude-sonnet-4-20250514',
   })
   const exec = buildFormExec({ workdir: '', model: 'claude-opus-4-20250514', reasoningEffort: '', allowControl: true })
   const updated = await store.updateLoop(loop.id, execUpdate({ exec }))

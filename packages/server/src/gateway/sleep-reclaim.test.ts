@@ -212,38 +212,7 @@ test("a cancellation report that races timeout reclaim remains canceled", async 
   expect(await store.getRun(run.id)).toMatchObject({ phase: "canceled", error: "stopped by user" });
 });
 
-test("(a'') a successful late reconcile advances loop.state and mirrors the scalar cursor onto run.state", async () => {
-  const gw = gateway(() => Promise.resolve());
-  const { machineId, loop } = (await seedMachineLoop(21 * MIN));
-  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) }));
-  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
 
-  (await gw.sweep());
-  expect((await store.getRun(run.id))!.phase).toBe("error");
-
-  // A workflow-style run wakes and reports success with a cursor.
-  const res = (await gw.report(rt, { ok: true, finalText: "sweep done", cursor: { processed: 7, sha: "abc123" } }));
-  expect(res.status).toBe(200);
-  // The workflow cursor advanced loop.state (next run's `prev` binding).
-  expect((await store.getLoop(loop.id))!.state).toEqual({ processed: 7, sha: "abc123" });
-  // The scalar cursor is mirrored onto run.state for {{latest.*}} / the trend chart.
-  expect((await store.getRun(run.id))!.state).toEqual({ processed: 7, sha: "abc123" });
-});
-
-test("(a''') a FAILED late reconcile does NOT advance loop.state (no reprocess/skip hazard)", async () => {
-  const gw = gateway(() => Promise.resolve());
-  const { machineId, loop } = (await seedMachineLoop(21 * MIN));
-  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) }));
-  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
-
-  (await gw.sweep());
-  const res = (await gw.report(rt, { ok: false, error: "workflow blew up", cursor: { processed: 7 } }));
-  expect(res.status).toBe(200);
-  expect((await store.getRun(run.id))!.phase).toBe("error");
-  // A failed run must never advance the cursor — same as the normal path.
-  expect((await store.getLoop(loop.id))!.state ?? null).toBeNull();
-  expect((await store.getRun(run.id))!.state ?? null).toBeNull();
-});
 
 test("(b) a pending run on an unreachable machine is DEFERRED — held claimable, no error, no alert", async () => {
   const { sent, fn } = recordingNotify();

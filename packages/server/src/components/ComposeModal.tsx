@@ -273,7 +273,7 @@ export function ComposeModal({
   }
 
   // Template screen — straight to the snippet (no two-step rail).
-  // Templates with a workflow diagram open a wider, two-column modal: the paste
+  // Templates with a flow diagram open a wider, two-column modal: the paste
   // prompt on the left, the loop visualization on the right. Templates without one
   // keep the plain single-column screen.
   if (template) {

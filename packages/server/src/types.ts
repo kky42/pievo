@@ -32,7 +32,7 @@ export type CodingAgent = (typeof CODING_AGENTS)[number]
 /** Coerce an unknown value to a known `CodingAgent`, or null when unrecognized.
  *  The ONE agent enum validator, imported by both write surfaces (server
  *  `buildEditUpdate`) and the web select — same anti-drift discipline as
- *  `validateUi/Workflow/Schema`. */
+ *  `validateUi`/schema validation. */
 export function coerceCodingAgent(value: unknown): CodingAgent | null {
   return typeof value === 'string' && (CODING_AGENTS as readonly string[]).includes(value) ? (value as CodingAgent) : null
 }
@@ -206,7 +206,6 @@ export interface JobFull {
   completionReason?: string | null
   pauseCause?: PauseCause | null
   taskFile?: string
-  workflow?: string
   stateSchema?: StateField[]
   /** Generative-UI template (agent-authored HTML; see LoopView). */
   ui?: string
@@ -337,7 +336,6 @@ export interface JobPayload {
   /** Set (non-empty) / clear (null|'') the closed-loop goal. Clearing also drops
    *  the completion stamps; the server enforces the lifecycle invariant. */
   goal?: string | null
-  workflow?: string
   stateSchema?: StateField[]
   ui?: string
   /** Push channel id (notification_channels.id), or '' / null to clear it. */

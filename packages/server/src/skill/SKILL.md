@@ -23,8 +23,8 @@ Read the reference for the job (they live on disk next to this file, under
 - **Editing an existing loop** (reschedule, rename, pause, set/clear a goal, or
   change what it does): **`references/update.md`**.
 - **How a loop stays coherent and improves over time** (the evolution pass that
-  sharpens its **task** and **workflow** from its own run history, then fits its
-  dashboard to the data): **`references/evolve.md`**.
+  sharpens its **task** from its own run history, then fits its dashboard to the
+  data): **`references/evolve.md`**.
 - **How a loop behaves each time it runs** (the runtime protocol: the task file as
   memory, surfacing only what changed, the report/finish grammar and finish bar, the
   schedule levers, and front-matter product conventions): **`references/run.md`**.

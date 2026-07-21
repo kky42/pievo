@@ -254,7 +254,6 @@ export const patchJob = createServerFn({ method: 'POST' })
       // clearing goal or reopening via enabled:true drops the terminal stamps).
       ...(p.goal !== undefined ? { goal: p.goal?.trim() || null } : {}),
       ...(p.taskFile !== undefined ? { taskFile: p.taskFile.trim() || null } : {}),
-      ...(p.workflow !== undefined ? { workflow: p.workflow.trim() || null } : {}),
       ...(p.stateSchema !== undefined ? { stateSchema: store.coerceStateSchema(p.stateSchema) ?? null } : {}),
       ...(p.ui !== undefined ? { ui: store.coerceUi(p.ui) ?? null } : {}),
       ...(p.exec?.workdir !== undefined ? { workdir: p.exec.workdir.trim() || null } : {}),
@@ -396,7 +395,7 @@ export const evolveJob = createServerFn({ method: 'POST' })
     const { scheduler } = await backend()
     const owned = await ownedLoop(id)
     if (!owned) return { error: 'not found' }
-    if (!store.canEvolve(owned.loop)) return { error: 'nothing to evolve - add metrics or a workflow first' }
+    if (!store.canEvolve(owned.loop)) return { error: 'nothing to evolve' }
     const queued = await scheduler.evolveNow(id)
     if (!('run' in queued)) return { error: queued.reason }
     return { ok: true, runId: queued.run.id, queued: true, coalesced: queued.state === 'coalesced' }

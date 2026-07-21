@@ -43,7 +43,7 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('<pievo-cli> log')
     expect(body).toContain('npm install -g @kky42/pievo@latest')
     expect(body).toContain('pievo daemon restart')
-    expect(body).toContain('only when those diagnostics point to a workflow/config problem')
+    expect(body).toContain('diagnostics point to a config problem')
   })
 
   test('create.md carries the §2 propose → confirm → build guidance', async () => {
@@ -150,7 +150,6 @@ describe('/api/skill/references/$', () => {
     // OQ1 scope guard: the edit-run CORE stays server-internal — no set-*/edit-run
     // verb mechanics leak into the public run protocol.
     expect(body).not.toContain('set-ui')
-    expect(body).not.toContain('set-workflow')
     expect(body).not.toContain('set-schema')
   })
 

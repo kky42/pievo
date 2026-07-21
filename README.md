@@ -36,8 +36,7 @@ Most coding agents can already run on a cron or loop a task themselves. That is 
 - **Scheduled agent loops** - cron or one-shot; open monitors or closed goals that finish themselves when met.
 - **BYOA execution** - runs on your machine via `@kky42/pievo`; the server is zero-LLM and zero code-exec. Credentials and tools stay local.
 - **Self-improving loops** - evolve passes review run history, sharpen the brief, distill state, and refine the generative dashboard.
-- **Deterministic pre-stage** - optional workflow body for cheap mechanical work before the agent; failures fall back to the agent with context.
-- **Teams + notifications** - multi-user dashboard, per-team push channels (Telegram, Feishu, and more), failure alerts.
+- **- **Teams + notifications** - multi-user dashboard, per-team push channels (Telegram, Feishu, and more), failure alerts.
 - **Synced artifact home** - loop folder in, dashboard out; front-matter products (reports, kanban cards, calendars) render as generative UI.
 - **Templates** - React Doctor, Market Research, Follow-up Tracker, Docs Sweep, Housekeeper, Dependency Triage, Error Sweep.
 - **Self-hostable** - one process, embedded pglite by default for local, Postgres + object store for production; Docker image included.

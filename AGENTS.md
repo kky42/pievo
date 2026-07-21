@@ -18,7 +18,7 @@ computes pure functions. Run instructions: `README.md`.
   - `src/gateway/` - machine gateway (`index.ts`: `MachineGateway`, the
     poll/report run-lifecycle core + owner verbs + retention/GC; `cli.ts`:
     `CliGateway`, the credential-keyed CLI dispatch for /api/machine/cli +
-    /agent-api/loop; `validate.ts`: the ONE ui/workflow/schema validator module
+    /agent-api/loop; `validate.ts`: the ONE ui/schema validator module
     both write surfaces import; `sync.ts`: `ArtifactSync`, the sync/blob byte
     ingress - boot shares ONE blob store between the classes), run tokens,
     delivery, prompt, notify, blobstore (local filesystem default/R2/in-memory test adapter), artifacts.
@@ -121,7 +121,7 @@ computes pure functions. Run instructions: `README.md`.
   (`renderRecentRuns`: ts / role / outcome-status / state KEYS only, not values /
   full provider session id / message collapsed + clipped to ~100 chars), headed by
   the on-demand `pievo log` pointer (reachable in-run).
-  `buildEditTask` KEEPS its inlined current ui/workflow/schema - that is current CONFIG,
+  `buildEditTask` KEEPS its inlined current ui/schema - that is current CONFIG,
   not history, and is useful for a surgical edit.
 - `allowControl` defaults TRUE; `false` means the owner pins the schedule. A run's
   self-schedule surface is only `reschedule` + `set-cron`, with cadence floors
@@ -242,24 +242,6 @@ computes pure functions. Run instructions: `README.md`.
     no-stacking; NEVER copy credentials/tokens/PII into reports or PRs; one dated
     `type: report` per run + actionable-error-count metric; nothing actionable = clean
     stop.
-
-## Workflows (deterministic pre-stage)
-
-- A loop's workflow is an **async function body, NOT an ES module**: top-level
-  `await` + `return {message?, state?}` are legal; top-level `export`/`import` is a
-  parse error (the daemon wraps the body in an async arrow inside a generated ESM
-  file run by bare node). Enforced at write time by `validateWorkflow` (AsyncFunction
-  constructor compile-only check) on all three write paths: createLoop, editLoop,
-  and run-token `set-workflow`. No dialect tolerance (never strip `export`).
-- `await tools.call("server.tool", args)` calls the machine's own MCP servers via
-  mcporter (headless, `disableOAuth: true` - never launches a browser flow). The
-  bridge `packages/daemon/src/mcp-bridge.mjs` is plain ESM on purpose (the workflow
-  subprocess runs bare node, dev and prod); `scripts/copy-runtime-assets.mjs` ships
-  it to `dist/`. Caps + timeout via `PIEVO_WORKFLOW_TOOL_*` env.
-- A failed workflow does NOT fail the run: `runner.ts` falls back to the agent with
-  the original task + failure context. A `/SyntaxError/` failure is a user-fix case
-  (exec runs have no `set-workflow`) - the agent writes `workflow-setup-<date>.md`
-  and surfaces a one-line owner prompt. The workflow cursor never advances on failure.
 
 ## Artifacts / storage
 
@@ -386,7 +368,7 @@ computes pure functions. Run instructions: `README.md`.
   the writable pinned override; the DB column stays `nextRunAt`) PLUS derived read-only
   aggregates (`nextFire`/`classification`/`runs`). `show --json` emits the envelope
   verbatim so dropping `id` roundtrips to a no-op `edit` patch (read/write identity,
-  pinned by a roundtrip test); large `ui`/`workflow` show a `present, N bytes` hint
+  pinned by a roundtrip test); large `ui` shows a `present, N bytes` hint
   unless `--full`. A run credential adds camelCase `selfSchedule`/`selfFinish` effective
   lines (these REPLACED the old kebab `self-schedule`/`self-finish` display keys). See
   `packages/server/AGENTS.md` for the durable notes.
@@ -433,8 +415,7 @@ computes pure functions. Run instructions: `README.md`.
   follow-up, not yet implemented.
 - Daemon jail: `PIEVO_ROOTS` is an always-applied local jail (`roots.ts`) -
   server-sent roots can only NARROW it, paths are resolve-normalized before the
-  prefix check. Child env is allowlisted everywhere (`spawn.ts`); the workflow
-  subprocess gets extra keys only via `PIEVO_WORKFLOW_ENV=KEY1,KEY2`. All daemon
+  prefix check. Child env is allowlisted everywhere (`spawn.ts`); the All daemon
   fetches go through `boundedFetch`; kills take the whole process group.
 - Exec timeout defaults to 12 hours and accepts a positive millisecond override via
   `PIEVO_EXEC_TIMEOUT_MS` (missing/zero/invalid/negative falls back to 12h). The guard
@@ -499,7 +480,7 @@ computes pure functions. Run instructions: `README.md`.
   rows while owner exec/edit/evolve rows remain claimable; the loop stays paused and
   their terminals never restore cadence. Completion cancels every pending exec/evolve
   and preserves only owner edit. Reports/finish/cancel/claim/reclaim share the loop lock;
-  terminal run + cursor/task + continuous cadence writes are one CAS transaction.
+  terminal run + task + continuous cadence writes are one CAS transaction.
   Auto-evolve is a system evolve requested from that terminal lifecycle. Pending
   system rows use immutable `runs.createdAt` for the 7d offline backstop;
   `updatedAt` remains the mutation stamp. Sweep's never-claimed/expiration writes
@@ -558,8 +539,8 @@ computes pure functions. Run instructions: `README.md`.
   no migration and cannot break rows.
 - Server route files use `createFileRoute(path).server.handlers`; dynamic-import
   heavy/native deps INSIDE handlers to stay out of the client bundle.
-- `editLoop` accepts the envelope fields plus content fields (workflow/ui/stateSchema)
-  through the SAME `validate{Ui,Workflow,Schema}` helpers the run-token `set-*` path
+- `editLoop` accepts the envelope fields plus content fields (ui/stateSchema)
+  through the SAME UI/schema validators the run-token `set-*` path
   uses (two surfaces cannot drift; schema stays additive). Keys outside
   `EDITABLE_LOOP_FIELDS` are rejected with a 400 listing the allowed set. Both
   `pievo new` and `pievo edit` support `--dry-run` (server validate-only, zero
@@ -572,7 +553,7 @@ computes pure functions. Run instructions: `README.md`.
   template-driven loop ships a **day-one dashboard** instead of waiting for an evolve
   pass. The daemon `pievo new` spreads the whole `--json` config, so both pass through
   with no whitelist change; `--dry-run` reports `ui` as a presence flag (like
-  `workflow`), not the markup. `create.md`'s "Dashboard at create" step tells the
+  `ui`), not the markup. `create.md`'s "Dashboard at create" step tells the
   agent to author the initial `ui` when the product shape is already known
   (cross-refs `evolve.md` §3).
   **A dropped dashboard is never silent**: the REAL create response echoes `ui`
@@ -622,8 +603,7 @@ computes pure functions. Run instructions: `README.md`.
   and applies `--force` only to stop. npm exclusively owns upgrades; no running-version
   file exists.
 - `pievo new` takes `--json '<inline>'` (or `--json -` for stdin); `pievo edit`
-  is JSON-only (`--json '<obj>'`) plus the content-file trio (`--workflow-file`,
-  `--ui-file`, `--schema-file`). Unknown flags reject loudly. The server is the sole
+  is JSON-only (`--json '<obj>'`) plus the content-file pair (`--ui-file`, `--schema-file`). Unknown flags reject loudly. The server is the sole
   validator.
 - `pievo log [<loop>]` - concise run survey (session ids + metrics; `--json`
   structured). Backed by `GET /api/machine/log` (device token).

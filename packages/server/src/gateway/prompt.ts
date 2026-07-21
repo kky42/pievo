@@ -29,7 +29,7 @@
  * longer dumps up to 12 runs as pretty-printed JSON (tens of KB of full messages +
  * full state); it emits a compact one-line-per-run SURVEY (ts / role / outcome-status
  * / state KEYS only / session id / message clipped ~100 chars), headed by an
- * on-demand `pievo log --json` pointer. `buildEditTask` KEEPS its inlined current ui/workflow/schema:
+ * on-demand `pievo log --json` pointer. `buildEditTask` KEEPS its inlined current ui/schema:
  * that is current config, not history, and is genuinely useful for a surgical edit.
  */
 import type { Loop, Run, StateField } from "../db/schema.js";
@@ -127,7 +127,7 @@ export function buildEditPrompt(): string {
 
 /** The edit user turn — the short edit CORE (apply ONE owner-requested change, don't
  *  run the task, don't finish, end with `pievo report`; carries the untrusted-data
- *  guard + skill pointer) ahead of the payload. The current ui/schema/workflow are
+ *  guard + skill pointer) ahead of the payload. The current ui/schema are
  *  inlined when present so an edit can make a surgical change to them rather than
  *  blind-rewrite — that is current CONFIG, not history, so it stays inlined (§3.4). */
 export function buildEditTask(loop: Loop, instruction: string): string {
@@ -143,7 +143,6 @@ export function buildEditTask(loop: Loop, instruction: string): string {
     parts.push("Current metric schema: " + formatSchemaFields(loop.stateSchema));
   }
   if (loop.ui) parts.push("Current ui:\n```html\n" + loop.ui + "\n```");
-  if (loop.workflow) parts.push("Current workflow:\n```js\n" + loop.workflow + "\n```");
   parts.push(
     `The owner wants this change:\n${instruction.trim()}`,
     "Apply it now per the instructions above, then report a one-line summary of what you changed.",
@@ -206,8 +205,7 @@ export function buildEvolveTask(loop: Loop, runs: Run[]): string {
     `Task file: ${loop.taskFile ?? "(none)"}`,
     `Metric schema: ${schema}`,
     "Current ui:\n" + (loop.ui ? "```html\n" + loop.ui + "\n```" : "(none yet — author one if the data warrants it)"),
-    "Current workflow:\n" + (loop.workflow ? "```js\n" + loop.workflow + "\n```" : "(none)"),
     renderRecentRuns(runs),
-    "Evolve this loop per your instructions: review the recent runs' log to sharpen AND distill the task file, distil/refine the workflow, fitting the dashboard as the lighter lever. Finish by logging what this pass did — `pievo report --message '<one line: which levers you pulled and why, or \"no change\" and why>'` — an internal run-log line; evolution never notifies the user.",
+    "Evolve this loop per your instructions: review the recent runs' log to sharpen and distill the task file, fitting the dashboard as the lighter lever. Finish by logging what this pass did — `pievo report --message '<one line: which levers you pulled and why, or \"no change\" and why>'` — an internal run-log line; evolution never notifies the user.",
   ].join("\n\n");
 }

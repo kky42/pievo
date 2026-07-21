@@ -163,8 +163,6 @@ export const loops = pgTable(
     taskFileContent: text("task_file_content"),
     /** When `taskFileContent` was last synced from the machine (ISO). */
     taskFileSyncedAt: text("task_file_synced_at"),
-    /** Zero-LLM pre-filter JS (authored by human / evolve). Runs on the machine. */
-    workflow: text("workflow"),
     /** Generative-UI template (authored by evolve; sanitized at render). */
     ui: text("ui"),
     /** Per-run metric schema. */
@@ -216,8 +214,6 @@ export const loops = pgTable(
      * advances this fact after each due occurrence; continuous clears it on due
      * and restores it from a successful/error terminal. */
     nextCadenceAt: text("next_cadence_at"),
-    /** Workflow cursor: last returned state, passed back as `prev`. */
-    state: jsonb("state").$type<unknown>(),
     /** Terminal exec count at last evolution (drives the periodic evolve trigger). */
     evolvedRunCount: integer("evolved_run_count"),
     createdAt: text("created_at").notNull(),
@@ -319,7 +315,6 @@ export const runLeases = pgTable(
     allowControl: boolean("allow_control").notNull().default(false),
     canSetUi: boolean("can_set_ui").notNull().default(false),
     canSetSchema: boolean("can_set_schema").notNull().default(false),
-    canSetWorkflow: boolean("can_set_workflow").notNull().default(false),
     canFinish: boolean("can_finish").notNull().default(false),
     state: text("state", { enum: ["active", "terminal-grace", "retired"] }).notNull().default("active"),
     /** Null while active/retired; ISO only during terminal-grace. */

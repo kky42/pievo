@@ -6,8 +6,8 @@ import { html } from '@codemirror/lang-html'
 import { tags as t } from '@lezer/highlight'
 
 /**
- * CodeMirror-backed code field for the manual settings form (workflow JS /
- * metrics JSON / dashboard HTML). Lives in its OWN lazy chunk - LoopForm
+ * CodeMirror-backed code field for the manual settings form (metrics JSON /
+ * dashboard HTML). Lives in its OWN lazy chunk - LoopForm
  * `lazy()`-imports it, so CodeMirror never rides in the base client bundle
  * (same discipline as the recharts-bearing LoopView chunk).
  *

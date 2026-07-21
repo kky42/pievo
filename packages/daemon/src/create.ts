@@ -3,7 +3,7 @@
  *
  * Folds SKILL.md §3 (hand IANA-timezone detection) and §4 (hand-built JSON +
  * curl) into one command. The agent's config carries only real intent —
- * name · cron · workflow|taskFile · workdir · model · reasoningEffort · stateSchema · ui · notify. This
+ * name · cron · taskFile · workdir · model · reasoningEffort · stateSchema · ui · notify. This
  * command fills the fixed envelope the agent shouldn't have to think about:
  *   - timezone: auto-detected IANA (config/--tz override), so the cadence fires
  *     in the user's local time, not the server's (UTC in prod),
@@ -193,9 +193,9 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     return 2;
   }
   // The `task` column is gone (batch 2): a loop's brief lives in its task file, so a
-  // loop needs a "workflow" (JS) OR a "taskFile" (path to the Spec) to work from.
-  if (!config.workflow && !config.taskFile) {
-    process.stderr.write('pievo: config needs a "workflow" (JS) or a "taskFile" (path to the loop\'s Spec)\n');
+  // loop needs a task file (path to the Spec) to work from.
+  if (!config.taskFile) {
+    process.stderr.write('pievo: config needs a "taskFile" (path to the loop\'s Spec)\n');
     return 2;
   }
 

@@ -35,14 +35,13 @@ export interface SpawnOptions {
 
 export function runProcess(command: string, args: string[], opts: SpawnOptions): Promise<SpawnResult> {
   // Cancellation won the race before this boundary: do not create even a
-  // short-lived provider/workflow process.
+  // short-lived provider process.
   if (opts.signal?.aborted) {
     return Promise.resolve({ code: null, signal: "SIGTERM", stdout: "", stderr: "", timedOut: false, aborted: true });
   }
   return new Promise((resolve, reject) => {
     // POSIX: run the child in its OWN process group so the timeout/abort kill can
-    // signal the whole tree — a SIGKILLed workflow's mcporter stdio grandchildren
-    // must not survive the workflow. win32 has no process groups: plain child.kill.
+    // signal the whole tree. win32 has no process groups: plain child.kill.
     const grouped = process.platform !== "win32";
     const child = spawn(command, args, {
       cwd: opts.cwd,
@@ -139,8 +138,7 @@ const BASE_ALLOW = [
 ];
 
 /** Build an allowlisted child env: the base set plus extra exact keys and prefix
- *  families. The shared helper behind execEnv() AND the workflow subprocess env
- *  (server-supplied workflow JS must never inherit the user's full shell). */
+ *  families. */
 export function allowlistEnv(extra: { keys?: string[]; prefixes?: string[] } = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const k of [...BASE_ALLOW, ...(extra.keys ?? [])]) {

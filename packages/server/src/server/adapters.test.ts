@@ -158,17 +158,3 @@ test("report incidents and pause causes cross the client adapter boundary", asyn
   expect(detail.runs.find((item) => item.id === run.id)?.reportIncident).toEqual(incident);
 });
 
-test("a workflow loop keeps the workflow kind regardless of recorded agent", async () => {
-  await store.createMachine({ id: "m-a", userId: "u1", name: "M", tokenHash: "h", online: true });
-  const loop = await store.createLoop({
-    userId: "u1",
-    machineId: "m-a",
-    name: "W",
-    cron: "0 8 * * *",
-    workflow: "return { message: 'hi' }",
-    agent: "codex",
-    enabled: true,
-    notify: "auto",
-  });
-  expect((await adapters.toJobSummary(loop)).kind).toBe("workflow");
-});

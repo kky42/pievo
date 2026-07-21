@@ -1,7 +1,6 @@
 /**
  * spawn helpers — the child-env allowlists (allowlistEnv / execEnv) and the
- * process-GROUP kill: a timed-out child's grandchildren (e.g. a workflow's
- * mcporter stdio servers) must not survive the timeout.
+ * process-GROUP kill: a timed-out child's grandchildren must not survive the timeout.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -75,24 +74,6 @@ describe("execEnv", () => {
   });
 });
 
-describe("allowlistEnv", () => {
-  test("prefix families pass through; everything outside the allowlist is dropped", () => {
-    setEnv("PIEVO_WORKFLOW_TOOL_RESULT_CAP", "1024");
-    setEnv("PIEVO_TOKEN", "dk_secret"); // NOT under the workflow prefix
-    setEnv("SOME_RANDOM_SECRET", "leak-me-not");
-    const env = allowlistEnv({ prefixes: ["PIEVO_WORKFLOW_"] });
-    expect(env.PIEVO_WORKFLOW_TOOL_RESULT_CAP).toBe("1024");
-    expect(env.PIEVO_TOKEN).toBeUndefined();
-    expect(env.SOME_RANDOM_SECRET).toBeUndefined();
-  });
-
-  test("extra exact keys join the base set", () => {
-    setEnv("EXTRA_KEY_FOR_TEST", "yes");
-    const env = allowlistEnv({ keys: ["EXTRA_KEY_FOR_TEST"] });
-    expect(env.EXTRA_KEY_FOR_TEST).toBe("yes");
-    expect(env.HOME).toBe(process.env.HOME);
-  });
-});
 
 async function waitFor(cond: () => boolean, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;

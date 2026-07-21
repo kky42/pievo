@@ -1,15 +1,11 @@
 /**
- * Run one delivery on this machine. First the workflow gate (if the loop has
- * one): a pure workflow that returns a message → report it DIRECTLY, no claude
- * (this is how zero-LLM loops work — e.g. a sensor → digest). Only if the
- * workflow escalates via `agent()` (or the loop has no workflow) do we run
- * claude-code. Finally report the run back to the server.
+ * Run one delivery on this machine: resolve the workdir, spawn the selected
+ * coding agent once, collect provider telemetry, and return a terminal report.
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { execEnv, runProcess } from "./spawn.js";
-import { runWorkflow, type AgentCall } from "./workflow.js";
 import { expandTilde } from "./loopdir.js";
 import { effectiveRoots, isWithinRoots } from "./roots.js";
 import { CALLBACK_BIN_DIR } from "./callback-bin.js";
@@ -32,7 +28,6 @@ export interface Delivery {
     name: string;
     workdir: string | null;
     taskFile: string | null;
-    workflow: string | null;
     model: string | null;
     /** Absent on older servers; unset delegates to the provider CLI default. */
     reasoningEffort?: string | null;
@@ -42,7 +37,6 @@ export interface Delivery {
      *  (`claude-code` | `codex`). */
     agent?: CodingAgent;
   };
-  prevState: unknown;
   /** Server-configured workdir jail — may only NARROW the daemon's local env
    *  PIEVO_ROOTS jail, never widen it (see roots.effectiveRoots). */
   roots?: string[];
@@ -53,14 +47,12 @@ export interface Delivery {
 export interface ReportBody {
   runId: string;
   ok: boolean;
-  /** Coding-agent subprocess exit code. Workflow-only success is 0; a spawn,
-   * timeout, signal, or pre-spawn failure has no numeric exit and reports null. */
+  /** Coding-agent subprocess exit code. A spawn, timeout, signal, or pre-spawn
+   * failure has no numeric exit and reports null. */
   exitCode: number | null;
   durationMs: number;
   outcome?: "direct" | "silent" | "exec" | "evolve";
   message?: string;
-  /** Workflow cursor (free-form) to persist as loop.state for next run's `prev`. */
-  cursor?: unknown;
   sessionId?: string;
   /** Provider-normalized token usage, summed across every subprocess attempt. */
   usage?: TokenUsage;
@@ -202,45 +194,7 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
     return completeRun({ runId: d.runId, ok: false, exitCode: null, durationMs: Date.now() - start, error: msg(err) });
   }
 
-  // 1. Workflow gate (cheap, zero-LLM). Pure result → report directly, no agent.
-  // Internal evolution passes skip this gate (they run the loop's coding agent
-  // directly) and may update ui/schema/workflow.
-  let cursor: unknown;
-  let escalation = "";
-  let workflowFailure: { error: string; source: string } | undefined;
-  if (d.role === "exec" && d.loop.workflow) {
-    const wf = await runWorkflow(d.loop.workflow, d.prevState, workdir, signal);
-    if (wf.aborted && canceled()) return completeRun({ runId: d.runId, ok: false, exitCode: null, durationMs: Date.now() - start, error: "canceled during workflow" }, "canceled");
-    if (!wf.ok) {
-      // A failed workflow (thrown JS, a failed tools.call, a timeout) no longer just
-      // reports a failed run. Instead we FALL BACK to the agent: it first completes
-      // this run's original task (the loop still delivers this tick), then diagnoses
-      // the workflow failure. Don't advance the cursor — the workflow produced none.
-      const tail = wf.stderr.trim().slice(-1200);
-      const err = wf.error ?? "workflow failed";
-      workflowFailure = {
-        error: tail ? `${err}\n${tail}` : err,
-        source: d.loop.workflow,
-      };
-      // fall through to the claude section below (task is augmented for the fallback).
-    } else {
-      cursor = wf.result!.state;
-      if (wf.result!.agentCalls.length === 0) {
-        // Pure workflow: direct message (or silent). No claude — but still sync
-        // the task file if the loop maintains one (the workflow may write it).
-        return completeRun({
-          runId: d.runId, ok: true, exitCode: 0, durationMs: Date.now() - start,
-          outcome: wf.result!.message ? "direct" : "silent",
-          message: wf.result!.message, cursor,
-          taskFileContent: readTaskFile(workdir, d.loop.taskFile, roots),
-        });
-      }
-      // Escalation: fold the workflow's signals into claude's task.
-      escalation = foldEscalation(wf.result!.agentCalls);
-    }
-  }
-
-  // 2. Exec: run claude (no workflow, the workflow escalated, or it FAILED → fallback).
+  // Run the selected coding agent exactly once.
   let ok = false;
   let sessionId: string | undefined;
   let error: string | undefined;
@@ -274,11 +228,7 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
       PIEVO_RUN_TOKEN: d.runToken,
       PIEVO_SERVER_URL: serverUrl,
     };
-    const task = workflowFailure
-      ? buildWorkflowFallbackTask(d.task, workflowFailure, dateStamp(), d.loop.name, d.loop.id)
-      : escalation
-        ? `${d.task}\n\nworkflow signal:\n${escalation}`
-        : d.task;
+    const task = d.task;
 
     // Provider sessions are deliberately single-shot. Capture sessionId for
     // possible future use, but never resume or retry this run's provider process.
@@ -343,131 +293,7 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
     // notification-exempt server-side — so an evolve pass that forgets to report
     // still leaves a readable run-log line instead of a blank timeline block.
     finalText,
-    cursor,
   }, error === "canceled by server request" ? "canceled" : undefined);
-}
-
-/** UTC date stamp (YYYY-MM-DD) for the dated workflow-setup file name. */
-export function dateStamp(now: Date = new Date()): string {
-  return now.toISOString().slice(0, 10);
-}
-
-/**
- * Build the fallback task handed to claude when a loop's deterministic workflow FAILS.
- * The agent must (1) still complete this run's original task so the loop delivers this
- * tick, then (2) diagnose the workflow failure. If the fix needs the USER to change
- * permissions / env / MCP auth, the agent writes a dated `workflow-setup-<date>.md` in
- * the loop's workdir and surfaces a one-line copy-paste fix prompt in its report.
- *
- * Pure + exported so it's unit-testable: the fallback task must carry the original task,
- * the workflow error, and the workflow source.
- */
-export function buildWorkflowFallbackTask(
-  originalTask: string,
-  failure: { error: string; source: string },
-  dateStr: string,
-  loopName: string,
-  loopId = "",
-): string {
-  const slug = loopName || "this-loop";
-  const setupFile = `workflow-setup-${dateStr}.md`;
-  // A SyntaxError is a DETERMINISTIC parse failure: the workflow never runs, fails
-  // identically every tick, and an exec run has NO verb to fix it (set-workflow is
-  // evolve/edit-only). So it must escalate to the owner, not quietly wait for evolve.
-  const isSyntaxError = /SyntaxError/.test(failure.error);
-  const editCmd = loopId
-    ? `pievo edit ${loopId} --workflow-file <corrected.js>`
-    : `pievo edit <loop-id> --workflow-file <corrected.js>`;
-  const closing = isSyntaxError
-    ? [
-        "This is a SYNTAX ERROR: the workflow fails to parse, so it never runs and will",
-        "fail IDENTICALLY on every future tick until the workflow is rewritten or cleared.",
-        "You (an exec run) have NO command to change the workflow — `set-workflow` is an",
-        "evolve/edit-only verb — so do NOT try to fix it yourself and do NOT just note it",
-        "for the next evolve pass (the loop would keep failing every tick until then).",
-        "Treat it as a user-fix case: write the setup file above with the concrete syntax",
-        "problem and a corrected workflow body (remember: a workflow is a plain script body",
-        "run inside an async function — NOT an ES module, NOT the Claude Code Workflow tool;",
-        "no top-level `export`/`import`, e.g. no `export const meta = {…}`). Then surface ONE",
-        "copy-paste owner prompt to apply it from their machine, e.g.:",
-        "",
-        `    ${editCmd}`,
-        "",
-        "or, if the workflow isn't worth keeping, clear it (`pievo edit <loop-id> --json",
-        `'{"workflow":""}'`,
-        ").",
-      ]
-    : [
-        "If instead the workflow just has a plain bug you could fix deterministically (a wrong",
-        "tool name, a bad filter), note it briefly for the next evolve pass — don't bother the",
-        "user with a fix that doesn't need them.",
-      ];
-  return [
-    originalTask,
-    "",
-    "---",
-    "IMPORTANT — workflow fallback. This loop has a cheap deterministic pre-stage (its",
-    "workflow) that runs before you. This tick the workflow FAILED, so it fell back to you.",
-    "Do TWO things, in order:",
-    "",
-    "1. First, complete THIS run's original task above, exactly as you normally would, so",
-    "   the loop still delivers its result this tick. Do not let the workflow failure stop",
-    "   you from doing the real work.",
-    "",
-    "2. Then diagnose why the workflow failed, using the error and source below.",
-    "",
-    "Workflow error:",
-    "```",
-    failure.error,
-    "```",
-    "",
-    "Workflow source:",
-    "```js",
-    failure.source,
-    "```",
-    "",
-    `If fixing the workflow needs the USER to change something you cannot (authorize an MCP`,
-    `server, set an env var / credential, grant a permission, install a runtime), do NOT try`,
-    `to do it yourself. Instead write a dated setup file \`${setupFile}\` in this loop's`,
-    `working directory that explains, concretely, exactly what the user must do to fix it.`,
-    `Then, in your report to the user, include ONE short copy-paste prompt they can paste`,
-    `into Claude Code or Codex to resolve it, e.g.:`,
-    "",
-    `    fix workflow issue in pievo/${slug}/${setupFile}`,
-    "",
-    "Note: the workflow subprocess runs with an ALLOWLISTED env — it does not inherit the",
-    "user's shell. If the failure is a missing credential that the MCP server config reads",
-    "from the environment (a `${VAR}` / `$env:VAR` placeholder, or a stdio server's env),",
-    "the fix is to name that key in `PIEVO_WORKFLOW_ENV` (comma-separated env key names",
-    "passed through to the workflow) in the daemon's environment and restart the daemon —",
-    "say so concretely in the setup file.",
-    "",
-    ...closing,
-  ].join("\n");
-}
-
-/** Per-call cap on the JSON-folded `agent()` data. The whole task travels to
- *  claude via `-p` argv, and the OS argv limit (E2BIG, ≈256KB on macOS) would
- *  kill the run outright — so a runaway tools.call result is clipped instead. */
-const ESCALATION_JSON_CAP = 64 * 1024;
-
-/** Fold the workflow's agent() escalation calls into claude's task text.
- *  Pure + exported for tests: each call's data JSON is capped (see above) with
- *  an explicit truncation marker so the agent knows the payload was clipped. */
-export function foldEscalation(calls: AgentCall[]): string {
-  return calls
-    .map((c) => {
-      let dataBlock = "";
-      if (c.data !== undefined) {
-        let json = JSON.stringify(c.data, null, 2);
-        if (json.length > ESCALATION_JSON_CAP) {
-          json = json.slice(0, ESCALATION_JSON_CAP) + `\n… [truncated — agent() data exceeded ${Math.round(ESCALATION_JSON_CAP / 1024)}KB; the task travels via argv]`;
-        }
-        dataBlock = "data:\n```json\n" + json + "\n```";
-      }
-      return [c.message, dataBlock].filter(Boolean).join("\n");
-    })
-    .join("\n\n");
 }
 
 /** Best-effort read of the loop's task file for sync to the server. The path may

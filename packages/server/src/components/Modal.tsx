@@ -14,7 +14,7 @@ export function Modal({
   open: boolean
   onClose: () => void
   children: ReactNode
-  /** Two-column dialogs (e.g. a template's prompt + workflow diagram) opt into a
+  /** Two-column dialogs (e.g. a template's prompt + flow diagram) opt into a
    *  wider shell; the default stays sized for the small compose/form dialogs. */
   wide?: boolean
 }) {

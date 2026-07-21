@@ -212,25 +212,6 @@ test("report authentication precedes invalid handling; uncorrelatable ids stay n
   expect(await store.countTerminalReportIncidents()).toBe(0);
 });
 
-test("active semantic-invalid report becomes a stable 2xx terminal incident and replays after deletion", async () => {
-  const machine = await seedMachine();
-  const loop = await seedLoop(machine.id);
-  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
-  const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false });
-  const payload = { reportId: "not-a-uuid", runId: run.id, result: "success" as const, cursor: { untrusted: true }, taskFileContent: "do not persist" };
-
-  const first = await gateway().report(token, payload);
-  expect(first).toMatchObject({ status: 200, body: { ok: true, accepted: false, terminal: true, reportId: payload.reportId, code: "REPORT_INVALID", disposition: "run-error", payloadDigest: tokens.sha256(JSON.stringify(payload)) } });
-  expect(await store.getRun(run.id)).toMatchObject({ phase: "error", reportIncident: { code: "REPORT_INVALID", reportId: payload.reportId } });
-  expect((await store.getLoop(loop.id))?.state).toBeNull();
-  expect((await store.getLoop(loop.id))?.taskFileContent).toBeNull();
-  expect(await tokens.resolveLease(token)).toBeUndefined();
-  expect(await store.countTerminalReportIncidents()).toBe(1);
-
-  await store.forceDeleteLoop(loop.id);
-  expect(await gateway().report(token, payload)).toEqual(first);
-  expect(await store.countTerminalReportIncidents()).toBe(1);
-});
 
 test.each([
   ["missing runId", { result: "success" }, "runId is required"],

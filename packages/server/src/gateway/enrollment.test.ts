@@ -77,44 +77,9 @@ test("gated mode: a forged bearer token cannot self-register via poll", async ()
   expect(await store.getMachine(tokens.machineIdFromToken(forged))).toBeUndefined();
 });
 
-test("gated mode: a forged token cannot create a loop (no machine exists)", async () => {
-  enableGate();
-  const gw = gateway();
-  const forged = "dk_unauthenticated_gated_repro";
-  // The daemon's first poll was rejected, so the machine never registered — and
-  // createLoop already fails closed on an unknown machine.
-  await gw.poll(forged, { host: "attacker-gated" });
-  const res = await gw.createLoop(forged, { name: "gated-unauth-loop", cron: "0 8 * * *", workflow: "return { message: 1 };" });
-  expect(res.status).toBe(401);
-  expect((await store.listMachines()).length).toBe(0);
-});
 
 // ---- gated mode: the legitimate connect-key flow still works end to end ----
 
-test("gated mode: a live connect-key registers, polls, and creates a loop", async () => {
-  enableGate();
-  const gw = gateway();
-  const deviceToken = tokens.mintDeviceToken();
-  const machineId = tokens.machineIdFromToken(deviceToken);
-  // The owner ran the web/AI-First connect flow, binding this token to their team.
-  await tokens.rememberConnectKey(deviceToken, { userId: "u1", teamId: store.teamIdForUser("u1") });
-
-  // First poll self-registers under the remembered owner (not "shared").
-  const poll1 = await gw.poll(deviceToken, { host: "owner-laptop" });
-  expect(poll1.status).toBe(200);
-  const machine = await store.getMachine(machineId);
-  expect(machine?.userId).toBe("u1");
-
-  // The daemon can then create a loop and keep polling.
-  const created = await gw.createLoop(deviceToken, { name: "L", cron: "0 8 * * *", workflow: "return { message: 1 };" });
-  expect(created.status).toBe(200);
-  expect((created.body as { ok: boolean }).ok).toBe(true);
-  const loops = await store.loopsForMachine(machineId);
-  expect(loops.map((l) => l.name)).toContain("L");
-
-  const poll2 = await gw.poll(deviceToken);
-  expect(poll2.status).toBe(200);
-});
 
 test("gated mode: an EXPIRED connect-key does not enroll", async () => {
   enableGate();

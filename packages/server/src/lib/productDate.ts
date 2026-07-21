@@ -7,7 +7,7 @@
  * Date rule (in priority order): a product's day comes from its FRONT MATTER
  * `date:` when present + parseable (the authoritative source — the loop declared
  * it); else from its FILENAME when parseable (`YYYY-MM-DD`, `YYYY_MM_DD`, or
- * `YYYYMMDD` - e.g. `digest-2026-07-01.md`, `workflow-setup-<date>.md`); else it
+ * `YYYYMMDD` - e.g. `digest-2026-07-01.md`, `report-<date>.md`); else it
  * falls back to the file's sync time (`updatedAt`), which the UI marks as
  * fallback-dated. Sync time ≈ run end in practice (the daemon flushes a final
  * sync before reporting), but it can misattribute a re-synced old file - hence

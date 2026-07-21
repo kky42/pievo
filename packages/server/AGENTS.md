@@ -87,9 +87,9 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - **`show` emits the FULL editable envelope** keyed EXACTLY as `edit --json` accepts
   (`loopEnvelope(loop)`: id + every `EDITABLE_LOOP_FIELDS` key — name, cron, timezone,
   notify, model, reasoningEffort, agent, allowControl, taskFile, enabled, runAt,
-  goal, workflow, ui, stateSchema) PLUS the derived read-only aggregates `nextFire`/`classification`/`runs`.
+  goal, ui, stateSchema) PLUS the derived read-only aggregates `nextFire`/`classification`/`runs`.
   `renderShowText` is the pure TOON renderer; `describe(loopId, {allowControl, canFinish,
-  full})` wraps it with the loop lookup + runs tally. Large fields (`ui`/`workflow`)
+  full})` wraps it with the loop lookup + runs tally. Large fields (`ui`)
   render as `present, N bytes — use --full to see` (or `absent`); `stateSchema` renders
   STRUCTURALLY (`[N]{key,label,unit}:` rows); `--full` inlines complete bodies (scalar-
   quoted, newlines escaped). A RUN credential adds the effective `selfSchedule`/
@@ -109,7 +109,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   this hold: (1) `set()` still writes to `update` but only RECORDS a change when the
   value actually differs (`sameLoopValue`, structural, null≡undefined) — so an all-no-op
   patch is a harmless idempotent re-apply (still 200, not "nothing to change"), while the
-  dry-run preview shows zero changes; (2) `runAt`/`workflow`/`ui`/`stateSchema` accept
+  dry-run preview shows zero changes; (2) `runAt`/`ui`/`stateSchema` accept
   `null` as an explicit clear (symmetric with `goal:null`), which is what `show --json`
   re-feeds for an unset field — a no-op when already null.
 
@@ -174,7 +174,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   lightweight guard for this batch (it also pins run.md's `--run-at`/`--next` note and
   that the retired kebab `self-schedule:`/`self-finish:` display keys never reappear).
 - `scripts/demo-cookie-unified.sh` create body used a stale `task:` field; `createLoop`
-  dropped the `task` column (batch 2) and 400s without `taskFile`/`workflow`, so the
+  dropped the `task` column (batch 2) and 400s without `taskFile`, so the
   demo was actually broken — batch 5 renames it to `taskFile` (review F7).
 - These `.md` edits compile into the server bundle via `?raw`, so this batch DEPLOYS
   server-side AND rides the next `@kky42/pievo` npm tarball for the installed skill
@@ -394,7 +394,7 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   the scheduler are public on `MachineGateway` for exactly that second consumer -
   so floors/allowControl/canFinish and the credential-type-first routing flow
   through unchanged. `gateway/toon.ts` stays the shared render spine.
-- `gateway/validate.ts` holds the ui/workflow/schema validators. ANTI-DRIFT
+- `gateway/validate.ts` holds the ui/schema validators. ANTI-DRIFT
   INVARIANT: the owner edit surface (`createLoop`/`editLoop` in index.ts) and the
   run-token `set-*` surface (`applySet*` in cli.ts) import this ONE module, so the
   two write paths cannot validate differently.

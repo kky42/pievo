@@ -65,8 +65,8 @@ Interactive
   loops [--fields a,b]    List your loops (default columns id/name/cron/enabled/
                           nextFire; --fields adds timezone/notify/model/goal/
                           taskFile/runs/lastOutcome; --json for machines).
-  edit <id> --json '<obj>'  Edit a loop (JSON-only + --workflow-file/--ui-file/
-                          --schema-file; --dry-run previews before/after).
+  edit <id> --json '<obj>'  Edit a loop (JSON-only + --ui-file/--schema-file;
+                          --dry-run previews before/after).
 ```
 
 Run `pievo --help` for the full usage text. Nested lifecycle help such as

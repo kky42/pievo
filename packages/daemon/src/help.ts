@@ -34,7 +34,7 @@ Loop setup and management
   loops [--fields a,b] [--json]
                           List loops on this machine.
   edit <loop> [--json '<obj>'] [content-file flags] [--dry-run]
-                          Apply a JSON patch and/or workflow/UI/schema files.
+                          Apply a JSON patch and/or UI/schema files.
 
 In-run completion
   report [--status new|resolved|nothing-new] [--message <text>]
@@ -67,7 +67,7 @@ const VERB_USAGE: Record<string, string> = {
   log: "pievo log [<loop>] [--json] [--limit N]\n  Show recent runs. <loop> may be an id or unique name; defaults to the loop for the current directory.",
   show: "pievo show [<loop>] [--full] [--json]\n  Show editable config and recent state. <loop> may be an id or unique name; defaults to the loop for the current directory.",
   loops: "pievo loops [--fields a,b] [--json]\n  List loops on this machine. Fields: timezone,notify,model,goal,taskFile,runs,lastOutcome.",
-  edit: "pievo edit <loop> [--json '<obj>'] [--workflow-file <path>] [--ui-file <path>] [--schema-file <path.json>] [--dry-run]\n  Apply a JSON patch and/or one or more content files; at least one edit input is required. --dry-run previews before/after.",
+  edit: "pievo edit <loop> [--json '<obj>'] [--ui-file <path>] [--schema-file <path.json>] [--dry-run]\n  Apply a JSON patch and/or one or more content files; at least one edit input is required. --dry-run previews before/after.",
   report: "pievo report [--status new|resolved|nothing-new] [--message <text> | --message-file <path>] [--state '<json>' | --state-file <path>]\n  In-run only: record this run's outcome and optional schema-validated metrics.",
   finish: "pievo finish [--message <text> | --message-file <path>] [--reason <text>] [--state '<json>' | --state-file <path>]\n  In-run only: mark an exec run's closed-loop goal met.",
   complete: "pievo complete [--message <text> | --message-file <path>] [--reason <text>] [--state '<json>' | --state-file <path>]\n  In-run only alias of finish.",

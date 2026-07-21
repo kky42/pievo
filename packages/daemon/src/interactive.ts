@@ -53,20 +53,18 @@ export function parseFlags(args: string[]): { positional: string[]; flags: Flags
   return { positional, flags };
 }
 
-/** Read a flag's file path into raw string content (for `--workflow-file` etc). */
+/** Read a flag's file path into raw string content (for file-backed edit flags). */
 function readFileFlag(flags: Flags, flag: string): string | undefined {
   const path = flags[flag];
   if (typeof path !== "string") return undefined;
   return readFileSync(path, "utf8");
 }
 
-/** The ONLY flags `pievo edit` accepts (batch 2 slim-down to JSON-only + the
- *  content trio). The scalar envelope flags (--cron/--tz/--name/--notify/--model/
- *  --pause/--resume/--run-at/--task-file) and --json-file are GONE: reshape a loop
- *  with a single `--json '<obj>'` patch, and push development-artifact content
- *  (workflow JS / UI HTML / schema JSON) via the file flags. `dry-run` is a mode,
- *  `server-url` is an optional request target override, not a patch key. */
-const EDIT_FLAGS = new Set(["json", "workflow-file", "ui-file", "schema-file", "dry-run", "server-url"]);
+/** The ONLY flags `pievo edit` accepts: reshape a loop with a single
+ * `--json '<obj>'` patch, and push development-artifact content (UI HTML /
+ * schema JSON) via the file flags. `dry-run` is a mode, `server-url` is an
+ * optional request target override, not a patch key. */
+const EDIT_FLAGS = new Set(["json", "ui-file", "schema-file", "dry-run", "server-url"]);
 
 /** The flags `pievo loops` accepts: `--fields <set>`, the `--json` escape hatch,
  *  `--help`, plus the optional server target override (consumed separately). An unknown flag is a
@@ -89,24 +87,22 @@ async function confirmForceDeleteInteractive(): Promise<boolean> {
 /**
  * Assemble the `pievo edit` patch body from the surviving flags. `--json '<obj>'`
  * carries the envelope + goal/enabled/allowControl etc; the `--*-file` flags read a
- * development-artifact file's raw content into workflow/ui/stateSchema (schema parsed
- * as JSON). Explicit `--json` keys win over the file flags. The server is the sole
+ * development-artifact file's raw content into ui/stateSchema (schema parsed as JSON).
+ * Explicit `--json` keys win over the file flags. The server is the sole
  * validator — the daemon only shapes the body. Throws on an UNKNOWN flag (a removed
  * scalar like --cron fails loudly, not silently) or unreadable/invalid file/JSON.
  */
 export function buildPatch(flags: Flags): Record<string, unknown> {
   const unknown = Object.keys(flags).filter((k) => !EDIT_FLAGS.has(k));
   if (unknown.length) {
-    throw new Error(`unknown flag --${unknown[0]} — try \`pievo --help\` (edit takes --json '<obj>', --workflow-file, --ui-file, --schema-file)`);
+    throw new Error(`unknown flag --${unknown[0]} — try \`pievo --help\` (edit takes --json '<obj>', --ui-file, --schema-file)`);
   }
 
   const patch: Record<string, unknown> = {};
 
-  // Convenience file flags — multi-line workflow/ui/schema content is awkward to
-  // embed in JSON on a CLI, so read the file's raw content into the patch field
-  // (schema parsed as JSON, mirroring the run-token `set-schema --file` shape).
-  const workflowFile = readFileFlag(flags, "workflow-file");
-  if (workflowFile !== undefined) patch.workflow = workflowFile;
+  // Convenience file flags — multi-line UI/schema content is awkward to embed in
+  // JSON on a CLI, so read the file's raw content into the patch field (schema
+  // parsed as JSON, mirroring the run-token `set-schema --file` shape).
   const uiFile = readFileFlag(flags, "ui-file");
   if (uiFile !== undefined) patch.ui = uiFile;
   const schemaFile = readFileFlag(flags, "schema-file");
@@ -128,9 +124,8 @@ const USAGE =
   "  --json '<json-object>'      the whole patch — e.g. '{\"cron\":\"0 9 * * *\",\"goal\":\"ship v1\"}'\n" +
   "                              (fields: name/cron/scheduleMode/continuousDelayMinutes/timezone/\n" +
   "                               notify/model/agent/allowControl/taskFile/enabled/\n" +
-  "                               runAt/workflow/ui/stateSchema/goal · {\"goal\":null} clears it;\n" +
+  "                               runAt/ui/stateSchema/goal · {\"goal\":null} clears it;\n" +
   "                               {\"enabled\":true} reopens a completed loop)\n" +
-  "  --workflow-file <path>      set the deterministic pre-stage JS from a file\n" +
   "  --ui-file <path>            set the dashboard HTML from a file\n" +
   "  --schema-file <path.json>   set the metric schema (JSON array) from a file\n" +
   "  --dry-run                   validate + preview before/after, change nothing\n" +
@@ -232,7 +227,7 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     // (or any explicit input flag that resolves to an empty patch) is a VALID no-op:
     // forward it so the server reports "nothing to change" + the allowed-key list (F8),
     // instead of short-circuiting to the usage screen client-side.
-    const gaveInput = flags["json"] !== undefined || flags["workflow-file"] !== undefined || flags["ui-file"] !== undefined || flags["schema-file"] !== undefined;
+    const gaveInput = flags["json"] !== undefined || flags["ui-file"] !== undefined || flags["schema-file"] !== undefined;
     if (!gaveInput) return err(USAGE), 2;
     // The whole edit travels as one unified verb: `edit <id> --json <patch> [--dry-run]`.
     const cliArgv = ["edit", id, "--json", JSON.stringify(patch), ...(dryRun ? ["--dry-run"] : [])];

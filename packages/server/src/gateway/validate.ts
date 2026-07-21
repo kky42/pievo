@@ -1,9 +1,9 @@
 /**
- * Content-field validators/normalizers for a loop's ui / workflow / stateSchema.
+ * Content-field validators/normalizers for a loop's ui / stateSchema.
  *
  * ANTI-DRIFT INVARIANT: the owner device-token edit surface (`createLoop`/
- * `editLoop` in `gateway/index.ts`) and the run-token `set-ui`/`set-workflow`/
- * `set-schema` surface (`applySet*` in `gateway/cli.ts`) MUST validate
+ * `editLoop` in `gateway/index.ts`) and the run-token `set-ui`/`set-schema`
+ * surface (`applySet*` in `gateway/cli.ts`) MUST validate
  * identically - both import this ONE module, so the two write paths cannot
  * drift. Each validator returns a normalized value ready to feed
  * `store.updateLoop`, or a `{ ok: false, detail }` the caller maps to a
@@ -24,33 +24,6 @@ export function normalizeProviderSetting(input: unknown): string | null {
 /** Sanitize/normalize dashboard HTML → the stored value (or null to clear). */
 export function validateUi(html: string): { ok: true; value: string | null } {
   return { ok: true, value: store.coerceUi(html) ?? null };
-}
-
-/** Validate + normalize the deterministic pre-stage JS → the stored value (or
- *  null to clear). A workflow body is NOT an ES module: the daemon runner
- *  (`workflow.ts` buildWrapper) interpolates it into an async arrow inside a
- *  generated ESM file, so top-level `export`/`import` (e.g. the Claude Code
- *  Workflow tool's `export const meta = {…}` header) is a PARSE error that
- *  kills the whole run before any line executes. We catch that at write time
- *  with a zero-exec parse check: the AsyncFunction constructor COMPILES the
- *  body (as the async-function body the runner will wrap it in, strict-mode
- *  matched to the ESM wrapper) but never RUNS it. Mirrors validateSchema's
- *  discriminated-union shape so the call sites map ok:false to a 400/rejection. */
-export function validateWorkflow(body: string): { ok: true; value: string | null } | { ok: false; detail: string } {
-  const src = body.trim();
-  if (!src) return { ok: true, value: null }; // clearing the workflow is fine
-  try {
-    // Zero-exec: the constructor compiles but does not execute the body.
-    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as FunctionConstructor;
-    new AsyncFunction("prev", "agent", "tools", "fetch", '"use strict";\n' + src);
-  } catch (e) {
-    const raw = e instanceof Error ? e.message : String(e);
-    const hint = /export|import/.test(raw)
-      ? " — a Pievo workflow is a plain script body (statements + `return {message?, state?}`), NOT an ES module and NOT the Claude Code Workflow tool format: remove any top-level `export`/`import` (e.g. `export const meta = {...}`). Use the injected globals `prev`/`agent`/`tools`/`fetch` directly."
-      : "";
-    return { ok: false, detail: `workflow has a syntax error: ${raw}${hint}` };
-  }
-  return { ok: true, value: src };
 }
 
 /** Validate a state schema. Accepts a JSON string (run-token path) or an

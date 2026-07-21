@@ -9,7 +9,7 @@ import { inputCls, labelCls, sectionHeadCls, selectCls } from './ui'
  * Build the exec slice of a manual form save.
  *
  * Always emits so model / reasoningEffort / allowControl ride with Save even
- * when workdir is empty (common for taskFile/workflow-only loops). Empty strings
+ * when workdir is empty. Empty strings
  * stay defined so patchJob can clear stored execution settings via `trim() || null` -
  * do not coerce cleared fields to `undefined` or gate the whole object on workdir.
  */
@@ -47,7 +47,6 @@ export interface LoopFormSeed {
   taskFile?: string
   notify?: string
   channelId?: string | null
-  workflow?: string
   stateSchema?: StateField[]
   ui?: string
   agent?: CodingAgent
@@ -62,7 +61,6 @@ interface FormState {
   taskFile: string
   notify: string
   channelId: string
-  workflow: string
   stateSchema: string
   ui: string
   agent: CodingAgent
@@ -82,7 +80,6 @@ function initState(initial?: LoopFormSeed): FormState {
     taskFile: initial?.taskFile ?? '',
     notify: initial?.notify ?? 'auto',
     channelId: initial?.channelId ?? '',
-    workflow: initial?.workflow ?? '',
     stateSchema: initial?.stateSchema ? JSON.stringify(initial.stateSchema) : '',
     ui: initial?.ui ?? '',
     agent: initial?.agent ?? 'claude-code',
@@ -187,7 +184,6 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
           taskFile: f.taskFile.trim(),
           notify: f.notify,
           channelId: f.channelId || null,
-          workflow: f.workflow.trim(),
           ui: f.ui.trim() || undefined,
           agent: f.agent,
           exec: buildFormExec(f),
@@ -284,7 +280,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
             onChange={(v) => set('workdir', v)}
             mono
             ph="/Users/you/Workspace/project"
-            hint="Project root on the machine - empty means workflow-only / agent() escalation."
+            hint="Project root on the machine. Empty lets the daemon use a scratch directory."
           />
           <TextField
             label="Model"
@@ -315,22 +311,8 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
         <div className="min-w-0">
           <Section
             title="Agent-authored content"
-            hint="Workflow, metrics and dashboard - usually written by evolve passes; edit by hand here when you know exactly what you want."
+            hint="Metrics and dashboard - usually written by evolve passes; edit by hand here when you know exactly what you want."
           />
-
-          <label className={labelCls}>Workflow · JavaScript function body</label>
-          <Suspense fallback={<EditorFallback minHeight="180px" />}>
-            <CodeField
-              lang="js"
-              value={f.workflow}
-              onChange={(v) => set('workflow', v)}
-              minHeight="180px"
-              placeholder={'const res = await tools.call("server.tool", { ... })\nreturn { message: "...", state: { ... } }'}
-            />
-          </Suspense>
-          <div className={hintCls}>
-            Deterministic zero-LLM pre-stage; top-level await and return {'{message, state}'} are allowed (optional).
-          </div>
 
           <label className={labelCls}>Metrics schema · JSON array</label>
           <Suspense fallback={<EditorFallback minHeight="90px" />}>

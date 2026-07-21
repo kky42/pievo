@@ -9,8 +9,8 @@
 /**
  * Body cap for the standard machine routes (poll / report / loop / agent-api).
  * 2MB — generously above the largest legitimate body: a report can carry a
- * 512KB taskFileContent + 512KB finalText + a 256KB cursor; an editLoop/agent-api
- * payload maxes out around one or two 512KB content fields. The sync route has
+ * 512KB taskFileContent + 512KB finalText; an editLoop/agent-api payload maxes
+ * out around one or two 512KB content fields. The sync route has
  * its own, larger cap (SYNC_BODY_CAP — it inlines blob bytes).
  */
 export const MACHINE_BODY_CAP = 2 * 1024 * 1024;
@@ -83,7 +83,7 @@ export interface HttpResult {
   body: unknown;
 }
 
-/** Cap for free-text wire fields (task / workflow / taskFileContent) — one shared
+/** Cap for free-text wire fields (task / taskFileContent) — one shared
  *  clipping discipline for every large string the daemon can send. */
 export const WIRE_TEXT_CAP = 512 * 1024;
 
@@ -94,7 +94,7 @@ export function nowIso(): string {
 /** Strip NUL (U+0000) from a wire string: Postgres text/jsonb columns REJECT the
  *  NUL byte (SQLite tolerated it), so a daemon-supplied string carrying one would
  *  throw mid-finalize on the DB write. The single sanitizing primitive behind
- *  `clipText` and index.ts's `str`/`stripNulDeep` - and used directly by `cli.ts`
+ *  `clipText` and index.ts's `str` - and used directly by `cli.ts`
  *  (parseFlags/validateState, the same one-chokepoint discipline). */
 export function stripNul(s: string): string {
   return s.replace(/\u0000/g, "");

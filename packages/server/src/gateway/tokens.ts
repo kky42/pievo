@@ -120,7 +120,6 @@ export interface RunLeaseCaps {
   allowControl: boolean;
   canSetUi?: boolean;
   canSetSchema?: boolean;
-  canSetWorkflow?: boolean;
   /** May THIS run declare the loop's goal met via `pievo finish`? Minted true
    *  only for an EXEC run on a CLOSED loop (loop.goal != null) — independent of
    *  allowControl (like the structural caps). Evolve/edit runs never get it. */
@@ -172,7 +171,6 @@ function leaseFromRow(row: typeof runLeases.$inferSelect): RunLease {
     allowControl: row.allowControl,
     canSetUi: row.canSetUi,
     canSetSchema: row.canSetSchema,
-    canSetWorkflow: row.canSetWorkflow,
     canFinish: row.canFinish,
     state: row.state,
     expiresAt: row.expiresAt == null ? Number.POSITIVE_INFINITY : Date.parse(row.expiresAt),
@@ -193,7 +191,6 @@ export async function registerRunLease(caps: RunLeaseCaps): Promise<string> {
     allowControl: caps.allowControl,
     canSetUi: caps.canSetUi ?? false,
     canSetSchema: caps.canSetSchema ?? false,
-    canSetWorkflow: caps.canSetWorkflow ?? false,
     canFinish: caps.canFinish ?? false,
     createdAt: new Date().toISOString(),
   });

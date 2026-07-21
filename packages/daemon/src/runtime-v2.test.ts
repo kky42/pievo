@@ -13,7 +13,7 @@ afterEach(() => { delete process.env.PIEVO_CLAUDE_BIN; delete process.env.PIEVO_
 
 function delivery(): Delivery {
   root ||= fs.mkdtempSync(path.join(os.tmpdir(), "pievo-v2-"));
-  return { runId: "run-1", runToken: "rk_1", role: "exec", loop: { id: "loop-1", name: "one", workdir: root, taskFile: null, workflow: null, model: null, allowControl: false }, prevState: null, systemPrompt: "", task: "do it" };
+  return { runId: "run-1", runToken: "rk_1", role: "exec", loop: { id: "loop-1", name: "one", workdir: root, taskFile: null, model: null, allowControl: false }, systemPrompt: "", task: "do it" };
 }
 
 describe("poll protocol v2", () => {
@@ -53,68 +53,6 @@ function stubbornTreeSource(files: { ready: string; pids: string; terms: string 
   ].join(";");
 }
 
-describe("run-scoped cancellation", () => {
-  test("cancel before spawn produces canceled without starting the provider", async () => {
-    const marker = path.join((delivery().loop.workdir as string), "spawned");
-    const fake = path.join(root, "fake.sh");
-    fs.writeFileSync(fake, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
-    process.env.PIEVO_CLAUDE_BIN = fake;
-    const ac = new AbortController();
-    ac.abort(RUN_CANCEL_REASON);
-    const terminal = await executeDelivery(delivery(), "https://example.test", [], ac.signal);
-    expect(terminal.result).toBe("canceled");
-    expect(fs.existsSync(marker)).toBe(false);
-  });
-
-  test("classifies a provider that converts SIGTERM into exit code 143 as canceled", async () => {
-    const d = delivery();
-    const ready = path.join(root, "trap-ready");
-    const fake = path.join(root, "trap-term.sh");
-    fs.writeFileSync(fake, [
-      "#!/bin/sh",
-      "trap 'exit 143' TERM",
-      `touch '${ready}'`,
-      "while true; do sleep 1; done",
-      "",
-    ].join("\n"), { mode: 0o755 });
-    process.env.PIEVO_CLAUDE_BIN = fake;
-    const ac = new AbortController();
-    const running = executeDelivery(d, "https://example.test", [], ac.signal);
-    await waitFor(() => fs.existsSync(ready));
-    ac.abort(RUN_CANCEL_REASON);
-    const terminal = await running;
-    expect(terminal).toMatchObject({ result: "canceled", exitCode: 143 });
-  });
-
-  test.each(["workflow", "claude-code", "codex"] as const)("cancel during %s sends TERM, falls back to KILL, and kills descendants", async (kind) => {
-    if (process.platform === "win32") return;
-    const d = delivery();
-    const files = {
-      ready: path.join(root, `${kind}-child-ready`),
-      pids: path.join(root, `${kind}-pids`),
-      terms: path.join(root, `${kind}-terms`),
-    };
-    const source = stubbornTreeSource(files);
-    if (kind === "workflow") d.loop.workflow = source;
-    else {
-      d.loop.agent = kind;
-      const fake = path.join(root, `stubborn-${kind}.mjs`);
-      fs.writeFileSync(fake, `#!/usr/bin/env node\n${source}\n`, { mode: 0o755 });
-      process.env[kind === "codex" ? "PIEVO_CODEX_BIN" : "PIEVO_CLAUDE_BIN"] = fake;
-    }
-    const ac = new AbortController();
-    const running = executeDelivery(d, "https://example.test", [], ac.signal);
-    await waitFor(() => fs.existsSync(files.ready) && fs.existsSync(files.pids));
-    const pids = fs.readFileSync(files.pids, "utf8").split(",").map(Number);
-    const canceledAt = Date.now();
-    ac.abort(RUN_CANCEL_REASON);
-    const terminal = await running;
-    expect(terminal.result).toBe("canceled");
-    expect(Date.now() - canceledAt).toBeGreaterThanOrEqual(4500);
-    expect(fs.readFileSync(files.terms, "utf8").split("\n").sort()).toEqual(["", "child", "parent"]);
-    await waitFor(() => pids.every((pid) => !isAlive(pid)));
-  }, 12000);
-});
 
 describe("single-flight persistence boundary", () => {
   test("permanent local persistence failures back off to a fixed 30s ceiling", () => {

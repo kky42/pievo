@@ -76,10 +76,9 @@ export function coerceUi(raw: unknown): string | undefined {
   return s ? s : undefined;
 }
 
-/** Any loop can evolve: the evolve pass bootstraps schema/ui/workflow from run
- *  data, so a plain task loop is a prime candidate (turn repeated work into a
- *  gate, add a dashboard). The terminal lifecycle applies the run-count/time
- *  throttle; owner-requested evolve remains unrestricted. */
+/** Any loop can evolve: the evolve pass sharpens the task, schema, and UI from
+ *  run data. The terminal lifecycle applies the run-count/time throttle;
+ *  owner-requested evolve remains unrestricted. */
 export function canEvolve(_loop: Loop): boolean {
   return true;
 }
@@ -731,7 +730,7 @@ export async function refreshRunHeartbeats(
   return refreshed.length;
 }
 
-type RunMutationCapability = "always" | "report" | "control" | "set-ui" | "set-schema" | "set-workflow" | "finish";
+type RunMutationCapability = "always" | "report" | "control" | "set-ui" | "set-schema" | "finish";
 type ActiveRunCheck =
   | { state: "active"; run: Run }
   | { state: "invalid-lease" | "run-not-running" | "forbidden" };
@@ -764,7 +763,6 @@ async function activeRunForMutationTx(
     (capability === "control" && lease.allowControl) ||
     (capability === "set-ui" && lease.canSetUi) ||
     (capability === "set-schema" && lease.canSetSchema) ||
-    (capability === "set-workflow" && lease.canSetWorkflow) ||
     (capability === "finish" && lease.canFinish);
   if (!permitted) return { state: "forbidden" };
   const run = (
@@ -1039,7 +1037,7 @@ export async function rejectTerminalReport(input: {
   });
 }
 
-/** Atomically CAS running→terminal and apply the report's loop cursor/task patch.
+/** Atomically CAS running→terminal and apply the report's loop patch.
  * The loop patch is unreachable when cancel/reclaim/another report won. */
 export async function finalizeRunningRun(
   loopId: string,
@@ -1478,7 +1476,7 @@ export async function claimReadyRunForMachine(machineId: string, at = nowIso()):
     const structural = run.role === "evolve" || run.role === "edit";
     await tx.insert(runLeases).values({ tokenHash, runId: run.id, loopId: loop.id, machineId, role: run.role,
       allowControl: structural || loop.allowControl, canSetUi: structural, canSetSchema: structural,
-      canSetWorkflow: structural, canFinish: run.role === "exec" && loop.goal != null, createdAt: at });
+      canFinish: run.role === "exec" && loop.goal != null, createdAt: at });
     return { run, loop, runToken };
   });
 }

@@ -1,122 +1,61 @@
 # Edit an existing loop
 
-A loop lives in two places, and you change each where it lives. Use the same
-**pievo-cli** prefix as for create (default `pievo`); it
-reuses this machine's persisted device token, so no `--server-url`/`--connect-key`
-or other auth is needed.
+A loop lives in two places, and you change each where it lives. Use the same **pievo-cli** prefix as for create (default `pievo`); it reuses this machine's persisted device token.
 
-- **Schedule / delivery envelope + goal** (cadence, name, timezone, notify, model,
-  reasoning effort, pause, goal, …) — the server owns it. Change it with `pievo edit` (below), which
-  is **JSON-only**: one `--json '<patch>'` of just the fields that change.
-- **What the loop does** (its instructions, context, log) — the loop's **task file
-  (`pievo/<slug>/README.md`) on this machine**. Edit it directly in the repo,
-  keeping its `## Spec` / `## Current understanding` / `## Timeline` structure; it
-  syncs back to the server on the loop's next run. (How a run maintains it:
-  `evolve.md`.) To point the loop at a *different* task file, patch the path:
-  `--json '{"taskFile":"…"}'` (the server records the path only; move/create the
-  file yourself).
-- **Dashboard / metric schema / workflow** — the loop normally shapes these itself
-  during its **evolution pass** (see `evolve.md`); leave them to it unless the user
-  explicitly asks. Then push them with the content-file flags (below); the server
-  validates with the same rules as the run-time `set-*` verbs (schema stays
-  additive — never drop a key still bound by the UI or reported by recent runs).
-  For `<loop-kanban>`, preserve `columns` values during display-only edits: they
-  are case-sensitive front-matter `type` keys, not display labels.
+- **Schedule / delivery envelope + goal** — cadence, name, timezone, notify, model, reasoning effort, pause, goal, etc. Change it with `pievo edit --json '<patch>'`.
+- **What the loop does** — the task file (`pievo/<slug>/README.md`) on this machine. Edit it directly, preserving `## Spec`, `## Current understanding`, and `## Timeline`. To point at a different task file, patch `taskFile`.
+- **Dashboard / metric schema** — usually left to evolution. If the user explicitly asks, push them with `--ui-file` / `--schema-file`; schema changes are additive.
 
-First find the loop id (only loops bound to THIS machine are listed):
+Find the loop id:
 
 ```bash
 <pievo-cli> loops
-# -> loop-xxxx  on      0 8 * * *  Asia/Shanghai  Cookie Daily Breakfast Report
-#    loop-yyyy  paused  0 * * * *                 Hourly metrics
 ```
 
-The default columns are `id`/`name`/`cron`/`enabled`/`nextFire`; add more with
-`--fields` (comma-separated, from `timezone`,`notify`,`model`,`reasoningEffort`,
-`goal`,`taskFile`,`runs`,`lastOutcome`) — an unknown field fails loud. `--json` emits the full records
-as a raw JSON array (every field, `runs`/`lastOutcome` always computed) when you need
-to parse the list instead of read it.
+Before reshaping behavior, read recent runs with `<pievo-cli> log <loop-id>` so the edit is grounded in evidence.
 
-Before reshaping a loop, see how its recent runs actually went with
-`<pievo-cli> log` (the loop for the current directory) or
-`<pievo-cli> log <loop-id>` (`--limit N`, `--json`) — a concise survey of status,
-metrics, and session ids. Read it first so
-an edit is grounded in what the runs really did, not a guess.
-
-## Edit the envelope — one JSON patch
-
-Pass only the fields that change. The server validates the patch and rejects unknown
-keys, so a typo fails loudly instead of a silent no-op:
+## Edit the envelope
 
 ```bash
-<pievo-cli> edit <loop-id> --json '{"cron":"0 9 * * *","notify":"always"}'   # reschedule + notify policy
-<pievo-cli> edit <loop-id> --json '{"scheduleMode":"continuous","continuousDelayMinutes":5}' # run again 5m after each exec terminal
-<pievo-cli> edit <loop-id> --json '{"enabled":false}'                         # pause (true = resume / reopen)
-<pievo-cli> edit <loop-id> --json '{"allowControl":false}'                    # pin the schedule — runs stop self-scheduling
-<pievo-cli> edit <loop-id> --json '{"goal":"ship v1.0"}'                      # make it closed (or change the finish line)
-<pievo-cli> edit <loop-id> --json '{"goal":null}'                             # back to an open monitor (clears goal AND completion)
+<pievo-cli> edit <loop-id> --json '{"cron":"0 9 * * *","notify":"always"}'
+<pievo-cli> edit <loop-id> --json '{"scheduleMode":"continuous","continuousDelayMinutes":5}'
+<pievo-cli> edit <loop-id> --json '{"enabled":false}'
+<pievo-cli> edit <loop-id> --json '{"goal":"ship v1.0"}'
+<pievo-cli> edit <loop-id> --json '{"goal":null}'
 ```
 
-The whitelist — every key `--json` accepts:
+Accepted keys:
 
-| key            | value                          | effect |
-|----------------|--------------------------------|--------|
-| `name`         | string                         | rename |
-| `cron`         | 5-field cron string            | retained cron cadence (owner path has no cadence floor) |
-| `scheduleMode` | `cron` \| `continuous`          | switch cadence mode; goal is independent |
-| `continuousDelayMinutes` | integer >= 1          | delay after each continuous exec ends (`done` or `error`) |
-| `timezone`     | IANA name                      | change the cron zone |
-| `notify`       | `always` \| `auto` \| `never`  | delivery policy |
-| `model`        | arbitrary string or `null`     | provider model; `null` uses the coding-agent CLI default |
-| `reasoningEffort` | arbitrary string or `null`  | provider reasoning effort; `null` uses the coding-agent CLI default |
-| `agent`        | `claude-code` \| `codex` | which coding agent executes this loop on the bound machine |
-| `allowControl` | boolean                        | `false` = **pin** the schedule (runs can't self-adjust) |
-| `enabled`      | boolean                        | `false` pauses; `true` resumes — or **reopens** a completed loop (clears its completion stamps; goal survives) |
-| `runAt`        | `2h` / ISO                     | one extra run soon, then resume cadence |
-| `taskFile`     | absolute path                  | repoint at a different task-file README |
-| `goal`         | string, or `null`             | set/change the finish line, or clear it (clearing also drops completion) |
-| `workflow`     | JS string                      | usually via `--workflow-file` instead |
-| `ui`           | HTML string                    | usually via `--ui-file` instead |
-| `stateSchema`  | array of `{key,label?,unit?}`  | usually via `--schema-file` instead |
+| key | value | effect |
+|---|---|---|
+| `name` | string | rename |
+| `cron` | 5-field cron string | retained cron cadence |
+| `scheduleMode` | `cron` \| `continuous` | switch cadence mode |
+| `continuousDelayMinutes` | integer >= 1 | delay after each continuous exec terminal |
+| `timezone` | IANA name | change cron zone |
+| `notify` | `always` \| `auto` \| `never` | delivery policy |
+| `model` | string or `null` | provider model; `null` uses CLI default |
+| `reasoningEffort` | string or `null` | provider reasoning effort; `null` uses CLI default |
+| `agent` | `claude-code` \| `codex` | coding agent used on the bound machine |
+| `allowControl` | boolean | `false` pins the schedule |
+| `enabled` | boolean | pause/resume; `true` reopens a completed loop |
+| `runAt` | `2h` / ISO | one extra run soon |
+| `taskFile` | absolute path | repoint at a different task-file README |
+| `goal` | string or `null` | set/change/clear the finish line |
+| `ui` | HTML string | usually via `--ui-file` |
+| `stateSchema` | array of `{key,label?,unit?}` | usually via `--schema-file` |
 
-Preview any patch with `--dry-run` — the server shows each key's before→after and any
-rejections, changing nothing (exits non-zero if the patch would be rejected):
+Preview with `--dry-run`.
+
+## Content fields
 
 ```bash
-<pievo-cli> edit <loop-id> --json '{"goal":null,"cron":"0 9 * * *"}' --dry-run
+<pievo-cli> edit <loop-id> --ui-file dash.html
+<pievo-cli> edit <loop-id> --schema-file schema.json
 ```
 
-## Content fields — reshape without a run
-
-These read a file's raw content into the patch (schema parsed as JSON), mirroring the
-run-time `set-*` verbs — because multi-line JS/HTML/JSON is awkward to embed in a
-`--json` string:
-
-```bash
-<pievo-cli> edit <loop-id> --workflow-file wf.js      # replace the deterministic pre-stage JS
-<pievo-cli> edit <loop-id> --ui-file dash.html        # replace the dashboard HTML
-<pievo-cli> edit <loop-id> --schema-file schema.json  # replace the metric schema (JSON array)
-```
-
-A `--workflow-file` body must obey the workflow syntax contract — a plain statement
-sequence run inside an async function, **not an ES module and not the Claude Code
-`Workflow` tool** (no top-level `export`/`import`, never `export const meta = {…}`;
-see `create.md` §4). The server parse-checks it and rejects a bad body (surfaced by
-`--dry-run`).
-
-Explicit `--json` keys win over any file flag. `pievo edit` prints
-`updated <name> — <fields>` on success, or `pievo: <error>` to fix. You can only
-edit loops bound to this machine; if `<pievo-cli> loops` doesn't list it, the user
-is on a different machine than the one running the loop.
-
-> Pausing, reopening, or running a loop now are also one-click in the Pievo web
-> dashboard. Manual run/evolve/edit requests may be queued while paused or offline;
-> completed loops accept only manual edit until reopened.
+Explicit `--json` keys win over file flags. You can only edit loops bound to this machine.
 
 ## Diagnose a rejected terminal report
 
-Use `<pievo-cli> show <loop-id>` and `<pievo-cli> log <loop-id>` first. If the
-incident names the daemon or compatibility fault domain, upgrade Pievo and restart
-the daemon (`npm install -g @kky42/pievo@latest`, then `pievo daemon restart`).
-Edit the workflow or loop configuration only when those diagnostics point to a
-workflow/config problem; do not guess at a repair from the rejection alone.
+Use `<pievo-cli> show <loop-id>` and `<pievo-cli> log <loop-id>` first. If the incident names the daemon or compatibility fault domain, upgrade Pievo and restart the daemon: `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`. Edit loop configuration only when diagnostics point to a config problem.
