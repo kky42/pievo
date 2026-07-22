@@ -565,6 +565,14 @@ computes pure functions. Run instructions: `README.md`.
 
 ## Daemon gotchas
 
+- **Server/daemon compatibility gate is mandatory for breaking wire changes.** When a
+  server change stops accepting any payload/behavior produced by a published daemon,
+  bump `packages/server/src/gateway/compat.ts` `MIN_DAEMON_VERSION` to the FIRST
+  compatible `@kky42/pievo` version and update tests/UI fixtures that pin
+  `requiredDaemonVersion`. Do this in the same change as the incompatibility, so
+  old daemons get `needsUpdate`/`UPGRADE_REQUIRED` instead of running and failing
+  mid-run. If old daemons remain accepted because the change is additive or ignores
+  extra fields, leave the gate but make that compatibility explicit in the PR/commit.
 - **Routing lives in the pure `route.ts` `classify(argv, env)`** (batch 6, unit-tested
   without hanging a subprocess); `cli.ts` maps the returned `Route` to its lazily-imported
   handler. The in-run callback (`PIEVO_RUN_TOKEN`+args) still wins FIRST; `-v`/`--version`
