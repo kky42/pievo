@@ -27,12 +27,12 @@
  * The untrusted-data guard rides along in that prose (evolve reads run messages;
  * edit reads the loop's current config — both untrusted). `buildEvolveTask` no
  * longer dumps up to 12 runs as pretty-printed JSON (tens of KB of full messages +
- * full state); it emits a compact one-line-per-run SURVEY (ts / role / phase-status
- * / state KEYS only / session id / message clipped ~100 chars), headed by an
+ * full metric values); it emits a compact one-line-per-run SURVEY (ts / role /
+ * phase-status / metric KEYS only / session id / message clipped ~100 chars), headed by an
  * on-demand `pievo log --json` pointer. `buildEditTask` KEEPS its inlined current ui/schema:
  * that is current config, not history, and is genuinely useful for a surgical edit.
  */
-import type { Loop, Run, StateField } from "../db/schema.js";
+import type { Loop, Run, MetricField } from "../db/schema.js";
 
 // Inlined at build time (Vite ?raw) so the prompt prose ships inside the nitro
 // bundle. Reading them from disk at runtime broke in prod: nitro bundles JS only,
@@ -59,20 +59,23 @@ function fillVars(text: string, vars: Record<string, string>): string {
 }
 
 /** One-line human description of a loop's metric schema: `key (unit) — label; …`. */
-function formatSchemaFields(schema: StateField[]): string {
+function formatSchemaFields(schema: MetricField[]): string {
   return schema.map((f) => `${f.key}${f.unit ? ` (${f.unit})` : ""}${f.label ? ` — ${f.label}` : ""}`).join("; ");
 }
 
 /** The schema-derived `pievo report` grammar line for a loop's metric charts. */
-function stateReportLine(loop: Loop): string {
-  const schema = loop.stateSchema ?? [];
+function metricReportLine(loop: Loop): string {
+  const schema = loop.metricSchema ?? [];
   return schema.length
-    ? `pievo report --status kept|no-change|blocked --state '{${schema.map((f) => `"${f.key}":<n>`).join(",")}}'
-  # record this run's status and metrics for the trend chart. Fields (keys must match, values must be finite numbers):
+    ? `pievo report --status kept|no-change|blocked --message "<concise result or no-go reason>" --metrics '{${schema.map((f) => `"${f.key}":<number|null>`).join(",")}}'
+  # exec runs MUST include every declared metric key. Fields (keys must match exactly):
   #   ${formatSchemaFields(schema)}
-  # report a subset if you only observed some; big payloads: --state-file <path>.`
-    : `pievo report --status kept|no-change|blocked
-  # this loop has no metric schema, so this run records no chart metrics — just the status/message.
+  # Use finite numbers for observed values, and null for a declared metric that was not produced this run
+  # (for example a failed experiment, blocked check, or missing measurement). Negative values are valid observations.
+  # Big payloads: --metrics-file <path>. --message is always required.`
+    : `pievo report --status kept|no-change|blocked --message "<concise result or no-go reason>"
+  # this loop has no metric schema, so this run records no chart metrics.
+  # --message is always required; do not pass --metrics.
   # to start charting a trend, an evolve/edit pass can define a metric schema first.`;
 }
 
@@ -90,19 +93,19 @@ export function buildLoopSystemPrompt(_loop: Loop): string {
 
 /**
  * The per-run user turn — now the FULL exec CORE (identity, untrusted-data guard,
- * the non-negotiable inline fallback core, the report/finish grammar, the per-run
+ * the non-negotiable inline fallback core, the report grammar, the per-run
  * trigger, and a pointer to the installable pievo skill for the deep protocol).
  * Self-sufficient by design: the skill is enrichment, never a dependency (§3.1). A
- * closed loop injects its setpoint as a `Goal (finish line): <goal>` line —
- * prompt-injected so it wins over the file per the trust hierarchy; an open loop
- * leaves that line blank. `{{stateLine}}` carries the schema-derived report grammar.
+ * goal-bearing loop injects its standing objective as an `Objective: <goal>` line —
+ * prompt-injected so it wins over the file per the trust hierarchy. `{{metricLine}}`
+ * carries the schema-derived report grammar.
  */
 export function buildExecTask(loop: Loop): string {
   const name = loop.name || loop.id;
   const taskFile = loop.taskFile ?? "(none — this loop has no task file yet; create one to hold its Spec)";
-  const goalLine = loop.goal ? `Goal (finish line): ${loop.goal}` : "";
-  const stateLine = stateReportLine(loop);
-  return fillVars(loadPrompt("exec-core"), { name, taskFile, goalLine, stateLine });
+  const goalLine = loop.goal ? `Objective: ${loop.goal}` : "";
+  const metricLine = metricReportLine(loop);
+  return fillVars(loadPrompt("exec-core"), { name, taskFile, goalLine, metricLine });
 }
 
 /**
@@ -126,7 +129,7 @@ export function buildEditPrompt(): string {
 }
 
 /** The edit user turn — the short edit CORE (apply ONE owner-requested change, don't
- *  run the task, don't finish, end with `pievo report`; carries the untrusted-data
+ *  run the task, end with `pievo report`; carries the untrusted-data
  *  guard + skill pointer) ahead of the payload. The current ui/schema are
  *  inlined when present so an edit can make a surgical change to them rather than
  *  blind-rewrite — that is current CONFIG, not history, so it stays inlined (§3.4). */
@@ -139,13 +142,13 @@ export function buildEditTask(loop: Loop, instruction: string): string {
     `Current schedule: ${where}`,
     `Task file: ${loop.taskFile ?? "(none yet)"}`,
   ];
-  if (loop.stateSchema?.length) {
-    parts.push("Current metric schema: " + formatSchemaFields(loop.stateSchema));
+  if (loop.metricSchema?.length) {
+    parts.push("Current metric schema: " + formatSchemaFields(loop.metricSchema));
   }
   if (loop.ui) parts.push("Current ui:\n```html\n" + loop.ui + "\n```");
   parts.push(
     `The owner wants this change:\n${instruction.trim()}`,
-    "Apply it now per the instructions above, then report a one-line summary of what you changed.",
+    "Apply it now per the instructions above, then run exactly one `pievo report --status kept|no-change|blocked --message \"<concise summary>\"`. Edit runs never pass `--metrics`.",
   );
   return parts.join("\n\n");
 }
@@ -165,7 +168,7 @@ function surveyMessage(message: string | null): string {
  * metadata; only the message is clipped. */
 function surveyRow(r: Run): string {
   const outcomeStatus = `${r.phase ?? "—"}/${r.status ?? "—"}`;
-  const keys = r.state && typeof r.state === "object" ? Object.keys(r.state) : [];
+  const keys = r.metrics && typeof r.metrics === "object" ? Object.keys(r.metrics) : [];
   const metrics = keys.length ? keys.join(",") : "—";
   return [
     (r.ts ?? "—").padEnd(24),
@@ -198,7 +201,7 @@ function renderRecentRuns(runs: Run[]): string {
  *  skill, so run-dispatch and the skill can't drift) ahead of the payload: current
  *  loop shape + the compact recent-runs survey. */
 export function buildEvolveTask(loop: Loop, runs: Run[]): string {
-  const schema = loop.stateSchema?.length ? formatSchemaFields(loop.stateSchema) : "(none declared)";
+  const schema = loop.metricSchema?.length ? formatSchemaFields(loop.metricSchema) : "(none declared)";
   return [
     loadPrompt("evolve"),
     `[loop evolution · ${loop.name || loop.id}]`,
@@ -206,6 +209,6 @@ export function buildEvolveTask(loop: Loop, runs: Run[]): string {
     `Metric schema: ${schema}`,
     "Current ui:\n" + (loop.ui ? "```html\n" + loop.ui + "\n```" : "(none yet — author one if the data warrants it)"),
     renderRecentRuns(runs),
-    "Evolve this loop per your instructions: review the recent runs' log to sharpen and distill the task file, fitting the dashboard as the lighter lever. Finish by logging what this pass did — `pievo report --status kept --message '<one line: which levers you pulled and why>'` (or `--status no-change`, or `--status blocked` when owner attention is required and the loop should pause) — an internal run-log line; evolution never notifies the user.",
+    "Evolve this loop per your instructions: review the recent runs' log to sharpen and distill the task file, fitting the dashboard as the lighter lever. Finish with exactly one `pievo report --status kept|no-change|blocked --message \"<concise summary>\"`. Evolve runs never pass `--metrics` and never notify the user.",
   ].join("\n\n");
 }

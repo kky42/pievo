@@ -32,3 +32,7 @@ __pycache__/
 # verification proof output (screenshots/video), never committed
 evidence/
 /.playwright-cli
+
+# drizzle-kit snapshots are local diff-generation cache, not migration source.
+# Runtime migrations use the reviewed SQL files plus meta/_journal.json.
+packages/server/drizzle/meta/*_snapshot.json

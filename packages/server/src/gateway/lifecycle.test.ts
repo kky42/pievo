@@ -75,15 +75,13 @@ test("pause leaves a running run and lease intact, preserving its queued owner f
   expect(await store.claimReadyRunForMachine(machine.id)).toBeUndefined();
 });
 
-test("start clears an owner pause cause and completion clears pause annotations", async () => {
+test("start clears an owner pause cause", async () => {
   const machine = await seedMachine();
   const loop = await seedLoop(machine.id);
   await store.pauseLoop(loop.id);
   expect((await store.getLoop(loop.id))?.pauseCause).toMatchObject({ kind: "owner" });
   await store.startLoop(loop.id);
   expect((await store.getLoop(loop.id))?.pauseCause).toBeNull();
-  await store.updateLoop(loop.id, { goal: "done", completedAt: new Date().toISOString(), completionReason: "done" });
-  expect(await store.getLoop(loop.id)).toMatchObject({ enabled: false, pauseCause: null });
 });
 
 test("paused loops claim owner work by role priority, stay paused after exec, and block system work", async () => {
@@ -274,6 +272,7 @@ test("terminal reports are idempotent, conflict-safe, and preserve actual post-c
   const loop = await seedLoop(machine.id);
   const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
   const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false });
+  await store.updateRun(run.id, { status: "kept", message: "completed despite cancellation" });
   await store.requestRunCancel(loop.id, run.id);
   const reportId = "018f47a2-9c2b-7d11-8f52-123456789abc";
   const payload = { reportId, runId: run.id, result: "success" as const, durationMs: 12 };
@@ -299,6 +298,8 @@ test("same reportId is bound to runId and concurrent cross-loop reports finalize
   const b = await store.addRun({ loopId: bLoop.id, userId: "u1", machineId: bMachine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
   const aToken = await tokens.registerRunLease({ runId: a.id, loopId: aLoop.id, machineId: aMachine.id, role: "exec", allowControl: false });
   const bToken = await tokens.registerRunLease({ runId: b.id, loopId: bLoop.id, machineId: bMachine.id, role: "exec", allowControl: false });
+  await store.updateRun(a.id, { status: "kept", message: "a complete" });
+  await store.updateRun(b.id, { status: "kept", message: "b complete" });
   const reportId = "018f47a2-9c2b-7d11-8f52-123456789aa3";
 
   const settled = await Promise.allSettled([
@@ -317,28 +318,6 @@ test("same reportId is bound to runId and concurrent cross-loop reports finalize
   expect(await store.countTerminalReportIncidents()).toBe(1);
   expect(await tokens.resolveLease(aToken)).toBeUndefined();
   expect(await tokens.resolveLease(bToken)).toBeUndefined();
-});
-
-test("semantic-invalid terminal-grace telemetry preserves the completed result", async () => {
-  const machine = await seedMachine();
-  const loop = await store.createLoop({ userId: "u1", machineId: machine.id, name: "closed", cron: "0 0 1 1 *", goal: "done", enabled: true });
-  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
-  const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false, canFinish: true });
-  const finished = await store.finishLoopRun(loop.id, run.id, tokens.sha256(token), { ts: new Date().toISOString(), reason: "goal met" });
-  expect(finished.state).toBe("finished");
-  const completedAt = (await store.getLoop(loop.id))!.completedAt;
-
-  const result = await gateway().report(token, {
-    reportId: "018f47a2-9c2b-7d11-8f52-123456789b01",
-    runId: run.id,
-    result: "success",
-    durationMs: -1,
-  });
-  expect(result).toMatchObject({ status: 200, body: { accepted: false, disposition: "telemetry-rejected" } });
-  expect(await store.getRun(run.id)).toMatchObject({ phase: "done", reportIncident: { code: "REPORT_INVALID" } });
-  expect((await store.getLoop(loop.id))?.completedAt).toBe(completedAt);
-  expect((await store.getLoop(loop.id))?.completionReason).toBe("goal met");
-  expect(await tokens.resolveLease(token)).toBeUndefined();
 });
 
 test("invalid terminal-grace telemetry preserves a canceled result", async () => {
@@ -404,19 +383,6 @@ test("delete completes after terminal report and leaves its durable receipt", as
   expect((await store.getReportReceipt(reportId))?.runId).toBe(run.id);
 });
 
-test("finished-run enrichment completes a pending delete", async () => {
-  const machine = await seedMachine();
-  const loop = await seedLoop(machine.id);
-  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "done", role: "exec", ts: new Date().toISOString() });
-  const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false });
-  await tokens.terminalizeLease(run.id);
-  await store.requestDeleteLoop(loop.id);
-
-  const response = await gateway().report(token, { reportId: "018f47a2-9c2b-7d11-8f52-123456789aa4", runId: run.id, result: "success", durationMs: 7 });
-  expect(response.status).toBe(200);
-  expect(await store.getLoop(loop.id)).toBeUndefined();
-});
-
 test("force-delete winning after report pre-resolution persists 410 and consumes retired lease", async () => {
   const machine = await seedMachine();
   const loop = await seedLoop(machine.id);
@@ -463,121 +429,6 @@ test("a retired lease with a foreign reportId gets a stable incident ACK", async
   expect(first).toMatchObject({ status: 200, body: { accepted: false, code: "REPORT_CONFLICT", disposition: "telemetry-rejected" } });
   expect(await tokens.resolveLease(bToken)).toBeUndefined();
   expect(await gateway().report(bToken, payload)).toEqual(first);
-});
-
-test("finish crash leaves bounded grace, then unblocks the machine and rejects late enrichment definitively", async () => {
-  const machine = await seedMachine();
-  const loop = await store.createLoop({ userId: "u1", machineId: machine.id, name: "closed", cron: "0 0 1 1 *", enabled: true, goal: "done" });
-  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
-  const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false, canFinish: true });
-  const at = Date.now();
-  expect((await store.finishLoopRun(loop.id, run.id, tokens.sha256(token), { ts: new Date(at).toISOString(), reason: "met" })).state).toBe("finished");
-  expect((await tokens.resolveLease(token, at))?.state).toBe("terminal-grace");
-
-  const other = await seedLoop(machine.id);
-  const queued = await store.enqueueRun(other.id, { role: "exec", requestedBy: "owner" });
-  expect(await store.claimReadyRunForMachine(machine.id)).toBeUndefined();
-  await tokens.pruneExpiredLeases(at + store.FINISH_REPORT_GRACE_MS + 1);
-  expect((await tokens.resolveLease(token))?.state).toBe("retired");
-  expect((await store.claimReadyRunForMachine(machine.id))?.run.id).toBe("run" in queued ? queued.run.id : "missing");
-
-  const reportId = "018f47a2-9c2b-7d11-8f52-123456789aab";
-  expect(await gateway().report(token, { reportId, runId: run.id, result: "success", durationMs: 99 })).toMatchObject({ status: 410, body: { code: "RETIRED", reportId } });
-  expect((await store.getRun(run.id))?.durationMs).not.toBe(99);
-});
-
-test("ordinary delete preserves expired finish authority until late report receives durable 410", async () => {
-  const machine = await seedMachine();
-  const loop = await store.createLoop({ userId: "u1", machineId: machine.id, name: "closed", cron: "0 0 1 1 *", enabled: true, goal: "done" });
-  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
-  const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false, canFinish: true });
-  const at = Date.now();
-  expect((await store.finishLoopRun(loop.id, run.id, tokens.sha256(token), { ts: new Date(at).toISOString(), reason: "met" })).state).toBe("finished");
-  await store.requestDeleteLoop(loop.id);
-  expect(await store.tryDeleteLoop(loop.id)).toBe(false);
-
-  await tokens.pruneExpiredLeases(at + store.FINISH_REPORT_GRACE_MS + 1);
-  expect((await tokens.resolveLease(token))?.state).toBe("retired");
-  expect(await store.tryDeleteLoop(loop.id)).toBe(true);
-  expect(await store.getLoop(loop.id)).toBeUndefined();
-  expect((await tokens.resolveLease(token))?.state).toBe("retired");
-
-  const reportId = "018f47a2-9c2b-7d11-8f52-123456789aac";
-  const payload = { reportId, runId: run.id, result: "success" as const, durationMs: 99 };
-  const first = await gateway().report(token, payload);
-  expect(first).toMatchObject({ status: 410, body: { code: "RETIRED", reportId } });
-  expect(await tokens.resolveLease(token)).toBeUndefined();
-  expect((await store.getReportReceipt(reportId))?.ackStatus).toBe(410);
-  expect(await gateway().report(token, payload)).toEqual(first);
-});
-
-test("ordinary delete and retired report remain definitive in both concurrent winner orders", async () => {
-  async function seeded(suffix: string) {
-    const machine = await seedMachine(`m-delete-race-${suffix}`);
-    const loop = await store.createLoop({ userId: "u1", machineId: machine.id, name: "closed", cron: "0 0 1 1 *", enabled: true, goal: "done" });
-    const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
-    const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false, canFinish: true });
-    const at = Date.now();
-    await store.finishLoopRun(loop.id, run.id, tokens.sha256(token), { ts: new Date(at).toISOString(), reason: "met" });
-    await store.requestDeleteLoop(loop.id);
-    await tokens.pruneExpiredLeases(at + store.FINISH_REPORT_GRACE_MS + 1);
-    return { loop, run, token };
-  }
-
-  // Delete commits while report is paused immediately before its 410 transaction.
-  const deleteFirst = await seeded("delete-first");
-  const originalAck = store.acknowledgeRetiredReport;
-  let releaseAck!: () => void;
-  const ackHeld = new Promise<void>((resolve) => { releaseAck = resolve; });
-  const ackEntered = new Promise<void>((resolve) => {
-    vi.spyOn(store, "acknowledgeRetiredReport").mockImplementationOnce(async (...args: Parameters<typeof originalAck>) => {
-      resolve();
-      await ackHeld;
-      return originalAck(...args);
-    });
-  });
-  const reporting = gateway().report(deleteFirst.token, { reportId: "018f47a2-9c2b-7d11-8f52-123456789aad", runId: deleteFirst.run.id, result: "success" });
-  await ackEntered;
-  expect(await store.tryDeleteLoop(deleteFirst.loop.id)).toBe(true);
-  releaseAck();
-  expect((await reporting).status).toBe(410);
-  vi.restoreAllMocks();
-
-  // Report commits its receipt/consume while delete is paused before its txn.
-  const reportFirst = await seeded("report-first");
-  const originalDelete = store.tryDeleteLoop;
-  let releaseDelete!: () => void;
-  const deleteHeld = new Promise<void>((resolve) => { releaseDelete = resolve; });
-  const deleteEntered = new Promise<void>((resolve) => {
-    vi.spyOn(store, "tryDeleteLoop").mockImplementationOnce(async (...args: Parameters<typeof originalDelete>) => {
-      resolve();
-      await deleteHeld;
-      return originalDelete(...args);
-    });
-  });
-  const deleting = store.tryDeleteLoop(reportFirst.loop.id);
-  await deleteEntered;
-  const response = await gateway().report(reportFirst.token, { reportId: "018f47a2-9c2b-7d11-8f52-123456789aae", runId: reportFirst.run.id, result: "success" });
-  expect(response.status).toBe(410);
-  releaseDelete();
-  expect(await deleting).toBe(true);
-  expect(await store.getLoop(reportFirst.loop.id)).toBeUndefined();
-  expect(await store.getReportReceipt("018f47a2-9c2b-7d11-8f52-123456789aae")).toBeDefined();
-  vi.restoreAllMocks();
-});
-
-test("startup repair terminalizes terminal-run active leases idempotently", async () => {
-  const machine = await seedMachine();
-  const loop = await seedLoop(machine.id);
-  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "done", role: "exec", ts: new Date().toISOString() });
-  const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false });
-  const at = Date.now();
-  expect(await store.repairTerminalRunLeases(at)).toBe(1);
-  const first = await tokens.resolveLease(token, at);
-  expect(first?.state).toBe("terminal-grace");
-  expect(first?.expiresAt).toBe(at + store.FINISH_REPORT_GRACE_MS);
-  expect(await store.repairTerminalRunLeases(at + 1000)).toBe(0);
-  expect((await tokens.resolveLease(token, at))?.expiresAt).toBe(first?.expiresAt);
 });
 
 test("cancellation is terminal only when the daemon reports canceled", async () => {

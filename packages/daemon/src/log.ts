@@ -39,8 +39,8 @@ interface RunRow {
   error: string | null;
   message: string | null;
   sessionId: string | null;
-  // The metrics the run reported (the state object).
-  state: Record<string, unknown> | null;
+  // The complete metric observation reported by the run.
+  metrics: Record<string, unknown> | null;
 }
 
 export type LogDeps = {
@@ -227,6 +227,6 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   }
 
   // TOON default: text-sink — the server renders the concise survey (incl. the empty
-  // state). A too-old server (no `text`) → a definitive SERVER_TOO_OLD error.
+  // structured run rows). A too-old server (no `text`) → a definitive SERVER_TOO_OLD error.
   return printTextOrTooOld(got.body, got.status, d.out);
 }

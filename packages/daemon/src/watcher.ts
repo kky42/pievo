@@ -28,7 +28,7 @@
  *
  * Per-loop sync caps (`capManifest`) bound the manifest to a file-count and a
  * cumulative-byte ceiling: over either, the loop folder is being misused as a
- * scratch workspace, so the SMALLEST files (a run's real reports/state/ui) still
+ * scratch workspace, so the SMALLEST files (a run's real reports/dashboard ui) still
  * sync while the overflow is dropped — one loud warning, no doomed giant POST
  * hot-retrying forever.
  */
@@ -68,7 +68,7 @@ const PUT_CONCURRENCY = 4;
  *  of the file's mtime is distrusted and re-hashed — a same-size rewrite inside
  *  coarse mtime granularity would otherwise serve a stale hash forever. */
 const RACY_MS = 2000;
-/** Per-loop sync caps: a loop folder is a synced CONTENT home (reports, state,
+/** Per-loop sync caps: a loop folder is a synced CONTENT home (reports, dashboard,
  *  ui, small artifacts), NOT a scratch workspace. Over either ceiling a run has
  *  dumped a heavy work product (a repo clone / git worktree / build tree) into
  *  it; `capManifest` sheds the overflow and keeps the real content syncing. */
@@ -307,7 +307,7 @@ export interface CapResult {
  * workspace (a repo clone / git worktree / build tree dumped into the synced
  * content home): keep the SHALLOWEST, then smallest, files first and DROP the
  * overflow, up to the file-count and cumulative-byte caps. Depth-first is what
- * protects a run's real products — the task file, reports, state, ui, and small
+ * protects a run's real products — the task file, reports, dashboard ui, and small
  * artifacts live at the TOP of the loop folder, while a flood (a checkout, a
  * worktree, a build tree) nests in subdirectories — so the content home always
  * makes the cut regardless of how small the flood's files are. Dropping =
@@ -489,7 +489,7 @@ class LoopWatcher {
               maxFiles: MAX_SYNC_FILES,
               maxBytes: MAX_SYNC_BYTES,
             },
-            `loop folder exceeds the sync cap (${capped.totalFiles} files / ${mib(capped.totalBytes)}, cap ${MAX_SYNC_FILES} files / ${mib(MAX_SYNC_BYTES)}) — syncing ${entries.length} top-level files, dropping ${capped.droppedFiles}. A loop folder is a synced content home for reports/state/ui/small artifacts, not a scratch workspace: keep heavy work products (repo clones, git worktrees, node_modules, build output, caches) OUTSIDE it.`,
+            `loop folder exceeds the sync cap (${capped.totalFiles} files / ${mib(capped.totalBytes)}, cap ${MAX_SYNC_FILES} files / ${mib(MAX_SYNC_BYTES)}) — syncing ${entries.length} top-level files, dropping ${capped.droppedFiles}. A loop folder is a synced content home for reports/dashboard ui/small artifacts, not a scratch workspace: keep heavy work products (repo clones, git worktrees, node_modules, build output, caches) OUTSIDE it.`,
           );
         }
       } else {

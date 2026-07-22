@@ -46,7 +46,6 @@ function job(id: string, name: string): JobSummary {
     running: false,
     lastRunTs: null,
     graduation: null,
-    completedAt: null,
     deleteRequestedAt: null,
     runs: [],
     runCount: 0,

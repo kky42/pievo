@@ -120,10 +120,6 @@ export interface RunLeaseCaps {
   allowControl: boolean;
   canSetUi?: boolean;
   canSetSchema?: boolean;
-  /** May THIS run declare the loop's goal met via `pievo finish`? Minted true
-   *  only for an EXEC run on a CLOSED loop (loop.goal != null) — independent of
-   *  allowControl (like the structural caps). Evolve/edit runs never get it. */
-  canFinish?: boolean;
 }
 
 /**
@@ -133,16 +129,14 @@ export interface RunLeaseCaps {
  *
  *   active ──[normal report / canceled]──────────────────────────▶ deleted
  *      │
- *      ├────[finish]──────────▶ terminal-grace ──[enrich]────────▶ deleted
  *      └────[sweep reclaim]───▶ terminal-grace ──[reconcile]─────▶ deleted
  *                                      └──[expiry]──▶ retired ──[410 receipt]──▶ deleted
  *
- * `terminal-grace` marks terminal-report-only authority: either a swept run awaiting
- * reconciliation or a successful finish awaiting telemetry enrichment. Agent-api
+ * `terminal-grace` marks terminal-report-only authority for a swept run awaiting
+ * reconciliation. Agent-api
  * mutations are refused (409); ONLY the single final report is honored. A
  * lease past `expiresAt` loses reconciliation authority and becomes durable
- * `retired`; it is deleted only when a matching 410 receipt commits. `finish`
- * uses a separate short grace set by the store so a terminal Run is never active.
+ * `retired`; it is deleted only when a matching 410 receipt commits.
  */
 export interface RunLease extends RunLeaseCaps {
   state: "active" | "terminal-grace" | "retired";
@@ -171,7 +165,6 @@ function leaseFromRow(row: typeof runLeases.$inferSelect): RunLease {
     allowControl: row.allowControl,
     canSetUi: row.canSetUi,
     canSetSchema: row.canSetSchema,
-    canFinish: row.canFinish,
     state: row.state,
     expiresAt: row.expiresAt == null ? Number.POSITIVE_INFINITY : Date.parse(row.expiresAt),
   };
@@ -191,7 +184,6 @@ export async function registerRunLease(caps: RunLeaseCaps): Promise<string> {
     allowControl: caps.allowControl,
     canSetUi: caps.canSetUi ?? false,
     canSetSchema: caps.canSetSchema ?? false,
-    canFinish: caps.canFinish ?? false,
     createdAt: new Date().toISOString(),
   });
   return token;
@@ -228,7 +220,7 @@ export async function terminalizeLease(runId: string, now: number = Date.now()):
 }
 
 /** Retire a lease outside a terminal write transaction (canceled/losing report
- * cleanup and expiry paths). Normal finalize, finish enrichment, and reclaimed-run
+ * cleanup and expiry paths). Normal finalize and reclaimed-run
  * reconcile consume the row inside their store transaction so run+loop+lease are
  * one single-shot commit. */
 export async function retireLease(token: string): Promise<void> {

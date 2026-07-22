@@ -86,29 +86,26 @@ computes pure functions. Run instructions: `README.md`.
   a due continuous fact. Continuous terminals (`done`/`error`) restore
   `nextCadenceAt = terminalAt + delay` when no exec is open; only exec claim/terminal
   transitions touch it (edit/evolve never shift exec cadence), and canceled execs do
-  not continue. Resume/reopen/mode switches synchronously set the
+  not continue. Resume/mode switches synchronously set the
   fact (`cron` future; continuous now or null behind an open exec) without canceling
-  pending work. Pause/completion clear both schedule facts. `cron` remains stored
+  pending work. Pause clears both schedule facts. `cron` remains stored
   while continuous ignores it, so switching back restores the expression.
-- **Open vs closed loops**: closed-ness derives from `loops.goal != null` (no kind
-  column). A closed loop's exec run gets `canFinish` and may call `pievo finish`
-  when the goal is met, stamping `completedAt`/`completionReason` + `enabled=false`.
-  The invariant `completedAt != null implies goal != null` is enforced at the single
-  write chokepoint `store.updateLoop`, which also runs lifecycle side effects for
-  every caller: `goal:null` clears completion stamps; `enabled:true` on a completed
-  loop is a reopen; `enabled:false` is a plain pause.
+- **Standing objectives**: `loops.goal` is optional guidance injected into every exec
+  prompt. It is independent of lifecycle: meeting it never completes or pauses the
+  loop. `finish`/`complete`, completion stamps, and finish lease capability do not
+  exist; only the owner pauses or deletes a loop.
 - A loop's standing brief lives ONLY in its task file's `## Spec` (there is no
   `task` column). The exec run's instructions live ENTIRELY in the first user turn
   (`buildExecTask` ← `skill/run/exec-core.md`): the self-sufficient CORE (identity +
   untrusted-data guard + the non-negotiable fallback core - read task file first, do
-  the work / surface only what changed, end with exactly ONE `pievo report`/`finish`,
-  `{{stateLine}}` report grammar, one pass then stop + per-run trigger + a pointer to
+  the work / surface only what changed, end with exactly ONE `pievo report`,
+  `{{metricLine}}` report grammar, one pass then stop + per-run trigger + a pointer to
   the installable pievo skill for the deep protocol). `buildLoopSystemPrompt` returns
   `""`; on an OLD daemon `--append-system-prompt-file` then points at an empty file (a
   harmless no-op, so batches 1-2 shipped server-first with no daemon change), and the
   current daemon skips the flag entirely when the delivered `systemPrompt` is empty (the
-  batch-5 `runner.ts` note under "Daemon gotchas"). A closed loop's goal is prompt-injected
-  as `Goal (finish line): <goal>` (an own-line fill, `{{goalLine}}`). Public runtime
+  batch-5 `runner.ts` note under "Daemon gotchas"). A goal is prompt-injected as
+  `Objective: <goal>` (an own-line fill, `{{goalLine}}`). Public runtime
   depth lives in `skill/references/run.md`.
 - The EVOLVE and EDIT runs follow the SAME first-user-turn model (Batch 2):
   `buildEvolvePrompt`/`buildEditPrompt` both return `""` (empty system prompt, same
@@ -118,7 +115,7 @@ computes pure functions. Run instructions: `README.md`.
   untrusted-data guard rides along in that prose (evolve reads run messages; edit reads
   the loop's current config - both untrusted). `buildEvolveTask` no longer dumps up to
   12 runs as pretty-printed JSON; it emits a COMPACT one-line-per-run survey
-  (`renderRecentRuns`: ts / role / outcome-status / state KEYS only, not values /
+  (`renderRecentRuns`: ts / role / outcome-status / metric keys only, not values /
   full provider session id / message collapsed + clipped to ~100 chars), headed by
   the on-demand `pievo log` pointer (reachable in-run).
   `buildEditTask` KEEPS its inlined current ui/schema - that is current CONFIG,
@@ -155,7 +152,7 @@ computes pure functions. Run instructions: `README.md`.
 - `references/evolve.md` doubles as the evolve RUN prompt (same `?raw` import), so
   skill and run-dispatch cannot drift. `references/run.md` is the PUBLIC runtime
   protocol (dual-audience: in-run enrichment + owner docs) - task-file discipline,
-  report/finish grammar + finish bar, schedule levers, and front-matter conventions;
+  report grammar, schedule levers, and front-matter conventions;
   the server-injected exec CORE stays
   authoritative and self-sufficient, so run.md is enrichment, never a dependency.
 - **HARD GUARDRAIL**: `packages/daemon/scripts/sync-skill.mjs` is a SELECTIVE
@@ -210,12 +207,12 @@ computes pure functions. Run instructions: `README.md`.
     developments; exactly ONE dated report per day with `type: report` front matter so
     reports ride the calendar; dashboard at create = calendar + newest-report embed;
     sharpen the focus over time.
-  - **Follow-up Tracker** (closed): paste right after shipping something - the session
+  - **Follow-up Tracker**: paste right after shipping something - the session
     context IS the invocation (no extra discovery machinery; skill-side template
     fetching is deliberately deferred). Verify a CONCRETE observation path exists
     (logs/MCP/URL/gh) and smoke-test it once - never create a blind loop; define a
-    concrete finish condition and create the loop CLOSED with it as the goal; confirm
-    cadence; finish only when genuinely met, report regressions plainly; modest
+    standing objective and keep observing until the owner pauses it; confirm cadence;
+    report regressions plainly; modest
     dashboard at create (latest-report embed + metric chart when one was defined).
   The four added later (adapted from top-scoring public loop cases), same disciplines
   at the same granularity:
@@ -326,7 +323,7 @@ computes pure functions. Run instructions: `README.md`.
   `loops`→listLoops, `edit`→editLoop, `log`→loopLog, `show`→describe, `home`→homeDevice —
   bare `pievo`'s content-first home, handled BEFORE the unknown-machine 401 guard so an
   unregistered machine renders a DEFINITIVE not-connected state, never a 401/empty;
-  `report`/`finish` are run-only → 403); a **run** credential (an `rk_`-prefixed run lease,
+  `report` is run-only → 403); a **run** credential (an `rk_`-prefixed run lease,
   or a pre-Batch-6 bare UUID over a deploy) → the per-run `dispatch()` verbs PLUS a read
   branch (`log`/`show`/`home`→homeRun, the lease's OWN loop context) scoped to the lease's
   OWN loop (this closes the historical
@@ -336,7 +333,7 @@ computes pure functions. Run instructions: `README.md`.
   advertises `log` truthful everywhere). Run-credential rules: owner-only verbs
   (`new`/`edit`/`loops`/`status`) → 403; a `--loop`/positional loop id that is not the
   lease's loop → **403, never a silent retarget**; a terminal-grace (reclaimed) lease →
-  409 (same reclaim grace as `agentApi`). Floors/`allowControl`/`canFinish`/the shared
+  409 (same reclaim grace as `agentApi`). Floors/`allowControl`/the shared
   content validators all flow through unchanged because the run path reuses `dispatch`.
   The router branches on the `dk_` device prefix vs a run-lease lookup, NOT on an `rk_`
   prefix — so a bare-UUID run token still routes to the run path (see the run-lease
@@ -362,15 +359,13 @@ computes pure functions. Run instructions: `README.md`.
   `body.text`, so `renderLoopLog` carrying `text` is what makes in-run `pievo log` print
   (the F2 fix). `finalizeCli` fills `text` from any structured `{error}` and ensures
   `exitCode`; errors render as `error:`/`code:` TOON. Two behavior changes ride along:
-  `report` and `finish` reject an invalid `--status` with a 400 `VALIDATION_ERROR` (F5) and
-  a second `finish` pins `CONFLICT`. `describe()` (`show`) now emits the FULL editable envelope (batch 2):
+  `report` requires a valid status and non-empty message. `describe()` (`show`) emits the FULL editable envelope:
   every `EDITABLE_LOOP_FIELDS` key keyed EXACTLY as `edit --json` accepts (`runAt` is
   the writable pinned override; the DB column stays `nextRunAt`) PLUS derived read-only
   aggregates (`nextFire`/`classification`/`runs`). `show --json` emits the envelope
   verbatim so dropping `id` roundtrips to a no-op `edit` patch (read/write identity,
   pinned by a roundtrip test); large `ui` shows a `present, N bytes` hint
-  unless `--full`. A run credential adds camelCase `selfSchedule`/`selfFinish` effective
-  lines (these REPLACED the old kebab `self-schedule`/`self-finish` display keys). See
+  unless `--full`. A run credential adds the effective `selfSchedule` line. See
   `packages/server/AGENTS.md` for the durable notes.
 - `auth.ts` THROWS at boot when the GitHub gate is on but `PIEVO_AUTH_SECRET` is
   unset. Configure it in the chosen host before enabling the gate.
@@ -425,7 +420,7 @@ computes pure functions. Run instructions: `README.md`.
   Cancellation intent is durable and does not terminalize a running run; only the
   daemon's actual terminal result may produce `canceled`.
 - **The run credential is a RUN LEASE (`tokens.ts`, Batch 6)**, not a mint→revoke
-  token: the per-run caps (`runId/loopId/machineId/role/allowControl/canSet*/canFinish`
+  token: the per-run caps (`runId/loopId/machineId/role/allowControl/canSet*`
   — the old `RunSlot` fields, now `RunLeaseCaps`) PLUS a tiny state machine `state:
   "active" | "terminal-grace" | "retired"` + `expiresAt`. `retired` is durable,
   authorizes no mutation, never blocks claims, and exists only until a matching late
@@ -444,10 +439,9 @@ computes pure functions. Run instructions: `README.md`.
 - **The old revoke/reclaim scatter collapses to ONE terminalize transition +
   retire + prune.** Normal poll delivery uses `store.claimReadyRunsForMachine` to
   claim + insert an `active` lease atomically. `terminal-grace` is report-only:
-  `store.reclaimRun` uses a 24h window for wake reconciliation, while `finish` uses
-  10 minutes for telemetry enrichment; both transitions share the loop lock, so a
+  `store.reclaimRun` opens the wake-reconciliation window under the loop lock, so a
   stale observation cannot mutate the winning report's lease.
-  Normal finalize, finish-enrich, and the ONE terminal-grace reconcile consume the
+  Normal finalize and the ONE terminal-grace reconcile consume the
   lease in the SAME store transaction as their run/loop writes (so concurrent normal
   reports and error→error reconcile are single-shot); reconcile rechecks grace
   expiry from a fresh clock read after taking the loop lock, so an old report cannot
@@ -457,9 +451,8 @@ computes pure functions. Run instructions: `README.md`.
   `retireLease(token)` handles a canceled/losing report; `store.cancelRun` deletes that run's lease in the same
   transaction, so a canceled local process immediately loses all run-token authority
   (its late report may 401). `pruneExpiredLeases(now)` converts expired grace to retired.
-  `finish` atomically moves its lease to a fixed 10-minute terminal grace: only the
-  daemon's enriching report is accepted; expiry restores machine liveness and a later
-  report receives durable 410. Startup idempotently repairs terminal-run active leases.
+  Expiry restores machine liveness and a later report receives durable 410. Startup
+  idempotently repairs terminal-run active leases.
   ALL loop deletion paths preserve retired tombstones; only the matching report→410
   receipt transaction consumes them (ordinary Delete and Force-delete cannot differ).
 - **Sweep-reclaimed runs are NOT retired immediately** - the usual cause is a laptop
@@ -478,8 +471,7 @@ computes pure functions. Run instructions: `README.md`.
   stable id; authority only promotes `system → owner`, latest owner edit text wins,
   and a running role may retain one pending follow-up. Pause cancels pending system
   rows while owner exec/edit/evolve rows remain claimable; the loop stays paused and
-  their terminals never restore cadence. Completion cancels every pending exec/evolve
-  and preserves only owner edit. Reports/finish/cancel/claim/reclaim share the loop lock;
+  their terminals never restore cadence. Reports/cancel/claim/reclaim share the loop lock;
   terminal run + task + continuous cadence writes are one CAS transaction.
   Auto-evolve is a system evolve requested from that terminal lifecycle. Pending
   system rows use immutable `runs.createdAt` for the 7d offline backstop;
@@ -524,22 +516,23 @@ computes pure functions. Run instructions: `README.md`.
 - vite binds `127.0.0.1` (not IPv6 `localhost`) - see `vite.config.ts`.
 - `src/routeTree.gen.ts` is generated + gitignored; `typecheck` runs `tsr generate`
   first. Run `routes:generate` standalone if you need the file otherwise.
-- **Changed `db/schema.ts`? Migrate locally right away**: `db:generate` (diffs
-  schema -> SQL, needs no DB) then `db:migrate`. `db:migrate` is the drizzle-kit CLI
+- **Changed `db/schema.ts`? Migrate locally right away**: hand-author and review the
+  forward-only SQL + journal entry; schema snapshots are local cache and are not
+  committed. `db:migrate` is the drizzle-kit CLI
   and needs `DIRECT_DATABASE_URL`/`DATABASE_URL` set - it errors on an empty URL and
   only targets a real Postgres (`drizzle.config.ts` routes it through `env.ts`
   `directDatabaseUrl()`, which THROWS when only a Supabase pooler `DATABASE_URL` is
   set with no `DIRECT_DATABASE_URL`, so DDL never runs over the `:6543` pooler);
   the embedded pglite tier has NO CLI migrate, it
-  applies the generated migrations IN-PROCESS at boot. `boot.ts` `ensureServer` calls
+  applies the reviewed migrations IN-PROCESS at boot. `boot.ts` `ensureServer` calls
   `runMigrations()` on every boot, so `pnpm dev` DOES auto-migrate the pglite tier in
-  process (you still run `db:generate` to author the SQL); prod applies on `pnpm start`
+  process; prod applies on `pnpm start`
   (`scripts/prestart.mjs`, postgres-js migrator over DIRECT for the hosted tier).
 - Drizzle `text(col, { enum })` is TS-only (no DB CHECK) - enum value changes need
   no migration and cannot break rows.
 - Server route files use `createFileRoute(path).server.handlers`; dynamic-import
   heavy/native deps INSIDE handlers to stay out of the client bundle.
-- `editLoop` accepts the envelope fields plus content fields (ui/stateSchema)
+- `editLoop` accepts the envelope fields plus content fields (ui/metricSchema)
   through the SAME UI/schema validators the run-token `set-*` path
   uses (two surfaces cannot drift; schema stays additive). Keys outside
   `EDITABLE_LOOP_FIELDS` are rejected with a 400 listing the allowed set. Both
@@ -585,8 +578,8 @@ computes pure functions. Run instructions: `README.md`.
   by default and `--foreground` also accepts first-connection flags. Detached re-exec uses
   `daemon start --foreground`, with the device token in env only. Top-level
   `up|down|status|doctor|update`, raw leading lifecycle flags, and `--api-key` are unknown.
-  `report`/`finish`/`complete` typed OUT of a run are FORWARDED to the server so its
-  crafted run-only 403 reaches the agent (F3); `pievo show` out-of-run (F1) resolves the
+  `report` typed OUT of a run is FORWARDED to the server so its crafted run-only 403
+  reaches the agent (F3); `finish`/`complete` are unknown commands. `pievo show` out-of-run resolves the
   loop client-side (like `log`, reusing `log.ts` `resolveLoopId`) then forwards.
 - **No coding-agent SessionStart hook.** Pievo deliberately does not inject its home
   view into every Claude Code/Codex session. Ordinary sessions discover Pievo through
@@ -647,7 +640,7 @@ computes pure functions. Run instructions: `README.md`.
 - **Unified CLI transport `cli-client.ts` `postCli(argv, legacy, deps)`** (batch 5):
   the ONE client behind BOTH CLI worlds. It selects the credential by env (run token
   from `PIEVO_RUN_TOKEN` wins, else the persisted device token), inlines the file
-  flags (`--message-file`→`--message`, `--state-file`→`--state-content`, `--file`→
+  flags (`--message-file`→`--message`, `--metrics-file`→`--metrics-content`, `--file`→
   `--file-content` — moved out of `callback.ts` so both credentials get it), and POSTs
   `{argv}` to the unified `/api/machine/cli` (server batch 4). On a **404** (old server)
   it invokes the per-credential `legacy` fallback — `legacyRun` → `/agent-api/loop` for

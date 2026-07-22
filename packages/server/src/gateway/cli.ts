@@ -9,8 +9,8 @@
  *
  * The verb router keys authority on CREDENTIAL TYPE first (`dk_` device prefix
  * vs run-lease lookup, bare-UUID back-compat) and reuses the core gateway
- * methods (`createLoop`/`editLoop`/`loopLog`/`renderLoopLog`/`finishLoop`)
- * through the injected `MachineGateway`, so floors/allowControl/canFinish and
+ * methods (`createLoop`/`editLoop`/`loopLog`/`renderLoopLog`)
+ * through the injected `MachineGateway`, so floors/allowControl and
  * the flat-404 scoping flow through unchanged. The agent-api verb dispatch is a
  * compact port of c0's control.ts: report/show + the allowControl schedule
  * mutations, plus set-ui/schema gated to the evolution pass (the
@@ -20,7 +20,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 
 import * as store from "../db/store.js";
-import type { Loop, NewLoop, NewRun, NotifyPolicy, Run, RunRole, RunStatus, StateField } from "../db/schema.js";
+import type { Loop, MetricField, NewLoop, NewRun, NotifyPolicy, Run, RunMetrics, RunRole, RunStatus } from "../db/schema.js";
 import { machinePresence, type MachinePresence } from "../lib/machinePresence.js";
 import { logger } from "../logger.js";
 import { selfCronFloorMinutes, selfRescheduleFloorMinutes } from "../env.js";
@@ -76,7 +76,7 @@ export class CliGateway {
   constructor(
     /** The run-lifecycle core: the CLI verbs reuse its owner methods
      *  (createLoop/listLoops/editLoop/loopLog), the shared `renderLoopLog`
-     *  scoping body, `finishLoop`, and the scheduler (schedule re-arm). */
+     *  scoping body and the scheduler (schedule re-arm). */
     private readonly gateway: MachineGateway,
     deps: CliGatewayDeps = {},
   ) {
@@ -90,7 +90,7 @@ export class CliGateway {
   async agentApi(runToken: string, argv: string[]): Promise<HttpResult> {
     const lease = await resolveLease(runToken);
     if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
-    // A terminal-grace lease (finished or sweep-reclaimed) accepts only its ONE
+    // A terminal-grace lease (sweep-reclaimed) accepts only its ONE
     // final report/enrichment — never further agent-api mutations.
     if (lease.state === "terminal-grace") {
       return { status: 409, body: { text: errorBlock(TERMINAL_GRACE_MSG, "CONFLICT"), exitCode: 1 } };
@@ -107,7 +107,7 @@ export class CliGateway {
    * first, then routes to the same methods the legacy endpoints call:
    *   · DEVICE credential (`dk_`-prefixed) → owner authority over any loop bound to
    *     the machine: `new`→createLoop, `loops`→listLoops, `edit`→editLoop,
-   *     `log`→loopLog, `show`→describe. `report`/`finish` are RUN-only (403).
+   *     `log`→loopLog, `show`→describe. `report` is RUN-only (403).
    *   · RUN credential (an `rk_`-prefixed run lease — or a bare-UUID token from a
    *     pre-Batch-6 mint over a deploy) → the least-privilege per-run `dispatch()`
    *     verbs, PLUS a read branch (`log`/`show`) scoped strictly to the lease's OWN
@@ -115,7 +115,7 @@ export class CliGateway {
    *     (`new`/`edit`/`loops`) are 403 for a run credential.
    * The branch keys on the `dk_` device prefix, NOT an `rk_` run prefix, so a
    * bare-UUID run token still routes to the run path (it just isn't a device token).
-   * Floors, `allowControl`, `canFinish`, and the shared content validators all flow
+   * Floors, `allowControl`, and the shared content validators all flow
    * through the reused `dispatch`/`createLoop`/`editLoop`/`loopLog` unchanged.
    */
   async cli(token: string, argv: string[]): Promise<HttpResult> {
@@ -191,10 +191,7 @@ export class CliGateway {
         return { status: 200, body: { ok: true, text: await this.describe(loop.id, { full: flags["full"] === true }) } };
       }
       case "report":
-      case "finish":
-      case "complete":
-        // Per §4.1: there is no run to attribute a device-credential report/finish to.
-        return { status: 403, body: { error: `pievo: "${verb}" is a run-only verb — a run reports/finishes itself; the owner edits via "edit"` } };
+        return { status: 403, body: { error: "pievo: report is a run-only verb; the owner edits via edit" } };
       default:
         return { status: 400, body: { error: `pievo: unknown command "${verb}" for the device credential (try: new, loops, pause, start, stop, delete, run stop, edit, log, show)` } };
     }
@@ -219,7 +216,6 @@ export class CliGateway {
     const loop = await this.ownedLoop(machineId, loopId);
     if (!loop) return { status: 404, body: { error: "no such loop on this machine" } };
     if (loop.deleteRequestedAt) return { status: 409, body: { error: "loop is being deleted and cannot be started" } };
-    if (loop.completedAt) return { status: 409, body: { error: "completed loop cannot be started; reopen it explicitly" } };
     const started = await store.startLoop(loop.id);
     if (!started) return { status: 409, body: { error: "loop could not be started" } };
     this.gateway.scheduler.addLoop(started);
@@ -349,7 +345,7 @@ export class CliGateway {
       const loop = await store.getLoop(lease.loopId);
       if (!loop) return { status: 404, body: { text: errorBlock("loop not found", "NOT_FOUND"), exitCode: 1 } };
       // The full editable envelope — identical shape to the device `show --json`
-      // (the run's effective selfSchedule/selfFinish lines are TOON-only, not in the
+      // (the run's effective selfSchedule line is TOON-only, not in the
       // read/write envelope). Scoped to the run's own loop (fenced above).
       const env = loopEnvelope(loop);
       return { status: 200, body: { ok: true, loop: env, text: JSON.stringify(env, null, 2), exitCode: 0 } };
@@ -383,21 +379,28 @@ export class CliGateway {
       case "help":
         return { code: 200, text: this.helpText(lease) };
       case "report": {
-        const rawState = str("state") ?? str("state-content");
-        let state: Record<string, number | string> | undefined;
-        if (rawState !== undefined) {
-          const loop = await store.getLoop(lease.loopId);
-          const v = validateState(rawState, loop?.stateSchema ?? undefined);
-          if (!v.ok) return derr(400, v.error, "VALIDATION_ERROR");
-          state = v.value;
-        }
-        // Status is required by the run protocol, but the server treats unknown
-        // values as a missing protocol result instead of rejecting the callback:
-        // the run will finish with status=null and the UI can flag it for review.
         const rawStatus = str("status");
-        const status = isStatus(rawStatus) ? rawStatus : undefined;
-        const invalidStatus = rawStatus !== undefined && status === undefined;
-        const message = str("message");
+        if (!isStatus(rawStatus)) {
+          return derr(400, `status must be kept|no-change|blocked${rawStatus === undefined ? "" : ` (got "${rawStatus}")`}`, "VALIDATION_ERROR");
+        }
+        const message = str("message")?.trim();
+        if (!message) return derr(400, "report requires a non-empty --message", "VALIDATION_ERROR");
+
+        const loop = await store.getLoop(lease.loopId);
+        if (!loop) return derr(404, "loop not found", "NOT_FOUND");
+        const rawMetrics = str("metrics") ?? str("metrics-content");
+        let metrics: RunMetrics | undefined;
+        if (lease.role === "exec" && (loop.metricSchema?.length ?? 0) > 0) {
+          if (rawMetrics === undefined) return derr(400, "exec report requires --metrics for every declared metric", "VALIDATION_ERROR");
+          const validated = validateMetrics(rawMetrics, loop.metricSchema!);
+          if (!validated.ok) return derr(400, validated.error, "VALIDATION_ERROR");
+          metrics = validated.value;
+        } else if (rawMetrics !== undefined) {
+          const reason = lease.role === "exec"
+            ? "this loop has no metric schema; omit --metrics"
+            : `${lease.role} reports must not include --metrics`;
+          return derr(400, reason, "VALIDATION_ERROR");
+        }
         const applied = await this.applyAuthorizedMutation(
           lease,
           leaseTokenHash,
@@ -406,22 +409,21 @@ export class CliGateway {
           stringifyFlags(flags),
           {
             runPatch: {
-              ...(status !== undefined ? { status: status as RunStatus } : invalidStatus ? { status: null } : {}),
-              // Clipped to the same cap the report finalText fallback enforces.
-              ...(message !== undefined ? { message: message.slice(0, MESSAGE_CAP) } : {}),
-              ...(state !== undefined ? { state } : {}),
+              status: rawStatus,
+              message: message.slice(0, MESSAGE_CAP),
+              ...(metrics !== undefined ? { metrics } : {}),
             },
           },
           "reported",
         );
         return applied.ok
-          ? { code: 200, text: renderReportedText(status, state, message !== undefined, invalidStatus) }
+          ? { code: 200, text: renderReportedText(rawStatus, metrics, true) }
           : derr(applied.status ?? 409, applied.detail ?? "this run is no longer active", applied.code);
       }
       case "show":
         return {
           code: 200,
-          text: await this.describe(lease.loopId, { allowControl: lease.allowControl, canFinish: lease.canFinish, full: flags["full"] === true }),
+          text: await this.describe(lease.loopId, { allowControl: lease.allowControl, full: flags["full"] === true }),
         };
       case "log": {
         // The run's OWN-loop history. Batch 4 wired this into dispatch so the help
@@ -432,33 +434,6 @@ export class CliGateway {
         // lives in runCli for the positional-arg case).
         const res = await this.gateway.renderLoopLog(lease.machineId, lease.loopId, flags["limit"]);
         return { code: res.status, text: (res.body as { text?: string }).text ?? "" };
-      }
-      case "finish":
-      case "complete": {
-        if (!lease.canFinish) {
-          // canFinish is false both for OPEN loops (no goal) and for evolve/edit
-          // runs — give the right message for each. The open-loop case is primary.
-          const loop = await store.getLoop(lease.loopId);
-          if (!loop || loop.goal == null) {
-            return derr(403, "this loop has no goal to finish (it's an open/monitor loop)", "FORBIDDEN");
-          }
-          return derr(403, "only an exec run may finish a loop", "FORBIDDEN");
-        }
-        // finish has a fixed successful business result (kept); ignore any status
-        // flag for compatibility with older prompts.
-        // Optional --state, validated exactly like the report verb.
-        const rawState = str("state") ?? str("state-content");
-        let state: Record<string, number | string> | undefined;
-        if (rawState !== undefined) {
-          const loop = await store.getLoop(lease.loopId);
-          const v = validateState(rawState, loop?.stateSchema ?? undefined);
-          if (!v.ok) return derr(400, v.error, "VALIDATION_ERROR");
-          state = v.value;
-        }
-        const message = str("message")?.slice(0, MESSAGE_CAP);
-        const reason = str("reason")?.slice(0, MESSAGE_CAP) ?? null;
-        const r = await this.gateway.finishLoop(lease, leaseTokenHash, { message, reason, state });
-        return r.ok ? { code: 200, text: await renderFinishedText(lease.loopId) } : derr(r.status ?? 400, r.detail ?? "rejected", r.code);
       }
       case "set-ui": {
         if (!lease.canSetUi) return derr(403, "only the evolution or edit pass may set the UI", "FORBIDDEN");
@@ -500,13 +475,10 @@ export class CliGateway {
 
   /** Usage for `pievo help` / `--help` / a bare invocation, rendered as the §4.9
    *  axi TOON: grouped verbs with an availability tag reflecting THIS lease's caps
-   *  (always / finish / dashboard-gate / schedule), then a trailing `help[]`. Still
+   *  (always / dashboard-gate / schedule), then a trailing `help[]`. Still
    *  role-aware — the tags flip with the lease's role + caps, so the agent never
    *  wastes a turn probing a verb it'll be 403'd on. */
   private helpText(lease: RunLease): string {
-    const finishTag = lease.canFinish
-      ? "available — declare the goal met (--message <achieved> [--reason <one line>])"
-      : `exec run on a goal (closed) loop only — this run is "${lease.role}"`;
     const structural = lease.canSetUi ? "available to this run" : `evolve/edit pass only — this run is "${lease.role}"`;
     const control = lease.allowControl ? "available to this run" : "needs allowControl (off for this loop)";
 
@@ -514,8 +486,8 @@ export class CliGateway {
     // under the `verbs:` top key (matching the reference tool's nested shape).
     const always = indent(
       listBlock("always", ["verb", "syntax"], [
-        ["report", "--status kept|no-change|blocked [--message <s>] [--state '{\"k\":n}' | --state-file <p>]"],
-        ["show", "print this loop's config + recent state"],
+        ["report", "--status kept|no-change|blocked --message <s> [--metrics '{\"k\":n|null}' | --metrics-file <p>]"],
+        ["show", "print this loop's config + recent metrics"],
         ["log", "recent run survey for this loop"],
       ]),
     );
@@ -537,12 +509,11 @@ export class CliGateway {
     return doc(
       "verbs:",
       always,
-      `  finish: ${finishTag}`,
       `  dashboard: ${structural}`,
       schedule,
       helpBlock([
         "Run `pievo show` to read the current config before changing it",
-        "Run `pievo report --status no-change` to close this run with no kept result",
+        "Run `pievo report --status no-change --message \"<why no result was kept>\"` to close this run",
       ]),
     );
   }
@@ -751,20 +722,18 @@ export class CliGateway {
     const v = await validateSchema(lease.loopId, json);
     if (!v.ok) return this.applyAuthorizedMutation(lease, leaseTokenHash, "set-schema", "set-schema", { bytes: String(json.length) }, {}, v.detail, "rejected");
     const detail = `schema set (${v.value.map((f) => f.key).join(", ")})`;
-    return this.applyAuthorizedMutation(lease, leaseTokenHash, "set-schema", "set-schema", { bytes: String(json.length) }, { loopPatch: { stateSchema: v.value } }, detail);
+    return this.applyAuthorizedMutation(lease, leaseTokenHash, "set-schema", "set-schema", { bytes: String(json.length) }, { loopPatch: { metricSchema: v.value } }, detail);
   }
 
   // The full editable envelope (F1/F6, §4.1 batch 2): every EDITABLE_LOOP_FIELDS key
   // keyed EXACTLY as `edit --json` accepts, PLUS the read-only derived aggregates
   // (nextFire/classification/runs). Large content (ui) shows a presence+size
-  // hint by default and inlines under `--full`; stateSchema renders structurally.
+  // hint by default and inlines under `--full`; metricSchema renders structurally.
   //
-  // `opts.allowControl`/`opts.canFinish` are a RUN caller's EFFECTIVE capabilities
-  // (the run lease's `structural || loop.allowControl`, and the exec-on-closed-loop
-  // finish gate); when present the run adds the `selfSchedule`/`selfFinish` effective
-  // lines and run-appropriate help. A device caller passes neither and gets the
+  // `opts.allowControl` is a RUN caller's EFFECTIVE scheduling capability; when
+  // present the run adds `selfSchedule` and run-appropriate help. A device caller gets the
   // owner-facing help (edit/log). `--json` is emitted by the callers, not here.
-  private async describe(loopId: string, opts: { allowControl?: boolean; canFinish?: boolean; full?: boolean } = {}): Promise<string> {
+  private async describe(loopId: string, opts: { allowControl?: boolean; full?: boolean } = {}): Promise<string> {
     const loop = await store.getLoop(loopId);
     if (!loop) return "loop not found";
     // The most recent exec run (newest-first) anchors the `runs:` tally's last result.
@@ -829,12 +798,12 @@ type Flags = Record<string, string | boolean>;
 
 const MUTATION_VERBS = new Set(["reschedule", "set-cron", "set-schedule", "pause", "resume", "notify", "set-name", "set-tz", "set-model"]);
 
-/** Shared refusal for terminal-report-only grace (successful finish or reclaim). */
+/** Shared refusal for terminal-report-only grace after reclaim. */
 const TERMINAL_GRACE_MSG =
   "this run is terminal and no longer accepts commands; its final result is delivered via the terminal report";
 
 /** Verbs that require OWNER (device) authority — a run credential is 403'd on these
- *  in the unified `cli` dispatch (§4.1). `report`/`finish` are the mirror image
+ *  in the unified `cli` dispatch (§4.1). `report` is the mirror image
  *  (run-only, 403 for a device credential) and are handled inline in `deviceCli`. */
 const DEVICE_ONLY_VERBS = new Set(["new", "edit", "loops", "start", "stop", "delete", "run"]);
 
@@ -916,25 +885,13 @@ function finalizeCli(res: HttpResult): HttpResult {
 }
 
 /** `pievo report` — the compact run-status confirmation (§4.6). */
-function renderReportedText(status: string | undefined, state: Record<string, number | string> | undefined, hasMessage: boolean, invalidStatus = false): string {
+function renderReportedText(status: string | undefined, metrics: RunMetrics | undefined, hasMessage: boolean): string {
   const parts: string[] = [];
   if (status) parts.push(`status=${status}`);
-  else if (invalidStatus) parts.push("status ignored");
-  const metrics = runMetricsToken(state);
-  if (metrics) parts.push(`metrics ${metrics}`);
+  const metricToken = runMetricsToken(metrics);
+  if (metricToken) parts.push(`metrics ${metricToken}`);
   if (hasMessage) parts.push("message recorded");
   return `reported: ${parts.length ? parts.join(" · ") : "recorded"}`;
-}
-
-/** `pievo finish` — the goal-met confirmation, read back off the completed loop. */
-async function renderFinishedText(loopId: string): Promise<string> {
-  const loop = await store.getLoop(loopId);
-  if (!loop) return "finished: goal met";
-  return doc(
-    `finished: ${scalar(loop.name ?? loop.id)} (${loop.id}) — goal met`,
-    loop.completedAt ? kvLine("completedAt", fmtTime(loop.completedAt)) : null,
-    loop.completionReason ? kvLine("completionReason", loop.completionReason) : null,
-  );
 }
 
 /** Indent every line of a rendered TOON block two spaces, so a typed list/detail
@@ -973,23 +930,17 @@ const alwaysAvail = (): string => "always available";
 /** RUN-credential verb help (in-run `rk_` lease). */
 const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
   report: {
-    syntax: "report --status kept|no-change|blocked [--message <text> | --message-file <path>] [--state '<json>' | --state-file <path>]",
-    summary: "record this run's status + metrics (state keys must match the loop's schema)",
+    syntax: "report --status kept|no-change|blocked --message <text> [--metrics '<json>' | --metrics-file <path>]",
+    summary: "record this run's required status and message, plus exact schema metrics for metric-enabled exec runs",
     avail: alwaysAvail,
     help: [
-      "Run `pievo report --status no-change` to close this run with no kept result",
-      'Run `pievo report --status kept --message "<one line>" --state \'{"drift":3}\'` to record metrics',
+      'Run `pievo report --status no-change --message "no actionable result"` to close this run with no kept result',
+      'Run `pievo report --status kept --message "reduced drift" --metrics \'{"drift":3,"skipped":null}\'` to record metrics',
     ],
-  },
-  finish: {
-    syntax: 'finish [--message <text> | --message-file <path>] [--reason "<one line>"] [--state \'<json>\' | --state-file <path>]',
-    summary: "declare the goal met — completes this closed loop",
-    avail: (l) => (l.canFinish ? "available — declare the goal met" : `exec run on a goal (closed) loop only — this run is "${l.role}"`),
-    help: ['Run `pievo finish --message "<what was achieved>" --reason "<one line>"` to complete the loop'],
   },
   show: {
     syntax: "show [--full] [--json]",
-    summary: "print this loop's current config + recent state",
+    summary: "print this loop's current config + recent runs",
     avail: alwaysAvail,
     help: ["Run `pievo show --full` to include full dashboard content", "Run `pievo show --json` for the editable JSON envelope"],
   },
@@ -1066,14 +1017,6 @@ const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
     help: ["Run `pievo set-model claude-opus-4-8` to pin the model"],
   },
 };
-// `complete` is a documented alias of `finish` (§6.2), with its own truthful syntax.
-RUN_VERB_HELP.complete = {
-  ...RUN_VERB_HELP.finish!,
-  syntax: RUN_VERB_HELP.finish!.syntax.replace(/^finish/, "complete"),
-  summary: "alias of finish — declare the goal met and complete this closed loop",
-  help: ['Run `pievo complete --message "<what was achieved>" --reason "<one line>"` to complete the loop'],
-};
-
 /** DEVICE-credential verb help (owner `dk_` device token). */
 const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
   new: {
@@ -1099,7 +1042,7 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
   },
   show: {
     syntax: "show [<id|unique-name>] [--full] [--json]",
-    summary: "print a loop's full config + recent state (defaults from the current directory)",
+    summary: "print a loop's full config + recent runs (defaults from the current directory)",
     help: ["Run `pievo loops` to list loops on this machine", "Run `pievo log <id>` to see the loop's recent runs"],
   },
   pause: {
@@ -1175,7 +1118,7 @@ function loopEnvelope(loop: Loop): Record<string, unknown> {
     runAt: loop.nextRunAt ?? null,
     goal: loop.goal ?? null,
     ui: loop.ui ?? null,
-    stateSchema: loop.stateSchema ?? null,
+    metricSchema: loop.metricSchema ?? null,
   };
 }
 
@@ -1188,13 +1131,13 @@ function contentField(value: string | null, full: boolean): Scalar | { raw: stri
   return { raw: `present, ${value.length} bytes — use --full to see` };
 }
 
-/** Render the state schema STRUCTURALLY (not char-clipped): the header
- *  `stateSchema[N]{key,label,unit}:` plus one `key,label,unit` triple per field,
+/** Render the metric schema STRUCTURALLY (not char-clipped): the header
+ *  `metricSchema[N]{key,label,unit}:` plus one `key,label,unit` triple per field,
  *  joined by ` · `. Absent → the bare `absent` token. */
-function schemaField(schema: StateField[] | null): { key: string; value: Scalar | { raw: string } } {
-  if (!schema || !schema.length) return { key: "stateSchema", value: "absent" };
+function schemaField(schema: MetricField[] | null): { key: string; value: Scalar | { raw: string } } {
+  if (!schema || !schema.length) return { key: "metricSchema", value: "absent" };
   const rows = schema.map((f) => [f.key, f.label ?? ABSENT, f.unit ?? ABSENT].join(",")).join(" · ");
-  return { key: `stateSchema[${schema.length}]{key,label,unit}`, value: { raw: rows } };
+  return { key: `metricSchema[${schema.length}]{key,label,unit}`, value: { raw: rows } };
 }
 
 /** The next cadence fire (the derived read-only aggregate), formatted in the loop's
@@ -1210,19 +1153,18 @@ function nextFireDisplay(loop: Loop): string {
 /**
  * `pievo show` — the full editable envelope TOON (F1/F6, feedback #1/#2, §4.1).
  * The `loop:` block keys are EXACTLY `edit --json`'s keys (read/write identity),
- * then the read-only derived aggregates (`nextFire`/`classification`/`runs`). A run
- * caller (opts.allowControl/canFinish present) adds the effective `selfSchedule`/
- * `selfFinish` lines + run-appropriate help; a device caller gets owner help.
+ * then the read-only derived aggregates (`nextFire`/`lifecycle`/`runs`). A run
+ * caller adds the effective `selfSchedule` line + run-appropriate help.
  */
 function renderShowText(
   loop: Loop,
   env: Record<string, unknown>,
   totalRuns: number,
   lastExec: Pick<Run, "phase" | "status" | "ts" | "error" | "reportIncident"> | null,
-  opts: { allowControl?: boolean; canFinish?: boolean; full?: boolean } = {},
+  opts: { allowControl?: boolean; full?: boolean } = {},
 ): string {
   const full = opts.full === true;
-  const schema = schemaField(loop.stateSchema ?? null);
+  const schema = schemaField(loop.metricSchema ?? null);
   const block = detailBlock("loop", [
     ["id", env.id as Scalar],
     ["name", env.name as Scalar],
@@ -1238,26 +1180,20 @@ function renderShowText(
     ["taskFile", env.taskFile as Scalar],
     ["enabled", env.enabled as Scalar],
     ["runAt", env.runAt as Scalar],
-    // The setpoint: a value ⇒ CLOSED loop (finishable); em-dash ⇒ OPEN (monitor).
+    // Optional standing objective; it never changes lifecycle.
     ["goal", env.goal as Scalar],
     ["ui", contentField(loop.ui ?? null, full)],
     [schema.key, schema.value],
   ]);
-  const classification =
-    loop.goal != null
-      ? "closed (has goal — self-finishes when the goal is met)"
-      : "open (no goal — runs until paused)";
   const runsTally = lastExec
     ? `${totalRuns} total · last exec ${runResultToken(lastExec)} ${fmtTime(lastExec.ts)}`
     : `${totalRuns} total`;
-  // A run caller reads its EFFECTIVE capabilities; a device caller (both undefined)
-  // omits these and gets the owner help below.
-  const isRun = opts.allowControl !== undefined || opts.canFinish !== undefined;
+  const isRun = opts.allowControl !== undefined;
   const help = isRun
     ? [
         "Run `pievo reschedule --run-at 2h` to run again sooner (then resume cadence)",
         `Run \`pievo set-cron "${loop.cron}"\` to change the cadence (floors apply)`,
-        'Run `pievo report --status kept --message "<one line>"` to record this run',
+        'Run `pievo report --status kept --message "<one-line result>"` to record this run',
       ]
     : [
         `Run \`pievo show ${loop.id} --full\` to see the complete ui body`,
@@ -1267,9 +1203,9 @@ function renderShowText(
   return doc(
     block,
     kvLine("nextFire", nextFireDisplay(loop)),
-    `classification: ${classification}`,
+    `lifecycle: ${loop.enabled ? "active" : "paused"}`,
     `runs: ${runsTally}`,
-    !loop.enabled && !loop.completedAt
+    !loop.enabled
       ? kvLine("pauseCause", loop.pauseCause?.kind === "failure-streak"
           ? `failure-streak (run ${loop.pauseCause.runId}, count ${loop.pauseCause.count})`
           : loop.pauseCause?.kind === "blocked"
@@ -1279,11 +1215,8 @@ function renderShowText(
     lastExec?.reportIncident
       ? kvLine("reportIncident", `${lastExec.reportIncident.code} · ${lastExec.reportIncident.faultDomain} · ${lastExec.reportIncident.reason}`)
       : null,
-    // EFFECTIVE run capabilities (camelCase, replacing the old self-schedule/
-    // self-finish display keys): whether this run may self-reschedule, and whether it
-    // may declare the goal met (exec-on-closed-loop).
+    // Effective run scheduling capability.
     opts.allowControl !== undefined ? kvLine("selfSchedule", opts.allowControl ? "allowed" : "off") : null,
-    opts.canFinish !== undefined ? kvLine("selfFinish", opts.canFinish ? "allowed" : "off") : null,
     helpBlock(help),
   );
 }
@@ -1451,7 +1384,7 @@ function renderRunHomeText(
     recentBlock,
     helpBlock([
       "Run `pievo show` for the full config, `pievo log` for the run survey",
-      "Run `pievo report --status no-change` to close this run",
+      "Run `pievo report --status no-change --message \"No useful change was found.\"` to close this run, then summarize in your final response",
     ]),
   );
 }
@@ -1460,36 +1393,33 @@ function isStatus(s: string | undefined): s is RunStatus {
   return s === "kept" || s === "no-change" || s === "blocked";
 }
 
-function validateState(
+function validateMetrics(
   raw: string,
-  schema?: StateField[],
-): { ok: true; value: Record<string, number | string> } | { ok: false; error: string } {
+  schema: MetricField[],
+): { ok: true; value: RunMetrics } | { ok: false; error: string } {
   let obj: unknown;
   try {
     obj = JSON.parse(raw);
   } catch {
-    return { ok: false, error: "--state must be a JSON object, e.g. --state '{\"mrr\":9160}'" };
+    return { ok: false, error: "--metrics must be a JSON object, e.g. --metrics '{\"mrr\":9160}'" };
   }
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { ok: false, error: "--state must be a JSON object" };
-  const allowed = schema?.length ? new Set(schema.map((f) => f.key)) : null;
-  const out: Record<string, number | string> = {};
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { ok: false, error: "--metrics must be a JSON object" };
+  const allowed = new Set(schema.map((f) => f.key));
+  const out: RunMetrics = {};
   for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
-    if (allowed && !allowed.has(k)) return { ok: false, error: `--state has unknown key "${k}". Allowed: ${[...allowed].join(", ")}` };
-    // Finite number (chart point) or non-empty string (the UI binds it; chart ignores)
-    // — same contract as the widened run.state column.
-    // NUL-strip string keys/values: a JSON-escaped \u0000 in the raw flag survives
-    // parseFlags (no literal NUL yet) and only materializes at JSON.parse here -
-    // and pg jsonb rejects it where SQLite tolerated it.
+    if (!allowed.has(k)) return { ok: false, error: `--metrics has unknown key "${k}". Allowed: ${[...allowed].join(", ")}` };
     if (typeof v === "number" && Number.isFinite(v)) out[stripNul(k)] = v;
-    else if (typeof v === "string" && v) out[stripNul(k)] = stripNul(v);
-    else return { ok: false, error: `--state.${k} must be a finite number or a non-empty string` };
+    else if (v === null) out[stripNul(k)] = null;
+    else return { ok: false, error: `--metrics.${k} must be a finite number or null` };
   }
+  const missing = schema.map((field) => field.key).filter((key) => !(key in out));
+  if (missing.length) return { ok: false, error: `--metrics is missing declared key(s): ${missing.join(", ")}` };
   return { ok: true, value: out };
 }
 
 /** Tiny flag parser: `--k v` pairs, bare `--flag` → true, first positional under `_`.
  *  Every key/value is NUL-stripped HERE - flags are wire input by definition, and
- *  several dispatch verbs (`report --message`, `finish --reason`, `set-name`, state
+ *  several dispatch verbs (`set-name`, metrics
  *  values) write flag strings straight into pg text/jsonb columns, which REJECT
  *  NUL (SQLite tolerated it). One chokepoint covers every verb at once. */
 function parseFlags(args: string[]): Flags {

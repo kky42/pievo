@@ -25,10 +25,11 @@ import type {
 } from '../types'
 import { coerceCodingAgent } from '../types'
 import * as store from '../db/store.js'
+import type { MetricField } from '../db/schema.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
-import { normalizeProviderSetting } from '../gateway/validate.js'
+import { normalizeProviderSetting, validateSchema } from '../gateway/validate.js'
 import { machinePresence } from '../lib/machinePresence.js'
 import { TEMPLATES } from './templates.js'
 
@@ -241,6 +242,15 @@ export const patchJob = createServerFn({ method: 'POST' })
     // validator: coerce once (null when absent or unrecognized) and only write a
     // known value, so the web surface can't persist an arbitrary agent string.
     const agent = coerceCodingAgent(p.agent)
+    let metricSchema: MetricField[] | null | undefined
+    if (p.metricSchema !== undefined) {
+      if (p.metricSchema === null) metricSchema = null
+      else {
+        const validated = await validateSchema(data.id, p.metricSchema)
+        if (!validated.ok) return { error: validated.detail }
+        metricSchema = validated.value
+      }
+    }
     const loop = await store.updateLoop(data.id, {
       ...(p.name !== undefined ? { name: p.name.trim() || null } : {}),
       ...(p.cron !== undefined ? { cron: p.cron } : {}),
@@ -250,11 +260,10 @@ export const patchJob = createServerFn({ method: 'POST' })
       ...(p.channelId !== undefined ? { channelId: p.channelId || null } : {}),
       ...(p.enabled !== undefined ? { enabled: !!p.enabled } : {}),
       ...(agent ? { agent } : {}),
-      // Goal set/clear (store.updateLoop enforces the completion-stamp lifecycle:
-      // clearing goal or reopening via enabled:true drops the terminal stamps).
+      // Goal is optional standing guidance; setting or clearing it does not alter lifecycle.
       ...(p.goal !== undefined ? { goal: p.goal?.trim() || null } : {}),
       ...(p.taskFile !== undefined ? { taskFile: p.taskFile.trim() || null } : {}),
-      ...(p.stateSchema !== undefined ? { stateSchema: store.coerceStateSchema(p.stateSchema) ?? null } : {}),
+      ...(p.metricSchema !== undefined ? { metricSchema: metricSchema ?? null } : {}),
       ...(p.ui !== undefined ? { ui: store.coerceUi(p.ui) ?? null } : {}),
       ...(p.exec?.workdir !== undefined ? { workdir: p.exec.workdir.trim() || null } : {}),
       ...(p.exec?.model !== undefined ? { model: normalizeProviderSetting(p.exec.model) } : {}),
@@ -289,7 +298,6 @@ export const startJob = createServerFn({ method: 'POST' })
     const owned = await ownedLoop(id)
     if (!owned) return { error: 'not found' }
     if (owned.loop.deleteRequestedAt) return { error: 'loop is being deleted' }
-    if (owned.loop.completedAt) return { error: 'completed loops must be reopened' }
     const loop = await store.startLoop(id)
     if (!loop) return { error: 'not found' }
     scheduler.addLoop(loop)

@@ -11,14 +11,14 @@ export interface SeriesPoint {
   v: number
 }
 
-/** Per-run numeric state snapshots → one series per numeric field (chronological). */
+/** Per-run numeric metrics snapshots → one series per numeric field (chronological). */
 export function numericSeries(runsNewestFirst: RunSummary[]): Record<string, SeriesPoint[]> {
   const chron = (runsNewestFirst ?? []).slice().reverse()
   const series: Record<string, SeriesPoint[]> = {}
   for (const r of chron) {
     const obj =
-      r.state && typeof r.state === 'object' && !Array.isArray(r.state)
-        ? (r.state as Record<string, Json>)
+      r.metrics && typeof r.metrics === 'object' && !Array.isArray(r.metrics)
+        ? (r.metrics as Record<string, Json>)
         : {}
     for (const k in obj) {
       const v = obj[k]
@@ -30,7 +30,7 @@ export function numericSeries(runsNewestFirst: RunSummary[]): Record<string, Ser
 
 /**
  * One Recharts data row: the run timestamp plus each requested metric present
- * at it. The timestamp field is `__t` (not `t`) so a loop whose declared state
+ * at it. The timestamp field is `__t` (not `t`) so a loop whose declared metrics
  * key is literally `t` can't overwrite it.
  */
 export interface SeriesRow {

@@ -4,7 +4,6 @@ import { Tooltip } from '@base-ui/react/tooltip'
 import { listJobs, listMyTeams } from '../server/loopApi'
 import { listMachines } from '../server/machineFns'
 import type { JobSummary, MachineSummary, RunSummary, TeamsView, TemplateInfo } from '../types'
-import { isCompleted } from '../lib/format'
 import { LoopCard } from './LoopCard'
 import { TeamSwitcher } from './TeamSwitcher'
 import { MachinesModal } from './MachinesModal'
@@ -103,9 +102,7 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
   }, [refetch, anyRunning])
 
   const refresh = () => void refetch()
-  const completed = jobs.filter(isCompleted)
-  const active = jobs.filter((j) => !isCompleted(j))
-  const activeOn = active.filter((j) => j.enabled).length
+  const activeOn = jobs.filter((j) => j.enabled).length
 
   const cardProps = () => ({
     onOpen: (id: string) => void navigate({ to: '/loops/$loopId', params: { loopId: id } }),
@@ -177,16 +174,16 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
         <div className="mb-5 mt-12 flex items-baseline gap-2.5">
           <h2 className="text-body font-semibold text-display">Active loops</h2>
           <span className="text-label text-secondary">
-            {active.length ? `${activeOn} scheduled · ${active.length} total` : ''}
+            {jobs.length ? `${activeOn} scheduled · ${jobs.length} total` : ''}
           </span>
         </div>
 
-        {active.length ? (
-          active.map((j) => <LoopCard job={j} {...cardProps()} key={j.id} />)
+        {jobs.length ? (
+          jobs.map((j) => <LoopCard job={j} {...cardProps()} key={j.id} />)
         ) : (
           <div className="py-16 text-center">
             <div className="text-[15px] text-secondary">
-              {jobs.length ? 'No active loops' : 'No loops yet'}
+              No loops yet
             </div>
             {!jobs.length && (
               <div className="mt-1.5 text-body text-disabled">
@@ -194,18 +191,6 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
               </div>
             )}
           </div>
-        )}
-
-        {completed.length > 0 && (
-          <>
-            <div className="mb-5 mt-11 flex items-baseline gap-2.5">
-              <h2 className="text-body font-semibold text-display">Completed</h2>
-              <span className="text-label text-secondary">{completed.length} total</span>
-            </div>
-            {completed.map((j) => (
-              <LoopCard job={j} {...cardProps()} key={j.id} />
-            ))}
-          </>
         )}
 
         {/* The playbook band - static education/sales content anchoring the page;

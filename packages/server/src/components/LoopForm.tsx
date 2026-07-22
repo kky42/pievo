@@ -1,5 +1,5 @@
 import { forwardRef, lazy, Suspense, useEffect, useId, useImperativeHandle, useState } from 'react'
-import type { ChannelSummary, CodingAgent, ExecPayload, JobPayload, StateField } from '../types'
+import type { ChannelSummary, CodingAgent, ExecPayload, JobPayload, MetricField } from '../types'
 import { CODING_AGENTS } from '../types'
 import { listChannels } from '../server/notifyFns'
 import { cronText } from '../lib/format'
@@ -47,7 +47,7 @@ export interface LoopFormSeed {
   taskFile?: string
   notify?: string
   channelId?: string | null
-  stateSchema?: StateField[]
+  metricSchema?: MetricField[]
   ui?: string
   agent?: CodingAgent
   exec?: { workdir?: string; model?: string; reasoningEffort?: string; allowControl?: boolean }
@@ -61,7 +61,7 @@ interface FormState {
   taskFile: string
   notify: string
   channelId: string
-  stateSchema: string
+  metricSchema: string
   ui: string
   agent: CodingAgent
   workdir: string
@@ -80,7 +80,7 @@ function initState(initial?: LoopFormSeed): FormState {
     taskFile: initial?.taskFile ?? '',
     notify: initial?.notify ?? 'auto',
     channelId: initial?.channelId ?? '',
-    stateSchema: initial?.stateSchema ? JSON.stringify(initial.stateSchema) : '',
+    metricSchema: initial?.metricSchema ? JSON.stringify(initial.metricSchema) : '',
     ui: initial?.ui ?? '',
     agent: initial?.agent ?? 'claude-code',
     workdir: e?.workdir ?? '',
@@ -166,11 +166,11 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
 
     useImperativeHandle(ref, () => ({
       read(): JobPayload | null {
-        let stateSchema: StateField[] | undefined
-        const ss = f.stateSchema.trim()
+        let metricSchema: MetricField[] | undefined
+        const ss = f.metricSchema.trim()
         if (ss) {
           try {
-            stateSchema = JSON.parse(ss)
+            metricSchema = JSON.parse(ss)
           } catch {
             setSchemaErr('Not valid JSON - expected an array like [{"key":"mrr","label":"MRR","unit":"$"}]')
             return null
@@ -187,7 +187,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
           ui: f.ui.trim() || undefined,
           agent: f.agent,
           exec: buildFormExec(f),
-          stateSchema,
+          metricSchema,
         }
       },
     }))
@@ -318,9 +318,9 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
           <Suspense fallback={<EditorFallback minHeight="90px" />}>
             <CodeField
               lang="json"
-              value={f.stateSchema}
+              value={f.metricSchema}
               onChange={(v) => {
-                set('stateSchema', v)
+                set('metricSchema', v)
                 setSchemaErr(null)
               }}
               minHeight="90px"

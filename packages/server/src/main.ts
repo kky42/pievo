@@ -119,7 +119,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
       continuousDelayMinutes: delay,
       workdir: b.workdir ?? null,
       taskFile: b.taskFile ?? null,
-      stateSchema: store.coerceStateSchema(b.stateSchema) ?? null,
+      metricSchema: store.coerceMetricSchema(b.metricSchema) ?? null,
       ui: store.coerceUi(b.ui) ?? null,
       notify: b.notify ?? "auto",
       allowControl: !!b.allowControl,

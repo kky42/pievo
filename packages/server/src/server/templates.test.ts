@@ -135,8 +135,8 @@ describe('template registry', () => {
     const d = ft.description.toLowerCase()
     expect(d).toContain('smoke test') // verify a real observation path before creating
     expect(d).toContain('blind loop') // refuse when nothing can be observed
-    expect(d).toContain('closed') // created closed, with a goal
-    expect(d).toContain('finish condition') // the goal is a concrete finish line
+    expect(d).toContain('standing objective')
+    expect(d).toContain('owner decides')
     // The paste-right-after-shipping invocation is the card's job, not the snippet's.
     expect(ft.desc.toLowerCase()).toContain('after finishing the task')
   })

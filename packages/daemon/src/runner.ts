@@ -163,12 +163,12 @@ export const runDelivery = executeDelivery;
 async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], signal?: AbortSignal): Promise<TerminalReport> {
   const start = Date.now();
   const canceled = () => signal?.aborted && signal.reason === RUN_CANCEL_REASON;
-  const finish = (body: ReportBody, ok: boolean, forcedResult?: TerminalResult): TerminalReport => ({
+  const terminalReport = (body: ReportBody, ok: boolean, forcedResult?: TerminalResult): TerminalReport => ({
     reportId: randomUUID(),
     ...body,
     result: forcedResult ?? (ok ? "success" : body.error?.includes("timed out") ? "timeout" : "failure"),
   });
-  if (canceled()) return finish({ runId: d.runId, exitCode: null, durationMs: 0, error: "canceled before execution" }, false, "canceled");
+  if (canceled()) return terminalReport({ runId: d.runId, exitCode: null, durationMs: 0, error: "canceled before execution" }, false, "canceled");
   // Force a final, run-tagged sync of the loop folder right before reporting so
   // the server's run snapshot (Phase 3) captures end-state even if a late write
   // slipped the watcher's debounce. Best-effort and bounded: the flush is raced
@@ -180,7 +180,7 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
       flushLoop(d.loop.id).catch(() => {}),
       new Promise<void>((resolve) => setTimeout(resolve, FLUSH_TIMEOUT_MS)),
     ]);
-    return finish(body, okOverride ?? body.error === undefined, forcedResult);
+    return terminalReport(body, okOverride ?? body.error === undefined, forcedResult);
   };
   // The LOCAL env jail (PIEVO_ROOTS) always applies when set; server-sent
   // roots can only narrow it — a hostile server must not widen the jail.

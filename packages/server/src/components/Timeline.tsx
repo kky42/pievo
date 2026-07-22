@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Tooltip } from '@base-ui/react/tooltip'
 import type { JobSummary, RunSummary } from '../types'
-import { dotColor, dotLabel, dotOpacity, dur, fmt, isCompleted, until } from '../lib/format'
+import { dotColor, dotLabel, dotOpacity, dur, fmt, until } from '../lib/format'
 import { runPulseAnim, useHydrated } from './ui'
 
 /*
@@ -112,7 +112,6 @@ export function Timeline({
 }) {
   const all = runs
   const en = job.enabled
-  const done = isCompleted(job)
   const L = all.length
   // Older runs that exist server-side but aren't fetched yet (never negative —
   // total can briefly lag the seeded page mid-poll).
@@ -157,7 +156,7 @@ export function Timeline({
 
   // Right edge: at the live edge we show the next-run marker; otherwise the
   // forward "+N" pager for the newer runs currently scrolled out of view.
-  const showNext = atLatest && en && !done && !!job.nextRun && !running
+  const showNext = atLatest && en && !!job.nextRun && !running
 
   return (
     // Contain the strip to its track. A full WINDOW of fixed-width (shrink-0) run

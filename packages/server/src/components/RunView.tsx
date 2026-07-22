@@ -331,9 +331,6 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
         <div className="flex min-w-0 flex-col gap-6">
           <Card label="Details">
             <div className="space-y-3.5">
-              <Field k="State">
-                <StatusPill run={run} colorText />
-              </Field>
               {run.status && <Field k="Status">{run.status}</Field>}
               {run.durationMs != null && <Field k="Duration">{dur(run.durationMs)}</Field>}
               {run.exitCode != null && <Field k="Exit code">{run.exitCode}</Field>}
@@ -344,9 +341,9 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
                   </span>
                 </Field>
               )}
-              {run.state != null && (
-                <Field k="Run state">
-                  <code className="block break-all font-mono text-label text-secondary">{JSON.stringify(run.state)}</code>
+              {run.metrics != null && (
+                <Field k="Run metrics">
+                  <code className="block break-all font-mono text-label text-secondary">{JSON.stringify(run.metrics)}</code>
                 </Field>
               )}
               {run.error && (

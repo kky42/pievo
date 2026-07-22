@@ -99,6 +99,9 @@ test("(a) a running run reclaimed while asleep is reconciled to done by the late
   const { machineId, loop } = (await seedMachineLoop(21 * MIN));
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) }));
   const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  // The in-run report is the durable source of status/message. The later machine
+  // terminal report only contributes provider/process telemetry.
+  await store.updateRun(run.id, { status: "kept", message: "opened PR #42" });
 
   // Sweep reclaims the stuck run and pushes the (soft) offline alert.
   (await gw.sweep());
@@ -127,6 +130,25 @@ test("(a) a running run reclaimed while asleep is reconciled to done by the late
   // Single-shot: the lease is now retired — a second late report is rejected.
   expect(await tokens.resolveLease(rt)).toBeUndefined();
   expect((await gw.report(rt, { result: "success" as const, finalText: "again" })).status).toBe(401);
+});
+
+test("a reclaimed late success stays failed when the run skipped its required report", async () => {
+  const gw = gateway(() => Promise.resolve());
+  const { machineId, loop } = await seedMachineLoop(21 * MIN);
+  const run = await store.addRun({
+    loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN),
+  });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+
+  await gw.sweep();
+  expect((await tokens.resolveLease(rt))?.state).toBe("terminal-grace");
+  expect((await gw.report(rt, { result: "success", durationMs: 1234 })).status).toBe(200);
+  expect(await store.getRun(run.id)).toMatchObject({
+    phase: "error",
+    status: null,
+    message: null,
+    error: "run protocol incomplete: missing status, message",
+  });
 });
 
 test("terminal-grace fences due cadence; late success consumes grace and retimes the fact", async () => {

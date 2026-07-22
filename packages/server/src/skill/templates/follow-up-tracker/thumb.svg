@@ -1,6 +1,6 @@
 <svg viewBox="0 0 144 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <!-- Mock of a closed loop driving toward its goal: a goal chip, observed
-       checkpoints ticking off, and the finish. Colors ride the app's CSS variables. -->
+  <!-- Mock of an ongoing loop tracking a standing objective through observed
+       checkpoints. Colors ride the app's CSS variables. -->
   <rect x="10" y="8" width="62" height="11" rx="5.5" fill="var(--color-success-soft, rgba(0,155,72,0.1))"/>
   <circle cx="18" cy="13.5" r="2" fill="var(--color-rubik-green, #009b48)"/>
   <rect x="24" y="12.5" width="40" height="2.5" rx="1.25" fill="var(--color-rubik-green, #009b48)" opacity="0.55"/>

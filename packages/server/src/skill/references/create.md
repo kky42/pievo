@@ -12,7 +12,7 @@ A loop only makes sense with a real task behind it. Read the session you're in a
 
 Only continue once there's a real intent.
 
-## 2 · Settle cadence, output, and the finish line
+## 2 · Settle cadence, output, and the objective
 
 Never silently guess how often the loop runs or what each run produces: propose → confirm → build. Propose sensible defaults for this specific task, in one short message, and get a yes or adjustment before creating.
 
@@ -20,7 +20,7 @@ Never silently guess how often the loop runs or what each run produces: propose 
 - **Per-run output.** Propose the concrete artifact or message format, e.g. a short markdown summary in `report.md`, a dated markdown product, or a one-line status.
 - **Cheap checks**: if the loop needs a cheap deterministic check, put it in the task file SOP. The exec agent runs the check first; if nothing changed, it reports `no-change` and stops.
 - **Markdown products**: if runs write markdown products, choose a small fixed `type:` vocabulary up front and use flat front matter (`type:`, `title:`, `date:`) so dashboard primitives can index them.
-- **Finish line — only for goal-shaped tasks**: only goal-shaped tasks get a one-line checkable `goal`. Monitor/digest loops omit `goal` and run until paused.
+- **Standing objective — when useful**: optimization tasks may get a one-line `goal` that guides every run. It never stops the loop; all loops run until the owner pauses or deletes them.
 
 ## 3 · Create the loop's folder and task file
 
@@ -47,7 +47,7 @@ Keep the absolute path to `README.md`; it goes in the config as `taskFile`.
 
 ## 4 · Author the loop config
 
-A loop uses `scheduleMode: "cron" | "continuous"`. Cron fires at wall-clock occurrences. Continuous enqueues its next exec only after an exec ends (`done` or `error`) plus `continuousDelayMinutes`; canceled runs, paused/completed loops, and edit/evolve runs do not continue it.
+A loop uses `scheduleMode: "cron" | "continuous"`. Cron fires at wall-clock occurrences. Continuous enqueues its next exec only after an exec ends (`done` or `error`) plus `continuousDelayMinutes`; canceled runs, paused loops, and edit/evolve runs do not continue it.
 
 Author the config inline and pass it to `pievo new --json`:
 
@@ -57,12 +57,12 @@ Author the config inline and pass it to `pievo new --json`:
   "cron": "m h dom mon dow",
   "scheduleMode": "cron",
   "continuousDelayMinutes": 1,
-  "goal": "<one-line checkable finish line — omit for a monitor loop>",
+  "goal": "<optional one-line standing objective>",
   "workdir": "<absolute project dir>",
   "taskFile": "<absolute path to the task file above>",
   "model": "<optional coding-agent model id>",
   "reasoningEffort": "<optional provider effort value>",
-  "stateSchema": [{ "key": "x", "label": "X", "unit": "" }],
+  "metricSchema": [{ "key": "x", "label": "X", "unit": "" }],
   "ui": "<small dashboard HTML — optional>",
   "notify": "auto"
 }
@@ -73,9 +73,9 @@ Rules:
 - Include `taskFile`. There is no `task` field; the agent's standing brief is the task file.
 - Set `workdir` to the absolute project directory when the loop should run in that project.
 - `scheduleMode` defaults to `cron`. For continuous work set `scheduleMode: "continuous"` and choose `continuousDelayMinutes` (integer >= 1). Keep a valid `cron`; continuous ignores it but Pievo retains it so switching back restores the prior cadence.
-- `goal` makes the loop closed: each exec run judges it and calls `pievo finish` when met. Omit `goal` for a monitor/digest loop.
+- `goal` is an optional standing objective. It never changes lifecycle state.
 - `model` and `reasoningEffort` are optional arbitrary strings. Include them only when the owner explicitly requests it.
-- `stateSchema` is optional; declare numeric per-run metrics to get a chart. The exec agent records values with `pievo report --state`.
+- `metricSchema` is optional; declare numeric per-run metrics to get a chart. Every exec report then supplies all values with `--metrics` (number or `null`).
 - `ui` is optional; include a day-one dashboard only when the product/metric shape is already settled.
 
 ### Dashboard at create
@@ -92,7 +92,7 @@ Preview first:
 <pievo-cli> new --json '<config>' --dry-run
 ```
 
-Check the classification matches your intent and the fire times look right. If you authored a `ui` and the preview warns that it was not applied, fix the HTML before creating.
+Check the normalized objective and fire times look right. If you authored a `ui` and the preview warns that it was not applied, fix the HTML before creating.
 
 Then create for real:
 

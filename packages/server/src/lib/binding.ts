@@ -4,17 +4,16 @@
  * once on the Job); these bindings inject the CURRENT run data at render time.
  *
  * Supported tokens:
- *   {{latest.<key>}}            newest value of a state metric (number → fnum, string verbatim)
+ *   {{latest.<key>}}            newest value of a metric (number → fnum, null → absent)
  *
- * The loop reports whatever it wants to surface as plain metrics each run (incl.
- * anything it computed itself — win-prob, lift, a verbal verdict); the template
- * just binds them by key. There is no domain-specific stats machinery here.
+ * The loop reports declared numeric metrics each run; the template binds them by
+ * key. There is no domain-specific stats machinery here.
  */
-import type { Json, RunSummary, StateField } from '../types'
+import type { Json, RunSummary, MetricField } from '../types'
 import { fnum } from './format'
 
-/** Parse a `<loop-chart series="key:label:unit, ...">` attribute into StateField[]. */
-export function parseSeries(attr?: string): StateField[] {
+/** Parse a `<loop-chart series="key:label:unit, ...">` attribute into MetricField[]. */
+export function parseSeries(attr?: string): MetricField[] {
   if (!attr) return []
   return attr
     .split(',')
@@ -32,14 +31,14 @@ export interface BindingContext {
 export function buildBindingContext(runs: RunSummary[]): BindingContext {
   // `runs` is newest-first (detail order) — take the first occurrence of each key.
   const latest: Record<string, string> = {}
+  const seen = new Set<string>()
   for (const r of runs) {
-    if (r.state && typeof r.state === 'object' && !Array.isArray(r.state)) {
-      for (const k in r.state) {
-        if (!(k in latest)) {
-          const v = (r.state as Record<string, Json>)[k]
-          if (typeof v === 'number') latest[k] = fnum(v)
-          else if (typeof v === 'string') latest[k] = v
-        }
+    if (r.metrics && typeof r.metrics === 'object' && !Array.isArray(r.metrics)) {
+      for (const k in r.metrics) {
+        if (seen.has(k)) continue
+        seen.add(k)
+        const v = (r.metrics as Record<string, Json>)[k]
+        if (typeof v === 'number') latest[k] = fnum(v)
       }
     }
   }

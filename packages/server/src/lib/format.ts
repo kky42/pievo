@@ -163,21 +163,3 @@ export const lastRunOf = (j: JobSummary): RunSummary | null => {
   const a = j.runs ?? []
   return a.length ? a[a.length - 1]! : null
 }
-
-/**
- * Completed = the loop reached its goal and was stamped terminal (`completedAt`
- * set by `pievo finish`). This is now an explicit loop state, NOT the old
- * disabled+resolved heuristic — a merely paused loop (no completedAt) stays in
- * the active section with a "Paused" badge.
- */
-export function isCompleted(j: JobSummary): boolean {
-  return j.completedAt != null
-}
-
-/**
- * A CLOSED loop is one carrying a goal (setpoint). "Active closed" = closed but
- * not yet completed — the state that surfaces the quiet "Goal" chip + goal line.
- */
-export function isClosed(j: JobSummary): boolean {
-  return j.goal != null && j.goal !== ''
-}

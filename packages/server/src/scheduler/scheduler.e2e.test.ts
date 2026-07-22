@@ -256,18 +256,6 @@ test("pause clears both facts, cancels system rows, and preserves owner rows", a
   ]);
 });
 
-test("completion preserves only pending owner edit", async () => {
-  const loop = await makeLoop("complete", { goal: "ship" });
-  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "owner" });
-  await store.enqueueRun(loop.id, { role: "evolve", requestedBy: "owner" });
-  await store.enqueueRun(loop.id, { role: "edit", requestedBy: "owner", requestText: "reopen later" });
-  const at = new Date().toISOString();
-  const done = await store.updateLoop(loop.id, { enabled: false, completedAt: at, completionReason: "done" });
-
-  expect(done).toMatchObject({ nextCadenceAt: null, nextRunAt: null });
-  expect((await pending(loop.id)).map((r) => r.role)).toEqual(["edit"]);
-});
-
 test("boot initializes missing cron facts to the future, idempotently and without catch-up", async () => {
   const loop = await makeLoop("boot-init");
   await store.updateLoop(loop.id, { nextCadenceAt: null });

@@ -1,5 +1,5 @@
 /**
- * Content-field validators/normalizers for a loop's ui / stateSchema.
+ * Content-field validators/normalizers for a loop's ui / metricSchema.
  *
  * ANTI-DRIFT INVARIANT: the owner device-token edit surface (`createLoop`/
  * `editLoop` in `gateway/index.ts`) and the run-token `set-ui`/`set-schema`
@@ -10,7 +10,7 @@
  * 400/rejection.
  */
 import * as store from "../db/store.js";
-import type { StateField } from "../db/schema.js";
+import type { MetricField } from "../db/schema.js";
 
 /** Normalize an optional provider-owned setting without validating its vocabulary.
  * Pievo deliberately treats model ids and reasoning efforts as opaque text; null or
@@ -26,11 +26,11 @@ export function validateUi(html: string): { ok: true; value: string | null } {
   return { ok: true, value: store.coerceUi(html) ?? null };
 }
 
-/** Validate a state schema. Accepts a JSON string (run-token path) or an
+/** Validate a metric schema. Accepts a JSON string (run-token path) or an
  *  already-parsed value (an `editLoop` JSON patch may carry the array inline).
  *  Enforces the additive rule: keys still bound by the UI or reported by
  *  recent runs may not be dropped. */
-export async function validateSchema(loopId: string, input: unknown): Promise<{ ok: true; value: StateField[] } | { ok: false; detail: string }> {
+export async function validateSchema(loopId: string, input: unknown): Promise<{ ok: true; value: MetricField[] } | { ok: false; detail: string }> {
   if (!(await store.getLoop(loopId))) return { ok: false, detail: "loop not found" };
   let parsed: unknown = input;
   if (typeof input === "string") {
@@ -40,8 +40,9 @@ export async function validateSchema(loopId: string, input: unknown): Promise<{ 
       return { ok: false, detail: 'schema must be JSON, e.g. [{"key":"mrr","label":"MRR","unit":"$"}]' };
     }
   }
-  const schema = store.coerceStateSchema(parsed);
-  if (!schema) return { ok: false, detail: "schema must be a non-empty array of {key, label?, unit?}" };
+  const result = store.parseMetricSchema(parsed);
+  if (!result.ok) return result;
+  const schema = result.value;
   const have = new Set(schema.map((f) => f.key));
   const dropped = (await schemaKeysInUse(loopId)).filter((k) => !have.has(k));
   if (dropped.length) {
@@ -57,7 +58,7 @@ async function schemaKeysInUse(loopId: string): Promise<string[]> {
   const keys = new Set<string>();
   const loop = await store.getLoop(loopId);
   if (loop?.ui) {
-    for (const m of loop.ui.matchAll(/\{\{\s*(?:latest|state)\.([a-zA-Z0-9_-]+)[^}]*\}\}/g)) keys.add(m[1]!);
+    for (const m of loop.ui.matchAll(/\{\{\s*latest\.([a-zA-Z0-9_-]+)[^}]*\}\}/g)) keys.add(m[1]!);
     for (const m of loop.ui.matchAll(/(?:series|key)=["']([^"']+)["']/g)) {
       for (const part of m[1]!.split(",")) {
         const key = part.trim().split(":")[0]?.trim();
@@ -66,8 +67,8 @@ async function schemaKeysInUse(loopId: string): Promise<string[]> {
     }
   }
   for (const run of await store.listRuns(loopId, 100)) {
-    if (!run.state || typeof run.state !== "object") continue;
-    for (const key of Object.keys(run.state as Record<string, unknown>)) keys.add(key);
+    if (!run.metrics || typeof run.metrics !== "object") continue;
+    for (const key of Object.keys(run.metrics as Record<string, unknown>)) keys.add(key);
   }
   return [...keys];
 }

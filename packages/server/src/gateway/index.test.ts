@@ -137,7 +137,7 @@ async function seededLoop() {
     cron: "0 0 1 1 *",
     enabled: true,
     notify: "auto",
-    stateSchema: [{ key: "mrr" }],
+    metricSchema: [{ key: "mrr" }],
     ui: "<h3>{{latest.mrr}}</h3>",
   }));
   const run = (await store.addRun({
@@ -147,7 +147,7 @@ async function seededLoop() {
     phase: "running",
     role: "evolve",
     ts: new Date().toISOString(),
-    state: { mrr: 10 },
+    metrics: { mrr: 10 },
   }));
   return { machine, loop, run };
 }
@@ -225,7 +225,7 @@ test("help (and a bare/unknown-flag invocation) returns role-aware usage", async
   const execHelp = (await helpText(["help"]));
   expect(execHelp).toContain('dashboard: evolve/edit pass only — this run is "exec"');
   expect(execHelp).toContain("schedule[4]{verb,syntax}: needs allowControl (off for this loop)");
-  expect(execHelp).toContain('finish: exec run on a goal (closed) loop only — this run is "exec"');
+  expect(execHelp).not.toContain("finish:");
 
   // An evolve run with the caps sees those same tags FLIP to available.
   const evolveToken = await tokens.registerRunLease({
@@ -254,7 +254,7 @@ test("set-schema rejects dropping keys still used by UI or recent runs", async (
   const res = (await gateway().agentApi(token, ["set-schema", "--file-content", JSON.stringify([{ key: "paid" }])]));
 
   expect(res.status).toBe(400);
-  expect((await store.getLoop(loop.id))!.stateSchema).toEqual([{ key: "mrr" }]);
+  expect((await store.getLoop(loop.id))!.metricSchema).toEqual([{ key: "mrr" }]);
   expect((await store.getRun(run.id))!.control?.[0]?.command).toBe("set-schema");
   expect((await store.getRun(run.id))!.control?.[0]?.result).toBe("rejected");
 });
@@ -283,6 +283,46 @@ test("report persists normalized terminal telemetry without cost or transcript f
   });
   expect(stored && "costUsd" in stored).toBe(false);
   expect(stored && "transcript" in stored).toBe(false);
+});
+
+test("machine finalization uses the already-validated report after the loop metric schema changes", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await store.createLoop({
+    userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never",
+    metricSchema: [{ key: "score" }],
+  });
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
+
+  expect((await gateway().agentApi(rt, ["report", "--status", "kept", "--message", "measured", "--metrics", '{"score":7}'])).status).toBe(200);
+  await store.updateLoop(loop.id, { metricSchema: null });
+
+  expect((await gateway().report(rt, { result: "success", exitCode: 0 })).status).toBe(200);
+  expect(await store.getRun(run.id)).toMatchObject({ phase: "done", metrics: { score: 7 }, error: null });
+});
+
+test("machine finalization turns a successful process into an error when the run skipped its required report", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await store.createLoop({
+    userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never",
+    metricSchema: [{ key: "score" }, { key: "delta" }],
+  });
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
+
+  const res = await gateway().report(rt, { result: "success", exitCode: 0, finalText: "provider claimed success" });
+  expect(res.status).toBe(200);
+  expect(await store.getRun(run.id)).toMatchObject({
+    phase: "error",
+    status: null,
+    message: null,
+    metrics: null,
+    error: "run protocol incomplete: missing status, message",
+  });
 });
 
 test("report terminalizes the leased run when payload runId does not match", async () => {
@@ -542,16 +582,16 @@ test("cli edit --json '{\"agent\":...}' changes the loop's recorded agent (the C
 });
 
 
-test("editLoop accepts stateSchema as a JSON string too (run-token parity)", async () => {
+test("editLoop accepts metricSchema as a JSON string too (run-token parity)", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   const created = (await gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "pievo/x/README.md" }));
   const id = (created.body as any).id as string;
 
-  const res = (await gateway().editLoop(token, id, { stateSchema: '[{"key":"visits","label":"Visits"}]' } as any));
+  const res = (await gateway().editLoop(token, id, { metricSchema: '[{"key":"visits","label":"Visits"}]' } as any));
   expect(res.status).toBe(200);
-  expect((await store.getLoop(id))!.stateSchema).toEqual([{ key: "visits", label: "Visits" }]);
+  expect((await store.getLoop(id))!.metricSchema).toEqual([{ key: "visits", label: "Visits" }]);
 });
 
 test("editLoop validates content fields (bad schema → 400, loop untouched)", async () => {
@@ -561,9 +601,53 @@ test("editLoop validates content fields (bad schema → 400, loop untouched)", a
   const created = (await gateway().createLoop(token, { name: "S", cron: "0 8 * * *", taskFile: "pievo/x/README.md" }));
   const id = (created.body as any).id as string;
 
-  const bad = (await gateway().editLoop(token, id, { stateSchema: [{ notKey: 1 }] } as any));
+  const bad = (await gateway().editLoop(token, id, { metricSchema: [{ notKey: 1 }] } as any));
   expect(bad.status).toBe(400);
-  expect((await store.getLoop(id))!.stateSchema).toBeNull();
+  expect((await store.getLoop(id))!.metricSchema).toBeNull();
+});
+
+test("metric schemas reject duplicate normalized keys on create, edit, and set-schema", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const duplicate = [{ key: "latency" }, { key: " latency ", label: "Duplicate after trim" }];
+
+  const create = await gateway().createLoop(token, {
+    name: "Bad schema",
+    cron: "0 8 * * *",
+    taskFile: "pievo/x/README.md",
+    metricSchema: duplicate,
+  });
+  expect(create.status).toBe(400);
+  expect((create.body as any).error).toContain("duplicate metric key: latency");
+
+  const created = await gateway().createLoop(token, { name: "Valid", cron: "0 8 * * *", taskFile: "pievo/x/README.md" });
+  const id = (created.body as any).id as string;
+  const edit = await gateway().editLoop(token, id, { metricSchema: duplicate });
+  expect(edit.status).toBe(400);
+  expect((edit.body as any).error).toContain("duplicate metric key: latency");
+
+  const run = await store.addRun({
+    loopId: id,
+    userId: "u1",
+    machineId,
+    phase: "running",
+    role: "evolve",
+    requestedBy: "owner",
+    ts: new Date().toISOString(),
+  });
+  const runToken = await tokens.registerRunLease({
+    runId: run.id,
+    loopId: id,
+    machineId,
+    role: "evolve",
+    allowControl: true,
+    canSetSchema: true,
+  });
+  const setSchema = await gateway().agentApi(runToken, ["set-schema", "--file-content", JSON.stringify(duplicate)]);
+  expect(setSchema.status).toBe(400);
+  expect((setSchema.body as any).text).toContain("duplicate metric key: latency");
+  expect((await store.getLoop(id))!.metricSchema).toBeNull();
 });
 
 
@@ -634,10 +718,10 @@ test("pollV2 with an old or unknown daemon version does not claim pending work",
   expect((unknown.body as any).needsUpdate.current).toBeNull();
   expect((await store.getRun(run.id))!.phase).toBe("pending");
 
-  const old = await gateway().pollV2(token, { protocolVersion: 2, info: { host: "mac", version: "2.0.0" } });
+  const old = await gateway().pollV2(token, { protocolVersion: 2, info: { host: "mac", version: "2.0.2" } });
   expect(old.status).toBe(200);
   expect((old.body as any).delivery).toBeNull();
-  expect((old.body as any).needsUpdate).toMatchObject({ current: "2.0.0", required: "2.0.1" });
+  expect((old.body as any).needsUpdate).toMatchObject({ current: "2.0.2", required: "2.0.3" });
   expect((await store.getRun(run.id))!.phase).toBe("pending");
 });
 
@@ -648,7 +732,7 @@ test("pollV2 with a compatible daemon version can claim pending work", async () 
   const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
   const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() });
 
-  const res = await gateway().pollV2(token, { protocolVersion: 2, info: { host: "mac", version: "2.0.1" } });
+  const res = await gateway().pollV2(token, { protocolVersion: 2, info: { host: "mac", version: "2.0.3" } });
   expect(res.status).toBe(200);
   expect((res.body as any).delivery.runId).toBe(run.id);
   expect((res.body as any).needsUpdate).toBeUndefined();
@@ -805,10 +889,25 @@ test("listMachinesForTeam is membership-scoped — a machine shows in its owner'
 
 
 
-// ---- closed-loop goal: finish verb, gating, completion side effects, reopen ----
+// ---- standing objective: goal never terminalizes the loop ----
 
-/** A machine + a CLOSED loop (goal set unless goal:null) with an exec run RUNNING,
- *  its run token minted with the poll-derived canFinish. Ready for `finish`. */
+test("goal is a standing objective and finish/complete are not run verbs", async () => {
+  const { loop, rt } = await seededClosedRun();
+  const gw = gateway();
+
+  for (const verb of ["finish", "complete"]) {
+    const res = await gw.cli(rt, [verb, "--message", "done"]);
+    expect(res.status).toBe(400);
+    expect(textOf(res)).toContain(`unknown command \\"${verb}\\"`);
+  }
+  const show = textOf(await gw.cli(rt, ["show"]));
+  expect(show).toContain(`goal: "${loop.goal}"`);
+  expect(show).not.toContain("selfFinish");
+  expect(show).not.toContain("closed");
+  expect((await store.getLoop(loop.id))!.enabled).toBe(true);
+});
+
+/** A machine + a goal-bearing loop with an exec run RUNNING. */
 async function seededClosedRun(opts: { notify?: "always" | "auto" | "never"; goal?: string | null } = {}) {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
@@ -816,262 +915,9 @@ async function seededClosedRun(opts: { notify?: "always" | "auto" | "never"; goa
   const goal = opts.goal === undefined ? "reach the goal" : opts.goal;
   const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: opts.notify ?? "auto", goal }));
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
-  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true, canFinish: loop.goal != null });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
   return { token, machineId, loop, run, rt };
 }
-
-test("finish completes a closed loop, cancels queued exec/evolve, preserves queued manual edit", async () => {
-  const { loop, run, rt } = (await seededClosedRun());
-  const { sent, fn } = recordingNotify();
-  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "owner" });
-  await store.enqueueRun(loop.id, { role: "evolve", requestedBy: "owner" });
-  await store.enqueueRun(loop.id, { role: "edit", requestedBy: "owner", requestText: "post-completion edit" });
-
-  const res = (await gateway(fn).agentApi(rt, ["finish", "--message", "hit 100 signups", "--reason", "target met"]));
-  expect(res.status).toBe(200);
-
-  const r = (await store.getRun(run.id))!;
-  expect(r.phase).toBe("done");
-  expect(r.status).toBe("kept");
-  expect(r.message).toBe("hit 100 signups");
-
-  const l = (await store.getLoop(loop.id))!;
-  expect(l.completedAt).toBeTruthy();
-  expect(l.completionReason).toBe("target met");
-  expect(l.enabled).toBe(false);
-  expect(l.goal).toBe("reach the goal"); // invariant: completedAt != null implies goal != null
-  const queued = (await store.openRunsForLoop(loop.id)).filter((x) => x.phase === "pending");
-  expect(queued.map((x) => x.role)).toEqual(["edit"]);
-  expect(queued[0]?.requestText).toBe("post-completion edit");
-
-  // Completion notification fired (a distinct terminal event).
-  expect(sent).toHaveLength(1);
-  expect(sent[0]!.loopId).toBe(loop.id);
-  expect(sent[0]!.message).toContain("Goal reached");
-
-  // finish records a server-computed durationMs even before the daemon's report.
-  expect(typeof r.durationMs).toBe("number");
-
-  // Finish immediately removes mutation authority while retaining a bounded
-  // terminal-report enrichment window.
-  expect((await tokens.resolveLease(rt))?.state).toBe("terminal-grace");
-  expect((await gateway().agentApi(rt, ["show"])).status).toBe(409);
-});
-
-test("finish and poll claim share one loop transaction: completed work can never escape", async () => {
-  const { token, loop, rt } = await seededClosedRun();
-  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "owner" });
-  await store.enqueueRun(loop.id, { role: "evolve", requestedBy: "owner" });
-  const gw = gateway();
-
-  const [finished, polled] = await Promise.all([
-    gw.agentApi(rt, ["finish", "--message", "done"]),
-    gw.poll(token),
-  ]);
-  expect(finished.status).toBe(200);
-  expect((polled.body as { deliveries: unknown[] }).deliveries).toHaveLength(0);
-  const rows = await store.openRunsForLoop(loop.id);
-  expect(rows.some((r) => (r.role === "exec" || r.role === "evolve") && (r.phase === "pending" || r.phase === "running"))).toBe(false);
-  expect((await store.getLoop(loop.id))!.completedAt).toBeTruthy();
-});
-
-test("finish leaves the token live for the daemon's enriching report (durationMs + sessionId), which then revokes it", async () => {
-  const { loop, run, rt } = (await seededClosedRun());
-  const gw = gateway();
-  expect((await gw.agentApi(rt, ["finish", "--message", "done"])).status).toBe(200);
-
-  // The daemon's normal post-run report arrives with precise telemetry. Its provider
-  // final text must not replace the summary already persisted by `finish`.
-  const rep = (await gw.report(rt, { result: "success" as const, durationMs: 4321, sessionId: "sess-xyz", finalText: "provider chatter" }));
-  expect(rep.status).toBe(200);
-
-  const r = (await store.getRun(run.id))!;
-  expect(r.durationMs).toBe(4321);
-  expect(r.sessionId).toBe("sess-xyz");
-  expect(r.message).toBe("done");
-  // The loop stays completed (the enriching report never re-stamps).
-  expect((await store.getLoop(loop.id))!.completedAt).toBeTruthy();
-  // Enrichment revoked the token — a second report is now a no-op (401).
-  expect((await gw.report(rt, { result: "success" as const, durationMs: 9 })).status).toBe(401);
-});
-
-test("finish TOCTOU: refuses (loop untouched) when the goal was cleared after the run started", async () => {
-  const { token, loop, run, rt } = (await seededClosedRun());
-  // Owner clears the goal mid-run (editLoop {goal:null}) — the run's canFinish was
-  // minted at poll, so it's stale.
-  expect((await gateway().editLoop(token, loop.id, { goal: null } as any)).status).toBe(200);
-
-  const res = (await gateway().agentApi(rt, ["finish", "--message", "x"]));
-  expect(res.status).toBe(400);
-  expect((res.body as { text: string }).text).toMatch(/no longer has a goal/i);
-  const l = (await store.getLoop(loop.id))!;
-  expect(l.completedAt).toBeNull();
-  expect(l.enabled).toBe(true);
-  expect((await store.getRun(run.id))!.phase).toBe("running"); // untouched
-});
-
-test("finish is single-shot: a second finish on the same still-live run refuses, no re-stamp/re-notify", async () => {
-  const { loop, run, rt } = (await seededClosedRun());
-  const { sent, fn } = recordingNotify();
-  const gw = gateway(fn);
-
-  expect((await gw.agentApi(rt, ["finish", "--message", "first", "--reason", "target met"])).status).toBe(200);
-  const first = (await store.getLoop(loop.id))!;
-  expect(first.completedAt).toBeTruthy();
-  expect(sent).toHaveLength(1);
-
-  // Terminal grace authorizes enrichment only, so a second mutation is fenced.
-  const res = (await gw.agentApi(rt, ["finish", "--message", "second", "--reason", "again"]));
-  expect(res.status).toBe(409);
-  expect((res.body as { text: string }).text).toMatch(/reclaimed|no longer accepts/i);
-
-  // Loop stamps unchanged (no re-stamp), run message unchanged, no second notification.
-  const l = (await store.getLoop(loop.id))!;
-  expect(l.completedAt).toBe(first.completedAt);
-  expect(l.completionReason).toBe("target met");
-  expect((await store.getRun(run.id))!.message).toBe("first");
-  expect(sent).toHaveLength(1);
-});
-
-test("finish alias `complete` works the same", async () => {
-  const { loop, rt } = (await seededClosedRun());
-  const res = (await gateway().agentApi(rt, ["complete", "--reason", "done"]));
-  expect(res.status).toBe(200);
-  expect((await store.getLoop(loop.id))!.completedAt).toBeTruthy();
-});
-
-test("finish validates --state against the loop schema like report", async () => {
-  const token = tokens.mintDeviceToken();
-  const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", goal: "g", stateSchema: [{ key: "mrr" }] }));
-  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
-  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true, canFinish: true });
-
-  // An unknown key is rejected (400) and nothing completes.
-  const bad = (await gateway().agentApi(rt, ["finish", "--state", '{"nope":1}']));
-  expect(bad.status).toBe(400);
-  expect((await store.getLoop(loop.id))!.completedAt).toBeNull();
-
-  // A schema-valid metric is recorded on the run and the loop completes.
-  const ok = (await gateway().agentApi(rt, ["finish", "--state", '{"mrr":9000}']));
-  expect(ok.status).toBe(200);
-  expect((await store.getRun(run.id))!.state).toEqual({ mrr: 9000 });
-  expect((await store.getLoop(loop.id))!.completedAt).toBeTruthy();
-});
-
-test("finish on an OPEN loop (no goal) is refused 403 — nothing completes", async () => {
-  const { loop, run, rt } = (await seededClosedRun({ goal: null }));
-  const res = (await gateway().agentApi(rt, ["finish", "--message", "x"]));
-  expect(res.status).toBe(403);
-  expect((res.body as { text: string }).text).toMatch(/no goal to finish/i);
-  const l = (await store.getLoop(loop.id))!;
-  expect(l.completedAt).toBeNull();
-  expect(l.enabled).toBe(true);
-  expect((await store.getRun(run.id))!.phase).toBe("running"); // untouched
-});
-
-test("evolve and edit runs never get canFinish — finish refused even on a closed loop", async () => {
-  const token = tokens.mintDeviceToken();
-  const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", goal: "reach goal" }));
-  for (const role of ["evolve", "edit"] as const) {
-    const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role, ts: new Date().toISOString() }));
-    // Mirrors poll: structural runs get canFinish false.
-    const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role, allowControl: true, canFinish: false });
-    const res = (await gateway().agentApi(rt, ["finish", "--message", "x"]));
-    expect(res.status).toBe(403);
-    expect((res.body as { text: string }).text).toMatch(/only an exec run/i);
-    await store.updateRun(run.id, { phase: "canceled" });
-    await tokens.retireLease(rt);
-  }
-  expect((await store.getLoop(loop.id))!.completedAt).toBeNull();
-});
-
-test("finish honors notify:never (no completion push)", async () => {
-  const { rt } = (await seededClosedRun({ notify: "never" }));
-  const { sent, fn } = recordingNotify();
-  const res = (await gateway(fn).agentApi(rt, ["finish", "--reason", "done"]));
-  expect(res.status).toBe(200);
-  expect(sent).toHaveLength(0);
-});
-
-test("poll mints canFinish only for an exec run on a closed loop (via show self-finish line)", async () => {
-  const token = tokens.mintDeviceToken();
-  const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const closed = (await store.createLoop({ userId: "u1", machineId, name: "C", cron: "0 0 1 1 *", enabled: true, notify: "auto", goal: "g" }));
-  (await store.addRun({ loopId: closed.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() }));
-  const open = (await store.createLoop({ userId: "u1", machineId, name: "O", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
-  (await store.addRun({ loopId: open.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() }));
-
-  const gw = gateway();
-  const closedDelivery = ((await gw.poll(token)).body as { deliveries: Array<{ runId: string; loop: { id: string }; runToken: string }> }).deliveries[0]!;
-  const closedShow = ((await gw.agentApi(closedDelivery.runToken, ["show"])).body as { text: string }).text;
-  expect(closedShow).toContain("goal: g");
-  expect(closedShow).toContain("selfFinish: allowed");
-
-  await store.updateRun(closedDelivery.runId, { phase: "done" });
-  await tokens.retireLease(closedDelivery.runToken);
-  const openDelivery = ((await gw.poll(token)).body as { deliveries: Array<{ runToken: string }> }).deliveries[0]!;
-  const openShow = ((await gw.agentApi(openDelivery.runToken, ["show"])).body as { text: string }).text;
-  expect(openShow).toContain("goal: —");
-  expect(openShow).toContain("selfFinish: off");
-});
-
-test("createLoop accepts a goal (closed loop); absent goal ⇒ open loop", async () => {
-  const token = tokens.mintDeviceToken();
-  const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-
-  const closed = (await gateway().createLoop(token, { name: "C", cron: "0 8 * * *", taskFile: "pievo/x/README.md", goal: "reach 100 users" }));
-  expect((await store.getLoop((closed.body as any).id))!.goal).toBe("reach 100 users");
-
-  const open = (await gateway().createLoop(token, { name: "O", cron: "0 8 * * *", taskFile: "pievo/x/README.md" }));
-  expect((await store.getLoop((open.body as any).id))!.goal).toBeNull();
-});
-
-test("editLoop sets a goal, and clearing it (goal:null) also clears the completion stamps", async () => {
-  const token = tokens.mintDeviceToken();
-  const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const created = (await gateway().createLoop(token, { name: "G", cron: "0 8 * * *", taskFile: "pievo/x/README.md" }));
-  const id = (created.body as any).id as string;
-
-  expect((await gateway().editLoop(token, id, { goal: "ship v1" })).status).toBe(200);
-  expect((await store.getLoop(id))!.goal).toBe("ship v1");
-
-  // Simulate a completed loop, then clear the goal → stamps drop (invariant held).
-  (await store.updateLoop(id, { completedAt: "2026-07-01T00:00:00Z", completionReason: "shipped", enabled: false }));
-  expect((await gateway().editLoop(token, id, { goal: null } as any)).status).toBe(200);
-  const l = (await store.getLoop(id))!;
-  expect(l.goal).toBeNull();
-  expect(l.completedAt).toBeNull();
-  expect(l.completionReason).toBeNull();
-});
-
-test("reopen: editLoop enabled:true on a completed loop clears the stamps; a plain pause leaves them", async () => {
-  const token = tokens.mintDeviceToken();
-  const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const created = (await gateway().createLoop(token, { name: "R", cron: "0 8 * * *", taskFile: "pievo/x/README.md", goal: "g" }));
-  const id = (created.body as any).id as string;
-  (await store.updateLoop(id, { completedAt: "2026-07-01T00:00:00Z", completionReason: "met", enabled: false }));
-
-  // Reopen: enabled:true drops the terminal stamps (goal survives).
-  expect((await gateway().editLoop(token, id, { enabled: true })).status).toBe(200);
-  const reopened = (await store.getLoop(id))!;
-  expect(reopened.enabled).toBe(true);
-  expect(reopened.completedAt).toBeNull();
-  expect(reopened.completionReason).toBeNull();
-  expect(reopened.goal).toBe("g");
-
-  // A plain pause (enabled:false) on a completed loop leaves stamps untouched.
-  (await store.updateLoop(id, { completedAt: "2026-07-02T00:00:00Z", completionReason: "met2", enabled: false }));
-  expect((await gateway().editLoop(token, id, { enabled: false })).status).toBe(200);
-  expect((await store.getLoop(id))!.completedAt).toBe("2026-07-02T00:00:00Z");
-});
 
 // ---- --dry-run: validate-only preview for new + edit (no persistence) ----
 
@@ -1084,11 +930,11 @@ async function seededMachine() {
 }
 
 
-test("createLoop --dry-run classifies a goal-less loop as open", async () => {
+test("createLoop --dry-run treats goal as ordinary standing configuration", async () => {
   const { token } = (await seededMachine());
-  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "x", dryRun: true }));
-  expect((res.body as any).classification).toBe("open");
-  expect((res.body as any).classificationText).toMatch(/runs until paused/i);
+  const res = (await gateway().createLoop(token, { cron: "0 8 * * *", taskFile: "x", goal: "improve score", dryRun: true }));
+  expect((res.body as any).config.goal).toBe("improve score");
+  expect((res.body as any).classification).toBeUndefined();
 });
 
 test("createLoop --dry-run still validates (bad cron → 400, nothing created)", async () => {
@@ -1131,19 +977,6 @@ test("editLoop --dry-run reports whitelist + invalid-value rejections (ok:false)
   expect((await store.getLoop(id))!.cron).toBe("0 8 * * *");
 });
 
-test("editLoop --dry-run reflects the reopen stamp-clear in the preview", async () => {
-  const { token } = (await seededMachine());
-  const created = (await gateway().createLoop(token, { name: "E", cron: "0 8 * * *", taskFile: "x", goal: "g" }));
-  const id = (created.body as any).id as string;
-  (await store.updateLoop(id, { completedAt: "2026-07-01T00:00:00Z", completionReason: "met", enabled: false }));
-  const res = (await gateway().editLoop(token, id, { enabled: true }, true));
-  const keys = ((res.body as any).changes as Array<{ key: string }>).map((c) => c.key);
-  expect(keys).toContain("enabled");
-  expect(keys).toContain("completedAt");
-  expect(keys).toContain("completionReason");
-  // Dry-run persisted nothing → the loop is still completed.
-  expect((await store.getLoop(id))!.completedAt).toBe("2026-07-01T00:00:00Z");
-});
 
 // ---- self-schedule cadence floors (RUN path only; the owner's edit path is unlimited) ----
 
@@ -1225,11 +1058,11 @@ test("reschedule floor: a run can't reschedule sooner than 5 min out", async () 
   expect((await store.getLoop(loop.id))!.nextRunAt).toBeTruthy();
 });
 
-test("show reports the goal line and self-finish gating for a run", async () => {
+test("show reports the standing objective without self-finish capability", async () => {
   const { loop, rt } = (await seededClosedRun());
   const text = ((await gateway().agentApi(rt, ["show"])).body as { text: string }).text;
   expect(text).toContain('goal: "reach the goal"');
-  expect(text).toContain("selfFinish: allowed");
+  expect(text).not.toContain("selfFinish");
   expect(loop.goal).toBe("reach the goal");
 });
 
@@ -1403,19 +1236,23 @@ test("blocked status pauses the loop for any role and outranks canceled terminal
   expect((await store.openRunsForLoop(loop.id)).filter((r) => r.phase === "pending" && r.requestedBy === "system")).toHaveLength(0);
 });
 
-test("invalid reported status is stored as missing status, not rejected", async () => {
+test("report requires a valid status and a non-empty message for every run role", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" });
-  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
-  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
   const gw = gateway();
 
-  const res = await gw.cli(rt, ["report", "--status", "wibble", "--message", "done but malformed"]);
-  expect(res.status).toBe(200);
-  expect((res.body as any).text).toContain("status ignored");
-  expect(await store.getRun(run.id)).toMatchObject({ status: null, message: "done but malformed" });
+  for (const role of ["exec", "edit", "evolve"] as const) {
+    const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role, ts: new Date().toISOString() });
+    const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role, allowControl: true });
+    expect((await gw.cli(rt, ["report", "--status", "wibble", "--message", "done"])).status).toBe(400);
+    expect((await gw.cli(rt, ["report", "--status", "kept"])).status).toBe(400);
+    expect((await gw.cli(rt, ["report", "--status", "kept", "--message", "   "])).status).toBe(400);
+    expect(await store.getRun(run.id)).toMatchObject({ status: null, message: null });
+    await store.updateRun(run.id, { phase: "canceled" });
+    await tokens.retireLease(rt);
+  }
 });
 
 test("continuous loop stops enqueueing after the 3rd exec error trips the breaker", async () => {
@@ -1826,12 +1663,12 @@ test("show computes `next` in the loop's timezone", async () => {
 
 test("agent-api report clips --message to the 2000-char cap", async () => {
   const { run, rt } = (await seededExecRun());
-  const res = (await gateway().agentApi(rt, ["report", "--message", "m".repeat(5000)]));
+  const res = (await gateway().agentApi(rt, ["report", "--status", "kept", "--message", "m".repeat(5000)]));
   expect(res.status).toBe(200);
   expect((await store.getRun(run.id))!.message!.length).toBe(2000);
 });
 
-test("agent-api flags are NUL-stripped before any pg write (report/state)", async () => {
+test("agent-api flags are NUL-stripped before any pg write", async () => {
   // Postgres text/jsonb REJECT U+0000 (SQLite tolerated it) - a flag value
   // carrying one (e.g. --file-content inlining a file with a stray NUL) must be
   // sanitized at the parseFlags chokepoint, not 500 the verb mid-run.
@@ -1839,16 +1676,47 @@ test("agent-api flags are NUL-stripped before any pg write (report/state)", asyn
   const res = (await gateway().agentApi(rt, [
     "report",
     "--status",
-    "new",
+    "kept",
     "--message",
     "before\u0000after",
-    "--state",
-    '{"note":"a\\u0000b"}',
   ]));
   expect(res.status).toBe(200);
   const stored = (await store.getRun(run.id))!;
   expect(stored.message).toBe("beforeafter");
-  expect((stored.state as Record<string, unknown>).note).toBe("ab");
+});
+
+test("exec report requires complete declared metrics and accepts negative/null values", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await store.createLoop({
+    userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never",
+    metricSchema: [{ key: "delta" }, { key: "missing" }],
+  } as any);
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
+  const gw = gateway();
+
+  expect((await gw.agentApi(rt, ["report", "--status", "kept", "--message", "measured"])).status).toBe(400);
+  expect((await gw.agentApi(rt, ["report", "--status", "kept", "--message", "measured", "--metrics", '{"delta":-2}'])).status).toBe(400);
+  const res = await gw.agentApi(rt, ["report", "--status", "kept", "--message", "measured", "--metrics", '{"delta":-2,"missing":null}']);
+  expect(res.status).toBe(200);
+  expect((await store.getRun(run.id)) as any).toMatchObject({ metrics: { delta: -2, missing: null } });
+});
+
+test("edit/evolve reports reject metrics", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" });
+  const gw = gateway();
+  for (const role of ["edit", "evolve"] as const) {
+    const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role, ts: new Date().toISOString() });
+    const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role, allowControl: true });
+    expect((await gw.agentApi(rt, ["report", "--status", "kept", "--message", "updated", "--metrics", '{"x":1}'])).status).toBe(400);
+    await store.updateRun(run.id, { phase: "canceled" });
+    await tokens.retireLease(rt);
+  }
 });
 
 test("report clips sessionId and error (untrusted wire input, same discipline as message)", async () => {
@@ -1911,7 +1779,6 @@ async function seededCli(opts: { allowControl?: boolean; goal?: string | null } 
     machineId,
     role: "exec",
     allowControl: opts.allowControl ?? true,
-    canFinish: loop.goal != null,
   });
   return { deviceToken, machineId, loop, run, runToken };
 }
@@ -2096,14 +1963,12 @@ test("cli force delete logs, reports reachability truthfully, and honors a false
   expect(await store.getLoop(second.loop.id)).toBeTruthy();
 });
 
-test("cli device credential: report/finish are run-only → 403", async () => {
+test("cli device credential: report is run-only and removed finish verbs are unknown", async () => {
   const { deviceToken } = (await seededCli());
   const gw = gateway();
-  for (const verb of ["report", "finish", "complete"]) {
-    const res = (await gw.cli(deviceToken, [verb]));
-    expect(res.status).toBe(403);
-    expect((res.body as { text: string }).text).toMatch(/run-only verb/); // error → text (P6)
-  }
+  expect((await gw.cli(deviceToken, ["report"])).status).toBe(403);
+  expect((await gw.cli(deviceToken, ["finish"])).status).toBe(400);
+  expect((await gw.cli(deviceToken, ["complete"])).status).toBe(400);
 });
 
 test("cli run credential: a --loop naming another loop is 403 (never a silent retarget)", async () => {
@@ -2186,14 +2051,6 @@ test("per-verb --help (run credential): role-aware syntax + availability from th
   expect(report).toContain("--status kept|no-change|blocked");
   expect(report).toContain('availability: "always available"');
 
-  // finish --help flips its availability with canFinish: allowed on a closed exec run…
-  const finishClosed = ((await gw.cli(runToken, ["finish", "--help"])).body as { text: string }).text;
-  expect(finishClosed).toContain('availability: "available — declare the goal met"');
-  // …and unavailable on an open (goal-less) loop's exec run.
-  const open = (await seededCli({ allowControl: true, goal: null }));
-  const finishOpen = ((await gateway().cli(open.runToken, ["finish", "--help"])).body as { text: string }).text;
-  expect(finishOpen).toContain("goal (closed) loop only");
-
   // A structural set-* verb reflects the (missing) evolve/edit cap on an exec run.
   const setUi = ((await gw.cli(runToken, ["set-ui", "--help"])).body as { text: string }).text;
   expect(setUi).toContain("verb: set-ui");
@@ -2239,20 +2096,6 @@ test("cli run credential: allowControl still gates schedule mutations through th
   expect(res.status).toBe(403);
   expect((res.body as { text: string }).text).toMatch(/allowControl/);
   expect((await store.getLoop(loop.id))!.enabled).toBe(true);
-});
-
-test("cli run credential: canFinish still gates finish (open loop refused, closed loop honored)", async () => {
-  // Open loop → the exec run's canFinish is false → finish 403.
-  const open = (await seededCli({ goal: null }));
-  const refused = (await gateway().cli(open.runToken, ["finish", "--message", "done"]));
-  expect(refused.status).toBe(403);
-  expect((refused.body as { text: string }).text).toMatch(/open\/monitor loop/);
-
-  // Closed loop → exec run carries canFinish → finish completes the loop.
-  const closed = (await seededCli({ goal: "reach the goal" }));
-  const ok = (await gateway().cli(closed.runToken, ["finish", "--message", "goal met"]));
-  expect(ok.status).toBe(200);
-  expect((await store.getLoop(closed.loop.id))!.completedAt).toBeTruthy();
 });
 
 test("cli device credential: new/edit/loops/log/show route to the existing gateway logic", async () => {
@@ -2304,4 +2147,3 @@ test("cli device credential: log/show of a loop on ANOTHER machine is a flat 404
   expect((await gw.cli(deviceToken, ["log", otherLoop.id])).status).toBe(404);
   expect((await gw.cli(deviceToken, ["show", otherLoop.id])).status).toBe(404);
 });
-

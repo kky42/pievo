@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Link, useNavigate } from '@tanstack/react-router'
 import type { ChannelSummary, CodingAgent, JobDetail, RunSummary } from '../types'
 import { buildEditPrompt, loopDir } from '../lib/editPrompt'
-import { cronText, dotColor, dotLabel, dur, fmt, isClosed, isCompleted, rel, tsShort, until } from '../lib/format'
+import { cronText, dotColor, dotLabel, dur, fmt, rel, tsShort, until } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { DAEMON_UPGRADE_REQUIRED, daemonStopSupport, deriveLoopLifecycle, lifecycleDisplay } from '../lib/lifecycleUi'
 import { setActiveTeamCookie } from '../lib/teamCookie'
@@ -23,7 +23,7 @@ const EDIT_SEEDS = [
   { label: 'Change the schedule', seed: 'Change the schedule: ' },
   { label: 'Adjust what it does', seed: 'Change what this loop does: ' },
   { label: 'Improve the dashboard', seed: 'Improve the dashboard: ' },
-  { label: 'Set a finish line', seed: 'Give this loop a goal, and finish it once the goal is met: ' },
+  { label: 'Set an objective', seed: 'Give this loop a standing objective to optimize toward: ' },
 ] as const
 
 // The agent-authored dashboard rides in its own lazy chunk (it pulls in
@@ -142,15 +142,14 @@ export function LoopDetailView({ id }: { id: string }) {
       setPending(null)
     }
   }
-  async function doLifecycle(action: 'pause' | 'start' | 'stop' | 'reopen' | 'delete') {
+  async function doLifecycle(action: 'pause' | 'start' | 'stop' | 'delete') {
     setActionErr(null)
     setPending('lifecycle')
     try {
       const r = action === 'pause' ? await pauseJob({ data: id })
         : action === 'start' ? await startJob({ data: id })
           : action === 'stop' ? await stopJob({ data: id })
-            : action === 'reopen' ? await patchJob({ data: { id, patch: { enabled: true } } })
-              : await deleteJob({ data: id })
+            : await deleteJob({ data: id })
       if (r.error) return setActionErr(`${action[0]!.toUpperCase() + action.slice(1)} failed: ${r.error}`)
       setConfirmingDelete(false)
       if (r.deleted) {
@@ -160,7 +159,7 @@ export function LoopDetailView({ id }: { id: string }) {
       }
       if (action === 'delete') deletingRef.current = true
       await refreshAll()
-      setFlash({ label: action === 'start' ? 'Started' : action === 'reopen' ? 'Reopened' : action === 'pause' ? 'Paused' : action === 'stop' ? 'Stop requested' : 'Deleting' })
+      setFlash({ label: action === 'start' ? 'Started' : action === 'pause' ? 'Paused' : action === 'stop' ? 'Stop requested' : 'Deleting' })
     } finally {
       setPending(null)
     }
@@ -232,12 +231,9 @@ export function LoopDetailView({ id }: { id: string }) {
       ? 'Machine asleep - requests will stay queued until it wakes'
       : 'Machine offline - requests will stay queued until it reconnects'
     : undefined
-  const completed = isCompleted(s)
   const lifecycle = deriveLoopLifecycle(s)
   const lifecycleText = lifecycleDisplay(detail)
   const protocolSupport = daemonStopSupport(detail.machine.daemonProtocol)
-  // A closed loop still working toward its goal (not yet completed).
-  const closedActive = isClosed(s) && !completed
   const onMachine = detail.machine.name ? `“${detail.machine.name}”` : 'the bound machine'
   // The dispatched edit run (once the poll surfaces it) drives the status card.
   const editRun = editDispatched && editRunId ? runs.find((r) => r.id === editRunId) : undefined
@@ -266,8 +262,8 @@ export function LoopDetailView({ id }: { id: string }) {
   )
 
   const deleting = lifecycle === 'deleting'
-  const paused = !s.enabled && !completed && !deleting
-  const active = s.enabled && !completed && !deleting
+  const paused = !s.enabled && !deleting
+  const active = s.enabled && !deleting
   const actionDisabled = busy || deleting
   const canRunWork = active || paused
   const canStop = canRunWork && !!s.running && protocolSupport.supported
@@ -282,14 +278,14 @@ export function LoopDetailView({ id }: { id: string }) {
           className={btnPrimary}
           disabled={actionDisabled || !canRunWork}
           onClick={() => void doRun()}
-          title={!canRunWork ? 'Unavailable for a completed or deleting loop' : offlineHint ?? (job.exec ? 'Spends credits' : undefined)}
+          title={!canRunWork ? 'Unavailable for a deleting loop' : offlineHint ?? (job.exec ? 'Spends credits' : undefined)}
           aria-label={job.exec ? 'Run once - spends credits' : 'Run once'}
         >
           {pending === 'run' ? 'Queuing…' : 'Run once'}
         </button>
         <button
           className={btn}
-          disabled={actionDisabled || !(canRunWork || completed)}
+          disabled={actionDisabled || !canRunWork}
           title="Dispatch or copy a prompt for an owner-requested edit"
           onClick={() => setEditVia(true)}
         >
@@ -298,7 +294,7 @@ export function LoopDetailView({ id }: { id: string }) {
         <button
           className={btn}
           disabled={actionDisabled || !canRunWork}
-          title={!canRunWork ? 'Unavailable for a completed or deleting loop' : offlineHint ?? 'Spends credits'}
+          title={!canRunWork ? 'Unavailable for a deleting loop' : offlineHint ?? 'Spends credits'}
           onClick={() => void doEvolve()}
         >
           {pending === 'evolve' ? 'Evolving…' : 'Evolve once'}
@@ -307,7 +303,6 @@ export function LoopDetailView({ id }: { id: string }) {
         <button className={btn} disabled={actionDisabled || !paused} onClick={() => void doLifecycle('start')}>Start</button>
         <button className={btn} disabled={actionDisabled || !active} onClick={() => void doLifecycle('pause')}>Pause</button>
         <button className={btnDanger} disabled={actionDisabled || !canStop} title={stopTitle} onClick={() => void doLifecycle('stop')}>Stop</button>
-        <button className={btn} disabled={actionDisabled || !completed} onClick={() => void doLifecycle('reopen')}>Reopen</button>
         <button className={btnDanger} disabled={actionDisabled} onClick={() => setConfirmingDelete(true)}>
           {deleting ? 'Deleting…' : 'Delete'}
         </button>
@@ -508,21 +503,13 @@ export function LoopDetailView({ id }: { id: string }) {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.015em] text-display">{s.name}</h1>
-              {lifecycle === 'completed' ? (
-                <Pill tone="success" dot="green">
-                  Completed
-                </Pill>
-              ) : (
-                <Pill tone={lifecycle === 'stopping' ? 'running' : undefined} dot={lifecycle === 'stopping' ? 'pulse' : undefined}>
-                  {lifecycleText}
-                </Pill>
-              )}
+              <Pill tone={lifecycle === 'stopping' ? 'running' : undefined} dot={lifecycle === 'stopping' ? 'pulse' : undefined}>
+                {lifecycleText}
+              </Pill>
               {s.queued && lifecycle === 'active' ? <Pill tone="outline">Queued</Pill> : null}
-              {/* Closed loop still working toward its goal → the quiet "Goal" chip
-                  (same understated style as the agent chip, not a status pill). */}
-              {closedActive && (
+              {s.goal && (
                 <Pill tone="success" title={s.goal ?? undefined}>
-                  Goal
+                  Objective
                 </Pill>
               )}
               {/* Which coding agent this loop is recorded against (loops.agent) —
@@ -550,7 +537,7 @@ export function LoopDetailView({ id }: { id: string }) {
               </span>
               {metaDot}
               <span>next {fmt(s.nextRun)}</span>
-              {s.nextRun && s.enabled && !completed && <span className="text-disabled">({until(s.nextRun)})</span>}
+              {s.nextRun && s.enabled && <span className="text-disabled">({until(s.nextRun)})</span>}
               {metaDot}
               <span className="inline-flex items-center gap-1.5" title={online ? 'Machine online' : asleep ? 'Machine asleep' : 'Machine offline'}>
                 <span className={`size-1.5 rounded-full ${online ? 'bg-rubik-green' : asleep ? 'bg-rubik-yellow' : 'bg-disabled'}`} />
@@ -561,17 +548,9 @@ export function LoopDetailView({ id }: { id: string }) {
               {metaDot}
               <code className="font-mono text-label text-disabled">{s.id}</code>
             </div>
-            {/* Closed active loop: the setpoint it's driving toward, in prose. */}
-            {closedActive && s.goal && (
+            {s.goal && (
               <div className="mt-2 text-body leading-snug text-secondary">
                 Working toward: <span className="text-primary">{s.goal}</span>
-              </div>
-            )}
-            {/* Completed: the recorded reason + when. */}
-            {lifecycle === 'completed' && (
-              <div className="mt-2 text-body leading-snug text-success">
-                Completed{s.completedAt ? ` · ${fmt(s.completedAt)}` : ''}
-                {s.completionReason && <span className="text-secondary"> - {s.completionReason}</span>}
               </div>
             )}
             {latestIncidentRun?.reportIncident && (

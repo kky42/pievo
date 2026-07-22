@@ -28,11 +28,14 @@ export type { ArtifactMeta } from "../server/frontmatter.js";
 // ---- shared value shapes (mirror the carried-over scheduler types) ----
 
 /** Declares a loop's per-run numeric observation metrics (chart legend + validation). */
-export interface StateField {
+export interface MetricField {
   key: string;
   label?: string;
   unit?: string;
 }
+
+/** One exec run's complete metric observation for its declared schema. */
+export type RunMetrics = Record<string, number | null>;
 
 /** One control command an exec/evolve run issued via the `pievo` shim (audit). */
 export interface ControlAction {
@@ -58,7 +61,7 @@ export type RunRole = "exec" | "evolve" | "edit";
 /** Queue authority, not scheduling provenance. Owner intent may promote a
  * system row, and no later system event may downgrade it. */
 export type RunRequester = "owner" | "system";
-/** `skipped`: a pending run retired without executing (pause/completion cleanup,
+/** `skipped`: a pending run retired without executing (pause/retention cleanup,
  *  legacy coalesce, or the offline catch-up window elapsed).
  *  Neither success nor failure — excluded from the failure streak (it rides
  *  phase `canceled`, and the streak counts only phase `error`). */
@@ -144,8 +147,7 @@ export const loops = pgTable(
     machineId: text("machine_id").notNull(),
     name: text("name"),
     cron: text("cron").notNull(),
-    /** Cadence is orthogonal to goal/completion: continuous loops may be open or
-     *  closed. The cron value remains stored while continuous mode ignores it, so
+    /** Cadence is orthogonal to the standing goal. The cron value remains stored while continuous mode ignores it, so
      *  switching back restores the prior cron without reconstructing it. */
     scheduleMode: text("schedule_mode", { enum: ["cron", "continuous"] }).notNull().default("cron"),
     /** Delay used when a done/error terminal restores continuous cadence.
@@ -165,28 +167,19 @@ export const loops = pgTable(
     /** Generative-UI template (authored by evolve; sanitized at render). */
     ui: text("ui"),
     /** Per-run metric schema. */
-    stateSchema: jsonb("state_schema").$type<StateField[]>(),
+    metricSchema: jsonb("metric_schema").$type<MetricField[]>(),
     notify: text("notify", { enum: ["always", "auto", "never"] }).notNull().default("auto"),
     /** May a run change its own schedule (reschedule/set-cron)? Default TRUE — a
      *  loop self-adjusts unless the owner PINS the schedule (allowControl=false =
      *  "don't self-adjust"). Run-path self-schedule is floor-guarded (see the
      *  cadence floors in gateway); the owner's edit path is unlimited. */
     allowControl: boolean("allow_control").notNull().default(true),
-    /** CLOSED-loop setpoint: a one-line, checkable goal. Null ⇒ OPEN loop
-     *  (monitor/digest — never self-terminates; "finish" is not a concept for it).
-     *  Non-null ⇒ CLOSED loop: each exec run is the comparator (judges state vs the
-     *  goal) and calls `pievo finish` when it's met. Open↔closed conversion = set/
-     *  clear this. */
+    /** Optional standing objective. It guides every run but never changes lifecycle;
+     * only the owner pauses or deletes a loop. */
     goal: text("goal"),
-    /** Terminal stamp: when the loop's goal was declared met (ISO). Null ⇒ still
-     *  running / never completed. Completing forces enabled=false (the scheduler
-     *  skips it for free). Structural invariant: non-null implies goal != null. */
-    completedAt: text("completed_at"),
     /** Durable Stop-before-delete marker. A deleting loop is never claimable. */
     deleteRequestedAt: timestamp("delete_requested_at", { withTimezone: true, mode: "string" }),
-    /** One-line reason recorded at completion (the finishing run's summary). */
-    completionReason: text("completion_reason"),
-    /** Diagnostic annotation for a paused loop; completion always clears it. */
+    /** Diagnostic annotation for a paused loop. */
     pauseCause: jsonb("pause_cause").$type<PauseCause>(),
     /** Optional provider model id. Null delegates model selection to the coding-agent CLI. */
     model: text("model"),
@@ -259,7 +252,7 @@ export const runs = pgTable(
     error: text("error"),
     /** This run's observation snapshot — numeric metrics (chart points) plus scalar
      *  values the generative UI binds via {{latest.*}} (strings ok; chart ignores them). */
-    state: jsonb("state").$type<Record<string, number | string>>(),
+    metrics: jsonb("metrics").$type<RunMetrics>(),
     /** Control actions this run issued (audit). */
     control: jsonb("control").$type<ControlAction[]>(),
     /** Provider session id on the machine, retained for owner-side continuation. */
@@ -298,7 +291,7 @@ export const runs = pgTable(
 // hand out live run credentials (unlike `machines.token`, there is no re-show
 // need). Lifecycle: `active` (expiresAt null = no expiry; the inactivity sweep
 // is the vanished-machine guard) → `terminal-grace` (bounded final-report window
-// for finish enrichment or wake reconciliation) → deleted on report, or `retired`
+// for wake reconciliation) → deleted on report, or `retired`
 // on expiry. Retired is non-authorizing durable 410 evidence until that report.
 
 export const runLeases = pgTable(
@@ -313,7 +306,6 @@ export const runLeases = pgTable(
     allowControl: boolean("allow_control").notNull().default(false),
     canSetUi: boolean("can_set_ui").notNull().default(false),
     canSetSchema: boolean("can_set_schema").notNull().default(false),
-    canFinish: boolean("can_finish").notNull().default(false),
     state: text("state", { enum: ["active", "terminal-grace", "retired"] }).notNull().default("active"),
     /** Null while active/retired; ISO only during terminal-grace. */
     expiresAt: text("expires_at"),

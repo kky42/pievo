@@ -27,8 +27,7 @@ import type { TemplateInfo } from '../types'
 // ── Spec (data only) ────────────────────────────────────────────────────────
 // `setup` = a one-time gate shown ABOVE the tick, outside the recurring cycle
 // (confirm/smoke-test something before the first run). `wt` = runs in the worktree.
-// `finish` = a closed loop's green terminus (it finishes itself when the goal is met).
-type NodeDef = { id: string; kicker: string; glyph: string; title: string; detail: ReactNode; wt?: boolean; setup?: boolean; finish?: boolean }
+type NodeDef = { id: string; kicker: string; glyph: string; title: string; detail: ReactNode; wt?: boolean; setup?: boolean }
 
 /** A PR card: [number, title, when]. */
 type Card = [string, string, string]
@@ -219,12 +218,11 @@ const MARKET_RESEARCH: FlowSpec = {
 const FOLLOW_UP: FlowSpec = {
   worktreeLabel: '', // no worktree — it observes, it doesn't fix
   nodes: [
-    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Verify + define the finish', detail: 'smoke-test an observation path · set the finish condition' },
+    { id: 'setup', setup: true, kicker: 'Before first run', glyph: '⚙', title: 'Verify + define the target', detail: 'smoke-test an observation path · set a standing objective' },
     { id: 'tick', kicker: 'On cadence', glyph: '◷', title: 'A few times a day', detail: 'wakes on cadence — no fixed clock time' },
     { id: 'observe', kicker: 'Step 1 · Observe', glyph: '⌕', title: 'Check the outcome', detail: 'through the verified path — logs / URL / gh' },
     { id: 'report', kicker: 'Step 2 · Report', glyph: '◈', title: 'Report what you find', detail: 'one report · a metric when natural' },
-    { id: 'check', kicker: 'Step 3 · Check', glyph: '⚖', title: 'Goal met?', detail: 'keep watching until it genuinely holds' },
-    { id: 'finish', finish: true, kicker: 'When met', glyph: '⚑', title: 'Finish the loop', detail: 'marks it done — stops watching' },
+    { id: 'check', kicker: 'Step 3 · Check', glyph: '⚖', title: 'Track the objective', detail: 'keep watching and surface regressions' },
   ],
   dashboard: [
     {
@@ -238,7 +236,7 @@ const FOLLOW_UP: FlowSpec = {
         'goal: hold ≥ 40% for 48h — 31h in, on track',
       ],
     },
-    { type: 'metric', label: 'Checkout conversion %', series: [29, 31, 30, 34, 37, 39, 41, 43, 44], note: 'goal: hold ≥ 40% for 48h, then the loop finishes itself.' },
+    { type: 'metric', label: 'Checkout conversion %', series: [29, 31, 30, 34, 37, 39, 41, 43, 44], note: 'objective: sustain ≥ 40%; keep watching for regressions.' },
   ],
 }
 
@@ -268,8 +266,8 @@ const WT_W = 280
 const WT_PAD_TOP = 18
 const WT_PAD_BOT = 16
 
-type Positioned = NodeDef & { kind: 'tick' | 'step' | 'setup' | 'finish'; x: number; y: number; w: number; h: number }
-type Geometry = { nodes: Positioned[]; wires: string[]; route: string; worktree: { x: number; y: number; w: number; h: number } | null; returnWireIndex: number; finishWireIndex: number; viewW: number; viewH: number }
+type Positioned = NodeDef & { kind: 'tick' | 'step' | 'setup'; x: number; y: number; w: number; h: number }
+type Geometry = { nodes: Positioned[]; wires: string[]; route: string; worktree: { x: number; y: number; w: number; h: number } | null; returnWireIndex: number; viewW: number; viewH: number }
 
 // Setup gates carry a longer, two-line detail, so they get a taller box; the
 // generator threads each node's own height through spacing / wires / the box.
@@ -277,8 +275,6 @@ const hOf = (d: NodeDef) => (d.setup ? 78 : NODE_H)
 
 function buildGeometry(defs: NodeDef[]): Geometry {
   const tickIndex = defs.findIndex((d) => !d.setup) // first non-setup node = the tick
-  const finishIndex = defs.findIndex((d) => d.finish) // -1 when the loop is open
-  const closed = finishIndex >= 0
   const nodes: Positioned[] = []
   let y = TOP
   defs.forEach((d, i) => {
@@ -288,7 +284,7 @@ function buildGeometry(defs: NodeDef[]): Geometry {
       const gap = !prevWt && curWt ? 48 : prevWt && curWt ? 30 : 36
       y += hOf(defs[i - 1]!) + gap
     }
-    const kind = d.finish ? 'finish' : d.setup ? 'setup' : i === tickIndex ? 'tick' : 'step'
+    const kind = d.setup ? 'setup' : i === tickIndex ? 'tick' : 'step'
     nodes.push({ ...d, kind, x: NODE_X, y, w: NODE_W, h: hOf(d) })
   })
 
@@ -297,47 +293,26 @@ function buildGeometry(defs: NodeDef[]): Geometry {
     ? { x: WT_X, y: wt[0]!.y - WT_PAD_TOP, w: WT_W, h: wt[wt.length - 1]!.y + wt[wt.length - 1]!.h + WT_PAD_BOT - (wt[0]!.y - WT_PAD_TOP) }
     : null
 
-  // Forward wires between every consecutive node (setup → tick and check → finish included).
+  // Forward wires between every consecutive node.
   const wires: string[] = []
   for (let i = 0; i < nodes.length - 1; i++) {
     wires.push(`M${CX} ${nodes[i]!.y + nodes[i]!.h} L${CX} ${nodes[i + 1]!.y - 4}`)
   }
-  // The solid forward exit into a closed loop's green terminus (check → finish).
-  const finishWireIndex = closed ? finishIndex - 1 : -1
-
   const tickNode = nodes[tickIndex]!
   const tickMidY = tickNode.y + tickNode.h / 2
-  // The last CYCLIC node: "Check" for a closed loop, else the last node.
-  const cycleEnd = closed ? finishIndex - 1 : nodes.length - 1
-  const cycleLast = nodes[cycleEnd]!
+  const cycleLast = nodes[nodes.length - 1]!
 
   const returnWireIndex = wires.length
-  let route: string
-  let viewH: number
-  if (closed) {
-    // Dashed loop-back exits the last cyclic node's LEFT edge, up the lane, into the
-    // tick's left edge — "keep looping UNTIL the goal is met" — freeing the bottom
-    // edge for the solid forward exit into the green finish terminus.
-    const midY = cycleLast.y + cycleLast.h / 2
-    wires.push(
-      `M${NODE_X} ${midY} L${LANE_X + 6} ${midY} Q${LANE_X} ${midY} ${LANE_X} ${midY - 6} L${LANE_X} ${tickMidY + 6} Q${LANE_X} ${tickMidY} ${LANE_X + 6} ${tickMidY} L${NODE_X - 4} ${tickMidY}`,
-    )
-    const centers = nodes.slice(tickIndex, finishIndex).map((n) => `${CX} ${n.y + n.h / 2}`).join(' L ')
-    route = `M${centers} L${LANE_X} ${midY} L${LANE_X} ${tickMidY} L${NODE_X - 4} ${tickMidY}`
-    const finishNode = nodes[finishIndex]!
-    viewH = finishNode.y + finishNode.h + 14
-  } else {
-    const laneY = cycleLast.y + cycleLast.h + 28
-    // last step → down → left lane → up → into the tick's left edge (the repeat).
-    wires.push(
-      `M${CX} ${cycleLast.y + cycleLast.h} L${CX} ${laneY - 6} Q${CX} ${laneY} ${CX - 6} ${laneY} L${LANE_X + 6} ${laneY} Q${LANE_X} ${laneY} ${LANE_X} ${laneY - 6} L${LANE_X} ${tickMidY + 6} Q${LANE_X} ${tickMidY} ${LANE_X + 6} ${tickMidY} L${NODE_X - 4} ${tickMidY}`,
-    )
-    const centers = nodes.slice(tickIndex).map((n) => `${CX} ${n.y + n.h / 2}`).join(' L ')
-    route = `M${centers} L${CX} ${laneY} L${LANE_X} ${laneY} L${LANE_X} ${tickMidY} L${NODE_X - 4} ${tickMidY}`
-    viewH = laneY + 14
-  }
+  const laneY = cycleLast.y + cycleLast.h + 28
+  // last step → down → left lane → up → into the tick's left edge (the repeat).
+  wires.push(
+    `M${CX} ${cycleLast.y + cycleLast.h} L${CX} ${laneY - 6} Q${CX} ${laneY} ${CX - 6} ${laneY} L${LANE_X + 6} ${laneY} Q${LANE_X} ${laneY} ${LANE_X} ${laneY - 6} L${LANE_X} ${tickMidY + 6} Q${LANE_X} ${tickMidY} ${LANE_X + 6} ${tickMidY} L${NODE_X - 4} ${tickMidY}`,
+  )
+  const centers = nodes.slice(tickIndex).map((n) => `${CX} ${n.y + n.h / 2}`).join(' L ')
+  const route = `M${centers} L${CX} ${laneY} L${LANE_X} ${laneY} L${LANE_X} ${tickMidY} L${NODE_X - 4} ${tickMidY}`
+  const viewH = laneY + 14
 
-  return { nodes, wires, route, worktree, returnWireIndex, finishWireIndex, viewW: VIEW_W, viewH }
+  return { nodes, wires, route, worktree, returnWireIndex, viewW: VIEW_W, viewH }
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -412,7 +387,7 @@ function FlowDiagram({ spec }: { spec: FlowSpec }) {
     const nodeEls = new Map<string, HTMLElement>()
     root.querySelectorAll<HTMLElement>('[data-lpf]').forEach((el) => nodeEls.set(el.dataset.lpf!, el))
     const order = geo.nodes
-      .filter((n) => n.kind !== 'setup' && n.kind !== 'finish') // one-time gate / terminus aren't in the cycle
+      .filter((n) => n.kind !== 'setup') // the one-time gate is outside the cycle
       .map((n) => ({ len: lenAt(n.x + n.w / 2, n.y + n.h / 2), el: nodeEls.get(n.id)! }))
       .filter((n) => n.el)
       .sort((a, b) => a.len - b.len)
@@ -490,9 +465,6 @@ function FlowDiagram({ spec }: { spec: FlowSpec }) {
               <marker id="lpf-arw" markerUnits="userSpaceOnUse" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
                 <path d="M1.2 1.2 L7 4 L1.2 6.8 Z" fill="var(--color-interactive)" />
               </marker>
-              <marker id="lpf-arw-good" markerUnits="userSpaceOnUse" viewBox="0 0 8 8" refX="6" refY="4" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
-                <path d="M1.2 1.2 L7 4 L1.2 6.8 Z" fill="var(--color-success)" />
-              </marker>
               <filter id="lpf-glow" x="-60%" y="-60%" width="220%" height="220%">
                 <feGaussianBlur stdDeviation="2.4" result="b" />
                 <feMerge>
@@ -502,21 +474,18 @@ function FlowDiagram({ spec }: { spec: FlowSpec }) {
               </filter>
               <path className="lpf-route" fill="none" d={geo.route} />
             </defs>
-            {geo.wires.map((d, i) => {
-              const isFinish = i === geo.finishWireIndex
-              return (
-                <path
-                  key={i}
-                  className={isFinish ? 'lpf-wire finish' : 'lpf-wire'}
-                  d={d}
-                  fill="none"
-                  strokeWidth={2}
-                  strokeLinecap="round"
-                  strokeDasharray={i === geo.returnWireIndex ? '6 6' : undefined}
-                  markerEnd={isFinish ? 'url(#lpf-arw-good)' : 'url(#lpf-arw)'}
-                />
-              )
-            })}
+            {geo.wires.map((d, i) => (
+              <path
+                key={i}
+                className="lpf-wire"
+                d={d}
+                fill="none"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeDasharray={i === geo.returnWireIndex ? '6 6' : undefined}
+                markerEnd="url(#lpf-arw)"
+              />
+            ))}
             <path className="lpf-comet" d={geo.route} fill="none" strokeWidth={2.5} strokeLinecap="round" filter="url(#lpf-glow)" opacity={0.9} />
             <circle className="lpf-pulse" r={3.8} filter="url(#lpf-glow)" />
           </svg>

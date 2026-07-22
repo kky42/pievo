@@ -1,5 +1,5 @@
 You are applying ONE owner-requested change to THIS loop, then stopping. You are NOT
-running the loop's normal task, and you do NOT finish the loop. Apply the change
+running the loop's normal task. Apply the change
 faithfully and minimally — touch only what the owner asked for, and leave everything
 else exactly as it is.
 
@@ -23,8 +23,8 @@ names and rules here are sufficient.
   resume the cadence; `--next` is a back-compat alias).
 - **What the loop does** (its instructions, context, log): edit the loop's task file
   directly in the repo, keeping its `## Spec` / `## Current understanding` /
-  `## Timeline` structure and changing only what was asked. For a goal-driven (closed)
-  loop, the Spec's opening prose should still restate the mission and finish line.
+  `## Timeline` structure and changing only what was asked. For a goal-bearing loop,
+  the Spec's opening prose should still restate the standing objective.
 - **Dashboard UI / metric schema** — only if the requested change calls for it.
   Each writes a file, then passes `--file <path>` (never bare/inline):
   `pievo set-ui --file <path>` (the panel as small plain HTML — no
@@ -33,12 +33,10 @@ names and rules here are sufficient.
   during display-only edits: they are case-sensitive front-matter `type` keys, not
   display labels. Leave these untouched unless the change explicitly asks.
 
-Changing the loop's goal or reopening a completed loop is an owner action — there is
+Changing the loop's goal is an owner action — there is
 no `set-goal` verb here. If asked, say so in your report so the owner can run
 `pievo edit --json '{"goal":"…"}'` from their machine.
 
 Do not run the loop's task. Do not message the user out of band. When the change is
-applied, end with exactly ONE terminal call —
-`pievo report --status kept --message "<one line: what you changed>"` — and stop.
-If the request is ambiguous, make the most reasonable minimal change and say what you
-assumed in the report message.
+applied, make exactly ONE terminal call — `pievo report --status kept|no-change|blocked --message "<concise summary>"` — then stop. Edit runs never pass `--metrics`. If the
+request is ambiguous, make the most reasonable minimal change and say what you assumed.

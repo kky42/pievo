@@ -41,8 +41,8 @@ const HTML =
   '<loop-chart series="cpu:CPU:℃, inlet:进风口:℃" window="24" points="24" range="24h"></loop-chart>' +
   '</div>'
 
-const mk = (ts: string, state: Record<string, number> | null): RunSummary =>
-  ({ id: 'r-' + ts, ts, status: null, message: null, state }) as unknown as RunSummary
+const mk = (ts: string, metrics: Record<string, number | null> | null): RunSummary =>
+  ({ id: 'r-' + ts, ts, status: null, message: null, metrics }) as unknown as RunSummary
 
 // Detail order = newest-first
 const RUNS: RunSummary[] = [
@@ -90,6 +90,15 @@ describe('LoopView <loop-chart>', () => {
     expect(out).toContain('<svg')
     expect(out).toContain('recharts-area') // single series → gradient area chart
     expect(out).toContain('recharts-dot') // the lone point is a visible dot
+  })
+
+  it('does not fall back to an older metric when the newest observation is null', () => {
+    const out = render('<div>CPU {{latest.cpu}}</div>', [
+      mk('2026-06-20T14:00:00.000Z', { cpu: null }),
+      mk('2026-06-20T13:00:00.000Z', { cpu: 40 }),
+    ])
+    expect(out).toContain('CPU —')
+    expect(out).not.toContain('CPU 40')
   })
 
   it('drops a stale <loop-sparkline> tag without crashing (retired primitive)', () => {

@@ -50,11 +50,11 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   gaining `text` — the in-run callback already prints `body.text`. Proven at the
   callback boundary by `daemon/src/callback.test.ts` (a stub server returning the new
   body, asserting non-empty stdout — that test changes NO daemon source).
-- **F5** (fail-loud): `dispatch` `report`/`finish` reject an invalid `--status` with a
-  400 `VALIDATION_ERROR` (`status must be new|resolved|nothing-new (got "x")`) instead
-  of the old silent `isStatus(...) ? {status} : {}` drop.
+- **F5** (fail-loud): `dispatch` `report` requires `kept|no-change|blocked` plus a
+  non-empty message. Exec runs with a metric schema also require `--metrics` with
+  exactly every declared key; edit/evolve runs reject metrics.
 - All dispatch errors render via `derr(code, message, slug?)` → `errorBlock` (slug
-  defaults from HTTP status; `finishLoop`'s already-finished rejection pins CONFLICT).
+  defaults from HTTP status).
 
 ## axi-conformance CLI (batch 4 — per-verb `--help`, in-run help TOON, F4)
 
@@ -63,7 +63,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   stays a working back-compat alias. This closed the shipped drift where the help
   documented `--run-at` but the code only read `--next` (following the help failed).
 - **In-run `help`** (`helpText`) renders the §4.9 TOON: a `verbs:` top key with
-  grouped typed lists (`always[3]`, `schedule[4]`) + `finish:`/`dashboard/gate:`
+  grouped typed lists (`always[3]`, `schedule[4]`) + `dashboard/gate:`
   lines, each carrying an availability TAG that flips with the lease caps (exec vs
   evolve/edit: `evolve/edit pass only — this run is "exec"` ↔ `available to this run`;
   schedule tag gates on `allowControl`), then a trailing `help[]`. The schedule list
@@ -73,8 +73,8 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   (+ role-aware `availability:` for a run) + a short `help[]`, via `verbHelpText(verb,
   lease?)` over two spec maps — `RUN_VERB_HELP` (lease present ⇒ role-aware) and
   `DEVICE_VERB_HELP` (owner surface, no availability line; `new`/`edit` summaries list
-  `EDITABLE_LOOP_FIELDS` so schemas are discoverable without failing). `complete`
-  aliases `finish`. Intercepted in THREE places: `deviceCli` + `runCli` (unified CLI,
+  `EDITABLE_LOOP_FIELDS` so schemas are discoverable without failing). Help is
+  intercepted in THREE places: `deviceCli` + `runCli` (unified CLI,
   after the DEVICE_ONLY/loop-fence checks so an owner-only verb still 403s on a run
   credential, never leaks help) and at the top of `dispatch` (the legacy
   `/agent-api/loop` transport). An unknown verb has no spec → `verbHelpText` returns
@@ -87,14 +87,13 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - **`show` emits the FULL editable envelope** keyed EXACTLY as `edit --json` accepts
   (`loopEnvelope(loop)`: id + every `EDITABLE_LOOP_FIELDS` key — name, cron, timezone,
   notify, model, reasoningEffort, agent, allowControl, taskFile, enabled, runAt,
-  goal, ui, stateSchema) PLUS the derived read-only aggregates `nextFire`/`classification`/`runs`.
-  `renderShowText` is the pure TOON renderer; `describe(loopId, {allowControl, canFinish,
+  goal, ui, metricSchema) PLUS the derived read-only aggregates `nextFire`/`lifecycle`/`runs`.
+  `renderShowText` is the pure TOON renderer; `describe(loopId, {allowControl,
   full})` wraps it with the loop lookup + runs tally. Large fields (`ui`)
-  render as `present, N bytes — use --full to see` (or `absent`); `stateSchema` renders
+  render as `present, N bytes — use --full to see` (or `absent`); `metricSchema` renders
   STRUCTURALLY (`[N]{key,label,unit}:` rows); `--full` inlines complete bodies (scalar-
-  quoted, newlines escaped). A RUN credential adds the effective `selfSchedule`/
-  `selfFinish` lines (camelCase — these REPLACED the old kebab `self-schedule`/
-  `self-finish` display keys) + run help; a DEVICE credential gets owner help (edit/log).
+  quoted, newlines escaped). A RUN credential adds the effective `selfSchedule`
+  line + run help; a DEVICE credential gets owner help (edit/log).
 - **Naming (F4):** the writable pinned override is `runAt` (the edit key; the DB column
   stays `nextRunAt`); the derived cron fire is the read-only `nextFire` (formatted in the
   loop's own tz via Intl, `nextFireDisplay`). The old wire display name `nextRunAt`
@@ -109,7 +108,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   this hold: (1) `set()` still writes to `update` but only RECORDS a change when the
   value actually differs (`sameLoopValue`, structural, null≡undefined) — so an all-no-op
   patch is a harmless idempotent re-apply (still 200, not "nothing to change"), while the
-  dry-run preview shows zero changes; (2) `runAt`/`ui`/`stateSchema` accept
+  dry-run preview shows zero changes; (2) `runAt`/`ui`/`metricSchema` accept
   `null` as an explicit clear (symmetric with `goal:null`), which is what `show --json`
   re-feeds for an unset field — a no-op when already null.
 
@@ -172,7 +171,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   ("evolve.md log survey names the shipped TOON columns"), which substring-matches the
   exact header + `summary:` + the `key=value` phrasing. That serving test is the
   lightweight guard for this batch (it also pins run.md's `--run-at`/`--next` note and
-  that the retired kebab `self-schedule:`/`self-finish:` display keys never reappear).
+  that the retired kebab `self-schedule:` display key never reappears).
 - `scripts/demo-cookie-unified.sh` create body used a stale `task:` field; `createLoop`
   dropped the `task` column (batch 2) and 400s without `taskFile`, so the
   demo was actually broken — batch 5 renames it to `taskFile` (review F7).
@@ -211,9 +210,9 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   `pievo` = the content-first HOME (device out-of-run; in-run bare posts `home` on the
   run cred). Lifecycle exists only under `pievo daemon start|stop|restart|status`;
   detached re-exec uses `daemon start --foreground` and keeps the token env-only.
-  Top-level `up|down|status|doctor|update`, raw lifecycle flags, and `--api-key` are unknown. `report`/`finish`/`complete` OUT of a run are
-  FORWARDED to the server (device cred → the crafted run-only 403, F3), never a generic
-  unknown-command. `pievo show` out-of-run (F1) resolves the loop client-side (like
+  Top-level `up|down|status|doctor|update`, raw lifecycle flags, `--api-key`, and
+  `finish|complete` are unknown. `report` outside a run is forwarded to the server
+  (device cred → the crafted run-only 403, F3). `pievo show` out-of-run resolves the loop client-side (like
   `log`, reusing `log.ts` `resolveLoopId`) then forwards.
 - **No coding-agent SessionStart hook.** Pievo does not inject home into unrelated
   Claude Code/Codex sessions. Ordinary sessions discover it through the user-scope skill
@@ -346,13 +345,11 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   index enforces one pending row per loop+role. Coalescing only promotes
   system→owner; latest owner edit wins; a running role may retain one follow-up.
   Cross-role rows survive and claim priority is `edit > evolve > exec`.
-- `store.updateLoop` owns lifecycle/cadence atomically. `loops.pauseCause` annotates an ordinary owner pause/stop vs circuit-breaker `failure-streak` (run/count); explicit start/reopen clears it and completion is not a pause, so clears it too. Pause clears both schedule
+- `store.updateLoop` owns lifecycle/cadence atomically. `loops.pauseCause` annotates an ordinary owner pause/stop vs circuit-breaker `failure-streak` (run/count); explicit start clears it. Pause clears both schedule
   facts and cancels pending system rows, but owner-requested exec/edit/evolve remain
   claimable while the loop stays paused; their terminal path cannot restore cadence.
-  Completion also clears both and cancels all pending exec/evolve plus system edit,
-  preserving only owner edit. Mode switches
-  never cancel queue rows: cron stores its next future occurrence; continuous stores
-  null behind open exec, otherwise now. Create/resume/reopen use the same rules.
+  Mode switches never cancel queue rows: cron stores its next future occurrence; continuous stores
+  null behind open exec, otherwise now. Create/resume use the same rules.
 - Claim + run-lease insert are one store transaction returning run+loop+wire token.
   Every run-token mutation atomically rechecks its matching active lease and running
   run under the loop lock (`mutateForActiveRun`; terminal helpers use the same check).
@@ -377,7 +374,7 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
 ## Gateway layout (the MachineGateway decomposition)
 
 - `gateway/index.ts` (`MachineGateway`) is the run-lifecycle core: poll/pollWait,
-  report/reclaimRun/sweep, `finishLoop`, `maintainStorage` (retention/GC), the
+  report/reclaimRun/sweep, `maintainStorage` (retention/GC), the
   owner verbs (createLoop/listLoops/editLoop/loopLog/renderLoopLog), and the
   presence/watch state.
 - The artifact byte-ingress cluster lives in `gateway/sync.ts` as `ArtifactSync`:
@@ -390,9 +387,9 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   /api/machine/cli credential router + `finalizeCli`), `agentApi()`
   (/agent-api/loop), the per-run `dispatch()` verb switch, and the CLI-only
   renders/help/home. It reuses the core's methods through the injected gateway -
-  `finishLoop`, `renderLoopLog` (the flat-404 scoping body), the owner verbs, and
+  `renderLoopLog` (the flat-404 scoping body), the owner verbs, and
   the scheduler are public on `MachineGateway` for exactly that second consumer -
-  so floors/allowControl/canFinish and the credential-type-first routing flow
+  so floors/allowControl and the credential-type-first routing flow
   through unchanged. `gateway/toon.ts` stays the shared render spine.
 - `gateway/validate.ts` holds the ui/schema validators. ANTI-DRIFT
   INVARIANT: the owner edit surface (`createLoop`/`editLoop` in index.ts) and the

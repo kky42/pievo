@@ -50,13 +50,13 @@ export function LoopPlaybook({ onStart }: { onStart: () => void }) {
         </IdeaCard>
 
         <IdeaCard
-          title="State + logs"
+          title="Memory + logs"
           caption="Durable memory across runs, so it never re-does work and every lesson sticks. Month three is smarter than week one."
         >
           <DocMock
-            name="state.md"
+            name="memory.md"
             lines={[
-              { h: '## State' },
+              { h: '## Memory' },
               { t: 'hypothesis: credit-wall users reply 3x' },
               { t: 'skip: known-noise fingerprints' },
               { h: '## Logs' },
@@ -291,7 +291,7 @@ function TriggerRow({ code, label }: { code: string; label: string }) {
  * The three roles laid out as a dispatch map (the article's infographic, on
  * app tokens): a trigger wakes the orchestrator, which fans tasks out to
  * parallel executor→verifier lanes; every lane ends in proof, and every run
- * reports back into state + logs. Warm ink = work being dispatched, green =
+ * reports back into memory + logs. Warm ink = work being dispatched, green =
  * proof flowing home. Real HTML cards carry all the text; SVG only draws the
  * connectors. Wide by nature, so the diagram scrolls inside its own pane on
  * narrow screens (never the page). Lane rows are fixed-height so the fan-out
@@ -436,7 +436,7 @@ function RolesFlow() {
               className="lpb-stage mt-auto rounded-control border border-success/40 bg-success-soft px-2 py-1.5 text-center font-mono text-micro text-success"
               style={stageStyle(4, 'success')}
             >
-              ✍ writes state + logs
+              ✍ writes memory + logs
             </div>
           </div>
 
@@ -531,7 +531,7 @@ function RolesFlow() {
             )
           })}
 
-          {/* report-back rail: results flow home into state + logs */}
+          {/* report-back rail: results flow home into memory + logs */}
           <div className="lpb-flow relative col-span-full row-start-5 h-10" style={stageStyle(4, 'success')}>
             <span aria-hidden className="absolute right-[90px] top-[-22px] bottom-1/2 border-r border-dashed border-success/70" />
             <span aria-hidden className="absolute left-[107px] top-[-9px] bottom-1/2 border-l border-dashed border-success/70" />
@@ -540,7 +540,7 @@ function RolesFlow() {
             </svg>
             <span aria-hidden className="absolute left-[107px] right-[90px] top-1/2 border-t border-dashed border-success/70" />
             <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap bg-surface px-2.5 font-mono text-micro text-success">
-              every run reports back → orchestrator writes state + logs
+              every run reports back → orchestrator writes memory + logs
             </span>
           </div>
         </div>

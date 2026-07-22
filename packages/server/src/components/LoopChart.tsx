@@ -10,7 +10,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import type { StateField } from '../types'
+import type { MetricField } from '../types'
 import { seriesRows, type SeriesPoint } from '../lib/stats'
 import { fnum, md, tsShort } from '../lib/format'
 
@@ -65,7 +65,7 @@ export function LoopChart({
   series,
 }: {
   data: Record<string, SeriesPoint[]>
-  series: StateField[]
+  series: MetricField[]
 }) {
   const gradientId = useId()
   if (!series.length) return null

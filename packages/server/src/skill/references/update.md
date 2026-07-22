@@ -38,12 +38,12 @@ Accepted keys:
 | `reasoningEffort` | string or `null` | provider reasoning effort; `null` uses CLI default |
 | `agent` | `claude-code` \| `codex` | coding agent used on the bound machine |
 | `allowControl` | boolean | `false` pins the schedule |
-| `enabled` | boolean | pause/resume; `true` reopens a completed loop |
+| `enabled` | boolean | pause/resume |
 | `runAt` | `2h` / ISO | one extra run soon |
 | `taskFile` | absolute path | repoint at a different task-file README |
-| `goal` | string or `null` | set/change/clear the finish line |
+| `goal` | string or `null` | set/change/clear the standing objective |
 | `ui` | HTML string | usually via `--ui-file` |
-| `stateSchema` | array of `{key,label?,unit?}` | usually via `--schema-file` |
+| `metricSchema` | array of `{key,label?,unit?}` | usually via `--schema-file` |
 
 Preview with `--dry-run`.
 

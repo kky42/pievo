@@ -87,7 +87,7 @@ async function confirmForceDeleteInteractive(): Promise<boolean> {
 /**
  * Assemble the `pievo edit` patch body from the surviving flags. `--json '<obj>'`
  * carries the envelope + goal/enabled/allowControl etc; the `--*-file` flags read a
- * development-artifact file's raw content into ui/stateSchema (schema parsed as JSON).
+ * development-artifact file's raw content into ui/metricSchema (schema parsed as JSON).
  * Explicit `--json` keys win over the file flags. The server is the sole
  * validator — the daemon only shapes the body. Throws on an UNKNOWN flag (a removed
  * scalar like --cron fails loudly, not silently) or unreadable/invalid file/JSON.
@@ -106,7 +106,7 @@ export function buildPatch(flags: Flags): Record<string, unknown> {
   const uiFile = readFileFlag(flags, "ui-file");
   if (uiFile !== undefined) patch.ui = uiFile;
   const schemaFile = readFileFlag(flags, "schema-file");
-  if (schemaFile !== undefined) patch.stateSchema = JSON.parse(schemaFile);
+  if (schemaFile !== undefined) patch.metricSchema = JSON.parse(schemaFile);
 
   // Explicit --json object wins over the file flags above.
   if (typeof flags["json"] === "string") {
@@ -124,8 +124,8 @@ const USAGE =
   "  --json '<json-object>'      the whole patch — e.g. '{\"cron\":\"0 9 * * *\",\"goal\":\"ship v1\"}'\n" +
   "                              (fields: name/cron/scheduleMode/continuousDelayMinutes/timezone/\n" +
   "                               notify/model/agent/allowControl/taskFile/enabled/\n" +
-  "                               runAt/ui/stateSchema/goal · {\"goal\":null} clears it;\n" +
-  "                               {\"enabled\":true} reopens a completed loop)\n" +
+  "                               runAt/ui/metricSchema/goal · {\"goal\":null} clears it;\n" +
+  "                               {\"enabled\":true} resumes a paused loop)\n" +
   "  --ui-file <path>            set the dashboard HTML from a file\n" +
   "  --schema-file <path.json>   set the metric schema (JSON array) from a file\n" +
   "  --dry-run                   validate + preview before/after, change nothing\n" +

@@ -22,7 +22,7 @@ import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
  */
 const FILE_FLAGS: Record<string, string> = {
   "--message-file": "--message",
-  "--state-file": "--state-content",
+  "--metrics-file": "--metrics-content",
   "--file": "--file-content",
 };
 

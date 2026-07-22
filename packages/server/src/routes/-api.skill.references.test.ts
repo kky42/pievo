@@ -55,9 +55,7 @@ describe('/api/skill/references/$', () => {
     // The parameters the agent must settle before `pievo new`.
     expect(body).toContain('Cadence.')
     expect(body).toContain('Per-run output.')
-    // Batch 3: a goal-shaped task also proposes a finish line (closed loop); a
-    // monitor-shaped task never mentions a goal.
-    expect(body).toContain('Finish line — only for goal-shaped tasks')
+    expect(body).toContain('Standing objective — when useful')
     // Concrete proposed defaults the guidance offers as examples.
     expect(body).toContain('every day at 9am your time')
     expect(body).toContain('every hour')
@@ -105,11 +103,10 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('Compress, don\'t append forever')
     // Surface-only-what-changed nuance.
     expect(body).toContain('surfaces only what is new or changed')
-    // The report/finish grammar and the strict finish bar.
-    expect(body).toContain('pievo report --status no-change')
-    expect(body).toContain('pievo finish --message')
-    expect(body).toContain('selfFinish: allowed')
-    expect(body).toContain('Never finish early')
+    expect(body).toContain('pievo report --status no-change --message')
+    expect(body).toContain('every exec run includes `--metrics`')
+    expect(body).toContain('meeting it does not stop the loop')
+    expect(body).not.toContain('pievo finish')
     // The schedule levers with `pievo show` first, and the run-path cadence floors.
     expect(body).toContain('pievo show')
     expect(body).toContain('pievo reschedule')

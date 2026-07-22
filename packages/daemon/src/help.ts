@@ -29,19 +29,16 @@ Loop setup and management
   stop <loop>             Pause, cancel queued work, and request run termination.
   delete <loop> [--force] Stop first, then delete server history and synced metadata.
   run stop <run>          Stop one run without pausing its loop.
-  show [<loop>]           Show editable config and recent state (--full, --json).
+  show [<loop>]           Show editable config and recent runs (--full, --json).
   log [<loop>]            Show recent runs (--json, --limit N).
   loops [--fields a,b] [--json]
                           List loops on this machine.
   edit <loop> [--json '<obj>'] [content-file flags] [--dry-run]
                           Apply a JSON patch and/or UI/schema files.
 
-In-run completion
-  report --status kept|no-change|blocked [--message <text>]
-                          Record this run's status and optional state metrics.
-  finish [--message <text>] [--reason <text>]
-                          Complete a closed loop whose goal was achieved.
-  complete                Alias of finish.
+In-run report
+  report --status kept|no-change|blocked --message <text> [--metrics <json>]
+                          Record required outcome text and exact declared metrics.
 
 Upgrade
   npm install -g @kky42/pievo@latest
@@ -65,12 +62,10 @@ const VERB_USAGE: Record<string, string> = {
   delete: "pievo delete <loop> [--force]\n  Stop then delete server history and synced metadata; local files remain. --force requires a prior ordinary delete request plus an interactive confirmation, and may remove server authority while the local process is still running.",
   run: "pievo run stop <run>\n  Stop one pending or running run without pausing its loop.",
   log: "pievo log [<loop>] [--json] [--limit N]\n  Show recent runs. <loop> may be an id or unique name; defaults to the loop for the current directory.",
-  show: "pievo show [<loop>] [--full] [--json]\n  Show editable config and recent state. <loop> may be an id or unique name; defaults to the loop for the current directory.",
+  show: "pievo show [<loop>] [--full] [--json]\n  Show editable config and recent runs. <loop> may be an id or unique name; defaults to the loop for the current directory.",
   loops: "pievo loops [--fields a,b] [--json]\n  List loops on this machine. Fields: timezone,notify,model,goal,taskFile,runs,lastResult.",
   edit: "pievo edit <loop> [--json '<obj>'] [--ui-file <path>] [--schema-file <path.json>] [--dry-run]\n  Apply a JSON patch and/or one or more content files; at least one edit input is required. --dry-run previews before/after.",
-  report: "pievo report --status kept|no-change|blocked [--message <text> | --message-file <path>] [--state '<json>' | --state-file <path>]\n  In-run only: record this run's status and optional schema-validated metrics.",
-  finish: "pievo finish [--message <text> | --message-file <path>] [--reason <text>] [--state '<json>' | --state-file <path>]\n  In-run only: mark an exec run's closed-loop goal met.",
-  complete: "pievo complete [--message <text> | --message-file <path>] [--reason <text>] [--state '<json>' | --state-file <path>]\n  In-run only alias of finish.",
+  report: "pievo report --status kept|no-change|blocked --message <text> [--metrics '<json>' | --metrics-file <path>]\n  In-run only: status and message are required; metric-enabled exec runs must supply every declared key.",
 };
 
 function versionLabel(version: string | undefined): string {

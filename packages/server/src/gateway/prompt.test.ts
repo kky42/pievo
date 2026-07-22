@@ -4,11 +4,11 @@
  * (run-dispatch and the installable skill now read the SAME file). These assertions
  * lock the run behavior for each role — losing a lever here is a regression, not a
  * doc tweak. The exec run's instructions live in the first USER turn (`buildExecTask`
- * ← exec-core.md, fills name/taskFile/goalLine/stateLine) with an empty system
+ * ← exec-core.md, fills name/taskFile/goalLine/metricLine) with an empty system
  * prompt (run-experience redesign, Batch 1). Batch 2 extends the same move to
  * EVOLVE and EDIT: their system prompts are now empty too, the standing prose ships
  * in the first user turn (`buildEvolveTask`/`buildEditTask`), and the evolve payload
- * inlines a COMPACT one-line-per-run survey (state keys not values, clipped message)
+ * inlines a COMPACT one-line-per-run survey (metric keys not values, clipped message)
  * instead of full pretty-printed JSON. These assertions lock that.
  */
 import { expect, test } from "vitest";
@@ -30,7 +30,7 @@ const loop = (over: Partial<Loop> = {}): Loop =>
     cron: "0 8 * * *",
     timezone: "America/New_York",
     taskFile: "/work/pievo/test/README.md",
-    stateSchema: null,
+    metricSchema: null,
     allowControl: false,
     ui: null,
     ...over,
@@ -44,3 +44,29 @@ test("evolve + edit system prompts are empty (prose moved to the user turn)", ()
   expect(buildEditPrompt()).toBe("");
 });
 
+test("exec prompt requires message and exact metrics while keeping goal non-terminal", () => {
+  const task = buildExecTask(loop({
+    goal: "runtime under 20 seconds",
+    metricSchema: [{ key: "runtime", label: "Runtime", unit: "s" }],
+  }));
+  expect(task).toContain("Objective: runtime under 20 seconds");
+  expect(task).toContain('--message "<concise result or no-go reason>"');
+  expect(task).toContain('--metrics \'{"runtime":<number|null>}\'');
+  expect(task).toContain("Negative values are valid observations");
+  expect(task).not.toContain("pievo finish");
+  expect(task).not.toContain("--state");
+});
+
+test("edit and evolve prompts require messages and forbid metrics", () => {
+  const edit = buildEditTask(loop(), "rename the loop");
+  const evolve = buildEvolveTask(loop(), [] as Run[]);
+  for (const task of [edit, evolve]) {
+    expect(task).toContain("--message");
+    for (const line of task.split("\n").filter((line) => line.includes("pievo report"))) {
+      expect(line).toContain("--status");
+      expect(line).toContain("--message");
+    }
+    expect(task).toContain("never pass `--metrics`");
+    expect(task).not.toContain("pievo finish");
+  }
+});

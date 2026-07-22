@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { numericSeries, seriesRows } from './stats'
 import type { RunSummary } from '../types'
 
-const run = (ts: string, state: RunSummary['state']): RunSummary => ({
+const run = (ts: string, metrics: RunSummary['metrics']): RunSummary => ({
   id: `run-${ts}`,
   loopId: 'loop-1',
   ts,
@@ -14,7 +14,7 @@ const run = (ts: string, state: RunSummary['state']): RunSummary => ({
   finalText: null,
   usage: null,
   error: null,
-  state,
+  metrics,
   control: null,
   sessionId: null,
 })

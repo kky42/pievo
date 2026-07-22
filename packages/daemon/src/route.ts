@@ -3,7 +3,7 @@ const INTERACTIVE_VERBS = new Set(["loops", "edit", "pause", "start", "stop", "d
 const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 const HELP_FLAG_ARGS = new Set(["--help", "-h"]);
 const VERSION_FLAGS = new Set(["--version", "-v"]);
-const FORWARD_VERBS = new Set(["report", "finish", "complete"]);
+const FORWARD_VERBS = new Set(["report"]);
 const COMMAND_VERBS = new Set(["daemon", "new", "skill", "log", "show", ...INTERACTIVE_VERBS, ...FORWARD_VERBS]);
 const DAEMON_SUBCOMMANDS = new Set(["start", "stop", "restart", "status"]);
 

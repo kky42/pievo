@@ -38,10 +38,12 @@ pnpm dev          # server on http://127.0.0.1:3000 (UI + scheduler + machine ro
 Copy `.env.example` to `packages/server/.env` if you need to configure auth,
 the artifact blob store, or other options. The app runs open (no auth) by default.
 
-> Changed `packages/server/src/db/schema.ts`? Author the migration SQL and
-> snapshot, then restart local dev so embedded PGlite applies it in-process:
+> Changed `packages/server/src/db/schema.ts`? Hand-author and review the
+> forward-only migration SQL under `packages/server/drizzle/`, and append its
+> entry to `drizzle/meta/_journal.json`. Drizzle schema snapshots are local
+> generation cache and are not committed. Then restart local dev so embedded
+> PGlite applies the migration in-process:
 > ```bash
-> pnpm --filter @kky42/pievo-server db:generate
 > pnpm dev
 > ```
 > `db:migrate` is only for a separately configured real Postgres and requires

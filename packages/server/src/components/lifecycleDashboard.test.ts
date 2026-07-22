@@ -25,22 +25,21 @@ vi.mock('@tanstack/react-router', () => ({ Link: ({ children }: { children: Reac
 const runningRun = (cancelRequested = false): RunSummary => ({
   id: 'r1', loopId: 'l1', ts: '2026-01-01T00:00:00Z', running: true, cancelRequested,
   agent: 'claude-code', status: null, message: null, durationMs: null,
-  exitCode: null, finalText: null, usage: null, error: null, state: null, control: null, sessionId: null,
+  exitCode: null, finalText: null, usage: null, error: null, metrics: null, control: null, sessionId: null,
 })
 
-type DetailState = 'active' | 'paused' | 'completed' | 'deleting'
+type DetailState = 'active' | 'paused' | 'deleting'
 function makeDetail(over: { state?: DetailState; online?: boolean; protocol?: number | null; running?: boolean; cancelRequested?: boolean } = {}): JobDetail {
   const state = over.state ?? 'paused'
   const running = over.running ?? false
   const r = runningRun(!!over.cancelRequested)
   const enabled = state === 'active'
-  const completedAt = state === 'completed' ? '2026-01-02T00:00:00Z' : null
   const deleteRequestedAt = state === 'deleting' ? '2026-01-01T00:01:00Z' : null
   return {
     job: { id: 'l1', cron: '0 6 * * *', scheduleMode: 'cron', continuousDelayMinutes: 1, enabled, notify: 'auto', agent: 'claude-code', exec: { executor: 'claude-code', workdir: '/tmp/project' } },
-    summary: { id: 'l1', name: 'Lifecycle loop', cron: '0 6 * * *', kind: 'exec:claude-code', enabled, notify: 'auto', nextRun: null, running, lastRunTs: running ? r.ts : null, graduation: null, completedAt, deleteRequestedAt, runs: running ? [r] : [], runCount: running ? 1 : 0 },
+    summary: { id: 'l1', name: 'Lifecycle loop', cron: '0 6 * * *', kind: 'exec:claude-code', enabled, notify: 'auto', nextRun: null, running, lastRunTs: running ? r.ts : null, graduation: null, deleteRequestedAt, runs: running ? [r] : [], runCount: running ? 1 : 0 },
     taskFileContent: null, taskFileSyncedAt: null, runs: running ? [r] : [],
-    machine: { id: 'm1', name: 'MacBook Pro', online: over.online ?? true, presence: (over.online ?? true) ? 'online' : 'offline', lastSeen: null, daemonProtocol: over.protocol === undefined ? 2 : over.protocol, daemonVersion: '2.0.1', needsUpdate: false, requiredDaemonVersion: '2.0.1' },
+    machine: { id: 'm1', name: 'MacBook Pro', online: over.online ?? true, presence: (over.online ?? true) ? 'online' : 'offline', lastSeen: null, daemonProtocol: over.protocol === undefined ? 2 : over.protocol, daemonVersion: '2.0.3', needsUpdate: false, requiredDaemonVersion: '2.0.3' },
   }
 }
 
@@ -69,10 +68,9 @@ afterEach(async () => {
 
 describe('LoopDetailView flat lifecycle actions', () => {
   it.each([
-    ['active', ['Run once', 'Agent edit', 'Evolve once', 'Settings', 'Pause', 'Delete'], ['Start', 'Stop', 'Reopen']],
-    ['paused', ['Run once', 'Agent edit', 'Evolve once', 'Settings', 'Start', 'Delete'], ['Pause', 'Stop', 'Reopen']],
-    ['completed', ['Agent edit', 'Settings', 'Reopen', 'Delete'], ['Run once', 'Evolve once', 'Start', 'Pause', 'Stop']],
-    ['deleting', [], ['Run once', 'Agent edit', 'Evolve once', 'Settings', 'Start', 'Pause', 'Stop', 'Reopen', 'Deleting…']],
+    ['active', ['Run once', 'Agent edit', 'Evolve once', 'Settings', 'Pause', 'Delete'], ['Start', 'Stop']],
+    ['paused', ['Run once', 'Agent edit', 'Evolve once', 'Settings', 'Start', 'Delete'], ['Pause', 'Stop']],
+    ['deleting', [], ['Run once', 'Agent edit', 'Evolve once', 'Settings', 'Start', 'Pause', 'Stop', 'Deleting…']],
   ] as const)('shows every action with the %s availability matrix', async (state, on, off) => {
     await mount(makeDetail({ state }))
     expect(host!.querySelector('[aria-label="More actions"]')).toBeNull()
@@ -81,7 +79,7 @@ describe('LoopDetailView flat lifecycle actions', () => {
     expect(host!.textContent).not.toContain('Push…')
     for (const label of on) expect(enabled(label), `${label} enabled`).toBe(true)
     for (const label of off) expect(enabled(label), `${label} disabled`).toBe(false)
-    expect(host!.querySelectorAll('button')).toHaveLength(9)
+    expect(host!.querySelectorAll('button')).toHaveLength(8)
   })
 
   it('enables Stop only for a running run and keeps protocol gating actionable', async () => {

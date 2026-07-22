@@ -42,7 +42,7 @@ import {
   type RunRequester,
   type RunSnapshot,
   type SnapshotManifest,
-  type StateField,
+  type MetricField,
   type Team,
   type TeamMember,
   type TeamInvite,
@@ -51,20 +51,39 @@ import type { ReportIncident, ReportIncidentDisposition } from "../types.js";
 
 // ---- coercion helpers (carried from c0 store.ts) ----
 
-/** Coerce an untrusted value into clean StateField[]; undefined if empty. */
-export function coerceStateSchema(raw: unknown): StateField[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  const out: StateField[] = [];
-  for (const f of raw) {
-    if (f && typeof f.key === "string" && f.key.trim()) {
-      out.push({
-        key: f.key.trim(),
-        ...(typeof f.label === "string" && f.label.trim() ? { label: f.label.trim() } : {}),
-        ...(typeof f.unit === "string" && f.unit.trim() ? { unit: f.unit.trim() } : {}),
-      });
-    }
+export type MetricSchemaParseResult =
+  | { ok: true; value: MetricField[] }
+  | { ok: false; detail: string };
+
+/** Parse an untrusted metric schema and enforce its standing key invariant. */
+export function parseMetricSchema(raw: unknown): MetricSchemaParseResult {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { ok: false, detail: "schema must be a non-empty array of {key, label?, unit?}" };
   }
-  return out.length ? out : undefined;
+  const out: MetricField[] = [];
+  const keys = new Set<string>();
+  for (const f of raw) {
+    if (!f || typeof f !== "object" || typeof (f as { key?: unknown }).key !== "string") {
+      return { ok: false, detail: "schema must be a non-empty array of {key, label?, unit?}" };
+    }
+    const field = f as { key: string; label?: unknown; unit?: unknown };
+    const key = field.key.trim();
+    if (!key) return { ok: false, detail: "metric keys must not be blank" };
+    if (keys.has(key)) return { ok: false, detail: `duplicate metric key: ${key}` };
+    keys.add(key);
+    out.push({
+      key,
+      ...(typeof field.label === "string" && field.label.trim() ? { label: field.label.trim() } : {}),
+      ...(typeof field.unit === "string" && field.unit.trim() ? { unit: field.unit.trim() } : {}),
+    });
+  }
+  return { ok: true, value: out };
+}
+
+/** Best-effort wrapper for trusted/internal config loaders. Wire writes use parseMetricSchema. */
+export function coerceMetricSchema(raw: unknown): MetricField[] | undefined {
+  const parsed = parseMetricSchema(raw);
+  return parsed.ok ? parsed.value : undefined;
 }
 
 const UI_MAX_LEN = 20_000;
@@ -135,9 +154,9 @@ export async function loopsForMachine(machineId: string): Promise<Loop[]> {
 
 export async function createLoop(input: Omit<NewLoop, "id" | "createdAt" | "updatedAt" | "nextCadenceAt"> & { id?: string }): Promise<Loop> {
   const ts = nowIso();
-  const enabled = input.completedAt ? false : (input.enabled ?? true);
+  const enabled = input.enabled ?? true;
   const scheduleMode = input.scheduleMode ?? "cron";
-  const nextCadenceAt = !enabled || input.completedAt
+  const nextCadenceAt = !enabled
     ? null
     : scheduleMode === "continuous"
       ? ts
@@ -145,7 +164,7 @@ export async function createLoop(input: Omit<NewLoop, "id" | "createdAt" | "upda
   const row: NewLoop = {
     ...input,
     enabled,
-    pauseCause: input.completedAt ? null : (input.pauseCause ?? (!enabled ? { kind: "owner", at: ts } : null)),
+    pauseCause: input.pauseCause ?? (!enabled ? { kind: "owner", at: ts } : null),
     nextRunAt: enabled ? (input.nextRunAt ?? null) : null,
     nextCadenceAt,
     id: input.id ?? newLoopId(),
@@ -169,61 +188,22 @@ async function cancelPendingTx(
     .where(where);
 }
 
-/** The one completion lifecycle implementation. Callers must already hold the
- * loop row lock; the completion stamp, pause/facts, and queue cleanup commit as
- * one transition. */
-async function completeLoopTx(
-  tx: StoreTx,
-  current: Loop,
-  patch: Partial<NewLoop>,
-  at: string,
-): Promise<Loop> {
-  const loop = (
-    await tx
-      .update(loops)
-      .set({ ...patch, enabled: false, pauseCause: null, nextCadenceAt: null, nextRunAt: null, updatedAt: at })
-      .where(eq(loops.id, current.id))
-      .returning()
-  )[0]!;
-  await cancelPendingTx(
-    tx,
-    and(
-      eq(runs.loopId, current.id),
-      eq(runs.phase, "pending"),
-      or(inArray(runs.role, ["exec", "evolve"]), and(eq(runs.role, "edit"), eq(runs.requestedBy, "system"))),
-    ),
-    "canceled - loop completed before this queued run was claimed",
-    at,
-  );
-  return loop;
-}
-
 /** Apply one loop patch while its row lock is held. This is shared by owner edits
- * and run-authorized mutations, so cadence and completion semantics cannot drift. */
+ * and run-authorized mutations, so cadence semantics cannot drift. */
 async function updateLoopTx(tx: StoreTx, current: Loop, patch: Partial<NewLoop>, at: string): Promise<Loop> {
   const extra: Partial<NewLoop> = {};
-  if (patch.goal === null) {
-    extra.completedAt = null;
-    extra.completionReason = null;
-  }
   if (patch.enabled === true) {
     extra.pauseCause = null;
-    if (patch.completedAt === undefined && current.completedAt) {
-      extra.completedAt = null;
-      extra.completionReason = null;
-    }
-  } else if (patch.enabled === false && current.enabled && patch.pauseCause === undefined && !current.completedAt) {
+  } else if (patch.enabled === false && current.enabled && patch.pauseCause === undefined) {
     extra.pauseCause = { kind: "owner", at };
   }
 
-  const completing = patch.completedAt != null;
-  if (completing) extra.enabled = false;
   const effective = { ...current, ...patch, ...extra } as Loop;
   if (current.deleteRequestedAt) extra.enabled = false;
-  const pausing = !effective.enabled || effective.completedAt != null || current.deleteRequestedAt != null;
+  const pausing = !effective.enabled || current.deleteRequestedAt != null;
   const activating =
-    effective.enabled && effective.completedAt == null &&
-    ((patch.enabled === true && (!current.enabled || current.completedAt != null)) ||
+    effective.enabled &&
+    ((patch.enabled === true && !current.enabled) ||
       (patch.scheduleMode !== undefined && patch.scheduleMode !== current.scheduleMode));
 
   if (pausing) {
@@ -243,13 +223,13 @@ async function updateLoopTx(tx: StoreTx, current: Loop, patch: Partial<NewLoop>,
       extra.nextCadenceAt = openExec ? null : at;
     }
   } else if (
-    effective.enabled && effective.completedAt == null && effective.scheduleMode === "cron" &&
+    effective.enabled && effective.scheduleMode === "cron" &&
     ((patch.cron !== undefined && patch.cron !== current.cron) ||
       (patch.timezone !== undefined && patch.timezone !== current.timezone))
   ) {
     extra.nextCadenceAt = nextCronAt(effective.cron, effective.timezone, at);
   } else if (
-    effective.enabled && effective.completedAt == null && effective.scheduleMode === "continuous" &&
+    effective.enabled && effective.scheduleMode === "continuous" &&
     current.nextCadenceAt && Date.parse(current.nextCadenceAt) > Date.parse(at) &&
     patch.continuousDelayMinutes !== undefined && patch.continuousDelayMinutes !== current.continuousDelayMinutes
   ) {
@@ -259,7 +239,6 @@ async function updateLoopTx(tx: StoreTx, current: Loop, patch: Partial<NewLoop>,
     extra.nextCadenceAt = new Date(terminalAt + effective.continuousDelayMinutes * 60_000).toISOString();
   }
 
-  if (completing) return completeLoopTx(tx, current, { ...patch, ...extra }, at);
   const loop = (
     await tx
       .update(loops)
@@ -323,11 +302,11 @@ export async function pauseLoop(id: string): Promise<Loop | undefined> {
   return (await pauseLoopState(id))?.loop;
 }
 
-/** Start is distinct from reopen: deleting/completed loops cannot be started. */
+/** Start a paused loop unless deletion has begun. */
 export async function startLoop(id: string): Promise<Loop | undefined> {
   return db.transaction(async (tx) => {
     const current = (await tx.select().from(loops).where(eq(loops.id, id)).for("update"))[0];
-    if (!current || current.completedAt || current.deleteRequestedAt) return undefined;
+    if (!current || current.deleteRequestedAt) return undefined;
     return updateLoopTx(tx, current, { enabled: true }, nowIso());
   });
 }
@@ -416,12 +395,8 @@ async function enqueueRunTx(
   if (loop.deleteRequestedAt) {
     return { state: "rejected", reason: "loop is being deleted" };
   }
-  if (request.requestedBy === "owner") {
-    if (loop.completedAt && request.role !== "edit") {
-      return { state: "rejected", reason: "loop is completed - only an owner edit may be queued" };
-    }
-  } else if (loop.completedAt || !loop.enabled) {
-    return { state: "skipped", reason: loop.completedAt ? "loop is completed" : "loop is paused" };
+  if (request.requestedBy !== "owner" && !loop.enabled) {
+    return { state: "skipped", reason: "loop is paused" };
   }
 
   const pending = (
@@ -508,7 +483,7 @@ async function terminalLifecycleTx(
         .where(and(eq(runs.loopId, currentLoop.id), eq(runs.role, "exec"), inArray(runs.phase, ["pending", "running"])))
         .limit(1)
     )[0];
-    update.nextCadenceAt = effective.enabled && !effective.completedAt && !openExec
+    update.nextCadenceAt = effective.enabled && !openExec
       ? new Date(Date.parse(terminalAt) + Math.max(1, effective.continuousDelayMinutes) * 60_000).toISOString()
       : null;
   }
@@ -535,7 +510,7 @@ async function terminalLifecycleTx(
 
   let failureStreak = 0;
   let autoPaused = false;
-  if (run.status === "blocked" && !loop.completedAt) {
+  if (run.status === "blocked") {
     loop = (
       await tx
         .update(loops)
@@ -554,7 +529,7 @@ async function terminalLifecycleTx(
 
   if (run.role === "exec" && run.phase === "error") {
     failureStreak = await execFailureStreakTx(tx, currentLoop.id);
-    if (failureAutopauseStreak > 0 && failureStreak >= failureAutopauseStreak && loop.enabled && !loop.completedAt) {
+    if (failureAutopauseStreak > 0 && failureStreak >= failureAutopauseStreak && loop.enabled) {
       loop = (
         await tx
           .update(loops)
@@ -572,7 +547,7 @@ async function terminalLifecycleTx(
     }
   }
 
-  if (autoEvolve && run.status !== "blocked" && run.role === "exec" && run.phase === "done" && loop.enabled && !loop.completedAt && canEvolve(loop)) {
+  if (autoEvolve && run.status !== "blocked" && run.role === "exec" && run.phase === "done" && loop.enabled && canEvolve(loop)) {
     const counted = (
       await tx
         .select({ n: sql<number>`count(*)` })
@@ -686,10 +661,10 @@ export async function countReportReceipts(): Promise<number> {
 }
 
 /** Idempotent startup repair for lifecycle rows left by an older server or a
- * crash across the finish boundary. Terminal runs can never retain active authority. */
+ * crash across terminalization. Terminal runs can never retain active authority. */
 export async function repairTerminalRunLeases(now: number = Date.now()): Promise<number> {
   const repaired = await db.update(runLeases)
-    .set({ state: "terminal-grace", expiresAt: new Date(now + FINISH_REPORT_GRACE_MS).toISOString() })
+    .set({ state: "terminal-grace", expiresAt: new Date(now + TERMINAL_REPORT_GRACE_MS).toISOString() })
     .where(and(
       eq(runLeases.state, "active"),
       sql`exists (select 1 from ${runs} where ${runs.id} = ${runLeases.runId} and ${runs.phase} in ('done', 'error', 'canceled'))`,
@@ -747,7 +722,7 @@ export async function refreshRunHeartbeats(
   return refreshed.length;
 }
 
-type RunMutationCapability = "always" | "report" | "control" | "set-ui" | "set-schema" | "finish";
+type RunMutationCapability = "always" | "report" | "control" | "set-ui" | "set-schema";
 type ActiveRunCheck =
   | { state: "active"; run: Run }
   | { state: "invalid-lease" | "run-not-running" | "forbidden" };
@@ -779,8 +754,7 @@ async function activeRunForMutationTx(
   const permitted = capability === "always" || capability === "report" ||
     (capability === "control" && lease.allowControl) ||
     (capability === "set-ui" && lease.canSetUi) ||
-    (capability === "set-schema" && lease.canSetSchema) ||
-    (capability === "finish" && lease.canFinish);
+    (capability === "set-schema" && lease.canSetSchema);
   if (!permitted) return { state: "forbidden" };
   const run = (
     await tx
@@ -1093,67 +1067,6 @@ export async function finalizeRunningRun(
   });
 }
 
-/** Enrich a run finalized by `finish`, consuming the surviving lease in the same
- * transaction. A duplicate/concurrent report whose winner already consumed the
- * lease cannot overwrite telemetry. */
-export async function enrichFinishedRun(
-  loopId: string,
-  runId: string,
-  leaseTokenHash: string,
-  patch: Partial<NewRun>,
-  receipt?: typeof runReportReceipts.$inferInsert,
-): Promise<Run | undefined> {
-  return db.transaction(async (tx) => {
-    if (receipt) await lockReportIdTx(tx, receipt.reportId);
-    const loop = (await tx.select({ id: loops.id }).from(loops).where(eq(loops.id, loopId)).for("update"))[0];
-    if (!loop) return undefined;
-    if (receipt) {
-      const incident = (await tx.select({ id: terminalReportIncidents.id }).from(terminalReportIncidents)
-        .where(eq(terminalReportIncidents.reportId, receipt.reportId)).limit(1))[0];
-      if (incident) return undefined;
-    }
-    const leaseNow = nowIso();
-    const lease = (
-      await tx
-        .select({ tokenHash: runLeases.tokenHash })
-        .from(runLeases)
-        .where(
-          and(
-            eq(runLeases.tokenHash, leaseTokenHash),
-            eq(runLeases.runId, runId),
-            eq(runLeases.loopId, loopId),
-            eq(runLeases.state, "terminal-grace"),
-            gt(runLeases.expiresAt, leaseNow),
-          ),
-        )
-        .limit(1)
-        .for("update")
-    )[0];
-    if (!lease) return undefined;
-    const current = (
-      await tx
-        .select()
-        .from(runs)
-        .where(and(eq(runs.id, runId), eq(runs.loopId, loopId), eq(runs.phase, "done")))
-        .limit(1)
-    )[0];
-    if (!current) return undefined;
-    const run = Object.keys(patch).length > 0
-      ? (
-          await tx
-            .update(runs)
-            .set({ ...patch, updatedAt: nowIso() })
-            .where(and(eq(runs.id, runId), eq(runs.loopId, loopId), eq(runs.phase, "done")))
-            .returning()
-        )[0]
-      : current;
-    if (!run) return undefined;
-    await tx.delete(runLeases).where(eq(runLeases.runId, runId));
-    if (receipt) await tx.insert(runReportReceipts).values(receipt);
-    return run;
-  });
-}
-
 /** User cancellation competes with claim/report/reclaim under the loop lock,
  * transitions only a still-open row, and retires its lease in the same txn. */
 export async function cancelRun(loopId: string, runId: string): Promise<Run | undefined> {
@@ -1258,61 +1171,7 @@ export async function reconcileReclaimedRun(
   });
 }
 
-export const FINISH_REPORT_GRACE_MS = 10 * 60 * 1000;
-
-export type FinishLoopRunResult =
-  | { state: "finished"; loop: Loop; run: Run }
-  | { state: "missing" | "goal-cleared" | "already-finished" | "run-not-running" | "invalid-lease" | "forbidden" };
-
-/** Atomically finalize the finishing exec, complete/pause its loop, and cancel
- * queued exec/evolve rows under the same loop lock used by poll claims. */
-export async function finishLoopRun(
-  loopId: string,
-  runId: string,
-  leaseTokenHash: string,
-  input: {
-    ts: string;
-    reason: string | null;
-    message?: string;
-    state?: Record<string, number | string>;
-    durationMs?: number;
-  },
-): Promise<FinishLoopRunResult> {
-  return db.transaction(async (tx) => {
-    const current = (await tx.select().from(loops).where(eq(loops.id, loopId)).for("update"))[0];
-    if (!current) return { state: "missing" as const };
-    if (current.goal == null) return { state: "goal-cleared" as const };
-    if (current.completedAt != null) return { state: "already-finished" as const };
-    const active = await activeRunForMutationTx(tx, loopId, runId, leaseTokenHash, "finish");
-    if (active.state !== "active") return active;
-
-    const finished = (
-      await tx
-        .update(runs)
-        .set({
-          phase: "done",
-          status: "kept",
-          ...(input.message !== undefined ? { message: input.message } : {}),
-          ...(input.state !== undefined ? { state: input.state } : {}),
-          ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {}),
-          ts: input.ts,
-          updatedAt: input.ts,
-        })
-        .where(and(eq(runs.id, runId), eq(runs.loopId, loopId), eq(runs.phase, "running")))
-        .returning()
-    )[0];
-    if (!finished) return { state: "run-not-running" as const };
-
-    const loop = await completeLoopTx(tx, current, {
-      completedAt: input.ts,
-      completionReason: input.reason,
-    }, input.ts);
-    await tx.update(runLeases)
-      .set({ state: "terminal-grace", expiresAt: new Date(Date.parse(input.ts) + FINISH_REPORT_GRACE_MS).toISOString() })
-      .where(and(eq(runLeases.tokenHash, leaseTokenHash), eq(runLeases.runId, runId), eq(runLeases.state, "active")));
-    return { state: "finished" as const, loop, run: finished };
-  });
-}
+export const TERMINAL_REPORT_GRACE_MS = 10 * 60 * 1000;
 
 export interface EnqueueRunRequest {
   role: RunRole;
@@ -1332,7 +1191,7 @@ export type EnqueueRunResult =
  *  - pending requests coalesce in place (stable run id),
  *  - owner authority promotes an existing system row and never downgrades,
  *  - latest owner edit text wins,
- *  - paused loops accept owner work; completed loops accept owner edit only.
+ *  - paused loops accept owner work while recurring system work stays stopped.
  */
 export async function enqueueRun(loopId: string, request: EnqueueRunRequest): Promise<EnqueueRunResult> {
   return db.transaction(async (tx) => {
@@ -1364,7 +1223,6 @@ export async function advanceDueSchedules(
     .from(loops)
     .where(and(
       eq(loops.enabled, true),
-      isNull(loops.completedAt),
       isNull(loops.deleteRequestedAt),
       due,
       filter.loopId ? eq(loops.id, filter.loopId) : undefined,
@@ -1375,7 +1233,7 @@ export async function advanceDueSchedules(
   for (const { id } of candidates) {
     const result = await db.transaction(async (tx) => {
       const loop = (await tx.select().from(loops).where(eq(loops.id, id)).for("update"))[0];
-      if (!loop?.enabled || loop.completedAt || loop.deleteRequestedAt) return undefined;
+      if (!loop?.enabled || loop.deleteRequestedAt) return undefined;
       const cadenceDue = !!loop.nextCadenceAt && Date.parse(loop.nextCadenceAt) <= Date.parse(at);
       const oneShotDue = !!loop.nextRunAt && Date.parse(loop.nextRunAt) <= Date.parse(at);
       if (!cadenceDue && !oneShotDue) return undefined;
@@ -1422,12 +1280,12 @@ export async function initializeCronCadence(at = nowIso()): Promise<Loop[]> {
   const candidates = await db
     .select({ id: loops.id })
     .from(loops)
-    .where(and(eq(loops.enabled, true), isNull(loops.completedAt), isNull(loops.deleteRequestedAt), eq(loops.scheduleMode, "cron"), isNull(loops.nextCadenceAt)));
+    .where(and(eq(loops.enabled, true), isNull(loops.deleteRequestedAt), eq(loops.scheduleMode, "cron"), isNull(loops.nextCadenceAt)));
   const initialized: Loop[] = [];
   for (const { id } of candidates) {
     const loop = await db.transaction(async (tx) => {
       const current = (await tx.select().from(loops).where(eq(loops.id, id)).for("update"))[0];
-      if (!current?.enabled || current.completedAt || current.scheduleMode !== "cron" || current.nextCadenceAt) return undefined;
+      if (!current?.enabled || current.scheduleMode !== "cron" || current.nextCadenceAt) return undefined;
       return (
         await tx
           .update(loops)
@@ -1474,14 +1332,14 @@ export async function claimReadyRunForMachine(machineId: string, at = nowIso()):
       .where(and(
         eq(runs.machineId, machineId), eq(runs.phase, "pending"), isNull(runs.cancelRequestedAt),
         or(eq(loops.enabled, true), eq(runs.requestedBy, "owner")),
-        isNull(loops.completedAt), isNull(loops.deleteRequestedAt),
+        isNull(loops.deleteRequestedAt),
       ))
       .orderBy(sql`case ${runs.role} when 'edit' then 0 when 'evolve' then 1 else 2 end`, asc(runs.createdAt))
       .limit(1))[0];
     if (!next) return undefined;
     let loop = (await tx.select().from(loops).where(eq(loops.id, next.loop.id)).for("update"))[0];
     const candidate = (await tx.select().from(runs).where(eq(runs.id, next.run.id)).limit(1).for("update"))[0];
-    if (!loop || !candidate || candidate.phase !== "pending" || candidate.cancelRequestedAt || loop.completedAt || loop.deleteRequestedAt || (!loop.enabled && candidate.requestedBy !== "owner")) return undefined;
+    if (!loop || !candidate || candidate.phase !== "pending" || candidate.cancelRequestedAt || loop.deleteRequestedAt || (!loop.enabled && candidate.requestedBy !== "owner")) return undefined;
     const run = (await tx.update(runs).set({ phase: "running", agent: loop.agent, heartbeatAt: null, ts: at, updatedAt: at })
       .where(and(eq(runs.id, candidate.id), eq(runs.phase, "pending"), isNull(runs.cancelRequestedAt))).returning())[0];
     if (!run) return undefined;
@@ -1490,8 +1348,7 @@ export async function claimReadyRunForMachine(machineId: string, at = nowIso()):
     }
     const structural = run.role === "evolve" || run.role === "edit";
     await tx.insert(runLeases).values({ tokenHash, runId: run.id, loopId: loop.id, machineId, role: run.role,
-      allowControl: structural || loop.allowControl, canSetUi: structural, canSetSchema: structural,
-      canFinish: run.role === "exec" && loop.goal != null, createdAt: at });
+      allowControl: structural || loop.allowControl, canSetUi: structural, canSetSchema: structural, createdAt: at });
     return { run, loop, runToken };
   });
 }
@@ -1587,7 +1444,7 @@ export async function execFailureStreak(loopId: string): Promise<number> {
 }
 
 /** Atomically stamp the deferred hint from a sweep snapshot. Claim, owner
- * promotion, pause/completion, and machine reconnect all win through the guarded
+ * promotion, pause, and machine reconnect all win through the guarded
  * transaction, so only a still-pending system exec on an offline machine may
  * trigger the corresponding notification. Returns the locked loop only when the
  * stamp committed; callers gate notification on that result. */
@@ -2344,7 +2201,7 @@ export async function getArtifactFile(loopId: string, path: string): Promise<Art
 }
 
 /** The loop's CURRENT live file set as a snapshot manifest (path → metadata) —
- *  what report() captures as the finishing run's end-state. */
+ *  what report() captures as the terminal run's artifact state. */
 export async function buildLoopManifest(loopId: string): Promise<SnapshotManifest> {
   const manifest: SnapshotManifest = {};
   for (const f of await listArtifacts(loopId)) {
@@ -2356,7 +2213,7 @@ export async function buildLoopManifest(loopId: string): Promise<SnapshotManifes
 // ---- run_snapshots (the loop's full manifest at each run boundary; Phase 3 diff) ----
 
 /** Write/overwrite a run's snapshot (path → file metadata). Idempotent on runId
- *  so a re-report of the same run just refreshes the captured end-state. */
+ *  so a re-report of the same run just refreshes the captured artifact state. */
 export async function putRunSnapshot(runId: string, loopId: string, manifest: SnapshotManifest): Promise<void> {
   await db
     .insert(runSnapshots)
@@ -2370,7 +2227,7 @@ export async function getRunSnapshot(runId: string): Promise<RunSnapshot | undef
 }
 
 /** The most recent snapshot for this loop strictly before `beforeTs` (the prior
- *  run's end-state — the diff baseline). Joins run_snapshots to runs for the ts
+ *  run's artifact state — the diff baseline). Joins run_snapshots to runs for the ts
  *  ordering; undefined when there is no earlier snapshotted run. */
 export async function prevRunSnapshot(loopId: string, beforeTs: string): Promise<RunSnapshot | undefined> {
   const row = (

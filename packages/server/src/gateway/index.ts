@@ -19,12 +19,12 @@ import { Cron } from "croner";
 
 import { logger } from "../logger.js";
 import * as store from "../db/store.js";
-import type { CodingAgent, Loop, NewLoop, NewRun, Run, RunRole, RunUsage } from "../db/schema.js";
+import type { CodingAgent, Loop, MetricField, NewLoop, NewRun, Run, RunRole, RunUsage } from "../db/schema.js";
 import { CODING_AGENTS, coerceCodingAgent } from "../types.js";
 import type { ReportIncident, ReportIncidentCode, ReportIncidentFaultDomain } from "../types.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery, type Delivery } from "./delivery.js";
-import { autopauseMessage, completionMessage, deferredMessage, dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
+import { autopauseMessage, deferredMessage, dispatchNotification, failureMessage, shouldNotify, shouldNotifyFailure } from "./notify.js";
 import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainResult } from "./retention.js";
 import { machinePresence } from "../lib/machinePresence.js";
@@ -106,13 +106,13 @@ export const EDITABLE_LOOP_FIELDS = new Set([
   "enabled",
   "runAt",
   "ui",
-  "stateSchema",
+  "metricSchema",
   "goal",
   "agent",
 ]);
 const MIN_INTERVAL_MS = 60_000;
 /** Run messages (report --message / finalText fallback).
- *  Run errors share the same cap. Exported for `cli.ts` (the report/finish verbs
+ *  Run errors share the same cap. Exported for `cli.ts` (the report verb
  *  clip to the same budget). */
 export const MESSAGE_CAP = 2000;
 /** A claude-code session id is a UUID-ish token — anything longer is garbage. */
@@ -164,8 +164,6 @@ const LOG_RUNS_MAX = 20;
 const USAGE_MAX = 1e12;
 const REPORT_ID_CAP = 200;
 
-/** Resolve the user-facing run summary. An agent may already have persisted its
- * message through `pievo report`; provider final text is only the last-resort fallback. */
 function receiptFor(body: MachineReportBody, runId: string, ackStatus = 200, ackBody?: Record<string, unknown>) {
   if (typeof body.reportId !== "string") return undefined;
   return {
@@ -239,15 +237,14 @@ function incidentDiagnosis(
   return { at: nowIso(), code, reason, issues, reportId, payloadDigest, faultDomain, recommendedAction };
 }
 
-function reportMessage(body: MachineReportBody, run: Run | undefined): string | undefined {
-  const raw = typeof body.message === "string"
-    ? body.message
-    : run?.message
-      ? run.message
-      : typeof body.finalText === "string"
-        ? body.finalText
-        : undefined;
-  return raw === undefined ? undefined : clipText(raw, MESSAGE_CAP);
+/** Validate the durable report facts before a successful provider process may
+ * become a successful run. The CLI validates first so an agent can retry; this
+ * terminal seam prevents an ignored 400 from silently producing an empty run. */
+function runProtocolMissing(run: Run): string[] {
+  const missing: string[] = [];
+  if (run.status !== "kept" && run.status !== "no-change" && run.status !== "blocked") missing.push("status");
+  if (!run.message?.trim()) missing.push("message");
+  return missing;
 }
 
 function validateTerminalReport(body: MachineReportBody): string[] {
@@ -850,14 +847,13 @@ export class MachineGateway {
       reasoningEffort?: unknown;
       workdir?: unknown;
       taskFile?: unknown;
-      stateSchema?: unknown;
+      metricSchema?: unknown;
       /** Optional initial dashboard UI (small HTML, same surface as `set-ui`). Lets a
        *  template-driven loop ship a day-one dashboard instead of waiting for an
        *  evolve pass. Validated by the same `validateUi` editLoop uses. */
       ui?: unknown;
       notify?: unknown;
-      /** Optional closed-loop setpoint. Non-null ⇒ the loop is CLOSED (self-finishes
-       *  when met); null/absent ⇒ OPEN (monitor/digest). */
+      /** Optional standing objective. It guides every run but never terminalizes the loop. */
       goal?: unknown;
       /** Coding agent this loop is bound to and EXECUTED with (claude-code | codex).
        *  Absent for older daemons defaults to claude-code. The daemon spawns that
@@ -903,7 +899,7 @@ export class MachineGateway {
     // (see buildExecTask).
     const taskFile = str(body.taskFile);
     if (!taskFile) return { status: 400, body: { error: "taskFile required (path to the loop's Spec)" } };
-    // Optional setpoint (clipped one-liner); absent/blank ⇒ open loop.
+    // Optional standing objective (clipped one-liner).
     const goal = str(body.goal)?.slice(0, GOAL_CAP) ?? null;
 
     const notify = body.notify === "always" || body.notify === "never" ? body.notify : "auto";
@@ -918,7 +914,12 @@ export class MachineGateway {
     }
     const agent: CodingAgent = coerceCodingAgent(body.agent) ?? "claude-code";
 
-    const stateSchema = store.coerceStateSchema(body.stateSchema) ?? null;
+    let metricSchema: MetricField[] | null = null;
+    if (body.metricSchema != null && !(Array.isArray(body.metricSchema) && body.metricSchema.length === 0)) {
+      const parsedMetricSchema = store.parseMetricSchema(body.metricSchema);
+      if (!parsedMetricSchema.ok) return { status: 400, body: { error: parsedMetricSchema.detail } };
+      metricSchema = parsedMetricSchema.value;
+    }
     // Optional day-one dashboard — same validate/clip surface as `set-ui` (editLoop).
     // Sanitized to the allowed tags/attrs; an unusable value coerces to null.
     const ui = validateUi(str(body.ui)?.slice(0, WIRE_TEXT_CAP) ?? "").value;
@@ -931,7 +932,7 @@ export class MachineGateway {
       : undefined;
 
     // Validate-only (`pievo new --dry-run`): every check above has passed, so
-    // return the normalized config + fire preview + open/closed classification and
+    // return the normalized config + fire preview and
     // persist NOTHING (no store write, no scheduler, no team-auth side effects).
     if (body.dryRun === true) {
       const config = {
@@ -949,7 +950,7 @@ export class MachineGateway {
         goal,
         notify,
         agent,
-        stateSchema,
+        metricSchema,
       };
       const nextRuns = scheduleMode === "cron" ? nextFires(cron, timezone, 3) : [];
       return {
@@ -960,11 +961,6 @@ export class MachineGateway {
           config,
           timezone: timezone ?? null,
           nextRuns,
-          classification: goal != null ? "closed" : "open",
-          classificationText:
-            goal != null
-              ? "closed (has goal): will self-finish when the goal is met"
-              : "open: runs until paused",
           ...(uiWarning ? { warning: uiWarning } : {}),
           text: renderCreateDryRunText(config, nextRuns, uiWarning),
         },
@@ -1040,7 +1036,7 @@ export class MachineGateway {
       reasoningEffort,
       workdir: str(body.workdir),
       taskFile,
-      stateSchema,
+      metricSchema,
       ui,
       notify,
       goal,
@@ -1193,7 +1189,7 @@ export class MachineGateway {
       error: r.error ?? null,
       message: r.message ?? null,
       sessionId: r.sessionId ?? null,
-      state: r.state ?? null,
+      metrics: r.metrics ?? null,
     }));
     const survey = renderLogText(loop.name ?? loop.id, loop.id, runs, await store.countRuns(loopId));
     return { status: 200, body: { ok: true, loopId: loop.id, name: loop.name ?? loop.id, runs, text: survey } };
@@ -1223,7 +1219,7 @@ export class MachineGateway {
       enabled?: unknown;
       runAt?: unknown;
       ui?: unknown;
-      stateSchema?: unknown;
+      metricSchema?: unknown;
       goal?: unknown;
       agent?: unknown;
     },
@@ -1257,15 +1253,6 @@ export class MachineGateway {
         ...unknownKeys.map((k) => ({ key: k, reason: `unknown field — allowed: ${[...EDITABLE_LOOP_FIELDS].join(", ")}` })),
         ...rejections,
       ];
-      // Reflect store.updateLoop's derived lifecycle side effects in the preview so
-      // the owner sees the FULL consequence: clearing the goal (goal:null) or
-      // reopening a completed loop (enabled:true) also drops the terminal stamps.
-      const clearsStamps =
-        (update.goal === null || (update.enabled === true && update.completedAt === undefined)) && loop.completedAt != null;
-      if (clearsStamps) {
-        changes.push({ key: "completedAt", from: loop.completedAt, to: null });
-        changes.push({ key: "completionReason", from: loop.completionReason, to: null });
-      }
       return {
         status: 200,
         body: {
@@ -1344,7 +1331,7 @@ export class MachineGateway {
     // idempotent re-apply, not a "nothing to change" 400), but it is not RECORDED as a
     // change. This is what makes read/write identity real — feeding a `show --json`
     // envelope back to `edit --dry-run` reports zero changes (the roundtrip pin).
-    // Values compare structurally (stateSchema is an array); null and undefined are
+    // Values compare structurally (metricSchema is an array); null and undefined are
     // equal (an absent field re-fed as null is unchanged).
     const set = (key: string, to: unknown, from: unknown): void => {
       (update as Record<string, unknown>)[key] = to;
@@ -1397,16 +1384,15 @@ export class MachineGateway {
     }
     if (p.allowControl !== undefined) set("allowControl", !!p.allowControl, loop.allowControl);
     if (p.enabled !== undefined) set("enabled", !!p.enabled, loop.enabled);
-    // Goal set (non-empty) / clear (null|blank). store.updateLoop enforces the
-    // lifecycle invariant: clearing the goal also clears the completion stamps,
-    // and enabling a completed loop reopens it (drops the stamps).
+    // Goal set (non-empty) / clear (null|blank). It is standing guidance only;
+    // lifecycle remains owner-controlled.
     if (p.goal !== undefined) set("goal", str(p.goal)?.slice(0, GOAL_CAP) ?? null, loop.goal);
     if (p.runAt !== undefined) {
       // `null`/blank clears the pinned override (symmetric with goal:null, and what
       // `show --json` re-feeds when there is no override) — a no-op when already null.
       if (p.runAt === null || p.runAt === "") set("nextRunAt", null, loop.nextRunAt);
       // Re-feeding the loop's CURRENT pin verbatim is a recorded no-op, bypassing the
-      // future-time guard: a paused/completed loop keeps a stale (past) `nextRunAt` that
+      // future-time guard: a paused loop may keep a stale (past) `nextRunAt` that
       // `show --json` echoes, and roundtripping it back through `edit` must not 400.
       else if (String(p.runAt) === loop.nextRunAt) set("nextRunAt", loop.nextRunAt, loop.nextRunAt);
       else {
@@ -1426,12 +1412,12 @@ export class MachineGateway {
       else if (typeof p.ui !== "string") rejections.push({ key: "ui", reason: "ui must be a string (the dashboard HTML)" });
       else set("ui", validateUi(clipText(p.ui, WIRE_TEXT_CAP)).value, loop.ui);
     }
-    if (p.stateSchema !== undefined) {
-      if (p.stateSchema === null) set("stateSchema", null, loop.stateSchema);
+    if (p.metricSchema !== undefined) {
+      if (p.metricSchema === null) set("metricSchema", null, loop.metricSchema);
       else {
-        const v = await validateSchema(loop.id, p.stateSchema);
-        if (!v.ok) rejections.push({ key: "stateSchema", reason: v.detail });
-        else set("stateSchema", v.value, loop.stateSchema);
+        const v = await validateSchema(loop.id, p.metricSchema);
+        if (!v.ok) rejections.push({ key: "metricSchema", reason: v.detail });
+        else set("metricSchema", v.value, loop.metricSchema);
       }
     }
     return { update, changes, rejections };
@@ -1525,51 +1511,6 @@ export class MachineGateway {
     return response;
   }
 
-  /** Finish already won. Enrich only run-local report data; a losing report must
-   * never write loop task state or repeat terminal side effects. */
-  private async enrichFinishedReport(
-    runToken: string,
-    lease: RunLease,
-    body: MachineReportBody,
-  ): Promise<HttpResult> {
-    const run = await store.getRun(lease.runId);
-    const message = reportMessage(body, run);
-    const patch: Partial<NewRun> = {
-      ...coerceTelemetry(body),
-      ...(message !== undefined ? { message } : {}),
-    };
-    const receipt = receiptFor(body, lease.runId);
-    const payloadDigest = sha256(JSON.stringify(body));
-    let enriched: Awaited<ReturnType<typeof store.enrichFinishedRun>>;
-    try {
-      enriched = await store.enrichFinishedRun(
-        lease.loopId,
-        lease.runId,
-        sha256(runToken),
-        patch,
-        receipt,
-      );
-    } catch (error) {
-      const raced = await committedReportEvidence(body.reportId!, payloadDigest, lease.runId);
-      if (raced.response) return raced.response;
-      if (raced.foreignRun) return this.rejectTerminalAttempt(runToken, lease, body, payloadDigest, "REPORT_CONFLICT", ["reportId was already committed for another run"]);
-      throw error;
-    }
-    if (!enriched) {
-      const raced = await committedReportEvidence(body.reportId!, payloadDigest, lease.runId);
-      if (raced.response) return raced.response;
-      if (raced.foreignRun) return this.rejectTerminalAttempt(runToken, lease, body, payloadDigest, "REPORT_CONFLICT", ["reportId was already committed for another run"]);
-      const refreshed = await resolveLease(runToken);
-      if (refreshed?.state === "retired") return this.retiredReport(runToken, body, lease.runId);
-      return { status: 409, body: { error: "terminal report was not finalized", code: "REPORT_NOT_FINALIZED", reportId: body.reportId } };
-    }
-    if (enriched && (await store.getLoop(lease.loopId))?.deleteRequestedAt) {
-      await store.tryDeleteLoop(lease.loopId);
-    }
-    log.info({ runId: lease.runId, enriched: !!enriched }, "report: finished-run enrichment consumed");
-    return { status: 200, body: receipt!.ackBody };
-  }
-
   /** Reconcile one swept run. The store consumes the terminal-grace lease in the
    * same loop-lock transaction as the error→done/error patch and loop state, so
    * concurrent late reports cannot both win (including error→error). */
@@ -1579,9 +1520,11 @@ export class MachineGateway {
     run: Run,
     body: MachineReportBody,
   ): Promise<HttpResult> {
-    const ok = body.result === "success";
+    const providerOk = body.result === "success";
     const canceled = body.result === "canceled";
-    const message = reportMessage(body, run);
+    const protocolMissing = providerOk ? runProtocolMissing(run) : [];
+    const ok = providerOk && protocolMissing.length === 0;
+    const message = run.message ?? undefined;
     const loopPatch: Partial<NewLoop> = {
       ...(typeof body.taskFileContent === "string"
         ? {
@@ -1604,9 +1547,11 @@ export class MachineGateway {
         ...(message !== undefined ? { message } : {}),
         ...(canceled
           ? { error: "stopped by user" }
-          : ok
-            ? { error: null }
-            : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : run.error }),
+          : protocolMissing.length
+            ? { error: `run protocol incomplete: missing ${protocolMissing.join(", ")}` }
+            : ok
+              ? { error: null }
+              : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : run.error }),
         ts: nowIso(),
       },
         loopPatch,
@@ -1627,7 +1572,7 @@ export class MachineGateway {
       if (raced.foreignRun) return this.rejectTerminalAttempt(runToken, lease, body, payloadDigest, "REPORT_CONFLICT", ["reportId was already committed for another run"]);
       const fresh = await store.getRun(lease.runId);
       if (fresh?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease, body);
-      if (fresh?.phase === "done") return this.enrichFinishedReport(runToken, lease, body);
+      if (fresh?.phase === "done") return { status: 409, body: { error: "run already finalized", code: "REPORT_NOT_FINALIZED", reportId: body.reportId } };
       const refreshed = await resolveLease(runToken);
       if (refreshed?.state === "retired") return this.retiredReport(runToken, body, lease.runId);
       log.info({ runId: lease.runId, phase: fresh?.phase }, "report: late reconcile lost terminal race");
@@ -1772,10 +1717,13 @@ export class MachineGateway {
 
     const run = await store.getRun(lease.runId);
     if (run?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease, body);
-    if (run?.phase === "done") return this.enrichFinishedReport(runToken, lease, body);
+    if (run?.phase === "done") return { status: 409, body: { error: "run already finalized", code: "REPORT_NOT_FINALIZED", reportId } };
     if (run?.phase === "error" && lease.state === "terminal-grace") {
       return this.reconcileReclaimedReport(runToken, lease, run, body);
     }
+
+    const protocolMissing = ok && run ? runProtocolMissing(run) : [];
+    const effectiveOk = ok && protocolMissing.length === 0;
 
     // Held until the running→terminal CAS wins. Cancel/reclaim/report losers can
     // never reach these loop-level writes.
@@ -1788,22 +1736,19 @@ export class MachineGateway {
         : {}),
     };
 
-    // An agent may already have persisted a message through `pievo report`.
-    // Provider final text is only fallback.
-    const message = reportMessage(body, run);
-
     let terminal: Awaited<ReturnType<typeof store.finalizeRunningRun>>;
     try {
       terminal = await store.finalizeRunningRun(
         lease.loopId,
         lease.runId,
         {
-        phase: canceled ? "canceled" : ok ? "done" : "error",
+        phase: canceled ? "canceled" : effectiveOk ? "done" : "error",
         ...coerceTelemetry(body),
-        ...(message !== undefined ? { message } : {}),
         ...(canceled
           ? { error: "stopped by user" }
-          : ok ? {} : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : "run failed on machine" }),
+          : protocolMissing.length
+            ? { error: `run protocol incomplete: missing ${protocolMissing.join(", ")}` }
+            : effectiveOk ? {} : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : "run failed on machine" }),
         ts: nowIso(),
       },
         loopPatch,
@@ -1832,7 +1777,7 @@ export class MachineGateway {
       }
       const fresh = await store.getRun(lease.runId);
       if (fresh?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease, body);
-      if (fresh?.phase === "done") return this.enrichFinishedReport(runToken, lease, body);
+      if (fresh?.phase === "done") return { status: 409, body: { error: "run already finalized", code: "REPORT_NOT_FINALIZED", reportId } };
       const refreshedLease = await resolveLease(runToken);
       if (refreshedLease?.state === "retired") return this.retiredReport(runToken, body, lease.runId);
       if (fresh?.phase === "error" && refreshedLease?.state === "terminal-grace") {
@@ -1865,7 +1810,7 @@ export class MachineGateway {
     // internal (owner config change / self-shaping) — never user-facing, success
     // OR failure. `updateRun` already returned the finalized row.
     if (!deleting && lease.role === "exec") {
-      if (ok) {
+      if (effectiveOk) {
         // Success: gate on the loop's notify policy + the run's content status.
         const loop = await store.getLoop(lease.loopId);
         if (finalized?.message && loop && shouldNotify(loop.notify, finalized.status ?? null)) {
@@ -1877,92 +1822,22 @@ export class MachineGateway {
         await this.notifyRunFailure(lease.loopId, lease.role, finalized?.error ?? null, terminal);
       }
     }
-    log.info({ runId: lease.runId, ok }, "report: finalized");
+    log.info({ runId: lease.runId, ok: effectiveOk }, "report: finalized");
     if (deleting) await store.tryDeleteLoop(lease.loopId);
     return { status: 200, body: reportId ? { ok: true, reportId } : { ok: true } };
   }
 
-  /**
-   * The `pievo finish` verb's effect (closed-loop self-termination): record THIS
-   * run as an ordinary success (phase=done, status=kept) with the
-   * run's summary/metrics, then stamp the loop terminal (completedAt=now,
-   * completionReason, enabled=false), remove it from the scheduler, capture the end-
-   * state snapshot, and fire a completion notification unless notify=never. Gated
-   * upstream by lease.canFinish (exec-on-closed-loop only).
-   *
-   * TOCTOU guard: canFinish was minted at poll; the owner may have CLEARED the goal
-   * since (editLoop {goal:null}) — completing then would violate the invariant
-   * "completedAt != null implies goal != null". So re-read the loop and refuse with
-   * a clear error when it's no longer a closed loop. Nothing is stamped.
-   *
-   * The store atomically moves the lease to a fixed 10-minute terminal-grace:
-   * mutation authority ends with the Run, while exactly one daemon report may add
-   * precise duration/session telemetry. Grace expiry becomes durable retired
-   * evidence and unblocks the machine; a later report receives 410. The completedAt
-   * guard keeps finish single-shot, and enrichment never re-stamps or re-notifies.
-   *
-   * Public (not private): `CliGateway`'s `finish`/`complete` dispatch case is the
-   * second consumer - the verb routing moved to `gateway/cli.ts`, the core
-   * loop-lifecycle write stays here.
-   */
-  async finishLoop(
-    lease: RunLease,
-    leaseTokenHash: string,
-    { message, reason, state }: { message?: string; reason: string | null; state?: Record<string, number | string> },
-  ): Promise<Applied> {
-    const ts = nowIso();
-    // The store serializes this whole transition with poll claims on the loop row:
-    // run done + completed/paused + pending exec/evolve cancellation have no gap.
-    const currentRun = await store.getRun(lease.runId);
-    const durationMs = currentRun ? Date.now() - Date.parse(currentRun.ts) : NaN;
-    const finished = await store.finishLoopRun(lease.loopId, lease.runId, leaseTokenHash, {
-      ts,
-      reason,
-      ...(message !== undefined ? { message } : {}),
-      ...(state !== undefined ? { state } : {}),
-      ...(Number.isFinite(durationMs) && durationMs >= 0 ? { durationMs } : {}),
-    });
-    if (finished.state === "goal-cleared" || finished.state === "missing") {
-      return { ok: false, detail: "this loop no longer has a goal to finish — its goal was cleared since this run started" };
-    }
-    if (finished.state === "already-finished") {
-      return { ok: false, detail: "this loop is already finished", code: "CONFLICT" };
-    }
-    if (finished.state === "forbidden") {
-      return { ok: false, detail: "this run may not finish this loop", code: "FORBIDDEN", status: 403 };
-    }
-    if (finished.state !== "finished") {
-      return { ok: false, detail: "this run is no longer running", code: "CONFLICT", status: 409 };
-    }
-    const loop = finished.loop;
-    this.scheduler.removeLoop(lease.loopId);
-    // Snapshot the loop's end-state (Phase 3 diff baseline), best-effort like report().
-    try {
-      await store.putRunSnapshot(lease.runId, lease.loopId, await store.buildLoopManifest(lease.loopId));
-      await store.pruneRunSnapshots(lease.loopId, snapshotRetention());
-    } catch (err) {
-      log.warn({ runId: lease.runId, err: err instanceof Error ? err.message : String(err) }, "finish: snapshot capture failed");
-    }
-    // Completion is a distinct terminal event — notify unless the user opted out
-    // of all pushes (notify: "never"). Best-effort (void), like the report path.
-    if (loop && loop.notify !== "never") {
-      this.pushNotify(loop, completionMessage(reason, message));
-    }
-    log.info({ runId: lease.runId, loopId: lease.loopId }, "finish: loop completed");
-    return { ok: true, detail: "loop finished — goal met, loop completed" };
-  }
 }
 
 // ---- helpers (ported from control.ts) ----
 
-/** The `{ ok, detail }` result shape shared by `finishLoop`/`validCadence` here and
+/** The `{ ok, detail }` result shape shared by `validCadence` here and
  *  the `applyMutation`/`applySet*` verb bodies in `cli.ts`. */
 export interface Applied {
   ok: boolean;
   detail?: string;
   /** An explicit axi error slug for a rejection (else the caller derives it from the
-   *  HTTP status). Used to mark a second-`finish` as CONFLICT rather than a generic
-   *  VALIDATION_ERROR. */
+   *  HTTP status). */
   code?: string;
   /** Optional HTTP status for atomic authorization/conflict rejections. */
   status?: number;
@@ -2096,9 +1971,9 @@ export function runResultToken(r: { phase: string; status: string | null }): str
 }
 
 /** A run's reported metrics as `k=v,k=v` (or null → the em-dash), for the log cell. */
-export function runMetricsToken(state: Record<string, unknown> | null | undefined): string | null {
-  if (!state || typeof state !== "object") return null;
-  const parts = Object.entries(state).map(([k, v]) => `${k}=${v}`);
+export function runMetricsToken(metrics: Record<string, unknown> | null | undefined): string | null {
+  if (!metrics || typeof metrics !== "object") return null;
+  const parts = Object.entries(metrics).map(([k, v]) => `${k}=${v}`);
   return parts.length ? parts.join(",") : null;
 }
 
@@ -2111,7 +1986,7 @@ interface LogRun {
   phase: string;
   status: string | null;
   sessionId: string | null;
-  state: Record<string, unknown> | null;
+  metrics: Record<string, unknown> | null;
   message: string | null;
 }
 
@@ -2131,7 +2006,7 @@ function renderLogText(name: string, loopId: string, runs: LogRun[], total: numb
     fmtTime(r.ts),
     r.role,
     runResultToken(r),
-    runMetricsToken(r.state),
+    runMetricsToken(r.metrics),
     r.sessionId,
     r.message ? truncate(r.message, LOG_MESSAGE_CELL_CAP, "use --json").value : null,
   ]);
@@ -2169,7 +2044,7 @@ function renderCreatedText(
   const nextRuns = scheduleMode === "cron" ? nextFires(cron, timezone, 3).map((iso) => fmtTimeZoned(iso, timezone)) : [];
   return doc(
     `created: ${scalar(name)} (${loopId})`,
-    `classification: ${goal != null ? "closed — self-finishes when the goal is met" : "open — runs until paused"}`,
+    `objective: ${goal != null ? "configured — guides every run" : "none"}`,
     `dashboard: ${uiApplied ? "applied" : "not applied"}`,
     `schedule: ${scheduleMode === "continuous" ? `continuous — ${continuousDelayMinutes}m after each exec terminal` : `cron — ${cron}`}`,
     nextRuns.length ? inlineArray("nextRuns", nextRuns, " · ") : null,
@@ -2187,7 +2062,7 @@ function renderCreatedText(
 function renderReplayText(name: string, loopId: string, goal: string | null): string {
   return doc(
     `created: ${scalar(name)} (${loopId}) [idempotent replay — existing loop returned]`,
-    `classification: ${goal != null ? "closed — self-finishes when the goal is met" : "open — runs until paused"}`,
+    `objective: ${goal != null ? "configured — guides every run" : "none"}`,
     helpBlock([`Run \`pievo show ${loopId}\` to see the full config`]),
   );
 }
@@ -2213,7 +2088,7 @@ function renderCreateDryRunText(
       ["notify", config.notify],
     ]),
     nextRuns.length ? inlineArray("nextRuns", nextRuns.map((iso) => fmtTimeZoned(iso, config.timezone)), " · ") : null,
-    `classification: ${config.goal != null ? "closed — self-finishes when the goal is met" : "open — runs until paused"}`,
+    `objective: ${config.goal != null ? "configured — guides every run" : "none"}`,
     warning ? kvLine("warning", warning) : null,
     helpBlock(["Run `pievo new --json '{...}'` (drop --dry-run) to create the loop"]),
   );
@@ -2271,7 +2146,7 @@ function str(v: unknown): string | null {
 
 /** Structural equality for an editLoop before→after comparison: null and undefined
  *  are equal (an absent field re-fed as null is unchanged); objects/arrays compare by
- *  their CANONICAL JSON serialization (stateSchema is a small array; object keys are
+ *  their CANONICAL JSON serialization (metricSchema is a small array; object keys are
  *  sorted so the comparison is order-INSENSITIVE — a value re-read from a pg `jsonb`
  *  column comes back with its keys normalized, which must not read as a change against
  *  a freshly-coerced value); everything else by `===`. Powers the no-op filter that

@@ -3,7 +3,7 @@
  *
  * Folds SKILL.md §3 (hand IANA-timezone detection) and §4 (hand-built JSON +
  * curl) into one command. The agent's config carries only real intent —
- * name · cron · taskFile · workdir · model · reasoningEffort · stateSchema · ui · notify. This
+ * name · cron · taskFile · workdir · model · reasoningEffort · metricSchema · ui · notify. This
  * command fills the fixed envelope the agent shouldn't have to think about:
  *   - timezone: auto-detected IANA (config/--tz override), so the cadence fires
  *     in the user's local time, not the server's (UTC in prod),
@@ -60,7 +60,7 @@ export function cronLooksValid(cron: unknown): cron is string {
 /**
  * Deterministic JSON: object keys sorted recursively so two logically-identical
  * configs (any key order) serialize identically. Arrays keep their order (order is
- * meaningful — e.g. a stateSchema's fields). The idempotency key hashes this.
+ * meaningful — e.g. a metricSchema's fields). The idempotency key hashes this.
  */
 export function canonicalJson(v: unknown): string {
   if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";

@@ -4,7 +4,7 @@ import { daemonStopSupport, deriveLoopLifecycle, lifecycleDisplay } from './life
 
 const run = (patch: Partial<RunSummary> = {}): RunSummary => ({
   id: 'r1', loopId: 'l1', ts: '2026-01-01T00:00:00Z', agent: null, status: null, message: null, durationMs: null, exitCode: null,
-  finalText: null, usage: null, error: null, state: null, control: null, sessionId: null,
+  finalText: null, usage: null, error: null, metrics: null, control: null, sessionId: null,
   ...patch,
 })
 const job = (patch: Partial<JobSummary> = {}): JobSummary => ({
@@ -17,13 +17,12 @@ function detail(summary: JobSummary, machine: Partial<JobDetail['machine']> = {}
   return {
     job: { id: summary.id, cron: summary.cron, scheduleMode: 'cron', continuousDelayMinutes: 1, enabled: summary.enabled, notify: 'auto' },
     summary, taskFileContent: null, taskFileSyncedAt: null, runs: summary.runs,
-    machine: { id: 'm1', name: 'MacBook Pro', online: true, presence: 'online', lastSeen: null, daemonProtocol: 2, daemonVersion: '2.0.1', needsUpdate: false, requiredDaemonVersion: '2.0.1', ...machine },
+    machine: { id: 'm1', name: 'MacBook Pro', online: true, presence: 'online', lastSeen: null, daemonProtocol: 2, daemonVersion: '2.0.3', needsUpdate: false, requiredDaemonVersion: '2.0.3', ...machine },
   }
 }
 
 describe('Dashboard lifecycle derivation', () => {
   it('uses the specified precedence and never calls cancellation intent Canceled', () => {
-    expect(deriveLoopLifecycle(job({ completedAt: '2026-01-01T00:00:00Z', deleteRequestedAt: '2026-01-02T00:00:00Z' }))).toBe('deleting')
     expect(deriveLoopLifecycle(job({ deleteRequestedAt: '2026-01-02T00:00:00Z', enabled: false }))).toBe('deleting')
     expect(deriveLoopLifecycle(job({ enabled: false, running: true, runs: [run({ running: true, cancelRequested: true })] }))).toBe('stopping')
     expect(deriveLoopLifecycle(job({ enabled: false, running: true, runs: [run({ running: true })] }))).toBe('paused-finishing')

@@ -548,18 +548,6 @@
 .lpf-node.setup .lpf-k {
   color: var(--color-warn);
 }
-/* A closed loop's finish terminus — a green end-state node + its forward exit wire. */
-.lpf-node.finish {
-  border-color: color-mix(in srgb, var(--color-success) 55%, var(--color-hairline));
-  background: color-mix(in srgb, var(--color-success) 8%, var(--color-surface));
-}
-.lpf-node.finish .lpf-k,
-.lpf-node.finish .lpf-t {
-  color: var(--color-success);
-}
-.lpf-wire.finish {
-  stroke: var(--color-success);
-}
 .lpf-node.visited {
   border-color: color-mix(in srgb, var(--color-interactive) 40%, var(--color-wire));
 }

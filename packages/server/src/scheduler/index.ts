@@ -55,7 +55,7 @@ export class Scheduler {
     const old = this.timers.get(loop.id);
     if (old) clearTimeout(old);
     this.timers.delete(loop.id);
-    if (!loop.enabled || loop.completedAt) return;
+    if (!loop.enabled) return;
     const targets = [loop.nextCadenceAt, loop.nextRunAt]
       .filter((v): v is string => v != null)
       .map(Date.parse)

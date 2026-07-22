@@ -1,14 +1,13 @@
 ---
 name: pievo
-description: Create, update, and evolve scheduled Pievo agent loops from a coding session. Use when the user wants to turn a task they just did into a recurring/scheduled loop, edit an existing loop's schedule or instructions, or asks to build a Pievo loop. A loop can carry a goal (a finish line) and completes itself when the goal is met; without one it runs indefinitely as a monitor.
+description: Create, update, and evolve scheduled Pievo agent loops from a coding session. Use when the user wants to turn a task they just did into a recurring/scheduled loop, edit an existing loop's schedule or instructions, or asks to build a Pievo loop. A loop can carry a standing optimization objective and runs until its owner pauses or deletes it.
 ---
 
 # Pievo — build and maintain scheduled loops
 
 Pievo turns a task into a **loop** that runs automatically on a schedule on this
-machine. A loop with a **goal** is closed — each run judges the goal and the loop
-finishes itself once it's met; without one it's an open monitor that runs
-indefinitely. Work end to end; keep questions to quick check-ins, don't run a full
+machine. A loop may carry a standing **goal** that guides repeated optimization;
+every loop runs until its owner pauses or deletes it. Work end to end; keep questions to quick check-ins, don't run a full
 interview. Two check-ins are right: if the session has no real task to loop yet, ask
 what to build rather than inventing one (`references/create.md` §1); and when the
 user hasn't specified the loop's cadence or per-run output, propose a sensible
@@ -26,7 +25,7 @@ Read the reference for the job (they live on disk next to this file, under
   sharpens its **task** from its own run history, then fits its dashboard to the
   data): **`references/evolve.md`**.
 - **How a loop behaves each time it runs** (the runtime protocol: the task file as
-  memory, surfacing only what changed, the report/finish grammar and finish bar, the
+  memory, surfacing only what changed, the required report grammar, the
   schedule levers, and front-matter product conventions): **`references/run.md`**.
 
 The machine is already connected — this skill was installed at user scope for each

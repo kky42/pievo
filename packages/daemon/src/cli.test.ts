@@ -74,7 +74,7 @@ describe("classify lifecycle routing", () => {
     expect(classify(["daemon", "status"], {})).toEqual({ kind: "daemonCommand", command: "status", args: [] });
   });
 
-  test.each(["up", "down", "status", "doctor", "update"])("%s has no route", (verb) => {
+  test.each(["up", "down", "status", "doctor", "update", "finish", "complete"])("%s has no route", (verb) => {
     expect(classify([verb], {})).toEqual({ kind: "unknown", verb });
   });
 

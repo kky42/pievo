@@ -53,7 +53,7 @@ export interface ReportIncident {
   recommendedAction: string
 }
 
-/** Why a non-completed loop is paused. This annotates lifecycle; it is not a new state. */
+/** Why a loop is paused. This annotates lifecycle; it is not a new state. */
 export type PauseCause =
   | { kind: 'owner'; at: string }
   | { kind: 'failure-streak'; at: string; runId: string; count: number }
@@ -94,7 +94,7 @@ export interface RunSummary {
     cacheCreationTokens?: number
   } | null
   error: string | null
-  state: Record<string, Json> | null
+  metrics: Record<string, number | null> | null
   control: Array<{ command: string; args: Json; result: string; detail?: string }> | null
   sessionId: string | null
   reportIncident?: ReportIncident | null
@@ -163,13 +163,8 @@ export interface JobSummary {
   queued?: boolean
   lastRunTs: string | null
   graduation: string | null
-  /** CLOSED-loop setpoint (one-line goal). Null ⇒ OPEN loop (monitor/digest). */
+  /** Optional standing objective. It guides runs but does not end the loop. */
   goal?: string | null
-  /** Terminal stamp: when the goal was declared met (ISO). Non-null ⇒ Completed
-   *  (drives the dashboard split + the "Completed" badge / Reopen action). */
-  completedAt?: string | null
-  /** One-line reason recorded at completion. */
-  completionReason?: string | null
   /** Durable Stop-before-delete marker. Non-null means server deletion is waiting. */
   deleteRequestedAt?: string | null
   pauseCause?: PauseCause | null
@@ -182,7 +177,7 @@ export interface JobSummary {
 }
 
 /** Per-round observed metric declared on a job, used to label the trend chart. */
-export interface StateField {
+export interface MetricField {
   key: string
   label?: string
   unit?: string
@@ -197,14 +192,11 @@ export interface JobFull {
   continuousDelayMinutes: number
   enabled: boolean
   notify: 'auto' | 'always' | 'never' | string
-  /** CLOSED-loop setpoint (one-line goal); null/absent ⇒ OPEN loop. */
+  /** Optional standing objective. */
   goal?: string | null
-  /** Terminal stamps (set when the loop's goal is declared met). */
-  completedAt?: string | null
-  completionReason?: string | null
   pauseCause?: PauseCause | null
   taskFile?: string
-  stateSchema?: StateField[]
+  metricSchema?: MetricField[]
   /** Generative-UI template (agent-authored HTML; see LoopView). */
   ui?: string
   /** Push channel this loop notifies through (notification_channels.id). */
@@ -331,10 +323,9 @@ export interface JobPayload {
   continuousDelayMinutes?: number
   taskFile?: string
   notify?: 'auto' | 'always' | 'never' | string
-  /** Set (non-empty) / clear (null|'') the closed-loop goal. Clearing also drops
-   *  the completion stamps; the server enforces the lifecycle invariant. */
+  /** Set (non-empty) or clear (null|'') the standing objective. */
   goal?: string | null
-  stateSchema?: StateField[]
+  metricSchema?: MetricField[]
   ui?: string
   /** Push channel id (notification_channels.id), or '' / null to clear it. */
   channelId?: string | null

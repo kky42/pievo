@@ -3,12 +3,11 @@ import type { JobDetail, JobSummary } from '../types'
 export const DASHBOARD_PROTOCOL = 2
 export const DAEMON_UPGRADE_REQUIRED = 'Daemon upgrade required to stop a running process. Run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.'
 
-export type LoopLifecycle = 'completed' | 'deleting' | 'stopping' | 'paused-finishing' | 'paused' | 'active'
+export type LoopLifecycle = 'deleting' | 'stopping' | 'paused-finishing' | 'paused' | 'active'
 
 /** Derive product lifecycle state only from durable server facts. */
 export function deriveLoopLifecycle(job: JobSummary): LoopLifecycle {
   if (job.deleteRequestedAt != null) return 'deleting'
-  if (job.completedAt != null) return 'completed'
   const running = job.runs.find((run) => run.running)
   if (!job.enabled && running?.cancelRequested) return 'stopping'
   if (!job.enabled && (job.running || running)) return 'paused-finishing'
@@ -33,7 +32,6 @@ export function lifecycleDisplay(detail: JobDetail): string {
     return `Stopping · waiting for ${detail.machine.name || 'machine'}`
   }
   switch (state) {
-    case 'completed': return 'Completed'
     case 'deleting': return 'Deleting'
     case 'stopping': return 'Stopping'
     case 'paused-finishing': return detail.summary.pauseCause?.kind === 'blocked' ? 'Paused — blocked · current run finishing' : detail.summary.pauseCause?.kind === 'owner' ? 'Paused by owner · current run finishing' : 'Paused · current run finishing'

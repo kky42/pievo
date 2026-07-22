@@ -88,35 +88,11 @@ test("a claimed run keeps its actual agent after the loop agent changes", async 
   expect(detail.runs.find((run) => run.id === claimed!.run.id)?.agent).toBe("codex");
 });
 
-test("goal / completion stamps surface on JobSummary and JobFull (+ isCompleted split)", async () => {
-  const { isCompleted, isClosed } = await import("../lib/format.js");
+test("goal surfaces as a standing objective on JobSummary and JobFull", async () => {
   await store.createMachine({ id: "m-a", userId: "u1", name: "M", tokenHash: "h", online: true });
-
-  // Open loop (no goal): not closed, not completed.
-  const open = await store.createLoop({ userId: "u1", machineId: "m-a", name: "Open", cron: "0 8 * * *", taskFile: "pievo/x/README.md", enabled: true, notify: "auto" });
-  const openSum = await adapters.toJobSummary(open);
-  expect(openSum.goal).toBeNull();
-  expect(openSum.completedAt).toBeNull();
-  expect(isClosed(openSum)).toBe(false);
-  expect(isCompleted(openSum)).toBe(false);
-
-  // Closed active loop (goal, no completion): closed, not completed.
-  const closed = await store.createLoop({ userId: "u1", machineId: "m-a", name: "Closed", cron: "0 8 * * *", taskFile: "pievo/x/README.md", goal: "reach 100 signups", enabled: true, notify: "auto" });
-  const closedSum = await adapters.toJobSummary(closed);
-  expect(closedSum.goal).toBe("reach 100 signups");
-  expect(isClosed(closedSum)).toBe(true);
-  expect(isCompleted(closedSum)).toBe(false);
-  expect((await adapters.toJobDetail(closed)).job.goal).toBe("reach 100 signups");
-
-  // Completed loop: completedAt set → isCompleted true (regardless of last run status).
-  const doneLoop = await store.createLoop({
-    userId: "u1", machineId: "m-a", name: "Done", cron: "0 8 * * *", taskFile: "pievo/x/README.md",
-    goal: "ship v1", completedAt: "2026-07-01T00:00:00Z", completionReason: "v1 shipped", enabled: false, notify: "auto",
-  });
-  const doneSum = await adapters.toJobSummary(doneLoop);
-  expect(doneSum.completedAt).toBe("2026-07-01T00:00:00Z");
-  expect(doneSum.completionReason).toBe("v1 shipped");
-  expect(isCompleted(doneSum)).toBe(true);
+  const loop = await store.createLoop({ userId: "u1", machineId: "m-a", name: "Optimizer", cron: "0 8 * * *", taskFile: "pievo/x/README.md", goal: "reduce runtime", enabled: true, notify: "auto" });
+  expect((await adapters.toJobSummary(loop)).goal).toBe("reduce runtime");
+  expect((await adapters.toJobDetail(loop)).job.goal).toBe("reduce runtime");
 });
 
 test("lifecycle request markers and daemon protocol surface at the Dashboard boundary", async () => {
@@ -157,4 +133,3 @@ test("report incidents and pause causes cross the client adapter boundary", asyn
   expect(detail.job.pauseCause).toMatchObject({ kind: "owner" });
   expect(detail.runs.find((item) => item.id === run.id)?.reportIncident).toEqual(incident);
 });
-

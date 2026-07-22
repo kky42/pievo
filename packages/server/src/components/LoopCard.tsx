@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { JobSummary, RunSummary } from '../types'
-import { cronText, dotLabel, fmt, isClosed, isCompleted, lastRunOf, rel } from '../lib/format'
+import { cronText, dotLabel, lastRunOf, rel } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { deriveLoopLifecycle } from '../lib/lifecycleUi'
 import { loadOlderRuns } from '../server/loopApi'
@@ -18,11 +18,7 @@ export function LoopCard({
 }) {
   const en = job.enabled
   const last = lastRunOf(job)
-  const completed = isCompleted(job)
   const lifecycle = deriveLoopLifecycle(job)
-  // A closed loop still working toward its goal (not yet completed) → the quiet
-  // "Goal" chip. Completed closed loops read via the Completed badge instead.
-  const closedActive = isClosed(job) && !completed
   const hydrated = useHydrated()
 
   // The loader seeds `job.runs` with the newest page; we lazily fetch OLDER
@@ -81,17 +77,12 @@ export function LoopCard({
           <Pill tone="outline">Queued</Pill>
         ) : null}
         {job.graduation && <Pill>{job.graduation}</Pill>}
-        {completed && (
-          <Pill tone="success" dot="green">
-            Completed
-          </Pill>
-        )}
-        {!completed && closedActive && (
+        {job.goal && (
           <Pill tone="success" title={job.goal ?? undefined}>
-            Goal
+            Objective
           </Pill>
         )}
-        {!completed && lifecycle === 'paused' && (
+        {lifecycle === 'paused' && (
           <Pill tone={job.pauseCause?.kind === 'blocked' ? 'accent' : undefined}>{job.pauseCause?.kind === 'blocked' ? 'Paused — blocked' : job.pauseCause?.kind === 'failure-streak' ? 'Paused automatically' : job.pauseCause?.kind === 'owner' ? 'Paused by owner' : 'Paused'}</Pill>
         )}
         <div className="ml-auto min-w-0 text-right text-meta text-secondary">
@@ -132,12 +123,6 @@ export function LoopCard({
         </div>
       )}
 
-      {completed && (
-        <div className="mt-1.5 text-label text-success">
-          Completed{job.completedAt ? ` · ${fmt(job.completedAt)}` : ''}
-          {job.completionReason && <span className="text-secondary"> - {job.completionReason}</span>}
-        </div>
-      )}
     </div>
   )
 }

@@ -17,11 +17,11 @@ Describe a recurring task once. Pievo runs it on a schedule with **your own mach
 
 ## What is Pievo?
 
-Pievo is infrastructure for **recurring agent work**. You describe a loop - a daily health check, a weekly research digest, a closed goal like "follow up until it's fixed". A small daemon on a machine you control runs it on schedule using your local coding agent.
+Pievo is infrastructure for **recurring agent work**. You describe a loop—a daily health check, a weekly research digest, or an objective like "keep following up until I pause it." A small daemon on a machine you control runs it on schedule using your local coding agent.
 
 The server only schedules, stores, authenticates, and notifies. **It never runs an LLM and never executes your code.** Execution is BYOA: [`@kky42/pievo`](https://www.npmjs.com/package/@kky42/pievo) on *your* machine, with *your* credentials, files, and tools. Artifacts you choose to sync come back as durable content; the rest never leaves the box.
 
-A loop can stay **open** (a monitor or digest that runs indefinitely) or **closed** (a finish line: the loop completes itself when the goal is met).
+A loop may carry an optional standing objective that guides every run. Objectives do not stop scheduling; the owner pauses or deletes the loop.
 
 Most coding agents can already run on a cron or loop a task themselves. That is the easy 5% - the timer. The real work is the structure that lets you trust it and run reliably. A bare agent loop does not give you:
 
@@ -33,7 +33,7 @@ Most coding agents can already run on a cron or loop a task themselves. That is 
 
 ## Features
 
-- **Scheduled agent loops** - cron or one-shot; open monitors or closed goals that finish themselves when met.
+- **Scheduled agent loops** - cron, continuous, or one-shot work with optional standing objectives.
 - **BYOA execution** - runs on your machine via `@kky42/pievo`; the server is zero-LLM and zero code-exec. Credentials and tools stay local.
 - **Self-improving loops** - evolve passes review run history, sharpen the brief, distill state, and refine the generative dashboard.
 - **- **Teams + notifications** - multi-user dashboard, per-team push channels (Telegram, Feishu, and more), failure alerts.
