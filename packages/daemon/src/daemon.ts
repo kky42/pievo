@@ -64,7 +64,7 @@ export class SingleFlightRuntime {
       } catch (err) {
         terminal = {
           reportId: randomUUID(), runId: delivery.runId, result: "failure", durationMs: 0, exitCode: null,
-          ok: false, error: err instanceof Error ? err.message : String(err),
+          error: err instanceof Error ? err.message : String(err),
         };
       }
       // SQLite commit is the boundary: stage cannot become reporting and the

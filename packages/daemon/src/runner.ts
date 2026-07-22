@@ -46,7 +46,6 @@ export interface Delivery {
 
 export interface ReportBody {
   runId: string;
-  ok: boolean;
   /** Coding-agent subprocess exit code. A spawn, timeout, signal, or pre-spawn
    * failure has no numeric exit and reports null. */
   exitCode: number | null;
@@ -164,24 +163,24 @@ export const runDelivery = executeDelivery;
 async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], signal?: AbortSignal): Promise<TerminalReport> {
   const start = Date.now();
   const canceled = () => signal?.aborted && signal.reason === RUN_CANCEL_REASON;
-  const finish = (body: ReportBody, forcedResult?: TerminalResult): TerminalReport => ({
+  const finish = (body: ReportBody, ok: boolean, forcedResult?: TerminalResult): TerminalReport => ({
     reportId: randomUUID(),
     ...body,
-    result: forcedResult ?? (body.ok ? "success" : body.error?.includes("timed out") ? "timeout" : "failure"),
+    result: forcedResult ?? (ok ? "success" : body.error?.includes("timed out") ? "timeout" : "failure"),
   });
-  if (canceled()) return finish({ runId: d.runId, ok: false, exitCode: null, durationMs: 0, error: "canceled before execution" }, "canceled");
+  if (canceled()) return finish({ runId: d.runId, exitCode: null, durationMs: 0, error: "canceled before execution" }, false, "canceled");
   // Force a final, run-tagged sync of the loop folder right before reporting so
   // the server's run snapshot (Phase 3) captures end-state even if a late write
   // slipped the watcher's debounce. Best-effort and bounded: the flush is raced
   // against a short timeout so a slow/hung server can't stall run reporting (and
   // the notification it triggers) past FLUSH_TIMEOUT_MS — the reclaim sweep + the
   // continuous watcher still converge the server's artifact state afterward.
-  const completeRun = async (body: ReportBody, forcedResult?: TerminalResult): Promise<TerminalReport> => {
+  const completeRun = async (body: ReportBody, forcedResult?: TerminalResult, okOverride?: boolean): Promise<TerminalReport> => {
     await Promise.race([
       flushLoop(d.loop.id).catch(() => {}),
       new Promise<void>((resolve) => setTimeout(resolve, FLUSH_TIMEOUT_MS)),
     ]);
-    return finish(body, forcedResult);
+    return finish(body, okOverride ?? body.error === undefined, forcedResult);
   };
   // The LOCAL env jail (PIEVO_ROOTS) always applies when set; server-sent
   // roots can only narrow it — a hostile server must not widen the jail.
@@ -190,7 +189,7 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
   try {
     workdir = resolveWorkdir(d.loop.workdir, d.loop.id, jail);
   } catch (err) {
-    return completeRun({ runId: d.runId, ok: false, exitCode: null, durationMs: Date.now() - start, error: msg(err) });
+    return completeRun({ runId: d.runId, exitCode: null, durationMs: Date.now() - start, error: msg(err) });
   }
 
   // Run the selected coding agent exactly once.
@@ -239,7 +238,7 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
       sysFile: hasSystemPrompt ? sysFile : undefined,
     });
 
-    if (canceled()) return completeRun({ runId: d.runId, ok: false, exitCode: null, durationMs: Date.now() - start, error: "canceled before provider spawn" }, "canceled");
+    if (canceled()) return completeRun({ runId: d.runId, exitCode: null, durationMs: Date.now() - start, error: "canceled before provider spawn" }, "canceled");
     const collector = makeTerminalCollector(agent);
     const r = await runProcess(bin, args, { cwd: workdir, env, timeoutMs: TIMEOUT_MS, onStdout: collector.feed, signal });
     const final = collector.result();
@@ -279,7 +278,6 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
 
   return completeRun({
     runId: d.runId,
-    ok,
     exitCode,
     durationMs: Date.now() - start,
     sessionId,
@@ -291,7 +289,7 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
     // notification-exempt server-side — so an evolve pass that forgets to report
     // still leaves a readable run-log line instead of a blank timeline block.
     finalText,
-  }, error === "canceled by server request" ? "canceled" : undefined);
+  }, error === "canceled by server request" ? "canceled" : undefined, ok);
 }
 
 /** Best-effort read of the loop's task file for sync to the server. The path may

@@ -217,6 +217,7 @@ test.each([
   ["missing runId", { result: "success" }, "runId is required"],
   ["mismatched runId", { runId: "another-run", result: "success" }, "runId does not match"],
   ["invalid result", { result: "bogus" }, "result must be"],
+  ["legacy ok-only result", { runId: "filled-below", ok: true }, "result must be"],
   ["invalid duration", { result: "success", durationMs: -1 }, "durationMs must be"],
   ["invalid exit code", { result: "success", exitCode: 1.5 }, "exitCode must be"],
 ] as const)("semantic invalid: %s is terminally acknowledged", async (_label, invalid, issue) => {

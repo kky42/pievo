@@ -267,7 +267,7 @@ test("report persists normalized terminal telemetry without cost or transcript f
   });
   const res = await gateway().report(token, {
     runId: run.id,
-    ok: true,
+    result: "success" as const,
     exitCode: 0,
     durationMs: 1234,
     sessionId: "sess-abc",
@@ -290,7 +290,7 @@ test("report terminalizes the leased run when payload runId does not match", asy
   const token = await tokens.registerRunLease({
     runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false,
   });
-  const response = await gateway().report(token, { runId: "run-other", ok: true });
+  const response = await gateway().report(token, { runId: "run-other", result: "success" as const });
   expect(response).toMatchObject({ status: 200, body: { accepted: false, code: "REPORT_INVALID", disposition: "run-error" } });
   expect(await store.getRun(run.id)).toMatchObject({ phase: "error", reportIncident: { code: "REPORT_INVALID" } });
   expect(await tokens.resolveLease(token)).toBeUndefined();
@@ -306,7 +306,7 @@ test("report syncs the machine's task file content onto the loop", async () => {
     allowControl: false,
   });
   const res = (await gateway().report(token, {
-    ok: true,
+    result: "success" as const,
     durationMs: 1000,
     taskFileContent: "# Breakfast log\n2026-06-19: 4g dispensed\n",
   }));
@@ -700,7 +700,7 @@ test("finishing running edit A does not clear queued edit B", async () => {
   const followUp = await store.enqueueRun(loop.id, { role: "edit", requestedBy: "owner", requestText: "B" });
   const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "edit", allowControl: true });
 
-  const res = await gateway().report(rt, { ok: true, durationMs: 5 });
+  const res = await gateway().report(rt, { result: "success" as const, durationMs: 5 });
   expect(res.status).toBe(200);
   expect("run" in followUp).toBe(true);
   const waiting = (await store.openRunsForLoop(loop.id)).find((r) => r.phase === "pending" && r.role === "edit");
@@ -882,7 +882,7 @@ test("finish leaves the token live for the daemon's enriching report (durationMs
 
   // The daemon's normal post-run report arrives with precise telemetry. Its provider
   // final text must not replace the summary already persisted by `finish`.
-  const rep = (await gw.report(rt, { ok: true, durationMs: 4321, sessionId: "sess-xyz", finalText: "provider chatter" }));
+  const rep = (await gw.report(rt, { result: "success" as const, durationMs: 4321, sessionId: "sess-xyz", finalText: "provider chatter" }));
   expect(rep.status).toBe(200);
 
   const r = (await store.getRun(run.id))!;
@@ -892,7 +892,7 @@ test("finish leaves the token live for the daemon's enriching report (durationMs
   // The loop stays completed (the enriching report never re-stamps).
   expect((await store.getLoop(loop.id))!.completedAt).toBeTruthy();
   // Enrichment revoked the token — a second report is now a no-op (401).
-  expect((await gw.report(rt, { ok: true, durationMs: 9 })).status).toBe(401);
+  expect((await gw.report(rt, { result: "success" as const, durationMs: 9 })).status).toBe(401);
 });
 
 test("finish TOCTOU: refuses (loop untouched) when the goal was cleared after the run started", async () => {
@@ -1244,7 +1244,7 @@ test("a FAILED exec run notifies the user (first failure of a streak)", async ()
   const { loop, rt } = (await seededExecRun());
   const { sent, fn } = recordingNotify();
 
-  const res = (await gateway(fn).report(rt, { ok: false, error: "claude exited 1", durationMs: 5 }));
+  const res = (await gateway(fn).report(rt, { result: "failure" as const, error: "claude exited 1", durationMs: 5 }));
   expect(res.status).toBe(200);
   expect(sent).toHaveLength(1);
   expect(sent[0]!.loopId).toBe(loop.id);
@@ -1275,7 +1275,7 @@ test("repeated consecutive failures are anti-spam'd: notify on the 1st and every
       ts: `2026-06-01T00:00:${String(i).padStart(2, "0")}Z`,
     });
     const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
-    (await gw.report(rt, { ok: false, error: "boom", durationMs: 1 }));
+    (await gw.report(rt, { result: "failure" as const, error: "boom", durationMs: 1 }));
   }
   expect(sent).toHaveLength(4);
 });
@@ -1294,7 +1294,7 @@ test("a success between failures resets the streak so the next failure re-alerts
   // Now a fresh failure → streak is 1 again → it must re-alert.
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: "2026-06-01T00:00:03Z" }));
   const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
-  (await gateway(fn).report(rt, { ok: false, error: "boom", durationMs: 1 }));
+  (await gateway(fn).report(rt, { result: "failure" as const, error: "boom", durationMs: 1 }));
 
   expect(sent).toHaveLength(1);
 });
@@ -1310,7 +1310,7 @@ test("evolve and edit run failures never produce user-facing failure notificatio
   for (const role of ["evolve", "edit"] as const) {
     const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role, ts: new Date().toISOString() }));
     const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role, allowControl: true });
-    (await gw.report(rt, { ok: false, error: "boom", durationMs: 1 }));
+    (await gw.report(rt, { result: "failure" as const, error: "boom", durationMs: 1 }));
   }
   expect(sent).toHaveLength(0);
 });
@@ -1318,7 +1318,7 @@ test("evolve and edit run failures never produce user-facing failure notificatio
 test("notify: 'never' suppresses failure alerts entirely", async () => {
   const { rt } = (await seededExecRun("never"));
   const { sent, fn } = recordingNotify();
-  (await gateway(fn).report(rt, { ok: false, error: "boom", durationMs: 1 }));
+  (await gateway(fn).report(rt, { result: "failure" as const, error: "boom", durationMs: 1 }));
   expect(sent).toHaveLength(0);
 });
 
@@ -1373,7 +1373,7 @@ test("circuit breaker: the 3rd consecutive exec failure auto-pauses the loop wit
   // The 3rd failure arrives as a real failing report — the breaker trips.
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
   const rt = (await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true }));
-  (await gw.report(rt, { ok: false, error: "boom", durationMs: 1 }));
+  (await gw.report(rt, { result: "failure" as const, error: "boom", durationMs: 1 }));
 
   expect((await store.getLoop(loop.id))!.enabled).toBe(false);
   expect(sent).toHaveLength(1);
@@ -1392,7 +1392,7 @@ test("blocked status pauses the loop for any role and outranks canceled terminal
   const gw = gateway();
 
   expect((await gw.cli(rt, ["report", "--status", "blocked", "--message", "owner-only goal change required"])).status).toBe(200);
-  expect((await gw.report(rt, { result: "canceled", ok: false, exitCode: 143, error: "canceled by server request", durationMs: 1 })).status).toBe(200);
+  expect((await gw.report(rt, { result: "canceled", exitCode: 143, error: "canceled by server request", durationMs: 1 })).status).toBe(200);
 
   const finalized = (await store.getRun(run.id))!;
   expect(finalized.phase).toBe("canceled");
@@ -1438,7 +1438,7 @@ test("continuous loop stops enqueueing after the 3rd exec error trips the breake
   let current = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", requestedBy: "system", ts: new Date().toISOString() });
   for (let attempt = 1; attempt <= 3; attempt++) {
     const rt = await tokens.registerRunLease({ runId: current.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
-    expect((await reportV2(gw, rt, { ok: false, error: `boom ${attempt}`, durationMs: 1 })).status).toBe(200);
+    expect((await reportV2(gw, rt, { result: "failure" as const, error: `boom ${attempt}`, durationMs: 1 })).status).toBe(200);
     let waiting = (await store.openRunsForLoop(loop.id)).find((r) => r.phase === "pending" && r.role === "exec");
     if (attempt < 3) {
       expect(waiting).toBeUndefined(); // cadence remains a fact until due
@@ -1468,7 +1468,7 @@ test("circuit breaker: notify=never still pauses, silently", async () => {
   }
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
   const rt = (await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true }));
-  (await gw.report(rt, { ok: false, error: "boom", durationMs: 1 }));
+  (await gw.report(rt, { result: "failure" as const, error: "boom", durationMs: 1 }));
 
   expect((await store.getLoop(loop.id))!.enabled).toBe(false);
   expect(sent).toHaveLength(0);
@@ -1600,7 +1600,7 @@ test("a canceled evolve report has no loop-level lifecycle side effect", async (
   const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "canceled", role: "evolve", ts: new Date().toISOString() });
   const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "evolve", allowControl: true });
 
-  expect((await gateway().report(rt, { ok: true, durationMs: 5 })).status).toBe(200);
+  expect((await gateway().report(rt, { result: "success" as const, durationMs: 5 })).status).toBe(200);
   expect((await store.getLoop(loop.id))!.nextCadenceAt).toBe(cadence);
   expect(await tokens.resolveLease(rt)).toBeUndefined();
 });
@@ -1854,7 +1854,7 @@ test("agent-api flags are NUL-stripped before any pg write (report/state)", asyn
 test("report clips sessionId and error (untrusted wire input, same discipline as message)", async () => {
   const { run, rt } = (await seededExecRun());
   const res = (await gateway().report(rt, {
-    ok: false,
+    result: "failure" as const,
     durationMs: 1,
     sessionId: "s".repeat(500),
     error: "e".repeat(5000),
@@ -1865,7 +1865,7 @@ test("report clips sessionId and error (untrusted wire input, same discipline as
   expect(stored.error!.length).toBe(2000); // MESSAGE_CAP
   // A non-string error degrades to the server's default reason.
   const again = (await seededExecRun());
-  (await gateway().report(again.rt, { ok: false, durationMs: 1, error: 42 as never }));
+  (await gateway().report(again.rt, { result: "failure" as const, durationMs: 1, error: 42 as never }));
   expect((await store.getRun(again.run.id))!.error).toBe("run failed on machine");
 });
 

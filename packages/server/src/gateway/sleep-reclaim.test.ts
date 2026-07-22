@@ -112,7 +112,7 @@ test("(a) a running run reclaimed while asleep is reconciled to done by the late
   expect((await tokens.resolveLease(rt))?.state).toBe("terminal-grace");
 
   // Laptop wakes: claude finished successfully, daemon reports late.
-  const res = (await gw.report(rt, { ok: true, durationMs: 1234, sessionId: "sess-1", finalText: "opened PR #42" }));
+  const res = (await gw.report(rt, { result: "success" as const, durationMs: 1234, sessionId: "sess-1", finalText: "opened PR #42" }));
   expect(res.status).toBe(200);
   const final = (await store.getRun(run.id))!;
   expect(final.phase).toBe("done");
@@ -126,7 +126,7 @@ test("(a) a running run reclaimed while asleep is reconciled to done by the late
   expect(sent[1]!.message).toBe("opened PR #42");
   // Single-shot: the lease is now retired — a second late report is rejected.
   expect(await tokens.resolveLease(rt)).toBeUndefined();
-  expect((await gw.report(rt, { ok: true, finalText: "again" })).status).toBe(401);
+  expect((await gw.report(rt, { result: "success" as const, finalText: "again" })).status).toBe(401);
 });
 
 test("terminal-grace fences due cadence; late success consumes grace and retimes the fact", async () => {
@@ -145,7 +145,7 @@ test("terminal-grace fences due cadence; late success consumes grace and retimes
   expect(await store.advanceDueSchedules(new Date(Date.now() + 10 * MIN).toISOString())).toHaveLength(0);
   expect(await store.claimReadyRunForMachine(machineId)).toBeUndefined();
 
-  expect((await gw.report(rt, { ok: true, finalText: "woke and finished" })).status).toBe(200);
+  expect((await gw.report(rt, { result: "success" as const, finalText: "woke and finished" })).status).toBe(200);
   const final = (await store.getRun(run.id))!;
   const retimed = (await store.getLoop(loop.id))!.nextCadenceAt!;
   expect(retimed).toBe(new Date(Date.parse(final.ts) + 5 * MIN).toISOString());
@@ -176,7 +176,7 @@ test("a provisional reclaim defers the breaker; confirmed late failure pauses at
   expect((await store.getLoop(loop.id))!.enabled).toBe(true);
   expect(sent).toHaveLength(0); // streak 3 is anti-spam-silent while provisional
 
-  expect((await gw.report(rt, { ok: false, error: "confirmed" })).status).toBe(200);
+  expect((await gw.report(rt, { result: "failure" as const, error: "confirmed" })).status).toBe(200);
   expect((await store.getLoop(loop.id))).toMatchObject({ enabled: false, nextCadenceAt: null, nextRunAt: null });
   expect((await store.openRunsForLoop(loop.id))).toHaveLength(0);
   expect(sent).toHaveLength(1); // one autopause note, never a second failure alert
@@ -191,7 +191,7 @@ test("(a') a late FAILURE report records the real error honestly, without a seco
 
   (await gw.sweep());
   expect(sent).toHaveLength(1); // the reclaim alert
-  const res = (await gw.report(rt, { ok: false, error: "claude reported an error" }));
+  const res = (await gw.report(rt, { result: "failure" as const, error: "claude reported an error" }));
   expect(res.status).toBe(200);
   const final = (await store.getRun(run.id))!;
   expect(final.phase).toBe("error");
@@ -208,7 +208,7 @@ test("a cancellation report that races timeout reclaim remains canceled", async 
 
   await gw.sweep();
   expect((await store.getRun(run.id))!.phase).toBe("error");
-  expect((await gw.report(rt, { result: "canceled", ok: false, exitCode: 143, error: "canceled by server request" })).status).toBe(200);
+  expect((await gw.report(rt, { result: "canceled", exitCode: 143, error: "canceled by server request" })).status).toBe(200);
   expect(await store.getRun(run.id)).toMatchObject({ phase: "canceled", error: "stopped by user" });
 });
 

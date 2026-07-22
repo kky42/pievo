@@ -140,7 +140,6 @@ interface MachineReportBody {
   reportId?: string;
   runId?: string;
   result?: "success" | "failure" | "canceled" | "timeout";
-  ok?: boolean;
   exitCode?: number | null;
   durationMs?: number;
   sessionId?: string;
@@ -253,9 +252,7 @@ function reportMessage(body: MachineReportBody, run: Run | undefined): string | 
 
 function validateTerminalReport(body: MachineReportBody): string[] {
   const issues: string[] = [];
-  if (body.result !== undefined) {
-    if (!["success", "failure", "canceled", "timeout"].includes(body.result as string)) issues.push("result must be success, failure, canceled, or timeout");
-  } else if (typeof body.ok !== "boolean") {
+  if (!["success", "failure", "canceled", "timeout"].includes(body.result as string)) {
     issues.push("result must be success, failure, canceled, or timeout");
   }
   if (body.durationMs !== undefined && (typeof body.durationMs !== "number" || !Number.isInteger(body.durationMs) || body.durationMs < 0 || body.durationMs > 2_147_483_647)) {
@@ -1582,7 +1579,7 @@ export class MachineGateway {
     run: Run,
     body: MachineReportBody,
   ): Promise<HttpResult> {
-    const ok = body.result ? body.result === "success" : !!body.ok;
+    const ok = body.result === "success";
     const canceled = body.result === "canceled";
     const message = reportMessage(body, run);
     const loopPatch: Partial<NewLoop> = {
@@ -1770,7 +1767,7 @@ export class MachineGateway {
     }
 
     const expected = receiptFor(body, lease.runId)!;
-    const ok = body.result !== undefined ? body.result === "success" : body.ok === true;
+    const ok = body.result === "success";
     const canceled = body.result === "canceled";
 
     const run = await store.getRun(lease.runId);

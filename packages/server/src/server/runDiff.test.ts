@@ -80,7 +80,7 @@ async function doRun(token: string, machineId: string, loopId: string, ts: strin
     .filter((f) => !f.oversize)
     .map((f) => ({ hash: sha256(f.bytes), encoding: "base64" as const, data: f.bytes.toString("base64") }));
   await art.sync(token, { loopId, runId: run.id, manifest, blobs });
-  const r = await gw.report(runToken, { reportId: `018f47a2-9c2b-7d11-8f52-${run.id.replace(/-/g, "").slice(0, 12)}`, runId: run.id, ok: true, durationMs: 1 });
+  const r = await gw.report(runToken, { reportId: `018f47a2-9c2b-7d11-8f52-${run.id.replace(/-/g, "").slice(0, 12)}`, runId: run.id, result: "success" as const, durationMs: 1 });
   expect(r.status).toBe(200);
   return run;
 }

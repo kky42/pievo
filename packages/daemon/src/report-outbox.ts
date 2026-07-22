@@ -12,7 +12,12 @@ export interface TerminalReport {
   result: TerminalResult;
   durationMs: number;
   exitCode: number | null;
-  [key: string]: unknown;
+  message?: string;
+  sessionId?: string;
+  usage?: unknown;
+  taskFileContent?: string;
+  error?: string;
+  finalText?: string;
 }
 
 export interface PersistedReport {
