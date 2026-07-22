@@ -4,10 +4,9 @@
  * writes the prompt to a file, then runs the selected coding agent.
  */
 import type { CodingAgent, Loop, Run } from "../db/schema.js";
-import * as store from "../db/store.js";
 import {
-  buildEditPrompt,
-  buildEditTask,
+  buildSteerPrompt,
+  buildSteerTask,
   buildEvolvePrompt,
   buildEvolveTask,
   buildExecTask,
@@ -16,8 +15,9 @@ import {
 
 export interface Delivery {
   runId: string;
+  runIndex: number;
   runToken: string;
-  role: "exec" | "evolve" | "edit";
+  role: "exec" | "evolve" | "steer";
   loop: {
     id: string;
     name: string;
@@ -39,27 +39,30 @@ export interface Delivery {
 
 export async function buildDelivery(loop: Loop, queuedRun: Run, runToken: string, roots: string[]): Promise<Delivery> {
   const runId = queuedRun.id;
-  const raw = queuedRun.role;
-  const role: Delivery["role"] = raw === "evolve" ? "evolve" : raw === "edit" ? "edit" : "exec";
+  if (queuedRun.runIndex == null) throw new Error(`claimed run ${runId} has no history index`);
+  const runIndex = queuedRun.runIndex;
+  const role: Delivery["role"] = queuedRun.role;
   let systemPrompt: string;
   let task: string;
   switch (role) {
-    case "evolve": {
-      const recentRuns = (await store.listRuns(loop.id, 13)).filter((r) => r.id !== runId).slice(-12);
+    case "evolve":
       systemPrompt = buildEvolvePrompt();
-      task = buildEvolveTask(loop, recentRuns);
+      task = buildEvolveTask(loop, runIndex);
       break;
-    }
-    case "edit":
-      systemPrompt = buildEditPrompt();
-      task = buildEditTask(loop, queuedRun?.requestText ?? "(no instruction - make no change and report that)");
+    case "steer":
+      systemPrompt = buildSteerPrompt();
+      task = buildSteerTask(loop, queuedRun.requestText ?? "(no instruction - make no change and report that)", runIndex);
+      break;
+    case "exec":
+      systemPrompt = buildLoopSystemPrompt(loop);
+      task = buildExecTask(loop, runIndex);
       break;
     default:
-      systemPrompt = buildLoopSystemPrompt(loop);
-      task = buildExecTask(loop);
+      throw new Error(`unsupported run role: ${String(role)}`);
   }
   return {
     runId,
+    runIndex,
     runToken,
     role,
     roots,

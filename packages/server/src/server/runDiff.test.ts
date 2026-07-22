@@ -168,3 +168,39 @@ test("getRunDiff degrades cleanly for a run with no snapshot (predates the featu
   const diff = await runDiff.computeRunDiff(run.id);
   expect(diff).toEqual({ hasSnapshot: false, files: [] });
 });
+
+test("bounded run diff caps changed files, blob input, and emitted diff text before later work", async () => {
+  const { token, machineId, loop } = await seed();
+  await doRun(token, machineId, loop.id, "2026-06-01T00:00:00.000Z", [
+    { path: "a.md", bytes: Buffer.from("old-a\n") },
+    { path: "b.md", bytes: Buffer.from("old-b\n") },
+    { path: "c.md", bytes: Buffer.from("old-c\n") },
+  ]);
+  const run2 = await doRun(token, machineId, loop.id, "2026-06-02T00:00:00.000Z", [
+    { path: "a.md", bytes: Buffer.from("new-a\n") },
+    { path: "b.md", bytes: Buffer.from("new-b\n") },
+    { path: "c.md", bytes: Buffer.from("new-c\n") },
+  ]);
+
+  const fileLimited = await runDiff.computeRunDiff(run2.id, { maxFiles: 1, maxInputBytes: 100, maxDiffChars: 100 });
+  expect(fileLimited).toMatchObject({
+    hasSnapshot: true,
+    totalFiles: 3,
+    truncated: true,
+    truncation: { files: true, inputBytes: false },
+    work: { filesProcessed: 1, inputBytes: 12 },
+  });
+  expect(fileLimited.files.map((file) => file.path)).toEqual(["a.md"]);
+
+  const workLimited = await runDiff.computeRunDiff(run2.id, { maxFiles: 3, maxInputBytes: 12, maxDiffChars: 20 });
+  expect(workLimited.totalFiles).toBe(3);
+  expect(workLimited.work?.inputBytes).toBeLessThanOrEqual(12);
+  expect(workLimited.work?.emittedDiffChars).toBeLessThanOrEqual(20);
+  expect(workLimited.truncation).toMatchObject({ inputBytes: true, diffChars: true });
+  expect(workLimited.truncated).toBe(true);
+  expect(workLimited.files.find((file) => file.path === "b.md")).toMatchObject({ diffOmitted: "input-budget" });
+
+  const diffSearchLimited = await runDiff.computeRunDiff(run2.id, { maxFiles: 1, maxInputBytes: 100, maxDiffChars: 1 });
+  expect(diffSearchLimited.files[0]).toMatchObject({ path: "a.md", diffOmitted: "diff-budget" });
+  expect(diffSearchLimited.work?.emittedDiffChars).toBe(0);
+});

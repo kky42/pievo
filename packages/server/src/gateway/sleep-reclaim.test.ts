@@ -263,7 +263,7 @@ test("a ready pending row gets a fresh claim window after a 21-minute cross-role
     loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", requestedBy: "system", ts: isoAgo(21 * MIN),
   });
   const blocker = await store.addRun({
-    loopId: loop.id, userId: "u1", machineId, phase: "running", role: "edit", requestedBy: "owner", ts: isoAgo(21 * MIN),
+    loopId: loop.id, userId: "u1", machineId, phase: "running", role: "steer", requestedBy: "owner", ts: isoAgo(21 * MIN),
   });
   // The blocker just ended. The old pending timestamp must not make the follow-up
   // instantly look 21m stale on this very first eligible sweep.

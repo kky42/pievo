@@ -86,7 +86,7 @@ export function coerceMetricSchema(raw: unknown): MetricField[] | undefined {
   return parsed.ok ? parsed.value : undefined;
 }
 
-const UI_MAX_LEN = 20_000;
+export const UI_MAX_LEN = 20_000;
 
 /** Trim + length-bound a `ui` template (storage guard; render-time sanitizes XSS). */
 export function coerceUi(raw: unknown): string | undefined {
@@ -176,16 +176,35 @@ export async function createLoop(input: Omit<NewLoop, "id" | "createdAt" | "upda
 
 type StoreTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+/** Allocate the next 1-based history number. Every caller already holds the
+ * owning loop row lock, so the counter and run transition share one commit. */
+async function allocateRunIndexTx(tx: StoreTx, loopId: string): Promise<number> {
+  const updated = (await tx.update(loops)
+    .set({ lastRunIndex: sql`${loops.lastRunIndex} + 1` })
+    .where(eq(loops.id, loopId))
+    .returning({ runIndex: loops.lastRunIndex }))[0];
+  if (!updated) throw new Error(`cannot allocate history index for missing loop ${loopId}`);
+  return updated.runIndex;
+}
+
+async function ensureRunIndexTx(tx: StoreTx, run: Pick<Run, "loopId" | "runIndex">): Promise<number> {
+  return run.runIndex ?? allocateRunIndexTx(tx, run.loopId);
+}
+
 async function cancelPendingTx(
   tx: StoreTx,
   where: ReturnType<typeof and>,
   message: string,
   at: string,
 ): Promise<void> {
-  await tx
-    .update(runs)
-    .set({ phase: "canceled", message, ts: at, updatedAt: at })
-    .where(where);
+  const pending = await tx.select({ id: runs.id, loopId: runs.loopId, runIndex: runs.runIndex })
+    .from(runs).where(where).orderBy(asc(runs.createdAt), asc(runs.id)).for("update");
+  for (const run of pending) {
+    const runIndex = await ensureRunIndexTx(tx, run);
+    await tx.update(runs)
+      .set({ phase: "canceled", runIndex, message, ts: at, updatedAt: at })
+      .where(and(eq(runs.id, run.id), eq(runs.phase, "pending")));
+  }
 }
 
 /** Apply one loop patch while its row lock is held. This is shared by owner edits
@@ -341,7 +360,8 @@ export async function requestRunCancel(loopId: string, runId: string): Promise<R
     if (!run) return undefined;
     if (run.phase === "pending") {
       const at = nowIso();
-      return (await tx.update(runs).set({ phase: "canceled", error: "stopped by user", ts: at, updatedAt: at })
+      const runIndex = await ensureRunIndexTx(tx, run);
+      return (await tx.update(runs).set({ phase: "canceled", runIndex, error: "stopped by user", ts: at, updatedAt: at })
         .where(and(eq(runs.id, runId), eq(runs.phase, "pending"))).returning())[0] ?? run;
     }
     if (run.phase === "running" && !run.cancelRequestedAt) {
@@ -416,7 +436,7 @@ async function enqueueRunTx(
           requestedBy,
           ts: at,
           updatedAt: at,
-          ...(request.requestedBy === "owner" && request.role === "edit"
+          ...(request.requestedBy === "owner" && request.role === "steer"
             ? { requestText: request.requestText ?? null }
             : {}),
         })
@@ -436,7 +456,7 @@ async function enqueueRunTx(
     phase: "pending",
     role: request.role,
     requestedBy: request.requestedBy,
-    requestText: request.role === "edit" ? request.requestText ?? null : null,
+    requestText: request.role === "steer" ? request.requestText ?? null : null,
     ...runTimes(at),
   };
   return { state: "queued", run: (await tx.insert(runs).values(row).returning())[0]! };
@@ -574,14 +594,31 @@ async function terminalLifecycleTx(
 export async function addRun(
   input: Omit<NewRun, "id" | "createdAt" | "updatedAt"> & { id?: string; createdAt?: string; updatedAt?: string },
 ): Promise<Run> {
-  const at = input.ts;
-  const row: NewRun = {
-    ...input,
-    id: input.id ?? randomUUID(),
-    createdAt: input.createdAt ?? at,
-    updatedAt: input.updatedAt ?? at,
-  };
-  return (await db.insert(runs).values(row).returning())[0]!;
+  return db.transaction(async (tx) => {
+    const loop = (await tx.select().from(loops).where(eq(loops.id, input.loopId)).for("update"))[0];
+    if (!loop) throw new Error(`cannot add run for missing loop ${input.loopId}`);
+    let runIndex = input.runIndex;
+    if (runIndex != null) {
+      await tx.update(loops).set({ lastRunIndex: sql`greatest(${loops.lastRunIndex}, ${runIndex})` }).where(eq(loops.id, loop.id));
+    } else if (input.phase !== "pending") {
+      runIndex = await allocateRunIndexTx(tx, loop.id);
+    }
+    const executing = input.phase === "running";
+    const at = input.ts;
+    const row: NewRun = {
+      ...input,
+      ...(runIndex != null ? { runIndex } : {}),
+      ...(executing ? {
+        agent: input.agent ?? loop.agent,
+        model: input.model ?? loop.model,
+        reasoningEffort: input.reasoningEffort ?? loop.reasoningEffort,
+      } : {}),
+      id: input.id ?? randomUUID(),
+      createdAt: input.createdAt ?? at,
+      updatedAt: input.updatedAt ?? at,
+    };
+    return (await tx.insert(runs).values(row).returning())[0]!;
+  });
 }
 
 export async function getRun(id: string): Promise<Run | undefined> {
@@ -873,10 +910,16 @@ export async function transitionRunPhase(
     const loop = (await tx.select({ id: loops.id }).from(loops).where(eq(loops.id, observed.loopId)).for("update"))[0];
     if (!loop) return undefined;
     const at = typeof patch.ts === "string" ? patch.ts : nowIso();
+    const currentRun = (await tx.select().from(runs)
+      .where(and(eq(runs.id, id), eq(runs.loopId, observed.loopId), eq(runs.phase, expected)))
+      .limit(1).for("update"))[0];
+    if (!currentRun) return undefined;
+    const terminal = patch.phase === "done" || patch.phase === "error" || patch.phase === "canceled";
+    const runIndex = terminal ? await ensureRunIndexTx(tx, currentRun) : currentRun.runIndex;
     const run = (
       await tx
         .update(runs)
-        .set({ ...patch, updatedAt: at })
+        .set({ ...patch, ...(runIndex != null ? { runIndex } : {}), updatedAt: at })
         .where(and(eq(runs.id, id), eq(runs.loopId, observed.loopId), eq(runs.phase, expected)))
         .returning()
     )[0];
@@ -1001,9 +1044,15 @@ export async function rejectTerminalReport(input: {
       return { state: "telemetry-rejected" as const, run, loop: current, receipt, failureStreak: 0 as const, autoPaused: false as const };
     }
 
+    const target = (await tx.select().from(runs)
+      .where(and(eq(runs.id, input.runId), eq(runs.loopId, input.loopId), eq(runs.phase, "running")))
+      .limit(1).for("update"))[0];
+    if (!target) return { state: "run-not-terminalizable" as const };
+    const runIndex = await ensureRunIndexTx(tx, target);
     const run = (await tx.update(runs)
       .set({
         phase: "error",
+        runIndex,
         error: input.incident.reason,
         reportIncident: input.incident,
         ts: input.incident.at,
@@ -1051,11 +1100,16 @@ export async function finalizeRunningRun(
       const active = await activeRunForMutationTx(tx, loopId, runId, leaseTokenHash, "report");
       if (active.state !== "active") return undefined;
     }
+    const target = (await tx.select().from(runs)
+      .where(and(eq(runs.id, runId), eq(runs.loopId, loopId), eq(runs.phase, "running")))
+      .limit(1).for("update"))[0];
+    if (!target) return undefined;
+    const runIndex = await ensureRunIndexTx(tx, target);
     const at = typeof runPatch.ts === "string" ? runPatch.ts : nowIso();
     const run = (
       await tx
         .update(runs)
-        .set({ ...runPatch, updatedAt: at })
+        .set({ ...runPatch, runIndex, updatedAt: at })
         .where(and(eq(runs.id, runId), eq(runs.loopId, loopId), eq(runs.phase, "running")))
         .returning()
     )[0];
@@ -1089,7 +1143,7 @@ export async function reclaimRun(
     if (!observed) return undefined;
     const loop = (await tx.select().from(loops).where(eq(loops.id, observed.loopId)).for("update"))[0];
     if (!loop) return undefined;
-    const currentRun = (await tx.select({ phase: runs.phase }).from(runs).where(eq(runs.id, runId)).limit(1))[0];
+    const currentRun = (await tx.select().from(runs).where(eq(runs.id, runId)).limit(1).for("update"))[0];
     if (currentRun?.phase !== expected) return undefined;
     if (expected === "running") {
       await tx
@@ -1097,10 +1151,11 @@ export async function reclaimRun(
         .set({ state: "terminal-grace", expiresAt: new Date(Date.parse(at) + graceMs).toISOString() })
         .where(and(eq(runLeases.runId, runId), eq(runLeases.state, "active")));
     }
+    const runIndex = await ensureRunIndexTx(tx, currentRun);
     const reclaimed = (
       await tx
         .update(runs)
-        .set({ phase: "error", error: reason, ts: at, updatedAt: at })
+        .set({ phase: "error", runIndex, error: reason, ts: at, updatedAt: at })
         .where(and(eq(runs.id, runId), eq(runs.phase, expected)))
         .returning()
     )[0];
@@ -1153,11 +1208,16 @@ export async function reconcileReclaimedRun(
         .for("update")
     )[0];
     if (!lease) return undefined;
+    const target = (await tx.select().from(runs)
+      .where(and(eq(runs.id, runId), eq(runs.loopId, loopId), eq(runs.phase, "error")))
+      .limit(1).for("update"))[0];
+    if (!target) return undefined;
+    const runIndex = await ensureRunIndexTx(tx, target);
     const at = typeof runPatch.ts === "string" ? runPatch.ts : nowIso();
     const run = (
       await tx
         .update(runs)
-        .set({ ...runPatch, updatedAt: at })
+        .set({ ...runPatch, runIndex, updatedAt: at })
         .where(and(eq(runs.id, runId), eq(runs.loopId, loopId), eq(runs.phase, "error")))
         .returning()
     )[0];
@@ -1190,7 +1250,7 @@ export type EnqueueRunResult =
  *  - a running role may retain one pending follow-up,
  *  - pending requests coalesce in place (stable run id),
  *  - owner authority promotes an existing system row and never downgrades,
- *  - latest owner edit text wins,
+ *  - latest owner steer text wins,
  *  - paused loops accept owner work while recurring system work stays stopped.
  */
 export async function enqueueRun(loopId: string, request: EnqueueRunRequest): Promise<EnqueueRunResult> {
@@ -1334,19 +1394,29 @@ export async function claimReadyRunForMachine(machineId: string, at = nowIso()):
         or(eq(loops.enabled, true), eq(runs.requestedBy, "owner")),
         isNull(loops.deleteRequestedAt),
       ))
-      .orderBy(sql`case ${runs.role} when 'edit' then 0 when 'evolve' then 1 else 2 end`, asc(runs.createdAt))
+      .orderBy(sql`case ${runs.role} when 'steer' then 0 when 'evolve' then 1 else 2 end`, asc(runs.createdAt))
       .limit(1))[0];
     if (!next) return undefined;
     let loop = (await tx.select().from(loops).where(eq(loops.id, next.loop.id)).for("update"))[0];
     const candidate = (await tx.select().from(runs).where(eq(runs.id, next.run.id)).limit(1).for("update"))[0];
     if (!loop || !candidate || candidate.phase !== "pending" || candidate.cancelRequestedAt || loop.deleteRequestedAt || (!loop.enabled && candidate.requestedBy !== "owner")) return undefined;
-    const run = (await tx.update(runs).set({ phase: "running", agent: loop.agent, heartbeatAt: null, ts: at, updatedAt: at })
+    const runIndex = await ensureRunIndexTx(tx, candidate);
+    const run = (await tx.update(runs).set({
+      phase: "running",
+      runIndex,
+      agent: loop.agent,
+      model: loop.model,
+      reasoningEffort: loop.reasoningEffort,
+      heartbeatAt: null,
+      ts: at,
+      updatedAt: at,
+    })
       .where(and(eq(runs.id, candidate.id), eq(runs.phase, "pending"), isNull(runs.cancelRequestedAt))).returning())[0];
     if (!run) return undefined;
     if (run.role === "exec" && loop.scheduleMode === "continuous" && loop.nextCadenceAt != null) {
       loop = (await tx.update(loops).set({ nextCadenceAt: null, updatedAt: at }).where(eq(loops.id, loop.id)).returning())[0]!;
     }
-    const structural = run.role === "evolve" || run.role === "edit";
+    const structural = run.role === "evolve" || run.role === "steer";
     await tx.insert(runLeases).values({ tokenHash, runId: run.id, loopId: loop.id, machineId, role: run.role,
       allowControl: structural || loop.allowControl, canSetUi: structural, canSetSchema: structural, createdAt: at });
     return { run, loop, runToken };
@@ -1397,7 +1467,7 @@ export async function lastTerminalRunAt(loopId: string): Promise<string | null> 
 }
 
 /** Newest scheduled (exec) run for a loop — the last-result anchor that a later
- *  evolve/edit must never mask. Null ⇒ no exec run yet. */
+ *  evolve/steer must never mask. Null ⇒ no exec run yet. */
 export async function lastExecRun(loopId: string): Promise<Run | undefined> {
   return (
     await db
@@ -1418,7 +1488,7 @@ export async function countRuns(loopId: string): Promise<number> {
  * Count consecutive FAILED exec runs ending at the loop's most recent finalized
  * exec run. Drives the failure-alert anti-spam cadence (`shouldNotifyFailure`)
  * entirely from persisted state — no in-memory counter to reset on deploy. Only
- * `exec` runs count: evolve/edit are internal and never produce user-facing
+ * `exec` runs count: evolve/steer are internal and never produce user-facing
  * failure noise. Canceled / still-open runs are ignored (neither success nor
  * failure), so a user-stopped run doesn't break or extend the streak.
  *
@@ -1570,10 +1640,11 @@ export async function reclaimUnclaimedPendingRun(
     )[0];
     const eligibleAt = Math.max(Date.parse(current.updatedAt), blocker ? Date.parse(blocker.ts) || 0 : 0);
     if (running || Date.parse(at) - eligibleAt <= timeoutMs) return undefined;
+    const runIndex = await ensureRunIndexTx(tx, current);
     const reclaimed = (
       await tx
         .update(runs)
-        .set({ phase: "error", error: reason, ts: at, updatedAt: at })
+        .set({ phase: "error", runIndex, error: reason, ts: at, updatedAt: at })
         .where(and(
           eq(runs.id, runId),
           eq(runs.phase, "pending"),
@@ -1620,9 +1691,10 @@ export async function expirePendingRun(
     if (!current || Date.parse(at) - Date.parse(current.createdAt) <= maxLifetimeMs) return false;
     const machine = (await tx.select({ online: machines.online }).from(machines).where(eq(machines.id, current.machineId)).limit(1))[0];
     if (machine?.online) return false;
+    const runIndex = await ensureRunIndexTx(tx, current);
     const canceled = await tx
       .update(runs)
-      .set({ phase: "canceled", message, ts: at, updatedAt: at })
+      .set({ phase: "canceled", runIndex, message, ts: at, updatedAt: at })
       .where(and(
         eq(runs.id, runId),
         eq(runs.phase, "pending"),
@@ -2058,6 +2130,14 @@ export async function blobExists(hash: string): Promise<boolean> {
   return !!(await db.select({ hash: blobs.hash }).from(blobs).where(eq(blobs.hash, hash)))[0];
 }
 
+/** Verified byte lengths recorded at blob ingress, used to budget reads before
+ * touching the byte store. Missing metadata is intentionally not estimated. */
+export async function blobSizes(hashes: string[]): Promise<Map<string, number>> {
+  if (!hashes.length) return new Map();
+  const rows = await db.select({ hash: blobs.hash, size: blobs.size }).from(blobs).where(inArray(blobs.hash, [...new Set(hashes)]));
+  return new Map(rows.map((row) => [row.hash, row.size]));
+}
+
 /** Record a blob's metadata (idempotent — same hash ⇒ same bytes, so a no-op on
  *  conflict). `meta` is the parsed front-matter subset for a non-binary product
  *  (null for binary / unparsed); computed once at ingress and reused on every
@@ -2226,17 +2306,16 @@ export async function getRunSnapshot(runId: string): Promise<RunSnapshot | undef
   return (await db.select().from(runSnapshots).where(eq(runSnapshots.runId, runId)))[0];
 }
 
-/** The most recent snapshot for this loop strictly before `beforeTs` (the prior
- *  run's artifact state — the diff baseline). Joins run_snapshots to runs for the ts
- *  ordering; undefined when there is no earlier snapshotted run. */
-export async function prevRunSnapshot(loopId: string, beforeTs: string): Promise<RunSnapshot | undefined> {
+/** The most recent indexed snapshot before one run. History order, not a
+ * timestamp tie, is the diff baseline. */
+export async function prevRunSnapshot(loopId: string, beforeRunIndex: number): Promise<RunSnapshot | undefined> {
   const row = (
     await db
       .select({ snap: runSnapshots })
       .from(runSnapshots)
       .innerJoin(runs, eq(runSnapshots.runId, runs.id))
-      .where(and(eq(runSnapshots.loopId, loopId), lt(runs.ts, beforeTs)))
-      .orderBy(desc(runs.ts))
+      .where(and(eq(runSnapshots.loopId, loopId), isNotNull(runs.runIndex), lt(runs.runIndex, beforeRunIndex)))
+      .orderBy(desc(runs.runIndex))
       .limit(1)
   )[0];
   return row?.snap;

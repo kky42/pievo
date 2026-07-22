@@ -32,13 +32,13 @@ describe('LoopDetailView edit-mode heading', () => {
 
 /**
  * Pievo runs more than one coding agent (claude-code, codex, more later), so
- * GENERIC edit copy must be agent-neutral ("your coding agent"), never hardcode
+ * GENERIC steer copy must be agent-neutral ("your coding agent"), never hardcode
  * "Claude Code". The AGENT_LABEL maps (the ACTUAL recorded/selectable agent — the
  * detail-page chip and the LoopForm agent <select> options) are exempt: they are
  * factual labels, not generic copy.
  */
-describe('agent-neutral edit copy', () => {
-  it('never hardcodes "Claude Code" in generic edit prose', () => {
+describe('agent-neutral steer copy', () => {
+  it('never hardcodes "Claude Code" in generic steer prose', () => {
     // strip the AGENT_LABEL map + its fallback default (the factual per-loop chip)
     const stripAgentLabel = (s: string) => s.replace(/AGENT_LABEL[^\n]*Claude Code[^\n]*\n/g, '').replace(/\?\?\s*'Claude Code'/g, '')
     expect(stripAgentLabel(src)).not.toMatch(/Claude Code/)
@@ -48,7 +48,7 @@ describe('agent-neutral edit copy', () => {
   })
 
   it('uses agent-neutral wording for the dispatch composer', () => {
-    expect(src).toMatch(/Edit with your coding agent/)
+    expect(src).toMatch(/Steer with your coding agent/)
     expect(src).toMatch(/Dispatch to your coding agent/)
   })
 
@@ -68,10 +68,10 @@ describe('agent-neutral edit copy', () => {
  */
 describe('copy-prompt path', () => {
   it('keeps the dispatch path and adds a Copy prompt affordance', () => {
-    expect(src).toMatch(/onRequestEdit/) // dispatch path still wired
-    expect(src).toMatch(/copyEditPrompt/) // added copy handler
+    expect(src).toMatch(/onRequestSteer/) // dispatch path still wired
+    expect(src).toMatch(/copySteerPrompt/) // added copy handler
     expect(src).toMatch(/Copy prompt/) // added button label
-    expect(src).toMatch(/buildEditPrompt/) // uses the pure helper
+    expect(src).toMatch(/buildSteerPrompt/) // uses the pure helper
     expect(src).toMatch(/loopDir\(job\.taskFile\)/) // derives the dir from the task file
   })
 })

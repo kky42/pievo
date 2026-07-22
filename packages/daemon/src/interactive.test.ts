@@ -77,6 +77,33 @@ describe("runInteractive — text sink (new server renders TOON in `text`)", () 
     expect(cap.stdout()).toBe(toon + "\n");
   });
 
+  test("steer forwards an inline message and inlines --message-file content", async () => {
+    const dir = tmp();
+    const messagePath = path.join(dir, "steer.txt");
+    writeFileSync(messagePath, "latest owner instruction\n");
+    const { fetchFn, calls } = stub(({ url, argv }) =>
+      url.includes("/api/machine/cli") && argv[0] === "steer"
+        ? { ok: true, body: { text: "steer queued", exitCode: 0 } }
+        : { ok: false, status: 404, body: {} },
+    );
+    const cap = capture({ fetchImpl: fetchFn });
+
+    expect(await runInteractive(["steer", "loop-1", "--message", "change cadence"], cap)).toBe(0);
+    expect(await runInteractive(["steer", "loop-1", "--message-file", messagePath], cap)).toBe(0);
+    expect(calls.map((call) => call.argv)).toEqual([
+      ["steer", "loop-1", "--message", "change cadence"],
+      ["steer", "loop-1", "--message", "latest owner instruction\n"],
+    ]);
+  });
+
+  test("steer requires exactly one loop and one message source", async () => {
+    const cap = capture();
+    expect(await runInteractive(["steer", "loop-1"], cap)).toBe(2);
+    expect(await runInteractive(["steer", "loop-1", "extra", "--message", "a"], cap)).toBe(2);
+    expect(await runInteractive(["steer", "loop-1", "--message", "a", "--message-file", "b"], cap)).toBe(2);
+    expect(cap.stderr()).toContain("usage: pievo steer");
+  });
+
   test("a too-old unified server (200, no `text`) surfaces the definitive SERVER_TOO_OLD error", async () => {
     // Batch 7 retired the structured-render fallback: no `text` → a definitive error.
     const { fetchFn } = stub(({ url, argv }) =>

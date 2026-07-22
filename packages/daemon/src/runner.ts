@@ -21,8 +21,10 @@ export const RUN_CANCEL_REASON = "pievo:run-cancel";
 
 export interface Delivery {
   runId: string;
+  /** Stable 1-based loop history index allocated atomically at claim. */
+  runIndex: number;
   runToken: string;
-  role: "exec" | "evolve" | "edit";
+  role: "exec" | "evolve" | "steer";
   loop: {
     id: string;
     name: string;
@@ -54,14 +56,14 @@ export interface ReportBody {
   sessionId?: string;
   /** Provider-normalized token usage, summed across every subprocess attempt. */
   usage?: TokenUsage;
-  /** Latest content of the loop's task file (the durable context+log doc). */
+  /** Latest content of the loop's authoritative standing-instruction file. */
   taskFileContent?: string;
   error?: string;
   finalText?: string;
 }
 
-/** Daemon-side cap on the synced task-file body — it's a growing log doc, so a
- *  huge one is tailed (recent entries are what the detail view is for). */
+/** Daemon-side cap on the synced task-file body. A pathological oversized Spec
+ * is tailed rather than making the terminal report unbounded. */
 const TASKFILE_CAP = 256 * 1024;
 
 const SELF_SCHEDULING_TOOLS = "ScheduleWakeup,CronCreate,CronList,CronDelete";
@@ -285,7 +287,7 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
     taskFileContent: readTaskFile(workdir, d.loop.taskFile, roots),
     error,
     // Every role sends finalText: the server only uses it as a message FALLBACK
-    // when the run didn't `pievo report --message` itself, and evolve/edit are
+    // when the run didn't `pievo report --message` itself, and evolve/steer are
     // notification-exempt server-side — so an evolve pass that forgets to report
     // still leaves a readable run-log line instead of a blank timeline block.
     finalText,

@@ -1,12 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import type { ChannelSummary, CodingAgent, JobDetail, RunSummary } from '../types'
-import { buildEditPrompt, loopDir } from '../lib/editPrompt'
+import { buildSteerPrompt, loopDir } from '../lib/steerPrompt'
 import { cronText, dotColor, dotLabel, dur, fmt, rel, tsShort, until } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { DAEMON_UPGRADE_REQUIRED, daemonStopSupport, deriveLoopLifecycle, lifecycleDisplay } from '../lib/lifecycleUi'
 import { setActiveTeamCookie } from '../lib/teamCookie'
-import { deleteJob, evolveJob, getJobDetail, loadOlderRuns, patchJob, pauseJob, requestEdit, runJob, startJob, stopJob } from '../server/loopApi'
+import { deleteJob, evolveJob, getJobDetail, loadOlderRuns, patchJob, pauseJob, requestSteer, runJob, startJob, stopJob } from '../server/loopApi'
 import { listChannels } from '../server/notifyFns'
 import { LoopFilesPanel } from './LoopFilesPanel'
 import { LoopForm, type LoopFormHandle } from './LoopForm'
@@ -19,7 +19,7 @@ const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code',
 
 /** Composer starters - one per editable dimension, so a blank box never stalls
  *  the owner. Clicking seeds the instruction; the agent handles the rest. */
-const EDIT_SEEDS = [
+const STEER_SEEDS = [
   { label: 'Change the schedule', seed: 'Change the schedule: ' },
   { label: 'Adjust what it does', seed: 'Change what this loop does: ' },
   { label: 'Improve the dashboard', seed: 'Improve the dashboard: ' },
@@ -44,7 +44,7 @@ const LoopView = lazy(() => import('./LoopView').then((m) => ({ default: m.LoopV
  * the owner describes the change while looking at the spec/dashboard it applies
  * to. Dispatch swaps the composer for a live status card under the header
  * (queued → applying → settled with report + files + a link to
- * the edit run); the page keeps polling, so the applied change surfaces around
+ * the steer run); the page keeps polling, so the applied change surfaces around
  * the card. Settings remains a full-page field-form takeover.
  */
 export function LoopDetailView({ id }: { id: string }) {
@@ -54,14 +54,14 @@ export function LoopDetailView({ id }: { id: string }) {
   const [err, setErr] = useState<string | null>(null) // fatal load error - replaces the whole view
   const [actionErr, setActionErr] = useState<string | null>(null) // inline action error - never nukes the view
   const [editing, setEditing] = useState(false) // manual field form (LoopForm) - the demoted fallback
-  const [editVia, setEditVia] = useState(false) // primary: the inline hand-to-your-coding-agent composer
-  const [editInstruction, setEditInstruction] = useState('')
+  const [steerVia, setSteerVia] = useState(false) // primary: the inline hand-to-your-coding-agent composer
+  const [steerInstruction, setSteerInstruction] = useState('')
   const [promptCopied, setPromptCopied] = useState(false) // copy-prompt path: adjust the loop yourself, no dispatch
-  const [editDispatched, setEditDispatched] = useState(false) // dispatched → the live status card watches the edit run
-  const [editRunId, setEditRunId] = useState<string | null>(null)
-  const editBoxRef = useRef<HTMLTextAreaElement>(null)
+  const [steerDispatched, setSteerDispatched] = useState(false) // dispatched → the live status card watches the steer run
+  const [steerRunId, setSteerRunId] = useState<string | null>(null)
+  const steerBoxRef = useRef<HTMLTextAreaElement>(null)
   const [machinesOpen, setMachinesOpen] = useState(false)
-  const [pending, setPending] = useState<null | 'run' | 'evolve' | 'save' | 'lifecycle' | 'edit'>(null)
+  const [pending, setPending] = useState<null | 'run' | 'evolve' | 'save' | 'lifecycle' | 'steer'>(null)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [flash, setFlash] = useFlash()
   const formRef = useRef<LoopFormHandle>(null)
@@ -92,11 +92,11 @@ export function LoopDetailView({ id }: { id: string }) {
   useEffect(() => {
     setDetail(null)
     setEditing(false)
-    setEditVia(false)
-    setEditInstruction('')
+    setSteerVia(false)
+    setSteerInstruction('')
     setPromptCopied(false)
-    setEditDispatched(false)
-    setEditRunId(null)
+    setSteerDispatched(false)
+    setSteerRunId(null)
     setConfirmingDelete(false)
     setOlder([])
     void load()
@@ -179,18 +179,18 @@ export function LoopDetailView({ id }: { id: string }) {
       setPending(null)
     }
   }
-  async function onRequestEdit() {
-    const instruction = editInstruction.trim()
+  async function onRequestSteer() {
+    const instruction = steerInstruction.trim()
     if (!instruction) return
     setActionErr(null)
-    setPending('edit')
+    setPending('steer')
     try {
-      const r = await requestEdit({ data: { id, instruction } })
-      if (r.error) return setActionErr(`Couldn't queue the edit: ${r.error}`)
-      setEditRunId(r.runId ?? null)
-        setEditDispatched(true)
-      setEditVia(false) // composer collapses; the live status card takes over
-      setEditInstruction('')
+      const r = await requestSteer({ data: { id, instruction } })
+      if (r.error) return setActionErr(`Couldn't queue the steer pass: ${r.error}`)
+      setSteerRunId(r.runId ?? null)
+      setSteerDispatched(true)
+      setSteerVia(false) // composer collapses; the live status card takes over
+      setSteerInstruction('')
       await refreshAll()
     } finally {
       setPending(null)
@@ -235,19 +235,19 @@ export function LoopDetailView({ id }: { id: string }) {
   const lifecycleText = lifecycleDisplay(detail)
   const protocolSupport = daemonStopSupport(detail.machine.daemonProtocol)
   const onMachine = detail.machine.name ? `“${detail.machine.name}”` : 'the bound machine'
-  // The dispatched edit run (once the poll surfaces it) drives the status card.
-  const editRun = editDispatched && editRunId ? runs.find((r) => r.id === editRunId) : undefined
-  const editSettled = !!editRun && !editRun.queued && !editRun.running
-  const dismissEdit = () => {
-    setEditDispatched(false)
-    setEditRunId(null)
+  // The dispatched steer run (once the poll surfaces it) drives the status card.
+  const steerRun = steerDispatched && steerRunId ? runs.find((r) => r.id === steerRunId) : undefined
+  const steerSettled = !!steerRun && !steerRun.queued && !steerRun.running
+  const dismissSteer = () => {
+    setSteerDispatched(false)
+    setSteerRunId(null)
   }
   // The loop's on-disk folder — where the owner runs their own coding agent for
   // the copy-prompt path (null ⇒ generic instruction, no fabricated path).
-  const editDir = loopDir(job.taskFile)
-  const copyEditPrompt = async () => {
+  const steerDir = loopDir(job.taskFile)
+  const copySteerPrompt = async () => {
     try {
-      await navigator.clipboard.writeText(buildEditPrompt({ loopId: id, loopName: s.name, instruction: editInstruction }))
+      await navigator.clipboard.writeText(buildSteerPrompt({ loopId: id, loopName: s.name, instruction: steerInstruction }))
       setPromptCopied(true)
       setTimeout(() => setPromptCopied(false), 4000)
     } catch {
@@ -286,10 +286,10 @@ export function LoopDetailView({ id }: { id: string }) {
         <button
           className={btn}
           disabled={actionDisabled || !canRunWork}
-          title="Dispatch or copy a prompt for an owner-requested edit"
-          onClick={() => setEditVia(true)}
+          title="Dispatch or copy a prompt for an owner-requested steer"
+          onClick={() => setSteerVia(true)}
         >
-          Agent edit
+          Steer
         </button>
         <button
           className={btn}
@@ -328,39 +328,39 @@ export function LoopDetailView({ id }: { id: string }) {
         </div>
       )}
 
-      {editVia && !deleting && (
+      {steerVia && !deleting && (
         <div
           className="mt-4 border-t border-hairline pt-4"
           onKeyDown={(e) => {
-            if (e.key === 'Escape' && pending !== 'edit') {
+            if (e.key === 'Escape' && pending !== 'steer') {
               e.stopPropagation()
-              setEditVia(false)
+              setSteerVia(false)
             }
           }}
         >
           <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-            <span className="text-body font-medium text-display">Edit with your coding agent</span>
+            <span className="text-body font-medium text-display">Steer with your coding agent</span>
             <span className="text-meta text-secondary">One agent pass on {onMachine} · spends credits</span>
           </div>
           <textarea
-            ref={editBoxRef}
+            ref={steerBoxRef}
             autoFocus
-            value={editInstruction}
-            onChange={(e) => setEditInstruction(e.target.value)}
+            value={steerInstruction}
+            onChange={(e) => setSteerInstruction(e.target.value)}
             onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && editInstruction.trim() && pending !== 'edit') void onRequestEdit()
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && steerInstruction.trim() && pending !== 'steer') void onRequestSteer()
             }}
             rows={3}
             placeholder="e.g. run at 9am on weekdays instead, and also check coffee stock"
             className="mt-3 w-full resize-y rounded-control border border-wire bg-raised p-3 font-mono text-label leading-relaxed text-primary outline-none transition-shadow placeholder:text-disabled focus:border-transparent focus:shadow-focus"
           />
-          {!editInstruction.trim() && (
+          {!steerInstruction.trim() && (
             <div className="mt-2 flex flex-wrap gap-1.5">
-              {EDIT_SEEDS.map((sd) => (
+              {STEER_SEEDS.map((sd) => (
                 <button
                   key={sd.label}
                   type="button"
-                  onClick={() => { setEditInstruction(sd.seed); editBoxRef.current?.focus() }}
+                  onClick={() => { setSteerInstruction(sd.seed); steerBoxRef.current?.focus() }}
                   className="cursor-pointer rounded-full border border-wire bg-surface px-3 py-1 text-label font-medium text-secondary transition-colors hover:bg-raised hover:text-display"
                 >
                   {sd.label}
@@ -369,20 +369,20 @@ export function LoopDetailView({ id }: { id: string }) {
             </div>
           )}
           <div className="mt-3.5 flex flex-wrap items-center gap-x-2.5 gap-y-2">
-            <button className={btnCost} disabled={pending === 'edit' || !editInstruction.trim()} title={offlineHint} onClick={() => void onRequestEdit()}>
-              {pending === 'edit' ? 'Dispatching…' : 'Dispatch to your coding agent'}
+            <button className={btnCost} disabled={pending === 'steer' || !steerInstruction.trim()} title={offlineHint} onClick={() => void onRequestSteer()}>
+              {pending === 'steer' ? 'Dispatching…' : 'Dispatch to your coding agent'}
             </button>
-            <button type="button" className={btn} disabled={pending === 'edit'} onClick={() => void copyEditPrompt()}>
+            <button type="button" className={btn} disabled={pending === 'steer'} onClick={() => void copySteerPrompt()}>
               {promptCopied ? '✓ Prompt copied' : 'Copy prompt'}
             </button>
-            <button className={btn} disabled={pending === 'edit'} onClick={() => setEditVia(false)}>Cancel</button>
+            <button className={btn} disabled={pending === 'steer'} onClick={() => setSteerVia(false)}>Cancel</button>
             <span className="hidden text-caption text-disabled sm:inline">⌘↩ dispatch · esc cancel</span>
           </div>
           <div className="mt-2 text-caption leading-snug text-disabled">
             {promptCopied ? (
               <span className="text-secondary">
                 ✓ Copied · run your coding agent{' '}
-                {editDir ? <>in <code className="break-all font-mono text-primary">{editDir}</code></> : "in the loop’s local directory on this machine"}{' '}
+                {steerDir ? <>in <code className="break-all font-mono text-primary">{steerDir}</code></> : "in the loop’s local directory on this machine"}{' '}
                 and paste the prompt to adjust the loop yourself.
               </span>
             ) : (
@@ -451,7 +451,7 @@ export function LoopDetailView({ id }: { id: string }) {
         {asleep ? 'seems to be asleep or offline' : 'offline'}
       </span>
       <span className="text-meta text-secondary">
-        {asleep ? '- queued work starts automatically when it reconnects.' : '- manual run, evolve, and edit requests remain safely queued.'}
+        {asleep ? '- queued work starts automatically when it reconnects.' : '- manual run, evolve, and steer requests remain safely queued.'}
         {detail.machine.lastSeen ? ` Last seen ${rel(detail.machine.lastSeen)}.` : ''}
       </span>
       <button
@@ -573,55 +573,55 @@ export function LoopDetailView({ id }: { id: string }) {
         </div>
       </header>
 
-      {/* dispatched edit - the live status card (queued → applying → settled).
+      {/* dispatched steer - the live status card (queued → applying → settled).
           The page stays live around it, so the applied change (new schedule,
           rewritten spec, fresh dashboard) surfaces as the card settles. */}
-      {editDispatched && (
+      {steerDispatched && (
         <section
           className="mt-6 rounded-card border border-hairline bg-surface px-6 py-5 shadow-card"
           style={{ animation: 'fadeIn 0.2s ease-out' }}
           aria-live="polite"
         >
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            {!editRun || editRun.queued ? (
+            {!steerRun || steerRun.queued ? (
               <span className="inline-flex items-center gap-2.5 text-body text-secondary">
                 <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-disabled" />
-                <span className="font-medium text-primary">Edit queued</span>
+                <span className="font-medium text-primary">Steer queued</span>
                 <span>waiting for {onMachine} and higher-priority work…</span>
               </span>
-            ) : editRun.running ? (
+            ) : steerRun.running ? (
               <span className="inline-flex min-w-0 items-center gap-2.5 text-body text-secondary">
                 <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={runPulseStyle} />
-                <span className="shrink-0 font-medium text-primary">Applying your edit</span>
+                <span className="shrink-0 font-medium text-primary">Applying your steer</span>
               </span>
             ) : (
               <span className="inline-flex min-w-0 items-center gap-2 text-body">
-                <span aria-hidden className="size-2.5 shrink-0 rounded-[2px]" style={{ background: dotColor(editRun) }} />
-                <span className="font-medium" style={{ color: dotColor(editRun) }}>
-                  {editRun.canceled ? 'Edit canceled' : editRun.phase === 'error' ? 'Edit failed' : 'Edit applied'}
+                <span aria-hidden className="size-2.5 shrink-0 rounded-[2px]" style={{ background: dotColor(steerRun) }} />
+                <span className="font-medium" style={{ color: dotColor(steerRun) }}>
+                  {steerRun.canceled ? 'Steer canceled' : steerRun.phase === 'error' ? 'Steer failed' : 'Steer applied'}
                 </span>
-                {editRun.error && <span className="truncate text-secondary">· {editRun.error}</span>}
+                {steerRun.error && <span className="truncate text-secondary">· {steerRun.error}</span>}
               </span>
             )}
             <div className="ml-auto flex items-center gap-3.5">
-              {editRun && (
+              {steerRun && (
                 <Link
                   to="/loops/$loopId/runs/$runId"
-                  params={{ loopId: id, runId: editRun.id }}
+                  params={{ loopId: id, runId: steerRun.id }}
                   className="text-label font-medium text-interactive underline underline-offset-2 transition-colors hover:text-display"
                 >
                   View run →
                 </Link>
               )}
-              <button type="button" onClick={dismissEdit} className={btnQuiet}>
-                {editSettled ? 'Done' : 'Hide'}
+              <button type="button" onClick={dismissSteer} className={btnQuiet}>
+                {steerSettled ? 'Done' : 'Hide'}
               </button>
             </div>
           </div>
 
-          {editSettled && editRun.message && (
+          {steerSettled && steerRun.message && (
             <div className="mt-3.5">
-              <Pre>{editRun.message}</Pre>
+              <Pre>{steerRun.message}</Pre>
             </div>
           )}
         </section>
@@ -695,7 +695,7 @@ function EditHead({ name, onBack }: { name: string; onBack: () => void }) {
       </h1>
       <p className="mt-1.5 max-w-[640px] text-meta leading-snug text-secondary">
         Loop configuration, notifications, and push channel, saved directly - no agent pass or credits. For changes in plain words, use
-        Agent edit instead.
+        Steer instead.
       </p>
     </div>
   )

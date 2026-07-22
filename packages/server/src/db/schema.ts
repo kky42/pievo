@@ -57,7 +57,7 @@ export interface RunUsage {
 export type NotifyPolicy = "always" | "auto" | "never";
 export type ScheduleMode = "cron" | "continuous";
 export type RunPhase = "pending" | "running" | "done" | "error" | "canceled";
-export type RunRole = "exec" | "evolve" | "edit";
+export type RunRole = "exec" | "evolve" | "steer";
 /** Queue authority, not scheduling provenance. Owner intent may promote a
  * system row, and no later system event may downgrade it. */
 export type RunRequester = "owner" | "system";
@@ -157,7 +157,7 @@ export const loops = pgTable(
     timezone: text("timezone"),
     /** Absolute project dir ON THE MACHINE the agent runs in (cwd). Null ⇒ daemon scratch dir. */
     workdir: text("workdir"),
-    /** Path ON THE MACHINE to the loop's durable context+log doc. */
+    /** Path ON THE MACHINE to the loop's authoritative standing-instruction file. */
     taskFile: text("task_file"),
     /** Latest synced snapshot of `taskFile`'s content — the daemon pushes it on
      *  report (capped; tail if huge). Null ⇒ never synced (no run yet / no file). */
@@ -208,6 +208,8 @@ export const loops = pgTable(
     nextCadenceAt: text("next_cadence_at"),
     /** Terminal exec count at last evolution (drives the periodic evolve trigger). */
     evolvedRunCount: integer("evolved_run_count"),
+    /** Last history number assigned under this loop's row lock. */
+    lastRunIndex: integer("last_run_index").notNull().default(0),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
@@ -228,15 +230,19 @@ export const runs = pgTable(
     loopId: text("loop_id").notNull(),
     userId: text("user_id").notNull(),
     machineId: text("machine_id").notNull(),
-    /** Execution agent captured atomically at claim. Pending and pre-migration rows are null. */
+    /** Execution profile captured atomically at claim. Pending/unclaimed rows are null. */
     agent: text("agent", { enum: CODING_AGENTS }),
+    model: text("model"),
+    reasoningEffort: text("reasoning_effort"),
+    /** 1-based execution/terminal order, assigned at claim or unclaimed terminalization. */
+    runIndex: integer("run_index"),
     phase: text("phase", { enum: ["pending", "running", "done", "error", "canceled"] }).notNull(),
-    role: text("role", { enum: ["exec", "evolve", "edit"] }).notNull(),
+    role: text("role", { enum: ["exec", "evolve", "steer"] }).notNull(),
     /** Durable queue authority. It only promotes system→owner; diagnostic trigger
      * reasons, if added later, must never drive lifecycle state. */
     requestedBy: text("requested_by", { enum: ["owner", "system"] }).notNull().default("system"),
-    /** Role-specific queued payload. Edit instructions live on the run, never on
-     *  the loop, so finishing edit A cannot erase queued edit B. */
+    /** Role-specific queued payload. Steer instructions live on the run, never on
+     *  the loop, so finishing steer A cannot erase queued steer B. */
     requestText: text("request_text"),
     /** Current phase/event timestamp retained for wire/UI compatibility. */
     ts: text("ts").notNull(),
@@ -273,6 +279,8 @@ export const runs = pgTable(
     index("runs_phase_idx").on(t.phase),
     index("runs_machine_phase_ready_idx").on(t.machineId, t.phase),
     index("runs_loop_ts_idx").on(t.loopId, t.ts),
+    uniqueIndex("runs_loop_run_index_idx").on(t.loopId, t.runIndex).where(sql`${t.runIndex} IS NOT NULL`),
+    index("runs_loop_terminal_history_idx").on(t.loopId, t.runIndex).where(sql`${t.runIndex} IS NOT NULL AND ${t.phase} IN ('done', 'error', 'canceled')`),
     // The queue seam coalesces under a loop-row lock; this partial unique index is
     // the final invariant if another process races or a future caller regresses.
     uniqueIndex("runs_loop_role_pending_idx").on(t.loopId, t.role).where(sql`${t.phase} = 'pending'`),
@@ -302,7 +310,7 @@ export const runLeases = pgTable(
     runId: text("run_id").notNull(),
     loopId: text("loop_id").notNull(),
     machineId: text("machine_id").notNull(),
-    role: text("role", { enum: ["exec", "evolve", "edit"] }).notNull(),
+    role: text("role", { enum: ["exec", "evolve", "steer"] }).notNull(),
     allowControl: boolean("allow_control").notNull().default(false),
     canSetUi: boolean("can_set_ui").notNull().default(false),
     canSetSchema: boolean("can_set_schema").notNull().default(false),

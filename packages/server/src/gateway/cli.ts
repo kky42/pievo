@@ -9,9 +9,9 @@
  *
  * The verb router keys authority on CREDENTIAL TYPE first (`dk_` device prefix
  * vs run-lease lookup, bare-UUID back-compat) and reuses the core gateway
- * methods (`createLoop`/`editLoop`/`loopLog`/`renderLoopLog`)
- * through the injected `MachineGateway`, so floors/allowControl and
- * the flat-404 scoping flow through unchanged. The agent-api verb dispatch is a
+ * methods (`createLoop`/`editLoop`) through the injected `MachineGateway`,
+ * plus the credential-neutral history module, so floors/allowControl and
+ * flat-404 scoping flow through unchanged. The agent-api verb dispatch is a
  * compact port of c0's control.ts: report/show + the allowControl schedule
  * mutations, plus set-ui/schema gated to the evolution pass (the
  * evolve run-token carries the canSet* caps).
@@ -57,7 +57,8 @@ import {
   type Applied,
   type MachineGateway,
 } from "./index.js";
-import { validateSchema, validateUi } from "./validate.js";
+import { validateSchema, validateSteerInstruction, validateUi } from "./validate.js";
+import { readLoopHistory } from "./history.js";
 import { nowIso, stripNul, type HttpResult } from "./http.js";
 
 export interface CliGatewayDeps {
@@ -74,9 +75,8 @@ export class CliGateway {
   private readonly destructiveLog: (event: Record<string, unknown>) => void;
 
   constructor(
-    /** The run-lifecycle core: the CLI verbs reuse its owner methods
-     *  (createLoop/listLoops/editLoop/loopLog), the shared `renderLoopLog`
-     *  scoping body and the scheduler (schedule re-arm). */
+    /** The run-lifecycle core: CLI verbs reuse its owner methods and scheduler.
+     * History authorization stays here; query/rendering lives in `history.ts`. */
     private readonly gateway: MachineGateway,
     deps: CliGatewayDeps = {},
   ) {
@@ -107,7 +107,7 @@ export class CliGateway {
    * first, then routes to the same methods the legacy endpoints call:
    *   · DEVICE credential (`dk_`-prefixed) → owner authority over any loop bound to
    *     the machine: `new`→createLoop, `loops`→listLoops, `edit`→editLoop,
-   *     `log`→loopLog, `show`→describe. `report` is RUN-only (403).
+   *     `steer`→requestSteer, `log`→readLoopHistory, `show`→describe. `report` is RUN-only (403).
    *   · RUN credential (an `rk_`-prefixed run lease — or a bare-UUID token from a
    *     pre-Batch-6 mint over a deploy) → the least-privilege per-run `dispatch()`
    *     verbs, PLUS a read branch (`log`/`show`) scoped strictly to the lease's OWN
@@ -116,7 +116,7 @@ export class CliGateway {
    * The branch keys on the `dk_` device prefix, NOT an `rk_` run prefix, so a
    * bare-UUID run token still routes to the run path (it just isn't a device token).
    * Floors, `allowControl`, and the shared content validators all flow
-   * through the reused `dispatch`/`createLoop`/`editLoop`/`loopLog` unchanged.
+   * through the reused `dispatch`/`createLoop`/`editLoop` paths unchanged.
    */
   async cli(token: string, argv: string[]): Promise<HttpResult> {
     const res = token.startsWith("dk_") ? await this.deviceCli(token, argv) : await this.runCli(token, argv);
@@ -174,8 +174,22 @@ export class CliGateway {
         if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
         return this.gateway.editLoop(deviceToken, loopArg || undefined, parsed.value as Record<string, unknown>, flags["dry-run"] === true);
       }
-      case "log":
-        return this.gateway.loopLog(deviceToken, loopArg, flags["limit"]);
+      case "steer": {
+        const loop = await this.ownedLoop(machineId, loopArg);
+        if (!loop) return { status: 404, body: { error: "no such loop on this machine" } };
+        const unknown = Object.keys(flags).filter((key) => !["_", "loop", "message", "help"].includes(key));
+        if (unknown.length) return { status: 400, body: { error: `pievo: unknown flag --${unknown[0]} (steer takes --message or --message-file)` } };
+        const instruction = validateSteerInstruction(flags["message"]);
+        if (!instruction.ok) return { status: 400, body: { error: `pievo: ${instruction.detail}` } };
+        const queued = await this.gateway.scheduler.requestSteer(loop.id, instruction.value);
+        if (!("run" in queued)) return { status: 409, body: { error: queued.reason } };
+        return { status: 200, body: { text: queued.state === "coalesced" ? `steer already queued; updated instruction (${queued.run.id})` : `steer queued (${queued.run.id})` } };
+      }
+      case "log": {
+        const loop = await this.ownedLoop(machineId, loopArg);
+        if (!loop) return { status: 404, body: { error: "no such loop on this machine" } };
+        return readLoopHistory(loop, flags);
+      }
       case "show": {
         // Device `show` may inspect ANY loop bound to the machine; the machine-scope
         // check mirrors loopLog/editLoop (flat 404, existence never leaks).
@@ -193,7 +207,7 @@ export class CliGateway {
       case "report":
         return { status: 403, body: { error: "pievo: report is a run-only verb; the owner edits via edit" } };
       default:
-        return { status: 400, body: { error: `pievo: unknown command "${verb}" for the device credential (try: new, loops, pause, start, stop, delete, run stop, edit, log, show)` } };
+        return { status: 400, body: { error: `pievo: unknown command "${verb}" for the device credential (try: new, loops, pause, start, stop, delete, run stop, edit, steer, log, show)` } };
     }
   }
 
@@ -339,7 +353,9 @@ export class CliGateway {
     // (already scoped to lease.loopId with the run's caps), but `show --json` needs a
     // structured body (`dispatch` returns text-only), so it is served here.
     if (verb === "log") {
-      return this.gateway.renderLoopLog(lease.machineId, lease.loopId, flags["limit"]);
+      const loop = await store.getLoop(lease.loopId);
+      if (!loop || loop.machineId !== lease.machineId) return { status: 404, body: { error: "no such loop on this machine" } };
+      return readLoopHistory(loop, flags);
     }
     if (verb === "show" && flags["json"] === true) {
       const loop = await store.getLoop(lease.loopId);
@@ -432,18 +448,23 @@ export class CliGateway {
         // directly). Scoped to the lease's own loop/machine — dispatch never reads a
         // loop id from flags, so a run can never target another loop (the loop-fence
         // lives in runCli for the positional-arg case).
-        const res = await this.gateway.renderLoopLog(lease.machineId, lease.loopId, flags["limit"]);
-        return { code: res.status, text: (res.body as { text?: string }).text ?? "" };
+        const loop = await store.getLoop(lease.loopId);
+        if (!loop || loop.machineId !== lease.machineId) return derr(404, "loop not found", "NOT_FOUND");
+        const res = await readLoopHistory(loop, flags);
+        const body = res.body as { text?: string; error?: string };
+        return res.status >= 400
+          ? derr(res.status, body.error ?? "history query failed")
+          : { code: res.status, text: body.text ?? "" };
       }
       case "set-ui": {
-        if (!lease.canSetUi) return derr(403, "only the evolution or edit pass may set the UI", "FORBIDDEN");
+        if (!lease.canSetUi) return derr(403, "only the evolution or steer pass may set the UI", "FORBIDDEN");
         const html = str("body") ?? str("file-content");
         if (html === undefined) return derr(400, "set-ui needs --file <path> (shim inlines it)", "VALIDATION_ERROR");
         const r = await this.applySetUi(lease, leaseTokenHash, html);
         return r.ok ? { code: 200, text: r.detail ?? "ui updated" } : derr(r.status ?? 400, r.detail ?? "rejected", r.code ?? "VALIDATION_ERROR");
       }
       case "set-schema": {
-        if (!lease.canSetSchema) return derr(403, "only the evolution or edit pass may set the schema", "FORBIDDEN");
+        if (!lease.canSetSchema) return derr(403, "only the evolution or steer pass may set the schema", "FORBIDDEN");
         const json = str("body") ?? str("file-content");
         if (json === undefined) return derr(400, "set-schema needs --file <path> (a JSON array of {key,label,unit})", "VALIDATION_ERROR");
         const r = await this.applySetSchema(lease, leaseTokenHash, json);
@@ -479,7 +500,7 @@ export class CliGateway {
    *  role-aware — the tags flip with the lease's role + caps, so the agent never
    *  wastes a turn probing a verb it'll be 403'd on. */
   private helpText(lease: RunLease): string {
-    const structural = lease.canSetUi ? "available to this run" : `evolve/edit pass only — this run is "${lease.role}"`;
+    const structural = lease.canSetUi ? "available to this run" : `evolve/steer pass only — this run is "${lease.role}"`;
     const control = lease.allowControl ? "available to this run" : "needs allowControl (off for this loop)";
 
     // The `always` group is a typed list; indent every line two spaces to nest it
@@ -713,9 +734,10 @@ export class CliGateway {
   // identically and can't drift (the anti-drift invariant lives in validate.ts).
 
   private async applySetUi(lease: RunLease, leaseTokenHash: string, html: string): Promise<Applied> {
-    const { value: ui } = validateUi(html);
-    const detail = ui ? `ui updated (${ui.length} bytes)` : "ui cleared";
-    return this.applyAuthorizedMutation(lease, leaseTokenHash, "set-ui", "set-ui", { bytes: String(html.length) }, { loopPatch: { ui } }, detail);
+    const v = validateUi(html);
+    if (!v.ok) return this.applyAuthorizedMutation(lease, leaseTokenHash, "set-ui", "set-ui", { bytes: String(html.length) }, {}, v.detail, "rejected");
+    const detail = v.value ? `ui updated (${v.value.length} bytes)` : "ui cleared";
+    return this.applyAuthorizedMutation(lease, leaseTokenHash, "set-ui", "set-ui", { bytes: String(html.length) }, { loopPatch: { ui: v.value } }, detail);
   }
 
   private async applySetSchema(lease: RunLease, leaseTokenHash: string, json: string): Promise<Applied> {
@@ -805,7 +827,7 @@ const TERMINAL_GRACE_MSG =
 /** Verbs that require OWNER (device) authority — a run credential is 403'd on these
  *  in the unified `cli` dispatch (§4.1). `report` is the mirror image
  *  (run-only, 403 for a device credential) and are handled inline in `deviceCli`. */
-const DEVICE_ONLY_VERBS = new Set(["new", "edit", "loops", "start", "stop", "delete", "run"]);
+const DEVICE_ONLY_VERBS = new Set(["new", "edit", "steer", "loops", "start", "stop", "delete", "run"]);
 
 const PAUSED_FINISHING = "loop paused; current run is finishing";
 const STOP_UPGRADE_REQUIRED = "Daemon upgrade required to stop a running process. Run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.";
@@ -922,9 +944,9 @@ interface VerbHelpSpec {
 
 /** Availability of a schedule/control mutation for a run: gated by `allowControl`. */
 const controlAvail = (l: RunLease): string => (l.allowControl ? "available to this run" : "needs allowControl (off for this loop)");
-/** Availability of a structural (set-ui/schema) verb: evolve/edit pass only. */
+/** Availability of a structural (set-ui/schema) verb: evolve/steer pass only. */
 const gateAvail = (has: (l: RunLease) => boolean | undefined) => (l: RunLease): string =>
-  has(l) ? "available to this run (evolve/edit pass)" : `evolve/edit pass only — this run is "${l.role}"`;
+  has(l) ? "available to this run (evolve/steer pass)" : `evolve/steer pass only — this run is "${l.role}"`;
 const alwaysAvail = (): string => "always available";
 
 /** RUN-credential verb help (in-run `rk_` lease). */
@@ -945,10 +967,10 @@ const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
     help: ["Run `pievo show --full` to include full dashboard content", "Run `pievo show --json` for the editable JSON envelope"],
   },
   log: {
-    syntax: "log [--limit <n>]",
-    summary: "recent run survey for this loop (session ids + metrics)",
+    syntax: "log [--limit 1..20] [--after N --through N | --since ISO --until ISO] [--role exec|evolve|steer] [--status kept|no-change|blocked] [--phase done|error|canceled] [--summary | --run <index|UUID> [--diff]] [--json]",
+    summary: "indexed terminal history, bounded aggregates, or one detailed run for this loop",
     avail: alwaysAvail,
-    help: ["Run `pievo log --limit 20` to show more recent runs"],
+    help: ["Run `pievo log --summary --json` for aggregate history", "Run `pievo log --run 12 --diff` for bounded run detail and artifact diff"],
   },
   reschedule: {
     syntax: "reschedule --run-at <30m|2h|ISO>",
@@ -1040,6 +1062,11 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
       "Run `pievo edit <id> --json '{...}' --dry-run` to preview the change",
     ],
   },
+  steer: {
+    syntax: "steer <id> --message <text> | --message-file <path>",
+    summary: "queue one owner steer pass; a pending steer is updated with the latest instruction",
+    help: ["Run `pievo steer <id> --message \"change the schedule to weekdays at 9am\"`"],
+  },
   show: {
     syntax: "show [<id|unique-name>] [--full] [--json]",
     summary: "print a loop's full config + recent runs (defaults from the current directory)",
@@ -1071,9 +1098,9 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
     help: ["A running run remains running until the daemon confirms cancellation"],
   },
   log: {
-    syntax: "log [<id>] [--limit <n>] [--json]",
-    summary: "recent run survey for a loop (session ids + metrics)",
-    help: ["Run `pievo log <id> --json` for normalized run fields and token usage"],
+    syntax: "log [<id>] [--limit 1..20] [--after N --through N | --since ISO --until ISO] [--role exec|evolve|steer] [--status kept|no-change|blocked] [--phase done|error|canceled] [--summary | --run <index|UUID> [--diff]] [--json]",
+    summary: "indexed terminal history, bounded aggregates, or one detailed run",
+    help: ["Run `pievo log <id> --summary --json` for aggregate history", "Run `pievo log <id> --run 12 --diff` for bounded run detail and artifact diff"],
   },
 };
 

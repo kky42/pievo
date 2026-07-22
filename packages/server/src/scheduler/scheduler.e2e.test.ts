@@ -72,36 +72,36 @@ async function claim(loop: Loop) {
   return claimed;
 }
 
-test("queue authority only promotes and latest owner edit wins", async () => {
+test("queue authority only promotes and latest owner steer wins", async () => {
   const loop = await makeLoop("authority");
-  const system = await store.enqueueRun(loop.id, { role: "edit", requestedBy: "system", requestText: "system" });
-  const owner = await store.enqueueRun(loop.id, { role: "edit", requestedBy: "owner", requestText: "owner A" });
-  const weaker = await store.enqueueRun(loop.id, { role: "edit", requestedBy: "system", requestText: "ignored" });
-  const latest = await store.enqueueRun(loop.id, { role: "edit", requestedBy: "owner", requestText: "owner B" });
+  const system = await store.enqueueRun(loop.id, { role: "steer", requestedBy: "system", requestText: "system" });
+  const owner = await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "owner A" });
+  const weaker = await store.enqueueRun(loop.id, { role: "steer", requestedBy: "system", requestText: "ignored" });
+  const latest = await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "owner B" });
 
   expect("run" in system && "run" in owner && owner.run.id).toBe("run" in system ? system.run.id : "");
   expect("run" in weaker && weaker.run).toMatchObject({ requestedBy: "owner", requestText: "owner A" });
   expect("run" in latest && latest.run).toMatchObject({ requestedBy: "owner", requestText: "owner B" });
-  expect(await pending(loop.id, "edit")).toHaveLength(1);
+  expect(await pending(loop.id, "steer")).toHaveLength(1);
 });
 
 test("a running role may retain one coalesced follow-up", async () => {
   const loop = await makeLoop("follow-up");
-  await scheduler().requestEdit(loop.id, "A");
+  await scheduler().requestSteer(loop.id, "A");
   const first = await claim(loop);
   expect(first.run.requestText).toBe("A");
 
-  const b = await scheduler().requestEdit(loop.id, "B");
-  const c = await scheduler().requestEdit(loop.id, "C");
+  const b = await scheduler().requestSteer(loop.id, "B");
+  const c = await scheduler().requestSteer(loop.id, "C");
   expect("run" in b && "run" in c && c.run.id).toBe("run" in b ? b.run.id : "");
-  expect((await pending(loop.id, "edit"))[0]).toMatchObject({ requestedBy: "owner", requestText: "C" });
+  expect((await pending(loop.id, "steer"))[0]).toMatchObject({ requestedBy: "owner", requestText: "C" });
 });
 
-test("cross-role claims are edit > evolve > exec and claim inserts the lease atomically", async () => {
+test("cross-role claims are steer > evolve > exec and claim inserts the lease atomically", async () => {
   const loop = await makeLoop("priority");
   await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });
   await store.enqueueRun(loop.id, { role: "evolve", requestedBy: "owner" });
-  await store.enqueueRun(loop.id, { role: "edit", requestedBy: "owner", requestText: "fix" });
+  await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "fix" });
 
   const roles: RunRole[] = [];
   for (let i = 0; i < 3; i++) {
@@ -112,7 +112,7 @@ test("cross-role claims are edit > evolve > exec and claim inserts the lease ato
     await store.updateRun(item.run.id, { phase: "canceled" });
     await tokens.retireLease(item.runToken);
   }
-  expect(roles).toEqual(["edit", "evolve", "exec"]);
+  expect(roles).toEqual(["steer", "evolve", "exec"]);
 });
 
 test("claim and cancel race cannot leave a canceled run with a live lease", async () => {
@@ -181,14 +181,14 @@ test("continuous activation, claim, terminal, and due transitions use nextCadenc
   expect(await pending(loop.id, "exec")).toHaveLength(1);
 });
 
-test("edit/evolve claims and terminals never move continuous exec cadence", async () => {
-  for (const role of ["edit", "evolve"] as const) {
+test("steer/evolve claims and terminals never move continuous exec cadence", async () => {
+  for (const role of ["steer", "evolve"] as const) {
     const loop = await makeLoop(`structural-${role}`, { scheduleMode: "continuous", continuousDelayMinutes: 7 });
     const cadence = (await store.getLoop(loop.id))!.nextCadenceAt;
     await store.enqueueRun(loop.id, {
       role,
       requestedBy: "owner",
-      ...(role === "edit" ? { requestText: "keep cadence" } : {}),
+      ...(role === "steer" ? { requestText: "keep cadence" } : {}),
     });
     const item = await claim(loop);
     expect(item.run.role).toBe(role);
@@ -216,7 +216,7 @@ test("canceled exec does not restart continuous cadence", async () => {
 test("mode switches change only cadence facts and never cancel pending rows", async () => {
   const loop = await makeLoop("switch");
   await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });
-  await store.enqueueRun(loop.id, { role: "edit", requestedBy: "owner", requestText: "keep" });
+  await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "keep" });
 
   const continuous = await store.updateLoop(loop.id, { scheduleMode: "continuous" });
   expect(continuous!.nextCadenceAt).toBeNull(); // open exec exists
@@ -226,7 +226,7 @@ test("mode switches change only cadence facts and never cancel pending rows", as
   expect(await pending(loop.id)).toHaveLength(2);
 });
 
-test("continuous delay edits retime the durable fact without run-history inference", async () => {
+test("continuous delay steers retime the durable fact without run-history inference", async () => {
   const loop = await makeLoop("retime", { scheduleMode: "continuous", continuousDelayMinutes: 2 });
   const terminalAt = new Date(Date.now() - 30_000).toISOString();
   const oldTarget = new Date(Date.parse(terminalAt) + 2 * 60_000).toISOString();
@@ -236,23 +236,23 @@ test("continuous delay edits retime the durable fact without run-history inferen
 
   const alreadyDue = new Date(Date.now() - 1_000).toISOString();
   await store.updateLoop(loop.id, { nextCadenceAt: alreadyDue });
-  const dueEdit = await store.updateLoop(loop.id, { continuousDelayMinutes: 20 });
-  expect(dueEdit!.nextCadenceAt).toBe(alreadyDue);
+  const dueSteer = await store.updateLoop(loop.id, { continuousDelayMinutes: 20 });
+  expect(dueSteer!.nextCadenceAt).toBe(alreadyDue);
 });
 
 test("pause clears both facts, cancels system rows, and preserves owner rows", async () => {
   const loop = await makeLoop("pause");
   await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });
   await store.enqueueRun(loop.id, { role: "evolve", requestedBy: "owner" });
-  await store.enqueueRun(loop.id, { role: "edit", requestedBy: "owner", requestText: "keep" });
+  await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "keep" });
   await store.updateLoop(loop.id, { nextRunAt: new Date(Date.now() + 60_000).toISOString() });
 
   const paused = await store.updateLoop(loop.id, { enabled: false });
   expect(paused).toMatchObject({ nextCadenceAt: null, nextRunAt: null });
   expect((await store.updateLoop(loop.id, { nextRunAt: new Date(Date.now() + 60_000).toISOString() }))!.nextRunAt).toBeNull();
   expect((await pending(loop.id)).map((r) => [r.role, r.requestedBy]).sort()).toEqual([
-    ["edit", "owner"],
     ["evolve", "owner"],
+    ["steer", "owner"],
   ]);
 });
 
@@ -385,10 +385,10 @@ test("run schedule constraints validate effective current cadence under the muta
   const loop = await makeLoop("floor-lock", { scheduleMode: "continuous", continuousDelayMinutes: 2 });
   const running = await store.addRun({
     loopId: loop.id, userId: loop.userId, machineId: loop.machineId,
-    phase: "running", role: "edit", requestedBy: "owner", ts: new Date().toISOString(),
+    phase: "running", role: "steer", requestedBy: "owner", ts: new Date().toISOString(),
   });
   const token = await tokens.registerRunLease({
-    runId: running.id, loopId: loop.id, machineId: loop.machineId, role: "edit", allowControl: true,
+    runId: running.id, loopId: loop.id, machineId: loop.machineId, role: "steer", allowControl: true,
   });
   const result = await store.mutateForActiveRun({
     loopId: loop.id,
@@ -429,10 +429,10 @@ test("run-authorized mutation rechecks active lease and running phase inside its
   const loop = await makeLoop("mutation-fence");
   const running = await store.addRun({
     loopId: loop.id, userId: loop.userId, machineId: loop.machineId,
-    phase: "running", role: "edit", requestedBy: "owner", ts: new Date().toISOString(),
+    phase: "running", role: "steer", requestedBy: "owner", ts: new Date().toISOString(),
   });
   const token = await tokens.registerRunLease({
-    runId: running.id, loopId: loop.id, machineId: loop.machineId, role: "edit",
+    runId: running.id, loopId: loop.id, machineId: loop.machineId, role: "steer",
     allowControl: true, canSetUi: true,
   });
   await store.reclaimRun(running.id, "running", "timeout");

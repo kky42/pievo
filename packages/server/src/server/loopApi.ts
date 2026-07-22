@@ -29,7 +29,7 @@ import type { MetricField } from '../db/schema.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
-import { normalizeProviderSetting, validateSchema } from '../gateway/validate.js'
+import { normalizeProviderSetting, validateSchema, validateSteerInstruction } from '../gateway/validate.js'
 import { machinePresence } from '../lib/machinePresence.js'
 import { TEMPLATES } from './templates.js'
 
@@ -409,16 +409,16 @@ export const evolveJob = createServerFn({ method: 'POST' })
     return { ok: true, runId: queued.run.id, queued: true, coalesced: queued.state === 'coalesced' }
   })
 
-/** Agent-First edit: durably queue an owner instruction. A pending edit is
- *  updated in place; an edit already running gets one follow-up. */
-export const requestEdit = createServerFn({ method: 'POST' })
+/** Agent-first steer: durably queue an owner instruction. A pending steer is
+ *  updated in place; a steer already running gets one follow-up. */
+export const requestSteer = createServerFn({ method: 'POST' })
   .validator((d: { id: string; instruction: string }) => d)
   .handler(async ({ data }): Promise<MutationResult> => {
     const { scheduler } = await backend()
     if (!(await ownedLoop(data.id))) return { error: 'not found' }
-    const instruction = data.instruction.trim()
-    if (!instruction) return { error: 'describe what to change' }
-    const queued = await scheduler.requestEdit(data.id, instruction)
+    const instruction = validateSteerInstruction(data.instruction)
+    if (!instruction.ok) return { error: instruction.detail }
+    const queued = await scheduler.requestSteer(data.id, instruction.value)
     if (!('run' in queued)) return { error: queued.reason }
     return { ok: true, runId: queued.run.id, queued: true, coalesced: queued.state === 'coalesced' }
   })

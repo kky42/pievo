@@ -156,21 +156,14 @@ describe("runLog", () => {
     expect(calls.some((u) => u.includes("loopId=loop-x"))).toBe(true);
   });
 
-  test("--limit and --json are forwarded / honored", async () => {
-    const runs = [{ id: "r1", ts: "t", role: "exec", phase: "done", status: null, durationMs: null, error: null, message: null, sessionId: "sess-r1", state: { mrr: 42 }, transcript: "", transcriptTruncated: false }];
+  test("advanced JSON fails loud instead of reconstructing a legacy response", async () => {
     const { fetchFn, calls } = stubFetch({
       "/api/machine/loop": { body: { loops: [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }] } },
-      "/api/machine/log": { body: { ok: true, name: "X", runs } },
     });
     const cap = capture({ cwd: () => "/unrelated", fetchFn });
-    expect(await runLog(["loop-x", "--limit", "3", "--json"], cap)).toBe(0);
-    expect(calls.some((u) => u.includes("limit=3"))).toBe(true);
-    // --json prints raw JSON, not the human header — including the session id.
-    expect(cap.stdout()).toContain('"id": "r1"');
-    expect(cap.stdout()).toContain('"sessionId": "sess-r1"');
-    // Metrics flow through verbatim in --json output too.
-    expect(cap.stdout()).toContain('"mrr": 42');
-    expect(cap.stdout()).not.toContain("recent run");
+    expect(await runLog(["loop-x", "--limit", "3", "--json"], cap)).toBe(1);
+    expect(cap.stdout()).toContain("code: SERVER_TOO_OLD");
+    expect(calls.some((u) => u.includes("/api/machine/log?"))).toBe(false);
   });
 
   test("--limit=5 (the --k=v form) parses like --limit 5 instead of erroring as an unknown flag", async () => {
@@ -184,19 +177,15 @@ describe("runLog", () => {
     expect(calls.some((u) => u.includes("limit=5"))).toBe(true);
   });
 
-  test("--json before the loop id keeps the id positional (boolean flag, no swallow)", async () => {
-    const runs = [{ id: "r1", ts: "t", role: "exec", phase: "done", status: null, durationMs: null, error: null, message: null, transcript: "", transcriptTruncated: false }];
+  test("--json before the loop id keeps the id positional", async () => {
     const { fetchFn, calls } = stubFetch({
       "/api/machine/loop": { body: { loops: [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }] } },
-      "/api/machine/log": { body: { ok: true, name: "X", runs } },
     });
     const cap = capture({ cwd: () => "/unrelated", fetchFn });
-    // --json must NOT consume "loop-x" as its value; the id stays positional.
-    expect(await runLog(["--json", "loop-x"], cap)).toBe(0);
-    expect(calls.some((u) => u.includes("loopId=loop-x"))).toBe(true);
-    // json mode still active → raw JSON, not the human header.
-    expect(cap.stdout()).toContain('"id": "r1"');
-    expect(cap.stdout()).not.toContain("recent run");
+    expect(await runLog(["--json", "loop-x"], cap)).toBe(1);
+    expect(cap.stdout()).toContain("SERVER_TOO_OLD");
+    // Resolution succeeded (rather than treating loop-x as --json's value).
+    expect(calls.some((u) => u.includes("/api/machine/cli"))).toBe(true);
   });
 
   test("a server error on the log call surfaces its rendered `text` and exits 1", async () => {
@@ -279,6 +268,29 @@ describe("runLog — unified /api/machine/cli (new server)", () => {
     expect(await runLog(["loop-x", "--limit", "3"], cap)).toBe(0);
     expect(calls[1]!.argv).toEqual(["log", "loop-x", "--limit", "3"]);
     expect(cap.stdout()).toBe(survey + "\n");
+  });
+
+  test("advanced flags fail loud when an older unified server returns its legacy runs shape", async () => {
+    const { fetchFn } = stubUnified(
+      [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }],
+      () => ({ ok: true, body: { runs: oneRun, text: "legacy survey", exitCode: 0 } }),
+    );
+    const cap = capture({ cwd: () => "/unrelated", fetchFn });
+    expect(await runLog(["loop-x", "--summary", "--json"], cap)).toBe(1);
+    expect(cap.stdout()).toContain("code: SERVER_TOO_OLD");
+    expect(cap.stdout()).not.toContain("legacy survey");
+  });
+
+  test("advanced flags and JSON are forwarded and server text prints verbatim", async () => {
+    const json = JSON.stringify({ through: 8, total: 2 });
+    const { fetchFn, calls } = stubUnified(
+      [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }],
+      () => ({ ok: true, body: { text: json, exitCode: 0 } }),
+    );
+    const cap = capture({ cwd: () => "/unrelated", fetchFn });
+    expect(await runLog(["loop-x", "--summary", "--after", "3", "--through", "8", "--json"], cap)).toBe(0);
+    expect(calls[1]!.argv).toEqual(["log", "loop-x", "--summary", "--json", "--after", "3", "--through", "8"]);
+    expect(cap.stdout()).toBe(json + "\n");
   });
 
   test("text sink: the default (non-transcript) log prints the server `text` verbatim, not its own render", async () => {

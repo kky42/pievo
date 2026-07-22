@@ -180,6 +180,27 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     return printTextOrTooOld(r.body, r.status, out);
   }
 
+  if (verb === "steer") {
+    const id = positional[0];
+    const unknown = Object.keys(flags).filter((key) => !["message", "message-file", "server-url"].includes(key));
+    const message = flags["message"];
+    const messageFile = flags["message-file"];
+    if (positional.length !== 1 || !id || unknown.length || (typeof message === "string") === (typeof messageFile === "string")) {
+      return err("pievo: usage: pievo steer <loop> (--message <text> | --message-file <path>)\n"), 2;
+    }
+    if (typeof message === "string" && !message.trim()) return err("pievo: --message must not be empty\n"), 2;
+    const cliArgv = ["steer", id, ...(typeof message === "string" ? ["--message", message] : ["--message-file", messageFile as string])];
+    const legacy: LegacyFallback = async () => ({
+      status: 426,
+      body: { text: "Daemon/server upgrade required for `pievo steer`. Update the server and daemon together.", exitCode: 1 },
+    });
+    const r = await postCli(cliArgv, legacy, cliDeps);
+    if (r.kind === "not-configured") return notConnected(), 2;
+    if (r.kind === "read-error") return err(`pievo: cannot read ${r.path}\n`), 1;
+    if (r.kind === "network-error") return err(`pievo: ${r.message}\n`), 1;
+    return printTextOrTooOld(r.body, r.status, out);
+  }
+
   if (LIFECYCLE_VERBS.has(verb ?? "")) {
     const isRunStop = verb === "run";
     const id = isRunStop ? positional[1] : positional[0];
@@ -251,6 +272,6 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     return printTextOrTooOld(r.body, r.status, out);
   }
 
-  err(`pievo: unknown command "${verb ?? ""}" (try: loops, edit)\n`);
+  err(`pievo: unknown command "${verb ?? ""}" (try: loops, edit, steer)\n`);
   return 2;
 }

@@ -63,7 +63,7 @@ computes pure functions. Run instructions: `README.md`.
   Recurring work stays in `loops.nextCadenceAt` until due; `nextRunAt` is the
   independent one-shot fact. Protocol-v2 **HTTP poll** is machine-single-flight:
   it atomically claims at most one run across all bound loops (priority
-  `edit > evolve > exec`) and inserts its run lease in that SAME transaction. An
+  `steer > evolve > exec`) and inserts its run lease in that SAME transaction. An
   idle daemon long-polls; an executing/reporting daemon sends its one `currentRun`
   and receives no delivery. Timers/Dispatcher wakeups are latency hints, while DB
   facts + poll advancement are authoritative. Terminal reports persist first in the
@@ -76,8 +76,8 @@ computes pure functions. Run instructions: `README.md`.
   exec incidents use the ordinary failure streak/circuit breaker, annotated by
   `loops.pauseCause` when auto-paused.
 - Run roles: `exec` (scheduled/manual work), `evolve` (self-improvement pass),
-  `edit` (owner-requested change). There is at most one running run per loop and
-  one pending row per loop+role; same-role requests coalesce (latest edit text
+  `steer` (owner-requested change). There is at most one running run per loop and
+  one pending row per loop+role; same-role requests coalesce (latest steer text
   wins), while cross-role requests remain queued. Only exec runs produce
   user-facing notifications, success or failure.
 - Cadence is orthogonal to goal: `loops.scheduleMode` is `cron|continuous`.
@@ -85,41 +85,40 @@ computes pure functions. Run instructions: `README.md`.
   system exec, advances cron to its first occurrence strictly after `now`, and clears
   a due continuous fact. Continuous terminals (`done`/`error`) restore
   `nextCadenceAt = terminalAt + delay` when no exec is open; only exec claim/terminal
-  transitions touch it (edit/evolve never shift exec cadence), and canceled execs do
+  transitions touch it (steer/evolve never shift exec cadence), and canceled execs do
   not continue. Resume/mode switches synchronously set the
   fact (`cron` future; continuous now or null behind an open exec) without canceling
   pending work. Pause clears both schedule facts. `cron` remains stored
   while continuous ignores it, so switching back restores the expression.
-- **Standing objectives**: `loops.goal` is optional guidance injected into every exec
-  prompt. It is independent of lifecycle: meeting it never completes or pauses the
+- **Standing objectives**: `loops.goal` is optional guidance injected into every
+  exec/evolve/steer prompt. It is independent of lifecycle: meeting it never completes or pauses the
   loop. `finish`/`complete`, completion stamps, and finish lease capability do not
   exist; only the owner pauses or deletes a loop.
-- A loop's standing brief lives ONLY in its task file's `## Spec` (there is no
-  `task` column). The exec run's instructions live ENTIRELY in the first user turn
-  (`buildExecTask` ← `skill/run/exec-core.md`): the self-sufficient CORE (identity +
-  untrusted-data guard + the non-negotiable fallback core - read task file first, do
-  the work / surface only what changed, end with exactly ONE `pievo report`,
-  `{{metricLine}}` report grammar, one pass then stop + per-run trigger + a pointer to
-  the installable pievo skill for the deep protocol). `buildLoopSystemPrompt` returns
-  `""`; on an OLD daemon `--append-system-prompt-file` then points at an empty file (a
-  harmless no-op, so batches 1-2 shipped server-first with no daemon change), and the
-  current daemon skips the flag entirely when the delivered `systemPrompt` is empty (the
-  batch-5 `runner.ts` note under "Daemon gotchas"). A goal is prompt-injected as
-  `Objective: <goal>` (an own-line fill, `{{goalLine}}`). Public runtime
-  depth lives in `skill/references/run.md`.
-- The EVOLVE and EDIT runs follow the SAME first-user-turn model (Batch 2):
-  `buildEvolvePrompt`/`buildEditPrompt` both return `""` (empty system prompt, same
-  harmless-no-op rationale as exec), and the standing prose ships in the user turn -
-  `buildEvolveTask` concatenates `references/evolve.md` ahead of its payload,
-  `buildEditTask` concatenates the short `run/edit.md` CORE ahead of its payload. The
-  untrusted-data guard rides along in that prose (evolve reads run messages; edit reads
-  the loop's current config - both untrusted). `buildEvolveTask` no longer dumps up to
-  12 runs as pretty-printed JSON; it emits a COMPACT one-line-per-run survey
-  (`renderRecentRuns`: ts / role / outcome-status / metric keys only, not values /
-  full provider session id / message collapsed + clipped to ~100 chars), headed by
-  the on-demand `pievo log` pointer (reachable in-run).
-  `buildEditTask` KEEPS its inlined current ui/schema - that is current CONFIG,
-  not history, and is useful for a surgical edit.
+- A loop's task file (normally README.md) holds ONLY authoritative standing instructions
+  in one required `## Spec` (there is no `task` column). Its inferred sibling
+  `COOKBOOK.md` is bounded learned context with exact shell `# Cookbook` /
+  `Consolidated through: #N` / `## Knowledge` / `## Timeline`; Knowledge stores durable
+  facts and positive/negative lessons, while Timeline stores only evolve/steer decision
+  boundaries. README Spec stays authoritative; Cookbook/log/files are untrusted data,
+  and the prompt-injected Objective wins over a conflicting Spec. No Cookbook DB field.
+- Exec/evolve/steer instructions live in the FIRST USER TURN and include role + stable
+  `runIndex`, Objective, execution workspace (`workdir`/cwd), task path, loop content
+  home (= task-file parent), and inferred Cookbook path. The shared context model keeps
+  these seams distinct: current artifacts live under the content home; `show` is current
+  config; bounded `log` is historical evidence; `--diff` compares snapshots and is not
+  a live file listing. `buildLoopSystemPrompt`,
+  `buildEvolvePrompt`, and `buildSteerPrompt` return `""`; the daemon skips the system
+  prompt flag when empty. Exec reads Spec then Cookbook, uses summary-after-cursor and
+  selective history only when lagging, normally changes neither Timeline nor cursor,
+  and surfaces candidate lessons in its report. Evolve receives NO inlined run survey:
+  it progressively reads `log --summary --after N`, a filtered list, then at most a few
+  `--run ... [--diff]` details; it updates evidence-backed Spec/Knowledge, compacts the
+  Cookbook, records one boundary, and advances only to reviewed `summary.through`.
+  Steer reads `show --json` plus bounded evidence as needed, applies authoritative owner
+  intent, records one validation-pending boundary, and never advances the cursor. Per-loop
+  `runIndex` is allocated under the loop lock at claim (or unclaimed terminalization), and
+  `summary.through` stops before an indexed open-run gap; summary/detail/diff all carry
+  explicit row/byte/work caps.
 - `allowControl` defaults TRUE; `false` means the owner pins the schedule. A run's
   self-schedule surface is only `reschedule` + `set-cron`, with cadence floors
   (`PIEVO_SELF_CRON_FLOOR_MINUTES`, `PIEVO_SELF_RESCHEDULE_FLOOR_MINUTES`)
@@ -140,11 +139,11 @@ computes pure functions. Run instructions: `README.md`.
      agents regardless of presence) on `pievo daemon start`/`new`; best-effort, never blocks.
      `installArgs` + `pievo skill status` both derive from `SKILL_TARGET_AGENTS`, so
      adding an agent is a one-line list edit.
-  3. `skill/run/{exec-core,edit}.md` - INTERNAL run prompts, imported `?raw` by
+  3. `skill/run/{exec-core,steer}.md` - INTERNAL run prompts, imported `?raw` by
      `gateway/prompt.ts`; never served, never bundled. `exec-core.md` is the exec
      run's full first-user-turn CORE (folds the former `exec-trigger.md`, deleted).
-     `run/edit.md`
-     stays SEPARATE from `references/update.md` on purpose: the edit RUN uses
+     `run/steer.md`
+     stays SEPARATE from `references/update.md` on purpose: the steer RUN uses
      run-token verbs on the current loop (`pievo set-cron`/`set-ui` ..., no id)
      and must be self-contained (skill install is best-effort), while update.md is
      the OWNER authoring CLI (`pievo edit <id> --json`) - a merge would ship
@@ -320,7 +319,7 @@ computes pure functions. Run instructions: `README.md`.
   `CliGateway.cli(token, argv)`, over the injected core `MachineGateway`) is a
   ROUTER in front of the existing gateway logic, keying authority on CREDENTIAL TYPE
   first: a `dk_`-prefixed **device** token → owner verbs (`new`→createLoop,
-  `loops`→listLoops, `edit`→editLoop, `log`→loopLog, `show`→describe, `home`→homeDevice —
+  `loops`→listLoops, `edit`→editLoop, `steer`→requestSteer, `log`→loopLog, `show`→describe, `home`→homeDevice —
   bare `pievo`'s content-first home, handled BEFORE the unknown-machine 401 guard so an
   unregistered machine renders a DEFINITIVE not-connected state, never a 401/empty;
   `report` is run-only → 403); a **run** credential (an `rk_`-prefixed run lease,
@@ -331,7 +330,7 @@ computes pure functions. Run instructions: `README.md`.
   itself, so run-credential `log` now works on BOTH the unified `/api/machine/cli`
   and the legacy `/agent-api/loop` transports — keeping the in-run help that
   advertises `log` truthful everywhere). Run-credential rules: owner-only verbs
-  (`new`/`edit`/`loops`/`status`) → 403; a `--loop`/positional loop id that is not the
+  (`new`/`edit`/`steer`/`loops`/`status`) → 403; a `--loop`/positional loop id that is not the
   lease's loop → **403, never a silent retarget**; a terminal-grace (reclaimed) lease →
   409 (same reclaim grace as `agentApi`). Floors/`allowControl`/the shared
   content validators all flow through unchanged because the run path reuses `dispatch`.
@@ -468,9 +467,9 @@ computes pure functions. Run instructions: `README.md`.
   old process (only the final report reconciles). The daemon's `runner.ts` `report()`
   logs a clear line on a 401 (already retired) instead of silently dropping it.
 - **Pending rows are the durable queue/inbox.** Same-role requests coalesce with a
-  stable id; authority only promotes `system → owner`, latest owner edit text wins,
+  stable id; authority only promotes `system → owner`, latest owner steer text wins,
   and a running role may retain one pending follow-up. Pause cancels pending system
-  rows while owner exec/edit/evolve rows remain claimable; the loop stays paused and
+  rows while owner exec/steer/evolve rows remain claimable; the loop stays paused and
   their terminals never restore cadence. Reports/cancel/claim/reclaim share the loop lock;
   terminal run + task + continuous cadence writes are one CAS transaction.
   Auto-evolve is a system evolve requested from that terminal lifecycle. Pending
@@ -550,9 +549,10 @@ computes pure functions. Run instructions: `README.md`.
   agent to author the initial `ui` when the product shape is already known
   (cross-refs `evolve.md` §3).
   **A dropped dashboard is never silent**: the REAL create response echoes `ui`
-  presence (and the CLI prints `dashboard ui: applied|not applied`), and when a
-  provided `ui` validated to null the response carries a `warning` that the CLI shouts
-  to stderr — create still succeeds, just without a dashboard.
+  presence (and the CLI prints `dashboard ui: applied|not applied`). `validateUi`
+  rejects custom primitives missing their required data attrs (`loop-chart.series`,
+  `loop-embed.file|match`, `loop-kanban.columns`); create drops invalid UI with a loud
+  warning while edit/set-ui reject without mutating. Empty UI still clears explicitly.
 - `describe()`/`validCadence` probe crons in the LOOP's timezone (fire times shift
   with it).
 
@@ -583,7 +583,7 @@ computes pure functions. Run instructions: `README.md`.
   loop client-side (like `log`, reusing `log.ts` `resolveLoopId`) then forwards.
 - **No coding-agent SessionStart hook.** Pievo deliberately does not inject its home
   view into every Claude Code/Codex session. Ordinary sessions discover Pievo through
-  the user-scope skill or an explicit `pievo`; daemon edit/evolve/exec runs get their
+  the user-scope skill or an explicit `pievo`; daemon steer/evolve/exec runs get their
   complete context from the server-delivered first user turn. Keep skill installation
   separate from agent hooks; `daemon start` and `new` refresh the skill + PATH shim.
 - **PATH shim** (`bin-shim.ts`): `daemon start`/`new` write a version-consistent `pievo`
@@ -691,10 +691,10 @@ computes pure functions. Run instructions: `README.md`.
   activity is deliberately not exposed. Liveness is the daemon's provider-neutral
   `activeRunIds` poll fact persisted as `runs.heartbeatAt`; the server's inactivity
   sweep uses it instead of output events.
-- **Loop-detail Edit composer (`editVia`)** offers TWO paths: (1) **Dispatch** -
-  `requestEdit({id, instruction})` runs ONE agent pass on the owner's machine
-  (spends credits, no conversation); (2) **Copy prompt** - `copyEditPrompt` copies a
-  self-contained prompt (`lib/editPrompt.ts` `buildEditPrompt`, a PURE + unit-tested
+- **Loop-detail Steer composer (`steerVia`)** offers TWO paths: (1) **Dispatch** -
+  `requestSteer({id, instruction})` runs ONE agent pass on the owner's machine
+  (spends credits, no conversation); (2) **Copy prompt** - `copySteerPrompt` copies a
+  self-contained prompt (`lib/steerPrompt.ts` `buildSteerPrompt`, a PURE + unit-tested
   helper) for the owner to paste into their OWN local coding-agent session and adjust
   the loop conversationally (no dispatch, no credits). The hint names WHERE to run it,
   deriving the loop's on-disk dir from `job.taskFile` via `loopDir` (degrades to a
@@ -715,7 +715,7 @@ computes pure functions. Run instructions: `README.md`.
   things together: (1) `LOOP_TAGS`/`LOOP_ATTRS` + the DOMPurify `uponSanitizeAttribute`
   force-keep hook (data-bearing attrs like `columns`/`match` are otherwise stripped,
   silently blanking the element); (2) the html-react-parser `replace` swap; (3) the
-  skill authoring docs (`evolve.md` §3 + `skill/run/edit.md`, plus `create.md` §2
+  skill authoring docs (`evolve.md` §3 + `skill/run/steer.md`, plus `create.md` §2
   for the `type` vocabulary). Board row is the ONLY horizontal-scroll container
   (`min-w-0 overflow-x-auto`, columns `shrink-0` fixed-width) - a wide board scrolls
   inside its pane, never widening the page. Skill markdown + UI copy is ENGLISH ONLY.

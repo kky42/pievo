@@ -109,7 +109,7 @@
   --color-running-soft: rgba(255, 213, 0, 0.16);
 
   /*
-   * Functional run-result ramp. Role chooses copy (exec/edit/evolve); severity
+   * Functional run-result ramp. Role chooses copy (exec/steer/evolve); severity
    * chooses color: gray = normal no-change, green = kept, red = blocked/error,
    * amber = protocol warning. Reused by the timeline gauge and status pills.
    */
@@ -121,7 +121,7 @@
   --color-run-canceled: var(--color-disabled);
   --color-run-queued: var(--color-secondary);
   --color-run-active-exec: var(--color-display);
-  --color-run-active-edit: color-mix(in srgb, var(--color-accent) 55%, var(--color-interactive));
+  --color-run-active-steer: color-mix(in srgb, var(--color-accent) 55%, var(--color-interactive));
   --color-run-active-evolve: var(--color-interactive);
   /* Legacy aliases kept for old CSS/test references while run result colors settle. */
   --color-run-nothing: var(--color-run-no-change);

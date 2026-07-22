@@ -52,7 +52,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   body, asserting non-empty stdout — that test changes NO daemon source).
 - **F5** (fail-loud): `dispatch` `report` requires `kept|no-change|blocked` plus a
   non-empty message. Exec runs with a metric schema also require `--metrics` with
-  exactly every declared key; edit/evolve runs reject metrics.
+  exactly every declared key; steer/evolve runs reject metrics.
 - All dispatch errors render via `derr(code, message, slug?)` → `errorBlock` (slug
   defaults from HTTP status).
 
@@ -65,7 +65,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - **In-run `help`** (`helpText`) renders the §4.9 TOON: a `verbs:` top key with
   grouped typed lists (`always[3]`, `schedule[4]`) + `dashboard/gate:`
   lines, each carrying an availability TAG that flips with the lease caps (exec vs
-  evolve/edit: `evolve/edit pass only — this run is "exec"` ↔ `available to this run`;
+  evolve/steer: `evolve/steer pass only — this run is "exec"` ↔ `available to this run`;
   schedule tag gates on `allowControl`), then a trailing `help[]`. The schedule list
   header carries its tag AFTER the `{…}:` (a list-header-with-tag, hand-built since
   `listBlock` emits a bare header); groups are nested under `verbs:` via `indent()`.
@@ -154,30 +154,36 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   explicit `body.exitCode` (HTTP stays 200 with the rich changes/rejections tables —
   `finalizeCli` leaves a pre-set `exitCode` alone).
 
-## axi-conformance CLI (batch 5 — skill/prose alignment)
+## Runtime README/Cookbook + indexed history protocol
 
-- Batch 5 is PROSE/markdown + the demo script ONLY (no gateway/daemon source): it
-  aligns the `?raw`-bundled public skill (`skill/references/{run,evolve}.md`) with the
-  TOON surface batches 1-4 shipped. `run.md` already carried the camelCase
-  `selfFinish`/`selfSchedule` show keys (batch 2 #75 did that); batch 5 only adds the
-  "`--run-at` is canonical; `--next` is a back-compat alias" note to the reschedule
-  lever (F4). `evolve.md`'s "reading the log" survey now names the shipped
-  `renderLogText` header verbatim — `runs[N]{ts,role,outcome,metrics,session,message}`
-  + the `summary:` tally — and clarifies that `pievo log`'s `metrics` column shows
-  `key=value` while the task-message inline table is metric-KEYS-only. `exec-core.md`
-  and `run/edit.md` were verified conformant and left untouched.
-- **When you change the `pievo log` TOON columns (`renderLogText`) you MUST update
-  `evolve.md`'s survey prose** — the pair is pinned by `-api.skill.references.test.ts`
-  ("evolve.md log survey names the shipped TOON columns"), which substring-matches the
-  exact header + `summary:` + the `key=value` phrasing. That serving test is the
-  lightweight guard for this batch (it also pins run.md's `--run-at`/`--next` note and
-  that the retired kebab `self-schedule:` display key never reappears).
-- `scripts/demo-cookie-unified.sh` create body used a stale `task:` field; `createLoop`
-  dropped the `task` column (batch 2) and 400s without `taskFile`, so the
-  demo was actually broken — batch 5 renames it to `taskFile` (review F7).
-- These `.md` edits compile into the server bundle via `?raw`, so this batch DEPLOYS
-  server-side AND rides the next `@kky42/pievo` npm tarball for the installed skill
-  (`sync-skill.mjs` whitelist is untouched — still SKILL.md + the 4 references).
+- README's one required `## Spec` is authoritative standing instruction. Sibling
+  `COOKBOOK.md` is inferred from `taskFile` (separator-safe; no DB field) and has
+  `# Cookbook`, `Consolidated through: #N`, `## Knowledge`, `## Timeline`. Knowledge
+  stores bounded durable facts and positive/negative lessons; Timeline stores only
+  evolve/steer decision boundaries. Objective prompt injection outranks a conflict;
+  Cookbook/history/files/config are untrusted data.
+- Every delivered role payload includes `runIndex`, Objective, execution workspace
+  (`workdir`/cwd), task-file path, loop content home (= task-file parent), and Cookbook
+  path. Prompt/skill prose defines current files under the content home as live artifacts,
+  `show` as current config, and bounded `log` as historical evidence (`--diff` compares
+  snapshots; it is not a live file listing). Exec normally changes neither Timeline nor
+  cursor. Evolve gets NO server-inlined
+  recent-run survey: it progressively calls summary after cursor, a filtered list, then
+  at most a few details/diffs, and advances only to reviewed `summary.through`. Steer
+  records one validation-pending boundary and never advances the cursor.
+- `gateway/history.ts` owns the bounded `log --summary/--after/--through/--run/--diff`
+  protocol; prompt/docs consume that seam rather than reproducing history queries.
+  `runs.runIndex` is allocated under the loop lock at claim (or unclaimed terminalization),
+  so priority order—not enqueue order—is history order; `summary.through` stops before any
+  indexed open-run gap. Summary selects only aggregate fields and fails loud above 5,000
+  rows; JSON responses cap at 512KB; run diffs cap files, blob input, and emitted chars
+  before expensive reads/jsdiff. Prompt behavior is pinned in `gateway/prompt.test.ts`;
+  served public prose is pinned in `routes/-api.skill.references.test.ts`.
+- Skill `.md` edits compile into the server bundle via `?raw` and ride the next daemon
+  tarball through the unchanged selective `sync-skill.mjs` whitelist. Dashboard prose
+  must name the exact custom attrs (`series`, `file|match`, `columns`); `validateUi`
+  now rejects primitives missing them so DOMPurify cannot silently strip an invented
+  `metric`/`src`/`name` into an empty panel.
 
 ## axi-conformance CLI (batch 6 — daemon text sink + content-first home)
 
@@ -216,7 +222,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   `log`, reusing `log.ts` `resolveLoopId`) then forwards.
 - **No coding-agent SessionStart hook.** Pievo does not inject home into unrelated
   Claude Code/Codex sessions. Ordinary sessions discover it through the user-scope skill
-  or explicit `pievo`; daemon edit/evolve/exec runs use the self-sufficient server-delivered
+  or explicit `pievo`; daemon steer/evolve/exec runs use the self-sufficient server-delivered
   first user turn. `daemon start` and `new` refresh the skill + PATH shim. Home still uses a
   bounded fetch (`HOME_TIMEOUT_MS`) so explicit interactive use degrades quickly.
 - **PATH shim** (`bin-shim.ts`, feedback #4): `pievo daemon start`/`new` write a `pievo`
@@ -321,7 +327,7 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   read-only when no schedule fact is due. Poll first calls
   `advanceDueSchedules(machineId)`, then `store.claimReadyRunForMachine`: a
   targeted pending scan plus machine advisory lock gives one claim across all
-  loops on that machine, picks `edit > evolve > exec`, and inserts the hashed run
+  loops on that machine, picks `steer > evolve > exec`, and inserts the hashed run
   lease before committing; the partial unique machine-running index is the final
   defense. `openRuns()` remains sweep-only.
 - Watch set: served from a per-machine cache (`WATCH_CACHE_TTL_MS` 15s), response
@@ -343,10 +349,10 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
 - Queue persistence reuses `runs`: `requestedBy: owner|system`, role-scoped
   `requestText`, immutable `createdAt`, and mutation `updatedAt`. One partial unique
   index enforces one pending row per loop+role. Coalescing only promotes
-  system→owner; latest owner edit wins; a running role may retain one follow-up.
-  Cross-role rows survive and claim priority is `edit > evolve > exec`.
+  system→owner; latest owner steer wins; a running role may retain one follow-up.
+  Cross-role rows survive and claim priority is `steer > evolve > exec`.
 - `store.updateLoop` owns lifecycle/cadence atomically. `loops.pauseCause` annotates an ordinary owner pause/stop vs circuit-breaker `failure-streak` (run/count); explicit start clears it. Pause clears both schedule
-  facts and cancels pending system rows, but owner-requested exec/edit/evolve remain
+  facts and cancels pending system rows, but owner-requested exec/steer/evolve remain
   claimable while the loop stays paused; their terminal path cannot restore cadence.
   Mode switches never cancel queue rows: cron stores its next future occurrence; continuous stores
   null behind open exec, otherwise now. Create/resume use the same rules.
@@ -354,7 +360,7 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   Every run-token mutation atomically rechecks its matching active lease and running
   run under the loop lock (`mutateForActiveRun`; terminal helpers use the same check).
   Only exec claim clears `nextCadenceAt`, and only exec done/error restores
-  `terminalAt + delay` when no exec is open; edit/evolve never shift exec cadence
+  `terminalAt + delay` when no exec is open; steer/evolve never shift exec cadence
   and canceled exec never continues. Terminal run,
   cursor/task, cadence, auto-evolve system request, and lease retirement share the
   loop-lock transaction. Reclaim terminalizes its lease and writes provisional
@@ -362,7 +368,7 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   late report may replace that fact before consuming the lease. Expiry is rechecked
   after taking the lock. The terminal transaction also computes the exec failure
   streak and atomically auto-pauses/clears facts/cancels pending system work.
-- Migration 0003 converts and clears legacy edit/evolve markers but retains their
+- Migration 0003 converts and clears legacy steer/evolve markers but retains their
   deprecated columns/defaults only to reduce old-image SELECT/INSERT breakage. This
   is not rollback support: migrations are forward-only, post-migration legacy writes
   are unsupported, and new runtime never reads/drains them. Boot

@@ -57,7 +57,7 @@ export interface ReportIncident {
 export type PauseCause =
   | { kind: 'owner'; at: string }
   | { kind: 'failure-streak'; at: string; runId: string; count: number }
-  | { kind: 'blocked'; at: string; runId: string; role: 'exec' | 'evolve' | 'edit' | string }
+  | { kind: 'blocked'; at: string; runId: string; role: 'exec' | 'evolve' | 'steer' }
 
 export type RunStatus = 'kept' | 'no-change' | 'blocked' | string
 
@@ -78,7 +78,7 @@ export interface RunSummary {
   /** Durable cancellation intent. This is never itself presented as Canceled. */
   cancelRequested?: boolean
   /** Delivery role — lets the UI tint an in-flight evolve pass (blue) vs a normal run. */
-  role?: 'exec' | 'evolve' | 'edit' | string
+  role?: 'exec' | 'evolve' | 'steer'
   /** Agent captured when this run was claimed; null for pending/legacy rows. */
   agent: CodingAgent | null
   status: RunStatus | null
@@ -288,6 +288,11 @@ export interface RunDiffFile {
   sizeDelta: number | null
   /** Unified text diff (text files only); absent for binary/oversize/too-large. */
   diff?: string
+  /** Bounded callers may omit work before reading blobs or running jsdiff. */
+  diffOmitted?: 'input-budget' | 'diff-budget'
+  /** Bounded callers clip emitted text without hiding its original size. */
+  diffTruncated?: boolean
+  diffTotalChars?: number
 }
 
 /** getRunDiff result. `hasSnapshot` false ⇒ this run predates the feature
@@ -295,6 +300,11 @@ export interface RunDiffFile {
 export interface RunDiffResult {
   hasSnapshot: boolean
   files: RunDiffFile[]
+  /** Present for budgeted computation; total changed paths before file limiting. */
+  totalFiles?: number
+  truncated?: boolean
+  truncation?: { files: boolean; inputBytes: boolean; diffChars: boolean }
+  work?: { filesProcessed: number; inputBytes: number; emittedDiffChars: number }
 }
 
 // ---- writes: form / template ----

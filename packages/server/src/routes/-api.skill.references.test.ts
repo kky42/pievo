@@ -71,6 +71,15 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('useful FOR IT')
   })
 
+  test('create.md creates authoritative README plus bounded COOKBOOK siblings', async () => {
+    const body = flat(await (await call('/api/skill/references/create.md')).text())
+    expect(body).toContain('README.md and COOKBOOK.md')
+    expect(body).toContain('one required section')
+    expect(body).toContain('mode: maintenance|optimization|mixed')
+    expect(body).toContain('# Cookbook Consolidated through: #0 ## Knowledge ## Timeline')
+    expect(body).toContain('is not a config field')
+  })
+
   test('create.md drops the removed `task` field + tmp.json ritual, uses inline --json', async () => {
     const body = flat(await (await call('/api/skill/references/create.md')).text())
     // Batch 2 removed the `task` column and the loop.tmp.json config file; create.md
@@ -89,19 +98,23 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('Dashboard at create')
     expect(body).toContain('day-one dashboard')
     expect(body).toContain('evolve.md` §3')
+    expect(body).toContain('<loop-chart series="score:Score"></loop-chart>')
+    expect(body).toContain('<loop-embed file="latest.md"></loop-embed>')
+    expect(body).toContain('dry-run rejects broken primitives')
     // `ui` is now a documented (optional) config field.
     expect(body).toContain('`ui` is optional')
   })
 
-  test('run.md carries the public runtime protocol depth', async () => {
+  test('run.md carries the public README/Cookbook runtime protocol', async () => {
     const body = flat(await (await call('/api/skill/references/run.md')).text())
-    // The task file is the loop's memory, with its three standing sections.
-    expect(body).toContain('## Spec')
-    expect(body).toContain('## Current understanding')
+    expect(body).toContain('one required `## Spec` section')
+    expect(body).toContain('# Cookbook')
+    expect(body).toContain('Consolidated through: #0')
+    expect(body).toContain('## Knowledge')
     expect(body).toContain('## Timeline')
-    // Compress-don't-append discipline.
-    expect(body).toContain('Compress, don\'t append forever')
-    // Surface-only-what-changed nuance.
+    expect(body).toContain('only evolve and steer decision boundaries')
+    expect(body).toContain('pievo log --summary --after N --json')
+    expect(body).toContain('pievo log --run <index> --json')
     expect(body).toContain('surfaces only what is new or changed')
     expect(body).toContain('pievo report --status no-change --message')
     expect(body).toContain('every exec run includes `--metrics`')
@@ -129,22 +142,32 @@ describe('/api/skill/references/$', () => {
     expect(body).not.toContain('self-finish: allowed')
   })
 
-  test('evolve.md log survey names the shipped TOON columns (batch 5)', async () => {
+  test('evolve.md teaches progressive indexed history and reviewed cursor discipline', async () => {
     const body = flat(await (await call('/api/skill/references/evolve.md')).text())
-    // The "reading the log" prose matches the server's `renderLogText` header + summary.
-    expect(body).toContain('runs[N]{ts,role,phase,status,metrics,session,message}')
-    expect(body).toContain('`summary:`')
-    // `pievo log` shows metric values as key=value; the task-message inline is keys-only.
-    expect(body).toContain('concise `key=value` survey')
+    expect(body).toContain('pievo log --summary --after N --json')
+    expect(body).toContain('pievo log --after N --role exec --limit 20 --json')
+    expect(body).toContain('pievo log --run <index> --json')
+    expect(body).toContain('summary.through')
+    expect(body).toContain('Maintenance `no-change` can mean')
+    expect(body).toContain('Optimization `no-change` can be useful negative evidence')
+    expect(body).toContain('Execution workspace (cwd)')
+    expect(body).toContain('Loop content home')
+    expect(body).toContain('a diff does not replace inspecting the current live files')
+    expect(body).toContain('<loop-chart series="score:Score:%"></loop-chart>')
+    expect(body).toContain('<loop-embed file="latest.md"></loop-embed>')
+    expect(body).toContain('Do not invent `metric`, `src`, `name`, `type`, or `height` attributes')
   })
 
-  test('run.md is dual-audience (in-run enrichment + owner-readable), not edit-run mechanics', async () => {
+  test('run.md is dual-audience (in-run enrichment + owner-readable), not steer-run mechanics', async () => {
     const body = flat(await (await call('/api/skill/references/run.md')).text())
     // Explicitly addresses both the in-run agent and the owner reading the skill.
     expect(body).toContain('Two audiences')
     // The prompt's inline CORE stays authoritative; the skill is enrichment.
     expect(body).toContain('your prompt wins')
-    // OQ1 scope guard: the edit-run CORE stays server-internal — no set-*/edit-run
+    expect(body).toContain('Execution workspace (cwd)')
+    expect(body).toContain('Loop content home')
+    expect(body).toContain('the diff is not a live file listing')
+    // OQ1 scope guard: the steer-run CORE stays server-internal — no set-*/steer-run
     // verb mechanics leak into the public run protocol.
     expect(body).not.toContain('set-ui')
     expect(body).not.toContain('set-schema')
@@ -157,9 +180,9 @@ describe('/api/skill/references/$', () => {
   })
 
   test('internal run prompts are NOT served (public surface = create/update/evolve only)', async () => {
-    // exec-core.md / edit.md live under skill/run/ — internal run-dispatch only. They
+    // exec-core.md / steer.md live under skill/run/ — internal run-dispatch only. They
     // must never leak through the public references route (or the npm bundle).
-    for (const name of ['exec-core.md', 'edit.md', 'control-on.md', 'control-off.md']) {
+    for (const name of ['exec-core.md', 'steer.md', 'edit.md', 'control-on.md', 'control-off.md']) {
       const res = await call(`/api/skill/references/${name}`)
       expect(res.status).toBe(404)
     }

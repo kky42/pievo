@@ -15,7 +15,7 @@ vi.mock('../server/loopApi', () => ({
   getJobDetail: vi.fn(async () => h.detail), loadOlderRuns: vi.fn(async () => []),
   deleteJob: h.del, forceDeleteJob: vi.fn(async () => ({ ok: true, deleted: true })),
   pauseJob: h.pause, startJob: vi.fn(async () => ({ ok: true })), stopJob: vi.fn(async () => ({ ok: true, waiting: true })),
-  evolveJob: vi.fn(async () => ({})), patchJob: vi.fn(async () => ({})), requestEdit: vi.fn(async () => ({})), runJob: vi.fn(async () => ({})),
+  evolveJob: vi.fn(async () => ({})), patchJob: vi.fn(async () => ({})), requestSteer: vi.fn(async () => ({})), runJob: vi.fn(async () => ({})),
   getRunDiff: vi.fn(async () => null), stopRun: vi.fn(async () => ({ ok: true, waiting: true })),
 }))
 vi.mock('../server/notifyFns', () => ({ listChannels: vi.fn(async () => []) }))
@@ -39,7 +39,7 @@ function makeDetail(over: { state?: DetailState; online?: boolean; protocol?: nu
     job: { id: 'l1', cron: '0 6 * * *', scheduleMode: 'cron', continuousDelayMinutes: 1, enabled, notify: 'auto', agent: 'claude-code', exec: { executor: 'claude-code', workdir: '/tmp/project' } },
     summary: { id: 'l1', name: 'Lifecycle loop', cron: '0 6 * * *', kind: 'exec:claude-code', enabled, notify: 'auto', nextRun: null, running, lastRunTs: running ? r.ts : null, graduation: null, deleteRequestedAt, runs: running ? [r] : [], runCount: running ? 1 : 0 },
     taskFileContent: null, taskFileSyncedAt: null, runs: running ? [r] : [],
-    machine: { id: 'm1', name: 'MacBook Pro', online: over.online ?? true, presence: (over.online ?? true) ? 'online' : 'offline', lastSeen: null, daemonProtocol: over.protocol === undefined ? 2 : over.protocol, daemonVersion: '2.0.3', needsUpdate: false, requiredDaemonVersion: '2.0.3' },
+    machine: { id: 'm1', name: 'MacBook Pro', online: over.online ?? true, presence: (over.online ?? true) ? 'online' : 'offline', lastSeen: null, daemonProtocol: over.protocol === undefined ? 2 : over.protocol, daemonVersion: '2.0.4', needsUpdate: false, requiredDaemonVersion: '2.0.4' },
   }
 }
 
@@ -68,9 +68,9 @@ afterEach(async () => {
 
 describe('LoopDetailView flat lifecycle actions', () => {
   it.each([
-    ['active', ['Run once', 'Agent edit', 'Evolve once', 'Settings', 'Pause', 'Delete'], ['Start', 'Stop']],
-    ['paused', ['Run once', 'Agent edit', 'Evolve once', 'Settings', 'Start', 'Delete'], ['Pause', 'Stop']],
-    ['deleting', [], ['Run once', 'Agent edit', 'Evolve once', 'Settings', 'Start', 'Pause', 'Stop', 'Deleting…']],
+    ['active', ['Run once', 'Steer', 'Evolve once', 'Settings', 'Pause', 'Delete'], ['Start', 'Stop']],
+    ['paused', ['Run once', 'Steer', 'Evolve once', 'Settings', 'Start', 'Delete'], ['Pause', 'Stop']],
+    ['deleting', [], ['Run once', 'Steer', 'Evolve once', 'Settings', 'Start', 'Pause', 'Stop', 'Deleting…']],
   ] as const)('shows every action with the %s availability matrix', async (state, on, off) => {
     await mount(makeDetail({ state }))
     expect(host!.querySelector('[aria-label="More actions"]')).toBeNull()
@@ -91,12 +91,12 @@ describe('LoopDetailView flat lifecycle actions', () => {
     expect(button('Stop')?.title).toContain('Daemon upgrade required')
   })
 
-  it('executes non-delete actions directly and Agent edit has no Settings sub-entry', async () => {
+  it('executes non-delete actions directly and Steer has no Settings sub-entry', async () => {
     await mount(makeDetail({ state: 'active' }))
     await act(async () => { button('Pause')!.click(); await Promise.resolve() })
     expect(h.pause).toHaveBeenCalledOnce()
     expect(host!.textContent).not.toContain('Pause future runs?')
-    await act(async () => { button('Agent edit')!.click(); await Promise.resolve() })
+    await act(async () => { button('Steer')!.click(); await Promise.resolve() })
     expect(host!.textContent).toContain('Dispatch to your coding agent')
     expect(host!.textContent).toContain('Copy prompt')
     expect(host!.textContent).not.toContain('Manual settings')

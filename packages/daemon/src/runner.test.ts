@@ -214,6 +214,7 @@ afterEach(() => {
 function delivery(overrides: Partial<Delivery> = {}): Delivery {
   return {
     runId: "run-1",
+    runIndex: 1,
     runToken: "tok-1",
     role: "exec",
     loop: {

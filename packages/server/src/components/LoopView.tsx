@@ -26,7 +26,7 @@ import { LoopKanban } from './LoopKanban'
  *
  * Registering a new primitive means moving three things together: LOOP_TAGS +
  * the sanitizer config below, the parser swap in `options`, and the skill's
- * authoring docs (references/evolve.md §3, run/edit.md) - the sanitizer
+ * authoring docs (references/evolve.md §3, run/steer.md) - the sanitizer
  * allowlist and the skill prose must never drift apart.
  */
 

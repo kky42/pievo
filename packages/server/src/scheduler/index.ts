@@ -89,8 +89,8 @@ export class Scheduler {
     return this.enqueue(id, { role: "evolve", requestedBy: "owner" });
   }
 
-  requestEdit(id: string, instruction: string): Promise<QueueResult> {
-    return this.enqueue(id, { role: "edit", requestedBy: "owner", requestText: instruction });
+  requestSteer(id: string, instruction: string): Promise<QueueResult> {
+    return this.enqueue(id, { role: "steer", requestedBy: "owner", requestText: instruction });
   }
 
   /** Poll fallback and timer callback converge here. */

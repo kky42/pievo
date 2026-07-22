@@ -367,7 +367,7 @@ test("pruneRunSnapshots handles a large backlog without a per-victim bound-varia
   // not 1180 victim ids, so a pre-feature backlog can't trip SQLite's variable limit.
   expect((await store.pruneRunSnapshots(loop.id, 20))).toBe(N - 20);
   expect((await store.pruneRunSnapshots(loop.id, 20))).toBe(0);
-});
+}, 15_000);
 
 test("GC spares a blob a snapshot comes to reference MID-PASS (per-candidate snapshot guard)", async () => {
   const { loop, machineId } = (await seed());

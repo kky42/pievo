@@ -89,9 +89,11 @@ describe("classify lifecycle routing", () => {
     expect(classify(["--api-key", "dk_x"], {})).toEqual({ kind: "unknown", verb: "--api-key" });
   });
 
-  test("loop lifecycle verbs remain interactive", () => {
+  test("owner loop verbs remain interactive", () => {
     expect(classify(["start", "loop-1"], {})).toEqual({ kind: "interactive", argv: ["start", "loop-1"] });
     expect(classify(["stop", "loop-1"], {})).toEqual({ kind: "interactive", argv: ["stop", "loop-1"] });
+    expect(classify(["steer", "loop-1", "--message", "change it"], {})).toEqual({ kind: "interactive", argv: ["steer", "loop-1", "--message", "change it"] });
+    expect(classify(["steer", "--help"], {})).toEqual({ kind: "help", verb: "steer" });
   });
 
   test("in-run routing still wins", () => {

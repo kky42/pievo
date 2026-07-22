@@ -53,8 +53,10 @@ Setup and management
   skill [status|install]  Manage the user-scope pievo agent skill install.
   show [<id>]             Show a loop's full editable config + recent runs (the
                           device credential inspects any loop on this machine).
-  log [<loop>]            Show a loop's recent runs (status, metrics, session id;
-                          --json for machines).
+  log [<loop>]            Show indexed terminal history. Use --summary for bounded
+                          role/result/token/runtime aggregates, --after/--since for
+                          windows, and --run <index> [--diff] for one run; --json
+                          emits normalized server-rendered JSON.
 
 Interactive
   pause <loop>            Pause future runs; current work continues.
@@ -65,8 +67,10 @@ Interactive
   loops [--fields a,b]    List your loops (default columns id/name/cron/enabled/
                           nextFire; --fields adds timezone/notify/model/goal/
                           taskFile/runs/lastOutcome; --json for machines).
-  edit <id> --json '<obj>'  Edit a loop (JSON-only + --ui-file/--schema-file;
-                          --dry-run previews before/after).
+  edit <id> --json '<obj>'  Edit loop configuration (JSON-only + --ui-file/
+                          --schema-file; --dry-run previews before/after).
+  steer <id> --message <text>  Queue one owner steer pass; --message-file reads
+                          the instruction from a file.
 ```
 
 Run `pievo --help` for the full usage text. Nested lifecycle help such as

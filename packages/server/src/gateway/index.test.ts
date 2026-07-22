@@ -64,6 +64,9 @@ function gateway(
       addLoop(): void {},
       removeLoop(): void {},
       runNow(): void {},
+      requestSteer(id: string, instruction: string) {
+        return store.enqueueRun(id, { role: "steer", requestedBy: "owner", requestText: instruction });
+      },
     } as any,
     undefined, // default local blobstore under the test PIEVO_DATA_DIR
     notify,
@@ -193,7 +196,7 @@ test("show reports the run's effective self-schedule capability", async () => {
   expect(allowed).toContain(`cron: "${loop.cron}"`);
   const off = (await showText(false));
   expect(off).toContain("selfSchedule: off");
-  // An evolve/edit pass carries the effective (structural) capability, so it reads allowed.
+  // An evolve/steer pass carries the effective (structural) capability, so it reads allowed.
   expect((await showText(true, "evolve"))).toContain("selfSchedule: allowed");
 });
 
@@ -223,7 +226,7 @@ test("help (and a bare/unknown-flag invocation) returns role-aware usage", async
   }
   // An exec run can't set-* or control → the availability TAGS say so, not "available".
   const execHelp = (await helpText(["help"]));
-  expect(execHelp).toContain('dashboard: evolve/edit pass only — this run is "exec"');
+  expect(execHelp).toContain('dashboard: evolve/steer pass only — this run is "exec"');
   expect(execHelp).toContain("schedule[4]{verb,syntax}: needs allowControl (off for this loop)");
   expect(execHelp).not.toContain("finish:");
 
@@ -442,9 +445,9 @@ test("owner cadence edits and run-token resume synchronously persist facts then 
 
   await store.updateLoop(loop.id, { enabled: false });
   const editRun = await store.addRun({
-    loopId: loop.id, userId: "u1", machineId, phase: "running", role: "edit", requestedBy: "owner", ts: new Date().toISOString(),
+    loopId: loop.id, userId: "u1", machineId, phase: "running", role: "steer", requestedBy: "owner", ts: new Date().toISOString(),
   });
-  const rt = await tokens.registerRunLease({ runId: editRun.id, loopId: loop.id, machineId, role: "edit", allowControl: true });
+  const rt = await tokens.registerRunLease({ runId: editRun.id, loopId: loop.id, machineId, role: "steer", allowControl: true });
   const cli = new cliMod.CliGateway(core);
   expect((await cli.agentApi(rt, ["resume"])).status).toBe(200);
   expect((await store.getLoop(loop.id))!.enabled).toBe(true);
@@ -452,9 +455,9 @@ test("owner cadence edits and run-token resume synchronously persist facts then 
   await store.updateRun(editRun.id, { phase: "canceled" });
   await tokens.retireLease(rt);
   const editRun2 = await store.addRun({
-    loopId: loop.id, userId: "u1", machineId, phase: "running", role: "edit", requestedBy: "owner", ts: new Date().toISOString(),
+    loopId: loop.id, userId: "u1", machineId, phase: "running", role: "steer", requestedBy: "owner", ts: new Date().toISOString(),
   });
-  const rt2 = await tokens.registerRunLease({ runId: editRun2.id, loopId: loop.id, machineId, role: "edit", allowControl: true });
+  const rt2 = await tokens.registerRunLease({ runId: editRun2.id, loopId: loop.id, machineId, role: "steer", allowControl: true });
   expect((await cli.agentApi(rt2, ["set-schedule", "continuous", "--delay-minutes", "20"])).status).toBe(200);
   expect(added).toEqual([loop.id, loop.id, loop.id]);
 });
@@ -721,7 +724,7 @@ test("pollV2 with an old or unknown daemon version does not claim pending work",
   const old = await gateway().pollV2(token, { protocolVersion: 2, info: { host: "mac", version: "2.0.2" } });
   expect(old.status).toBe(200);
   expect((old.body as any).delivery).toBeNull();
-  expect((old.body as any).needsUpdate).toMatchObject({ current: "2.0.2", required: "2.0.3" });
+  expect((old.body as any).needsUpdate).toMatchObject({ current: "2.0.2", required: "2.0.4" });
   expect((await store.getRun(run.id))!.phase).toBe("pending");
 });
 
@@ -729,33 +732,33 @@ test("pollV2 with a compatible daemon version can claim pending work", async () 
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", model: "snapshot-model", reasoningEffort: "high", agent: "codex" });
   const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() });
 
-  const res = await gateway().pollV2(token, { protocolVersion: 2, info: { host: "mac", version: "2.0.3" } });
+  const res = await gateway().pollV2(token, { protocolVersion: 2, info: { host: "mac", version: "2.0.4" } });
   expect(res.status).toBe(200);
-  expect((res.body as any).delivery.runId).toBe(run.id);
+  expect((res.body as any).delivery).toMatchObject({ runId: run.id, runIndex: 1 });
   expect((res.body as any).needsUpdate).toBeUndefined();
-  expect((await store.getRun(run.id))!.phase).toBe("running");
+  expect((await store.getRun(run.id))!).toMatchObject({ phase: "running", runIndex: 1, agent: "codex", model: "snapshot-model", reasoningEffort: "high" });
 });
 
-test("poll claims only one ready run per loop and honors edit > evolve > exec", async () => {
+test("poll claims only one ready run per loop and honors steer > evolve > exec", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
   await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });
   await store.enqueueRun(loop.id, { role: "evolve", requestedBy: "owner" });
-  await store.enqueueRun(loop.id, { role: "edit", requestedBy: "owner", requestText: "latest" });
+  await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "latest" });
 
   const gw = gateway();
   const first = (await gw.poll(token)).body as { deliveries: Array<{ runId: string; role: string; task: string }> };
   expect(first.deliveries).toHaveLength(1);
-  expect(first.deliveries[0]!.role).toBe("edit");
+  expect(first.deliveries[0]!.role).toBe("steer");
   expect(first.deliveries[0]!.task).toContain("latest");
   expect((await store.openRunsForLoop(loop.id)).filter((r) => r.phase === "pending")).toHaveLength(2);
 
-  // Even a second poll cannot drain the other roles while edit is running.
+  // Even a second poll cannot drain the other roles while steer is running.
   expect(((await gw.poll(token)).body as { deliveries: unknown[] }).deliveries).toHaveLength(0);
   await store.updateRun(first.deliveries[0]!.runId, { phase: "done" });
   await tokens.retireLease((first.deliveries[0] as any).runToken);
@@ -765,7 +768,7 @@ test("poll claims only one ready run per loop and honors edit > evolve > exec", 
 
 test("set-tz applies the timezone through an allowControl run token", async () => {
   const { loop, machine, run } = (await seededLoop());
-  const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "edit", allowControl: true });
+  const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "steer", allowControl: true });
   const res = (await gateway().agentApi(token, ["set-tz", "Asia/Tokyo"]));
   expect(res.status).toBe(200);
   expect((await store.getLoop(loop.id))!.timezone).toBe("Asia/Tokyo");
@@ -775,19 +778,19 @@ test("set-tz applies the timezone through an allowControl run token", async () =
   expect((await store.getLoop(loop.id))!.timezone).toBe("Asia/Tokyo"); // unchanged
 });
 
-test("finishing running edit A does not clear queued edit B", async () => {
+test("finishing running steer A does not clear queued steer B", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
-  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "edit", requestedBy: "owner", requestText: "A", ts: new Date().toISOString() });
-  const followUp = await store.enqueueRun(loop.id, { role: "edit", requestedBy: "owner", requestText: "B" });
-  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "edit", allowControl: true });
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "steer", requestedBy: "owner", requestText: "A", ts: new Date().toISOString() });
+  const followUp = await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "B" });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "steer", allowControl: true });
 
   const res = await gateway().report(rt, { result: "success" as const, durationMs: 5 });
   expect(res.status).toBe(200);
   expect("run" in followUp).toBe(true);
-  const waiting = (await store.openRunsForLoop(loop.id)).find((r) => r.phase === "pending" && r.role === "edit");
+  const waiting = (await store.openRunsForLoop(loop.id)).find((r) => r.phase === "pending" && r.role === "steer");
   expect(waiting).toMatchObject({ requestText: "B", requestedBy: "owner" });
 });
 
@@ -982,7 +985,7 @@ test("editLoop --dry-run reports whitelist + invalid-value rejections (ok:false)
 
 test("set-schedule applies the run cadence floor to continuous delay and the retained cron", async () => {
   const { loop, machine, run } = await seededLoop();
-  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "edit", allowControl: true });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "steer", allowControl: true });
   const gw = gateway();
 
   const tooFastContinuous = await gw.agentApi(rt, ["set-schedule", "continuous", "--delay-minutes", "3"]);
@@ -1132,7 +1135,7 @@ test("a success between failures resets the streak so the next failure re-alerts
   expect(sent).toHaveLength(1);
 });
 
-test("evolve and edit run failures never produce user-facing failure notifications", async () => {
+test("evolve and steer run failures never produce user-facing failure notifications", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
@@ -1140,7 +1143,7 @@ test("evolve and edit run failures never produce user-facing failure notificatio
   const { sent, fn } = recordingNotify();
   const gw = gateway(fn);
 
-  for (const role of ["evolve", "edit"] as const) {
+  for (const role of ["evolve", "steer"] as const) {
     const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role, ts: new Date().toISOString() }));
     const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role, allowControl: true });
     (await gw.report(rt, { result: "failure" as const, error: "boom", durationMs: 1 }));
@@ -1220,8 +1223,8 @@ test("blocked status pauses the loop for any role and outranks canceled terminal
   await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" });
   await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });
-  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "edit", requestedBy: "owner", requestText: "fix", ts: new Date().toISOString() });
-  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "edit", allowControl: true });
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "steer", requestedBy: "owner", requestText: "fix", ts: new Date().toISOString() });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "steer", allowControl: true });
   const gw = gateway();
 
   expect((await gw.cli(rt, ["report", "--status", "blocked", "--message", "owner-only goal change required"])).status).toBe(200);
@@ -1232,7 +1235,7 @@ test("blocked status pauses the loop for any role and outranks canceled terminal
   expect(finalized.status).toBe("blocked");
   const paused = (await store.getLoop(loop.id))!;
   expect(paused.enabled).toBe(false);
-  expect(paused.pauseCause).toMatchObject({ kind: "blocked", runId: run.id, role: "edit" });
+  expect(paused.pauseCause).toMatchObject({ kind: "blocked", runId: run.id, role: "steer" });
   expect((await store.openRunsForLoop(loop.id)).filter((r) => r.phase === "pending" && r.requestedBy === "system")).toHaveLength(0);
 });
 
@@ -1243,7 +1246,7 @@ test("report requires a valid status and a non-empty message for every run role"
   const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" });
   const gw = gateway();
 
-  for (const role of ["exec", "edit", "evolve"] as const) {
+  for (const role of ["exec", "steer", "evolve"] as const) {
     const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role, ts: new Date().toISOString() });
     const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role, allowControl: true });
     expect((await gw.cli(rt, ["report", "--status", "wibble", "--message", "done"])).status).toBe(400);
@@ -1316,7 +1319,7 @@ test("manual follow-ups are not reclaimed while blocked by a running role or a l
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" });
-  await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "edit", requestedBy: "owner", requestText: "A", ts: new Date().toISOString() });
+  await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "steer", requestedBy: "owner", requestText: "A", ts: new Date().toISOString() });
   const queued = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", requestedBy: "owner", ts: new Date(Date.now() - 8 * 86_400_000).toISOString() });
   const gw = gateway();
 
@@ -1704,13 +1707,13 @@ test("exec report requires complete declared metrics and accepts negative/null v
   expect((await store.getRun(run.id)) as any).toMatchObject({ metrics: { delta: -2, missing: null } });
 });
 
-test("edit/evolve reports reject metrics", async () => {
+test("steer/evolve reports reject metrics", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" });
   const gw = gateway();
-  for (const role of ["edit", "evolve"] as const) {
+  for (const role of ["steer", "evolve"] as const) {
     const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role, ts: new Date().toISOString() });
     const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role, allowControl: true });
     expect((await gw.agentApi(rt, ["report", "--status", "kept", "--message", "updated", "--metrics", '{"x":1}'])).status).toBe(400);
@@ -1796,13 +1799,13 @@ test("cli branches by credential: dk_ prefix → device path, bare-UUID → run 
 });
 
 test("cli run credential: log returns the run's OWN-loop history (closes the note.md seam)", async () => {
-  const { runToken, loop, run } = (await seededCli());
-  (await store.updateRun(run.id, { status: "kept", message: "did a thing", sessionId: "sess-abc" }));
+  const { runToken, loop, machineId } = (await seededCli());
+  const historical = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "steer", requestedBy: "owner", status: "kept", message: "did a thing", sessionId: "sess-abc", ts: new Date().toISOString() });
   const res = (await gateway().cli(runToken, ["log"]));
   expect(res.status).toBe(200);
   const body = res.body as any;
   expect(body.text).toContain(loop.id); // loopId is render-only (stripped); the survey text carries it
-  expect(body.runs.some((r: any) => r.id === run.id && r.message === "did a thing")).toBe(true); // runs channel retained
+  expect(body.runs.some((r: any) => r.id === historical.id && r.role === "steer" && r.message === "did a thing")).toBe(true); // runs channel retained
   // Batch 4 wired a `log` case into dispatch, so the legacy `/agent-api/loop`
   // transport now yields the run's OWN-loop log too — the help that advertises
   // `log` is truthful on both transports (the seam is closed everywhere).
@@ -1823,7 +1826,7 @@ test("cli run credential: show is scoped to the run's own loop with its caps", a
 test("cli run credential: owner-only verbs are 403, not unknown-command", async () => {
   const { runToken } = (await seededCli());
   const gw = gateway();
-  for (const argv of [["new"], ["edit"], ["loops"], ["start"], ["stop"], ["delete"], ["run", "stop", "r"]]) {
+  for (const argv of [["new"], ["edit"], ["steer"], ["loops"], ["start"], ["stop"], ["delete"], ["run", "stop", "r"]]) {
     const res = (await gw.cli(runToken, argv));
     expect(res.status).toBe(403);
     expect((res.body as { text: string }).text).toMatch(/device credential|own loop/);
@@ -2051,10 +2054,10 @@ test("per-verb --help (run credential): role-aware syntax + availability from th
   expect(report).toContain("--status kept|no-change|blocked");
   expect(report).toContain('availability: "always available"');
 
-  // A structural set-* verb reflects the (missing) evolve/edit cap on an exec run.
+  // A structural set-* verb reflects the (missing) evolve/steer cap on an exec run.
   const setUi = ((await gw.cli(runToken, ["set-ui", "--help"])).body as { text: string }).text;
   expect(setUi).toContain("verb: set-ui");
-  expect(setUi).toContain("evolve/edit pass only");
+  expect(setUi).toContain("evolve/steer pass only");
 });
 
 test("per-verb --help (device credential): owner verbs print full syntax + templates, no availability line", async () => {
@@ -2125,6 +2128,26 @@ test("cli device credential: new/edit/loops/log/show route to the existing gatew
   const show = (await gw.cli(deviceToken, ["show", newId]));
   expect(show.status).toBe(200);
   expect((show.body as { text: string }).text).toContain('cron: "0 9 * * *"');
+});
+
+test("cli device credential: steer queues and coalesces the latest owner instruction", async () => {
+  const { deviceToken, loop } = await seededCli();
+  // seededCli has a running exec, so the steer remains pending and can coalesce.
+  const first = await gateway().cli(deviceToken, ["steer", loop.id, "--message", "first instruction"]);
+  const second = await gateway().cli(deviceToken, ["steer", loop.id, "--message", "latest instruction"]);
+  expect(first.status).toBe(200);
+  expect(second.status).toBe(200);
+  expect(textOf(second)).toContain("updated instruction");
+  const pending = (await store.openRunsForLoop(loop.id)).filter((run) => run.phase === "pending" && run.role === "steer");
+  expect(pending).toHaveLength(1);
+  expect(pending[0]?.requestText).toBe("latest instruction");
+});
+
+test("cli device credential: steer validates ownership and message", async () => {
+  const { deviceToken, loop } = await seededCli();
+  expect((await gateway().cli(deviceToken, ["steer", loop.id])).status).toBe(400);
+  expect((await gateway().cli(deviceToken, ["steer", loop.id, "--message", "   "])).status).toBe(400);
+  expect((await gateway().cli(deviceToken, ["steer", "missing", "--message", "x"])).status).toBe(404);
 });
 
 test("cli device credential: edit honors --dry-run (validate-only, no persistence)", async () => {

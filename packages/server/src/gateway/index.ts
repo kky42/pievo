@@ -318,7 +318,7 @@ export class MachineGateway {
   /**
    * Alert the user that an exec run FAILED (error / timeout / machine-offline),
    * through the loop's chosen channel, gated by the anti-spam streak policy
-   * (`shouldNotifyFailure` over `store.execFailureStreak`). Evolve/edit runs are
+   * (`shouldNotifyFailure` over `store.execFailureStreak`). Evolve/steer runs are
    * internal — they never produce user-facing failure noise. Best-effort + non-
    * throwing: the run's error is already on the dashboard regardless. Call AFTER
    * the run row has been finalized to `error`, so the streak count includes it.
@@ -921,14 +921,14 @@ export class MachineGateway {
       metricSchema = parsedMetricSchema.value;
     }
     // Optional day-one dashboard — same validate/clip surface as `set-ui` (editLoop).
-    // Sanitized to the allowed tags/attrs; an unusable value coerces to null.
-    const ui = validateUi(str(body.ui)?.slice(0, WIRE_TEXT_CAP) ?? "").value;
-    // A dashboard the caller PROVIDED but that validated to nothing must never vanish
-    // silently — surface it (dry-run + real create) so a dropped dashboard is LOUD.
-    // The create still succeeds; the loop just has no dashboard until it's fixed.
+    // A dashboard the caller PROVIDED but that is empty or has a broken custom
+    // primitive must never vanish silently. Create remains non-fatal but drops it
+    // with a loud warning; dry-run gives the agent a chance to repair it first.
+    const uiResult = validateUi(str(body.ui)?.slice(0, WIRE_TEXT_CAP) ?? "");
+    const ui = uiResult.ok ? uiResult.value : null;
     const uiDropped = body.ui != null && body.ui !== "" && ui == null;
     const uiWarning = uiDropped
-      ? "the provided ui was empty after validation and was NOT applied — the loop was created without a dashboard"
+      ? `the provided ui was NOT applied — ${uiResult.ok ? "it was empty after validation" : uiResult.detail}; the loop was created without a dashboard`
       : undefined;
 
     // Validate-only (`pievo new --dry-run`): every check above has passed, so
@@ -1109,7 +1109,7 @@ export class MachineGateway {
         // paused loop shows no next fire (— in the cell), matching §4.2.
         const nextFire = l.enabled && l.scheduleMode === "cron" ? (nextFires(l.cron, l.timezone, 1)[0] ?? null) : null;
         // The last-result cell tracks the newest EXEC (scheduled) run, aligning with
-        // `show` — a later successful evolve/edit must never mask a failed scheduled run.
+        // `show` — a later successful evolve/steer must never mask a failed scheduled run.
         const last = wantLastResult ? await store.lastExecRun(l.id) : undefined;
         return {
           id: l.id,
@@ -1403,14 +1403,18 @@ export class MachineGateway {
       }
     }
     // Content fields reuse the SAME validators the run-token set-* path uses, so
-    // the owner edit surface can't drift from the evolve/edit run behavior. They
+    // the owner edit surface can't drift from the evolve/steer run behavior. They
     // also get the same wire clip discipline as createLoop.
     // Content fields accept `null` as an explicit clear (what `show --json` re-feeds
     // when the field is unset — a no-op when already null, so the roundtrip holds).
     if (p.ui !== undefined) {
       if (p.ui === null) set("ui", null, loop.ui);
       else if (typeof p.ui !== "string") rejections.push({ key: "ui", reason: "ui must be a string (the dashboard HTML)" });
-      else set("ui", validateUi(clipText(p.ui, WIRE_TEXT_CAP)).value, loop.ui);
+      else {
+        const v = validateUi(clipText(p.ui, WIRE_TEXT_CAP));
+        if (!v.ok) rejections.push({ key: "ui", reason: v.detail });
+        else set("ui", v.value, loop.ui);
+      }
     }
     if (p.metricSchema !== undefined) {
       if (p.metricSchema === null) set("metricSchema", null, loop.metricSchema);
@@ -1587,7 +1591,7 @@ export class MachineGateway {
       log.warn({ runId: lease.runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
     }
     const finalized = reconciled.run;
-    if (!deleting && ok && lease.role !== "evolve" && lease.role !== "edit") {
+    if (!deleting && ok && lease.role !== "evolve" && lease.role !== "steer") {
       const loop = await store.getLoop(lease.loopId);
       if (finalized.message && loop && shouldNotify(loop.notify, finalized.status ?? null)) {
         this.pushNotify(loop, finalized.message);
@@ -1806,7 +1810,7 @@ export class MachineGateway {
     // This only refreshes the best-effort timer.
     this.scheduler.addLoop(terminal.loop);
 
-    // Notify (the loop's chosen channel), best-effort. Edit/evolve runs are
+    // Notify (the loop's chosen channel), best-effort. Steer/evolve runs are
     // internal (owner config change / self-shaping) — never user-facing, success
     // OR failure. `updateRun` already returned the finalized row.
     if (!deleting && lease.role === "exec") {
@@ -1982,7 +1986,7 @@ export const LOG_MESSAGE_CELL_CAP = 100;
 
 interface LogRun {
   ts: string;
-  role: string;
+  role: RunRole;
   phase: string;
   status: string | null;
   sessionId: string | null;

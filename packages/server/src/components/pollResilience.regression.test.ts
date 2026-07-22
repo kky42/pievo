@@ -11,11 +11,11 @@ import { describe, expect, it } from 'vitest'
  * must clear `err` on success, and the error view must offer a Retry (mirroring
  * RunDetailView's).
  *
- * (2) LoopDetailView: dispatching a SECOND edit in a page session must track the
- * server-returned durable run id (including a coalesced existing pending edit),
+ * (2) LoopDetailView: dispatching a SECOND steer in a page session must track the
+ * server-returned durable run id (including a coalesced existing pending steer),
  * rather than guessing from unseen rows, and clear the accumulated progress log.
  * (The transcript variant of this bug
- * died with the takeover: the settled transcript now lives on the edit run's
+ * died with the takeover: the settled transcript now lives on the steer run's
  * own detail page.)
  *
  * (3) ComposeModal: the claimStatus setInterval tick had no rejection handler —
@@ -44,11 +44,11 @@ describe('LoopDetailView poll/error resilience', () => {
     expect(errView).toContain('void load()')
   })
 
-  it('starts a fresh dispatch from a clean slate (second edit tracks its own run)', () => {
-    const dispatch = /async function onRequestEdit\(\) \{[\s\S]*?\n  \}/.exec(src)?.[0]
-    expect(dispatch, 'onRequestEdit should exist').toBeTruthy()
-    expect(dispatch).toContain('setEditRunId(r.runId ?? null)')
-    expect(dispatch).not.toContain('setEditLog')
+  it('starts a fresh dispatch from a clean slate (second steer tracks its own run)', () => {
+    const dispatch = /async function onRequestSteer\(\) \{[\s\S]*?\n  \}/.exec(src)?.[0]
+    expect(dispatch, 'onRequestSteer should exist').toBeTruthy()
+    expect(dispatch).toContain('setSteerRunId(r.runId ?? null)')
+    expect(dispatch).not.toContain('setSteerLog')
   })
 })
 

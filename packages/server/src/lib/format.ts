@@ -104,18 +104,18 @@ export const ST = {
   canceled: { c: 'var(--color-run-canceled)', label: 'Canceled' },
   queued: { c: 'var(--color-run-queued)', label: 'Queued' },
   'active-exec': { c: 'var(--color-run-active-exec)', label: 'Running…' },
-  'active-edit': { c: 'var(--color-run-active-edit)', label: 'Editing…' },
+  'active-steer': { c: 'var(--color-run-active-steer)', label: 'Steering…' },
   'active-evolve': { c: 'var(--color-run-active-evolve)', label: 'Evolving…' },
 } satisfies Record<string, StatusMeta>
 
 const statusMeta = (k: string | null | undefined): StatusMeta | undefined =>
   k === 'kept' || k === 'no-change' || k === 'blocked' ? ST[k] : undefined
 
-const roleWord = (r: RunSummary): 'exec' | 'edit' | 'evolve' =>
-  r.role === 'edit' ? 'edit' : r.role === 'evolve' ? 'evolve' : 'exec'
+const roleWord = (r: RunSummary): 'exec' | 'steer' | 'evolve' =>
+  r.role === 'steer' ? 'steer' : r.role === 'evolve' ? 'evolve' : 'exec'
 
 const keptLabel = (r: RunSummary): string =>
-  roleWord(r) === 'edit' ? 'Edited' : roleWord(r) === 'evolve' ? 'Improved' : 'Kept'
+  roleWord(r) === 'steer' ? 'Steered' : roleWord(r) === 'evolve' ? 'Improved' : 'Kept'
 
 export function dotColor(r: RunSummary): string {
   if (r.running) return ST[`active-${roleWord(r)}`].c

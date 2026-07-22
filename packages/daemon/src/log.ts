@@ -1,8 +1,7 @@
 /**
- * `pievo log [<loop>] [--limit N] [--json]` — print how a loop's recent runs
- * actually went. The default is the server's concise text survey; `--json`
- * returns the retained structured run rows. Provider transcripts are not a
- * daemon telemetry or CLI surface.
+ * `pievo log` — indexed terminal history, aggregates, and bounded run detail.
+ * Every mode, including `--json`, is rendered by the server and printed verbatim;
+ * provider transcripts are not a daemon telemetry or CLI surface.
  *
  * Like `pievo loops`/`edit`, this is an owner-OUTSIDE-a-run command: it goes
  * through the shared CLI client (`postCli`), which reuses the device token + server
@@ -27,20 +26,6 @@ export interface LoopRow {
   name: string;
   workdir: string | null;
   taskFile: string | null;
-}
-
-interface RunRow {
-  id: string;
-  ts: string;
-  role: string;
-  phase: string;
-  status: string | null;
-  durationMs: number | null;
-  error: string | null;
-  message: string | null;
-  sessionId: string | null;
-  // The complete metric observation reported by the run.
-  metrics: Record<string, unknown> | null;
 }
 
 export type LogDeps = {
@@ -71,13 +56,17 @@ function seams(d: LogDeps): Seams {
 
 /** Boolean flags that never take a value — so `log --json <loop>` keeps `<loop>`
  *  as a positional instead of swallowing it as `--json`'s argument. */
-const BOOL_FLAGS = new Set(["json"]);
+const BOOL_FLAGS = new Set(["json", "summary", "diff", "help"]);
+const VALUE_FLAGS = ["run", "after", "through", "since", "until", "role", "status", "phase", "limit"] as const;
 
-/** The flags `pievo log` accepts (plus the global daemon flags consumed separately).
- *  `help` is allowlisted so it never trips the unknown-flag guard. */
-const LOG_FLAGS = new Set(["json", "limit", "help", "server-url"]);
+/** The daemon only recognizes syntax; the server owns semantic validation. */
+const LOG_FLAGS = new Set([...BOOL_FLAGS, ...VALUE_FLAGS, "server-url"]);
 
 /** `--k v` / `--k=v` pairs, bare/boolean `--flag` → true; everything else is positional. */
+function boolFlag(value: string | boolean | undefined): boolean {
+  return value === true || value === "true";
+}
+
 function parseArgs(args: string[]): { positional: string[]; flags: Record<string, string | boolean> } {
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
@@ -177,7 +166,9 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   // `loops`/`edit` flag discipline and the unknown-verb exit code.
   const unknown = Object.keys(flags).filter((k) => !LOG_FLAGS.has(k));
   if (unknown.length) return d.err(`pievo: unknown flag --${unknown[0]} — try \`pievo log --help\`\n`), 2;
-  const json = flags["json"] === true || flags["json"] === "true";
+  if (positional.length > 1) return d.err("pievo: log accepts at most one loop id or name\n"), 2;
+  const missingValue = VALUE_FLAGS.find((key) => flags[key] === true);
+  if (missingValue) return d.err(`pievo: --${missingValue} requires a value\n`), 2;
   const limit = typeof flags["limit"] === "string" ? flags["limit"] : undefined;
 
   const notConnected = () =>
@@ -201,9 +192,21 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   const resolved = resolveLoopId(listData.loops, positional[0], d.cwd());
   if ("error" in resolved) return renderResolveError(resolved, d.out, d.err);
 
-  // 2. Fetch the resolved loop's recent runs.
-  const logArgv = ["log", resolved.id, ...(limit ? ["--limit", limit] : [])];
+  // 2. Fetch the resolved loop's history. Canonicalize flags so the positional
+  // loop used for client-side resolution is not sent twice.
+  const forwarded: string[] = [];
+  for (const key of ["summary", "diff", "json"] as const) if (flags[key] === true || flags[key] === "true") forwarded.push(`--${key}`);
+  for (const key of VALUE_FLAGS) {
+    const value = flags[key];
+    if (typeof value === "string") forwarded.push(`--${key}`, value);
+  }
+  const logArgv = ["log", resolved.id, ...forwarded];
+  const advanced = [...BOOL_FLAGS].some((key) => key !== "help" && key !== "json" && boolFlag(flags[key])) ||
+    flags["json"] !== undefined || VALUE_FLAGS.some((key) => key !== "limit" && flags[key] !== undefined);
   const legacyLog: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
+    if (advanced) {
+      return { status: 400, body: { text: 'error: "this server only supports legacy recent-list log; upgrade it for history flags"\ncode: SERVER_TOO_OLD', exitCode: 1 } };
+    }
     const qs = new URLSearchParams({ loopId: resolved.id });
     if (limit) qs.set("limit", limit);
     const res = await fetchImpl(`${server}/api/machine/log?${qs.toString()}`, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
@@ -213,20 +216,13 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   if (got.kind === "not-configured") return notConnected(), 2;
   if (got.kind === "read-error") return d.err(`pievo: cannot read ${got.path}\n`), 1;
   if (got.kind === "network-error") return d.err(`pievo: ${got.message}\n`), 1;
-  const data = got.body as { runs?: RunRow[]; error?: string };
-
-  // `--json` reads the retained structured `runs` data channel. A missing
-  // `runs` means an error status or a too-old server without that channel.
-  if (json) {
-    if (got.status >= 400 || !data.runs) {
-      d.err(`pievo: ${data.error || `log failed (${got.status})`}\n`);
-      return 1;
-    }
-    d.out(`${JSON.stringify(data.runs, null, 2)}\n`);
-    return 0;
+  // Unified servers before indexed history ignore advanced flags and retain their
+  // legacy `runs` channel. Fail loud instead of printing a successful wrong shape.
+  if (advanced && Array.isArray(got.body.runs)) {
+    d.out('error: "this server only supports legacy recent-list log; upgrade it for history flags"\ncode: SERVER_TOO_OLD\n');
+    return 1;
   }
-
-  // TOON default: text-sink — the server renders the concise survey (incl. the empty
-  // structured run rows). A too-old server (no `text`) → a definitive SERVER_TOO_OLD error.
+  // All modes are a pure text sink. A text-less old server fails definitively;
+  // JSON is never reconstructed from retained structured channels.
   return printTextOrTooOld(got.body, got.status, d.out);
 }

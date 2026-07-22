@@ -1,7 +1,7 @@
 /**
  * Copy-prompt path for the loop-detail Edit composer.
  *
- * The dispatch path (`requestEdit`) runs ONE agent pass on the owner's machine -
+ * The dispatch path (`requestSteer`) runs ONE agent pass on the owner's machine -
  * spends credits, no conversation. This is the non-dispatch alternative: a
  * self-contained prompt the owner pastes into their OWN local coding-agent
  * session (in the loop's directory) so they can iterate/converse and adjust the
@@ -25,7 +25,7 @@ export function loopDir(taskFile?: string | null): string | null {
  *  instruction, or a clear placeholder asking them to describe it), and that the
  *  agent should drive the installed pievo CLI/skill (`pievo loops`,
  *  `pievo edit <id> ...`) to apply and confirm the change. Concise, agent-neutral. */
-export function buildEditPrompt({
+export function buildSteerPrompt({
   loopId,
   loopName,
   instruction,

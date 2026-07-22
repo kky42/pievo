@@ -4,11 +4,11 @@
  * loop-prompt.ts, bound to the new Loop row and the renamed `pievo` CLI. Prompt
  * prose lives as markdown loaded + `{{token}}`-filled here. ALL prompt prose lives
  * under src/skill/: the public authoring trio (create/update/evolve) in
- * skill/references/, and the INTERNAL run prompts (exec-core, edit) in skill/run/ —
+ * skill/references/, and the INTERNAL run prompts (exec-core, steer) in skill/run/ —
  * server-side run-dispatch only, never served or bundled. The `evolve` text is the
  * SINGLE source of truth shared with the installable agent skill
  * (skill/references/evolve.md) — run-dispatch and the skill read the same file, so
- * the evolution guidance can't drift. `edit` is a run-token verb prompt with no
+ * the evolution guidance can't drift. `steer` is a run-token verb prompt with no
  * authoring twin (see skill/references/update.md for the authoring CLI).
  *
  * Run-experience redesign, Batch 1: the exec run's instructions now live entirely
@@ -20,19 +20,13 @@
  * fallback core + per-run trigger + a pointer to the installable pievo skill for
  * the deep protocol). The public runtime depth lives in references/run.md.
  *
- * Batch 2 extends the same move to the EVOLVE and EDIT runs, and trims the inlined
- * run history. `buildEvolvePrompt`/`buildEditPrompt` now return "" (empty system
- * prompt, exactly like exec) — the standing prose ships in the first user turn,
- * concatenated ahead of each role's payload by `buildEvolveTask`/`buildEditTask`.
- * The untrusted-data guard rides along in that prose (evolve reads run messages;
- * edit reads the loop's current config — both untrusted). `buildEvolveTask` no
- * longer dumps up to 12 runs as pretty-printed JSON (tens of KB of full messages +
- * full metric values); it emits a compact one-line-per-run SURVEY (ts / role /
- * phase-status / metric KEYS only / session id / message clipped ~100 chars), headed by an
- * on-demand `pievo log --json` pointer. `buildEditTask` KEEPS its inlined current ui/schema:
- * that is current config, not history, and is genuinely useful for a surgical edit.
+ * EVOLVE and STEER follow the same first-user-turn model. All three roles receive
+ * their durable run index plus the task file, execution workspace, loop content
+ * home, and inferred sibling COOKBOOK.md paths.
+ * Runtime history is never inlined into delivery: evolve/steer gather only bounded,
+ * progressively filtered evidence through `pievo log`.
  */
-import type { Loop, Run, MetricField } from "../db/schema.js";
+import type { Loop, MetricField } from "../db/schema.js";
 
 // Inlined at build time (Vite ?raw) so the prompt prose ships inside the nitro
 // bundle. Reading them from disk at runtime broke in prod: nitro bundles JS only,
@@ -40,12 +34,12 @@ import type { Loop, Run, MetricField } from "../db/schema.js";
 // `?raw` resolves identically from skill/run/ as it did from scheduler/prompts/.
 import execCore from "../skill/run/exec-core.md?raw";
 import evolve from "../skill/references/evolve.md?raw";
-import edit from "../skill/run/edit.md?raw";
+import steer from "../skill/run/steer.md?raw";
 
 const PROMPTS: Record<string, string> = {
   "exec-core": execCore,
   evolve,
-  edit,
+  steer,
 };
 
 function loadPrompt(name: string): string {
@@ -56,6 +50,18 @@ function loadPrompt(name: string): string {
 
 function fillVars(text: string, vars: Record<string, string>): string {
   return text.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
+}
+
+/** Infer the bounded learned-context file beside taskFile without persisting a
+ * second path. Preserve whichever separator the task path uses. */
+export function cookbookPathForTaskFile(taskFile: string | null | undefined): string {
+  if (!taskFile) return "COOKBOOK.md";
+  const slash = Math.max(taskFile.lastIndexOf("/"), taskFile.lastIndexOf("\\"));
+  return slash < 0 ? "COOKBOOK.md" : `${taskFile.slice(0, slash + 1)}COOKBOOK.md`;
+}
+
+function goalLine(loop: Loop): string {
+  return loop.goal ? `Objective: ${loop.goal}` : "Objective: (none configured; follow task-file ## Spec)";
 }
 
 /** One-line human description of a loop's metric schema: `key (unit) — label; …`. */
@@ -76,7 +82,7 @@ function metricReportLine(loop: Loop): string {
     : `pievo report --status kept|no-change|blocked --message "<concise result or no-go reason>"
   # this loop has no metric schema, so this run records no chart metrics.
   # --message is always required; do not pass --metrics.
-  # to start charting a trend, an evolve/edit pass can define a metric schema first.`;
+  # to start charting a trend, an evolve/steer pass can define a metric schema first.`;
 }
 
 /**
@@ -100,12 +106,20 @@ export function buildLoopSystemPrompt(_loop: Loop): string {
  * prompt-injected so it wins over the file per the trust hierarchy. `{{metricLine}}`
  * carries the schema-derived report grammar.
  */
-export function buildExecTask(loop: Loop): string {
+export function buildExecTask(loop: Loop, runIndex: number): string {
   const name = loop.name || loop.id;
-  const taskFile = loop.taskFile ?? "(none — this loop has no task file yet; create one to hold its Spec)";
-  const goalLine = loop.goal ? `Objective: ${loop.goal}` : "";
+  const taskFile = loop.taskFile ?? "README.md (missing — create it with one ## Spec)";
+  const cookbookPath = cookbookPathForTaskFile(loop.taskFile);
   const metricLine = metricReportLine(loop);
-  return fillVars(loadPrompt("exec-core"), { name, taskFile, goalLine, metricLine });
+  return fillVars(loadPrompt("exec-core"), {
+    name,
+    taskFile,
+    cookbookPath,
+    workdir: loop.workdir ?? "(daemon-selected scratch directory)",
+    runIndex: String(runIndex),
+    goalLine: goalLine(loop),
+    metricLine,
+  });
 }
 
 /**
@@ -120,95 +134,41 @@ export function buildEvolvePrompt(): string {
 }
 
 /**
- * The edit system prompt is now EMPTY (like exec/evolve, Batch 2): the short edit
+ * The steer system prompt is now EMPTY (like exec/evolve, Batch 2): the short steer
  * CORE moved into the first user turn, concatenated ahead of the payload by
- * `buildEditTask`. Same server-first, harmless-no-op rationale as the others.
+ * `buildSteerTask`. Same server-first, harmless-no-op rationale as the others.
  */
-export function buildEditPrompt(): string {
+export function buildSteerPrompt(): string {
   return "";
 }
 
-/** The edit user turn — the short edit CORE (apply ONE owner-requested change, don't
- *  run the task, end with `pievo report`; carries the untrusted-data
- *  guard + skill pointer) ahead of the payload. The current ui/schema are
- *  inlined when present so an edit can make a surgical change to them rather than
- *  blind-rewrite — that is current CONFIG, not history, so it stays inlined (§3.4). */
-export function buildEditTask(loop: Loop, instruction: string): string {
-  const where = loop.timezone ? `${loop.cron} (${loop.timezone})` : `${loop.cron} (server-local)`;
-  const parts = [
-    loadPrompt("edit"),
-    `[loop edit · ${loop.name || loop.id}]`,
-    `Loop id: ${loop.id}`,
-    `Current schedule: ${where}`,
-    `Task file: ${loop.taskFile ?? "(none yet)"}`,
-  ];
-  if (loop.metricSchema?.length) {
-    parts.push("Current metric schema: " + formatSchemaFields(loop.metricSchema));
-  }
-  if (loop.ui) parts.push("Current ui:\n```html\n" + loop.ui + "\n```");
-  parts.push(
-    `The owner wants this change:\n${instruction.trim()}`,
-    "Apply it now per the instructions above, then run exactly one `pievo report --status kept|no-change|blocked --message \"<concise summary>\"`. Edit runs never pass `--metrics`.",
-  );
-  return parts.join("\n\n");
-}
-
-/** How many chars of a run's message survive in the compact survey. */
-const SURVEY_MESSAGE_CAP = 100;
-
-/** A run's message collapsed to a single clipped line for the survey. */
-function surveyMessage(message: string | null): string {
-  const s = (message ?? "").replace(/\s+/g, " ").trim();
-  if (!s) return "—";
-  return s.length > SURVEY_MESSAGE_CAP ? s.slice(0, SURVEY_MESSAGE_CAP) + "…" : s;
-}
-
-/** One run as a single survey line. State appears as KEYS only — values are noise at
- * survey altitude. The full session id remains concise correlation/continuation
- * metadata; only the message is clipped. */
-function surveyRow(r: Run): string {
-  const outcomeStatus = `${r.phase ?? "—"}/${r.status ?? "—"}`;
-  const keys = r.metrics && typeof r.metrics === "object" ? Object.keys(r.metrics) : [];
-  const metrics = keys.length ? keys.join(",") : "—";
+/** The steer user turn: authoritative owner instruction plus identity. Current
+ * config/history stay behind `show --json` and bounded `log` reads. */
+export function buildSteerTask(loop: Loop, instruction: string, runIndex: number): string {
   return [
-    (r.ts ?? "—").padEnd(24),
-    (r.role ?? "—").padEnd(7),
-    outcomeStatus.padEnd(16),
-    metrics.padEnd(16),
-    (r.sessionId ?? "—").padEnd(38),
-    surveyMessage(r.message),
-  ].join(" ");
+    loadPrompt("steer"),
+    `[loop steer #${runIndex} · ${loop.name || loop.id}]`,
+    `Objective: ${loop.goal ?? "(none configured; follow task-file ## Spec)"}`,
+    `Execution workspace (cwd): ${loop.workdir ?? "(daemon-selected scratch directory)"}`,
+    `Task file: ${loop.taskFile ?? "README.md (missing — create it with one ## Spec)"}`,
+    "Loop content home: the directory containing the Task file above (not necessarily cwd)",
+    `Cookbook: ${cookbookPathForTaskFile(loop.taskFile)}`,
+    `The owner's instruction (authoritative steering):\n${instruction.trim()}`,
+    "Apply it now, record one validation pending boundary, then run exactly one `pievo report --status kept|no-change|blocked --message \"<concise summary>\"`. This steer does not advance `Consolidated through`. Steer runs never pass `--metrics`.",
+  ].join("\n\n");
 }
 
-/** The compact recent-runs survey: one line per run (oldest → newest). */
-function renderRecentRuns(runs: Run[]): string {
-  const header =
-    `Recent runs (oldest → newest, N=${runs.length}) — a compact survey. ` +
-    `Run pievo log --json for normalized fields and token usage.`;
-  if (!runs.length) return `${header}\n\n(no prior runs yet)`;
-  const columns = [
-    "ts".padEnd(24),
-    "role".padEnd(7),
-    "phase/status".padEnd(16),
-    "metrics(keys)".padEnd(16),
-    "session".padEnd(38),
-    "message",
-  ].join(" ");
-  return [header, "", columns, ...runs.map(surveyRow)].join("\n");
-}
-
-/** The evolution user turn — the standing evolve prose (shared with the installable
- *  skill, so run-dispatch and the skill can't drift) ahead of the payload: current
- *  loop shape + the compact recent-runs survey. */
-export function buildEvolveTask(loop: Loop, runs: Run[]): string {
-  const schema = loop.metricSchema?.length ? formatSchemaFields(loop.metricSchema) : "(none declared)";
+/** The evolution user turn. History/config are intentionally not inlined; the
+ * shared evolve protocol gathers them progressively through the CLI. */
+export function buildEvolveTask(loop: Loop, runIndex: number): string {
   return [
     loadPrompt("evolve"),
-    `[loop evolution · ${loop.name || loop.id}]`,
-    `Task file: ${loop.taskFile ?? "(none)"}`,
-    `Metric schema: ${schema}`,
-    "Current ui:\n" + (loop.ui ? "```html\n" + loop.ui + "\n```" : "(none yet — author one if the data warrants it)"),
-    renderRecentRuns(runs),
-    "Evolve this loop per your instructions: review the recent runs' log to sharpen and distill the task file, fitting the dashboard as the lighter lever. Finish with exactly one `pievo report --status kept|no-change|blocked --message \"<concise summary>\"`. Evolve runs never pass `--metrics` and never notify the user.",
+    `[loop evolve #${runIndex} · ${loop.name || loop.id}]`,
+    `Objective: ${loop.goal ?? "(none configured; follow task-file ## Spec)"}`,
+    `Execution workspace (cwd): ${loop.workdir ?? "(daemon-selected scratch directory)"}`,
+    `Task file: ${loop.taskFile ?? "README.md (missing — create it with one ## Spec)"}`,
+    "Loop content home: the directory containing the Task file above (not necessarily cwd)",
+    `Cookbook: ${cookbookPathForTaskFile(loop.taskFile)}`,
+    "Evolve this loop per the protocol above. Finish with exactly one `pievo report --status kept|no-change|blocked --message \"<concise summary>\"`. Evolve runs never pass `--metrics` and never notify the user.",
   ].join("\n\n");
 }

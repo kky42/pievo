@@ -1,9 +1,10 @@
 # Edit an existing loop
 
-A loop lives in two places, and you change each where it lives. Use the same **pievo-cli** prefix as for create (default `pievo`); it reuses this machine's persisted device token.
+A loop has distinct control, instruction, and learned-context surfaces. Use the same **pievo-cli** prefix as for create (default `pievo`); it reuses this machine's persisted device token.
 
 - **Schedule / delivery envelope + goal** — cadence, name, timezone, notify, model, reasoning effort, pause, goal, etc. Change it with `pievo edit --json '<patch>'`.
-- **What the loop does** — the task file (`pievo/<slug>/README.md`) on this machine. Edit it directly, preserving `## Spec`, `## Current understanding`, and `## Timeline`. To point at a different task file, patch `taskFile`.
+- **Standing instructions** — the task file (`pievo/<slug>/README.md`) contains one required authoritative `## Spec`. Edit the Spec directly. To point at a different README, patch `taskFile`.
+- **Learned context** — sibling `COOKBOOK.md` contains `Consolidated through: #N`, `## Knowledge`, and `## Timeline`. Knowledge holds durable facts and reusable positive/negative evidence; Timeline holds only evolve/steer decision boundaries and stays bounded.
 - **Dashboard / metric schema** — usually left to evolution. If the user explicitly asks, push them with `--ui-file` / `--schema-file`; schema changes are additive.
 
 Find the loop id:
@@ -12,7 +13,18 @@ Find the loop id:
 <pievo-cli> loops
 ```
 
-Before reshaping behavior, read recent runs with `<pievo-cli> log <loop-id>` so the edit is grounded in evidence.
+Before reshaping behavior, read README and Cookbook. Gather history progressively: `<pievo-cli> log <loop-id> --summary --after N --json` first, then a filtered `<pievo-cli> log <loop-id> --after N`, then at most a few `<pievo-cli> log <loop-id> --run <index> [--diff]` details. Never replay history exhaustively.
+
+For an existing loop with `## Current understanding` or a per-run `## Timeline` in README, the next evolve or steer moves useful learned content into COOKBOOK.md, leaves README's Spec authoritative, and records that migration boundary. An ordinary direct config edit need not rewrite content files.
+
+To delegate a plain-language change as one owner-authorized agent pass, queue a steer run instead of patching configuration directly:
+
+```bash
+<pievo-cli> steer <loop-id> --message "change the schedule to weekdays at 9am"
+<pievo-cli> steer <loop-id> --message-file instruction.txt
+```
+
+A pending steer coalesces and the latest owner instruction wins. `pievo edit` remains the direct configuration patch command.
 
 ## Edit the envelope
 

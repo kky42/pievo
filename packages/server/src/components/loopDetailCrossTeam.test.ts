@@ -32,7 +32,7 @@ vi.mock('../server/loopApi', () => ({
   stopJob: vi.fn(async () => ({})),
   evolveJob: vi.fn(async () => ({})),
   patchJob: vi.fn(async () => ({})),
-  requestEdit: vi.fn(async () => ({})),
+  requestSteer: vi.fn(async () => ({})),
   runJob: vi.fn(async () => ({})),
 }))
 

@@ -8,7 +8,7 @@ import { isOutdated } from "../lib/semver.js";
  * daemon release. Unknown versions are treated as incompatible because only
  * daemons that report a version can be known-safe for breaking protocol changes.
  */
-export const MIN_DAEMON_VERSION = "2.0.3";
+export const MIN_DAEMON_VERSION = "2.0.4";
 
 export function daemonNeedsUpdate(current: string | null | undefined, required = MIN_DAEMON_VERSION): boolean {
   if (!current) return true;

@@ -100,9 +100,9 @@ export function LoopPlaybook({ onStart }: { onStart: () => void }) {
         <div className="grid grid-cols-1 gap-x-10 gap-y-3 sm:grid-cols-2">
           <p className="text-body leading-relaxed text-primary">
             Fragile systems break on a bad run. Robust ones survive it. An antifragile
-            loop gets stronger from it: a periodic evolve pass reads the last dozen runs
-            and asks where money was wasted, which boundary is too loose, which mistake
-            keeps repeating.
+            loop gets stronger from it: a periodic evolve pass starts with bounded history
+            aggregates, then drills into only the decisive runs to ask where money was
+            wasted, which boundary is too loose, and which mistake keeps repeating.
           </p>
           <p className="text-body leading-relaxed text-secondary">
             Its output is not product work. It is changes to the loop itself: a tighter

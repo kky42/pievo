@@ -45,7 +45,7 @@ test("a machine claims only one running run across loops", async () => {
   const a = await seedLoop(machine.id);
   const b = await seedLoop(machine.id);
   await store.enqueueRun(a.id, { role: "exec", requestedBy: "owner" });
-  await store.enqueueRun(b.id, { role: "edit", requestedBy: "owner", requestText: "edit" });
+  await store.enqueueRun(b.id, { role: "steer", requestedBy: "owner", requestText: "steer" });
 
   const claims = await Promise.all([
     store.claimReadyRunForMachine(machine.id),
@@ -63,7 +63,7 @@ test("pause leaves a running run and lease intact, preserving its queued owner f
   const loop = await seedLoop(machine.id);
   const running = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
   const token = await tokens.registerRunLease({ runId: running.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false });
-  await store.enqueueRun(loop.id, { role: "edit", requestedBy: "owner", requestText: "later" });
+  await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "later" });
 
   const paused = await store.pauseLoop(loop.id);
   const again = await store.pauseLoop(loop.id);
@@ -92,11 +92,11 @@ test("paused loops claim owner work by role priority, stay paused after exec, an
   });
   await store.enqueueRun(loop.id, { role: "exec", requestedBy: "owner" });
   await store.enqueueRun(loop.id, { role: "evolve", requestedBy: "owner" });
-  await store.enqueueRun(loop.id, { role: "edit", requestedBy: "owner", requestText: "owner edit" });
+  await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "owner steer" });
 
-  const edit = await store.claimReadyRunForMachine(machine.id);
-  expect(edit?.run).toMatchObject({ role: "edit", requestedBy: "owner" });
-  await store.finalizeRunningRun(loop.id, edit!.run.id, { phase: "done", ts: new Date().toISOString() }, {}, tokens.sha256(edit!.runToken));
+  const steer = await store.claimReadyRunForMachine(machine.id);
+  expect(steer?.run).toMatchObject({ role: "steer", requestedBy: "owner" });
+  await store.finalizeRunningRun(loop.id, steer!.run.id, { phase: "done", ts: new Date().toISOString() }, {}, tokens.sha256(steer!.runToken));
   const evolve = await store.claimReadyRunForMachine(machine.id);
   expect(evolve?.run.role).toBe("evolve");
   await store.finalizeRunningRun(loop.id, evolve!.run.id, { phase: "done", ts: new Date().toISOString() }, {}, tokens.sha256(evolve!.runToken));
@@ -116,7 +116,7 @@ test("stop atomically pauses, clears facts, cancels all pending work, and only r
   await store.updateLoop(loop.id, { nextRunAt: "2030-01-01T00:00:00.000Z" });
   const running = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
   const token = await tokens.registerRunLease({ runId: running.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false });
-  await store.enqueueRun(loop.id, { role: "edit", requestedBy: "owner", requestText: "owner" });
+  await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "owner" });
   await store.enqueueRun(loop.id, { role: "evolve", requestedBy: "system" });
 
   const stopped = await store.stopLoop(loop.id);
@@ -136,7 +136,7 @@ test("stop atomically pauses, clears facts, cancels all pending work, and only r
 test("stop-run cancels pending immediately but only marks running and does not pause", async () => {
   const machine = await seedMachine();
   const loop = await seedLoop(machine.id);
-  const pending = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "pending", role: "edit", requestedBy: "owner", ts: new Date().toISOString() });
+  const pending = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "pending", role: "steer", requestedBy: "owner", ts: new Date().toISOString() });
   expect((await store.requestRunCancel(loop.id, pending.id))?.phase).toBe("canceled");
 
   const running = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
@@ -347,7 +347,7 @@ test("invalid exec participates in streak/autopause, preserves owner queue, and 
   });
   const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
   await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });
-  await store.enqueueRun(loop.id, { role: "edit", requestedBy: "owner", requestText: "keep me" });
+  await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "keep me" });
   const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false });
   const sent: string[] = [];
   const gw = gateway(async (_loop, message) => { sent.push(message); });
@@ -361,7 +361,7 @@ test("invalid exec participates in streak/autopause, preserves owner queue, and 
   expect(await store.getLoop(loop.id)).toMatchObject({ pauseCause: { kind: "failure-streak", runId: run.id, count: 3 } });
   const queued = await store.openRunsForLoop(loop.id);
   expect(queued.find((item) => item.role === "exec")).toBeUndefined();
-  expect(queued.find((item) => item.role === "edit" && item.requestedBy === "owner")).toBeTruthy();
+  expect(queued.find((item) => item.role === "steer" && item.requestedBy === "owner")).toBeTruthy();
   expect(sent).toHaveLength(1);
   expect(sent[0]).toMatch(/paused automatically/i);
 

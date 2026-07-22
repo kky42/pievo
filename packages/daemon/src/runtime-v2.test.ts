@@ -13,7 +13,7 @@ afterEach(() => { delete process.env.PIEVO_CLAUDE_BIN; delete process.env.PIEVO_
 
 function delivery(): Delivery {
   root ||= fs.mkdtempSync(path.join(os.tmpdir(), "pievo-v2-"));
-  return { runId: "run-1", runToken: "rk_1", role: "exec", loop: { id: "loop-1", name: "one", workdir: root, taskFile: null, model: null, allowControl: false }, systemPrompt: "", task: "do it" };
+  return { runId: "run-1", runIndex: 1, runToken: "rk_1", role: "exec", loop: { id: "loop-1", name: "one", workdir: root, taskFile: null, model: null, allowControl: false }, systemPrompt: "", task: "do it" };
 }
 
 describe("poll protocol v2", () => {

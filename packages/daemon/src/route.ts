@@ -1,5 +1,5 @@
 /** Pure CLI routing over argv/env. Lifecycle commands live only under `daemon`. */
-const INTERACTIVE_VERBS = new Set(["loops", "edit", "pause", "start", "stop", "delete", "run"]);
+const INTERACTIVE_VERBS = new Set(["loops", "edit", "steer", "pause", "start", "stop", "delete", "run"]);
 const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 const HELP_FLAG_ARGS = new Set(["--help", "-h"]);
 const VERSION_FLAGS = new Set(["--version", "-v"]);

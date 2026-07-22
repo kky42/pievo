@@ -35,6 +35,8 @@ Loop setup and management
                           List loops on this machine.
   edit <loop> [--json '<obj>'] [content-file flags] [--dry-run]
                           Apply a JSON patch and/or UI/schema files.
+  steer <loop> (--message <text> | --message-file <path>)
+                          Queue one owner steer pass with the latest instruction.
 
 In-run report
   report --status kept|no-change|blocked --message <text> [--metrics <json>]
@@ -61,10 +63,11 @@ const VERB_USAGE: Record<string, string> = {
   stop: "pievo stop <loop>\n  Pause the loop, cancel queued work, and request current-run termination.",
   delete: "pievo delete <loop> [--force]\n  Stop then delete server history and synced metadata; local files remain. --force requires a prior ordinary delete request plus an interactive confirmation, and may remove server authority while the local process is still running.",
   run: "pievo run stop <run>\n  Stop one pending or running run without pausing its loop.",
-  log: "pievo log [<loop>] [--json] [--limit N]\n  Show recent runs. <loop> may be an id or unique name; defaults to the loop for the current directory.",
+  log: "pievo log [<loop>] [--limit 1..20] [--after N --through N | --since ISO --until ISO] [--role exec|evolve|steer] [--status kept|no-change|blocked] [--phase done|error|canceled] [--summary | --run <index|UUID> [--diff]] [--json]\n  Show indexed terminal history, aggregates, or bounded run detail. <loop> defaults from the current directory.",
   show: "pievo show [<loop>] [--full] [--json]\n  Show editable config and recent runs. <loop> may be an id or unique name; defaults to the loop for the current directory.",
   loops: "pievo loops [--fields a,b] [--json]\n  List loops on this machine. Fields: timezone,notify,model,goal,taskFile,runs,lastResult.",
   edit: "pievo edit <loop> [--json '<obj>'] [--ui-file <path>] [--schema-file <path.json>] [--dry-run]\n  Apply a JSON patch and/or one or more content files; at least one edit input is required. --dry-run previews before/after.",
+  steer: "pievo steer <loop> (--message <text> | --message-file <path>)\n  Queue one owner steer pass. A pending steer coalesces and the latest owner instruction wins.",
   report: "pievo report --status kept|no-change|blocked --message <text> [--metrics '<json>' | --metrics-file <path>]\n  In-run only: status and message are required; metric-enabled exec runs must supply every declared key.",
 };
 

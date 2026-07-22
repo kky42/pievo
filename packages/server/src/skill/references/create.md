@@ -22,32 +22,37 @@ Never silently guess how often the loop runs or what each run produces: propose 
 - **Markdown products**: if runs write markdown products, choose a small fixed `type:` vocabulary up front and use flat front matter (`type:`, `title:`, `date:`) so dashboard primitives can index them.
 - **Standing objective — when useful**: optimization tasks may get a one-line `goal` that guides every run. It never stops the loop; all loops run until the owner pauses or deletes them.
 
-## 3 · Create the loop's folder and task file
+## 3 · Create README.md and COOKBOOK.md
 
-Every loop gets its own folder under the project: `<project>/pievo/<slug>/`. Its task file lives there, and lightweight products land there too.
+Every loop gets its own folder under the project: `<project>/pievo/<slug>/`. It contains the authoritative standing instructions, bounded learned context, and lightweight products.
 
 This folder is a synced content home, not a scratch workspace. Heavy work products — repo checkouts, git worktrees, `node_modules`, build output, caches — must live outside the loop folder. Write only finished reports/artifacts back into the loop folder.
 
-Write `<project>/pievo/<slug>/README.md`:
+Write `<project>/pievo/<slug>/README.md` with standing instructions only. It has one required section:
 
 ```markdown
 # <Loop name>
 
 ## Spec
-What this loop checks or does and why, plus the concrete steps / commands / endpoints / files involved. State when to message the user vs. stay silent. If there is a cheap deterministic check, put it here as the first SOP step and say to report `no-change` when it finds no actionable change. If the loop writes markdown products, state the fixed front-matter vocabulary.
-
-## Current understanding
-The baseline / known state / open issues seeded from this session; each run updates it.
-
-## Timeline
-<!-- one dated entry per run, appended below by the loop -->
+<What this loop checks or does and why; its concrete SOP, commands, endpoints, files, output and notification rules, cheap early checks, and product conventions. State mode: maintenance|optimization|mixed when that distinction helps interpret no-change evidence.>
 ```
 
-Keep the absolute path to `README.md`; it goes in the config as `taskFile`.
+Write its sibling `<project>/pievo/<slug>/COOKBOOK.md` exactly as the initial bounded learned-context shell:
+
+```markdown
+# Cookbook
+Consolidated through: #0
+
+## Knowledge
+
+## Timeline
+```
+
+Knowledge will hold durable facts plus reusable positive and negative lessons. Timeline is reserved for evolve/steer decision boundaries, never one entry per exec. Keep the absolute path to `README.md`; it goes in config as `taskFile`. The Cookbook path is inferred beside it and is not a config field.
 
 ## 4 · Author the loop config
 
-A loop uses `scheduleMode: "cron" | "continuous"`. Cron fires at wall-clock occurrences. Continuous enqueues its next exec only after an exec ends (`done` or `error`) plus `continuousDelayMinutes`; canceled runs, paused loops, and edit/evolve runs do not continue it.
+A loop uses `scheduleMode: "cron" | "continuous"`. Cron fires at wall-clock occurrences. Continuous enqueues its next exec only after an exec ends (`done` or `error`) plus `continuousDelayMinutes`; canceled runs, paused loops, and steer/evolve runs do not continue it.
 
 Author the config inline and pass it to `pievo new --json`:
 
@@ -70,8 +75,8 @@ Author the config inline and pass it to `pievo new --json`:
 
 Rules:
 
-- Include `taskFile`. There is no `task` field; the agent's standing brief is the task file.
-- Set `workdir` to the absolute project directory when the loop should run in that project.
+- Include `taskFile`. There is no `task` field; the agent's standing brief is the task file. Its parent directory becomes the synced **loop content home** for Cookbook, reports, dashboard UI, and small artifacts.
+- Set `workdir` to the absolute project directory when the loop should run in that project. This is the provider's **execution workspace (cwd)**, not the artifact root; it can differ from the loop content home.
 - `scheduleMode` defaults to `cron`. For continuous work set `scheduleMode: "continuous"` and choose `continuousDelayMinutes` (integer >= 1). Keep a valid `cron`; continuous ignores it but Pievo retains it so switching back restores the prior cadence.
 - `goal` is an optional standing objective. It never changes lifecycle state.
 - `model` and `reasoningEffort` are optional arbitrary strings. Include them only when the owner explicitly requests it.
@@ -80,7 +85,7 @@ Rules:
 
 ### Dashboard at create
 
-When the product shape is already known, author the initial `ui` now so the loop has a day-one dashboard. Use the primitives from `evolve.md` §3 and bind only declared metrics / documented product types.
+When the product shape is already known, author the initial `ui` now so the loop has a day-one dashboard. Use the primitives from `evolve.md` §3 and bind only declared metrics / documented product types. The common exact forms are `<loop-chart series="score:Score"></loop-chart>` and `<loop-embed file="latest.md"></loop-embed>`; artifact paths are relative to the loop folder. Never substitute `metric`, `src`, or `name` for those attributes — dry-run rejects broken primitives.
 - `notify`: `auto` (only when there's something to say) | `always` | `never`.
 - Don't add `timezone`, `claim`, or auth fields — `pievo new` injects the timezone, connect-key claim, and device token.
 
