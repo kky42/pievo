@@ -35,7 +35,7 @@ test("scalar renders numbers/booleans bare and null/undefined as the em-dash", (
 test("scalar leaves a bare token unquoted, quotes anything with whitespace/comma/colon/quote or empty", () => {
   // Bare single tokens (matches gh-axi's `state: open`, `author: stonexer`).
   expect(scalar("open")).toBe("open");
-  expect(scalar("ok/nothing-new")).toBe("ok/nothing-new");
+  expect(scalar("ok/no-change")).toBe("ok/no-change");
   expect(scalar("$0.08")).toBe("$0.08");
   expect(scalar("loop-mr9aey5u-8854eece")).toBe("loop-mr9aey5u-8854eece");
   // Whitespace → quoted (a cron / a date read as one cell).
@@ -138,8 +138,8 @@ test("helpBlock renders help[N]: with indented command templates verbatim", () =
 // ---- errors ----
 
 test("errorBlock quotes the message and emits a bare code slug", () => {
-  expect(errorBlock('status must be new|resolved|nothing-new (got "wibble")', "VALIDATION_ERROR")).toBe(
-    'error: "status must be new|resolved|nothing-new (got \\"wibble\\")"\ncode: VALIDATION_ERROR',
+  expect(errorBlock('status must be kept|no-change|blocked (got "wibble")', "VALIDATION_ERROR")).toBe(
+    'error: "status must be kept|no-change|blocked (got \\"wibble\\")"\ncode: VALIDATION_ERROR',
   );
 });
 

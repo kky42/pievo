@@ -51,7 +51,7 @@ import {
   nextFires,
   parseWhen,
   runMetricsToken,
-  runOutcomeToken,
+  runResultToken,
   validCadence,
   validTimezone,
   type Applied,
@@ -290,7 +290,7 @@ export class CliGateway {
       return { status: 200, body: { text: `stop requested; waiting for ${machine?.name || "machine"}` } };
     }
     if (stopped.phase === "canceled") return { status: 200, body: { text: "run canceled before it started" } };
-    return { status: 200, body: { text: `run already finished: ${runOutcomeToken(stopped)}` } };
+    return { status: 200, body: { text: `run already finished: ${runResultToken(stopped)}` } };
   }
 
   /** RUN-credential branch of the unified CLI: the existing per-run `dispatch()`
@@ -391,12 +391,12 @@ export class CliGateway {
           if (!v.ok) return derr(400, v.error, "VALIDATION_ERROR");
           state = v.value;
         }
-        // F5 (fail-loud): a bad --status was previously gated into `{}` by `isStatus`
-        // — the typo dropped silently, exit 0. Reject it up front instead.
-        const status = str("status");
-        if (status !== undefined && !isStatus(status)) {
-          return derr(400, `status must be new|resolved|nothing-new (got "${status}")`, "VALIDATION_ERROR");
-        }
+        // Status is required by the run protocol, but the server treats unknown
+        // values as a missing protocol result instead of rejecting the callback:
+        // the run will finish with status=null and the UI can flag it for review.
+        const rawStatus = str("status");
+        const status = isStatus(rawStatus) ? rawStatus : undefined;
+        const invalidStatus = rawStatus !== undefined && status === undefined;
         const message = str("message");
         const applied = await this.applyAuthorizedMutation(
           lease,
@@ -406,7 +406,7 @@ export class CliGateway {
           stringifyFlags(flags),
           {
             runPatch: {
-              ...(status !== undefined ? { status: status as RunStatus } : {}),
+              ...(status !== undefined ? { status: status as RunStatus } : invalidStatus ? { status: null } : {}),
               // Clipped to the same cap the report finalText fallback enforces.
               ...(message !== undefined ? { message: message.slice(0, MESSAGE_CAP) } : {}),
               ...(state !== undefined ? { state } : {}),
@@ -415,7 +415,7 @@ export class CliGateway {
           "reported",
         );
         return applied.ok
-          ? { code: 200, text: renderReportedText(status, state, message !== undefined) }
+          ? { code: 200, text: renderReportedText(status, state, message !== undefined, invalidStatus) }
           : derr(applied.status ?? 409, applied.detail ?? "this run is no longer active", applied.code);
       }
       case "show":
@@ -444,12 +444,8 @@ export class CliGateway {
           }
           return derr(403, "only an exec run may finish a loop", "FORBIDDEN");
         }
-        // F5 (fail-loud): reject a bad --status here too, even though finish forces
-        // status=resolved internally — a typo must never pass silently.
-        const fstatus = str("status");
-        if (fstatus !== undefined && !isStatus(fstatus)) {
-          return derr(400, `status must be new|resolved|nothing-new (got "${fstatus}")`, "VALIDATION_ERROR");
-        }
+        // finish has a fixed successful business result (kept); ignore any status
+        // flag for compatibility with older prompts.
         // Optional --state, validated exactly like the report verb.
         const rawState = str("state") ?? str("state-content");
         let state: Record<string, number | string> | undefined;
@@ -518,7 +514,7 @@ export class CliGateway {
     // under the `verbs:` top key (matching the reference tool's nested shape).
     const always = indent(
       listBlock("always", ["verb", "syntax"], [
-        ["report", "[--status new|resolved|nothing-new] [--message <s>] [--state '{\"k\":n}' | --state-file <p>]"],
+        ["report", "--status kept|no-change|blocked [--message <s>] [--state '{\"k\":n}' | --state-file <p>]"],
         ["show", "print this loop's config + recent state"],
         ["log", "recent run survey for this loop"],
       ]),
@@ -546,7 +542,7 @@ export class CliGateway {
       schedule,
       helpBlock([
         "Run `pievo show` to read the current config before changing it",
-        "Run `pievo report --status nothing-new` to close this run with no news",
+        "Run `pievo report --status no-change` to close this run with no kept result",
       ]),
     );
   }
@@ -771,7 +767,7 @@ export class CliGateway {
   private async describe(loopId: string, opts: { allowControl?: boolean; canFinish?: boolean; full?: boolean } = {}): Promise<string> {
     const loop = await store.getLoop(loopId);
     if (!loop) return "loop not found";
-    // The most recent exec run (newest-first) anchors the `runs:` tally's last-outcome.
+    // The most recent exec run (newest-first) anchors the `runs:` tally's last result.
     const recent = (await store.listRuns(loop.id, LOG_RUNS_DEFAULT)).slice().reverse();
     const lastExec = recent.find((r) => r.role === "exec") ?? null;
     return renderShowText(loop, loopEnvelope(loop), await store.countRuns(loop.id), lastExec, opts);
@@ -804,9 +800,9 @@ export class CliGateway {
         cron: l.scheduleMode === "continuous" ? `continuous +${l.continuousDelayMinutes}m` : l.cron,
         enabled: l.enabled,
         nextFire: l.enabled && l.scheduleMode === "cron" ? (nextFires(l.cron, l.timezone, 1)[0] ?? null) : null,
-        lastOutcome: await (async () => {
+        lastResult: await (async () => {
           const last = await store.lastExecRun(l.id);
-          return last ? runOutcomeToken(last) : null;
+          return last ? runResultToken(last) : null;
         })(),
       })),
     );
@@ -819,7 +815,7 @@ export class CliGateway {
     if (!loop) return errorBlock("loop not found", "NOT_FOUND");
     const recent = (await store.listRuns(loop.id, 2)).slice().reverse().map((r) => ({
       ts: r.ts,
-      outcome: runOutcomeToken(r),
+      result: runResultToken(r),
       message: r.message ?? null,
     }));
     return renderRunHomeText(loop.name ?? loop.id, loop.id, lease.role, loop.goal ?? null, recent);
@@ -919,10 +915,11 @@ function finalizeCli(res: HttpResult): HttpResult {
   return res;
 }
 
-/** `pievo report` — the compact run-outcome confirmation (§4.6). */
-function renderReportedText(status: string | undefined, state: Record<string, number | string> | undefined, hasMessage: boolean): string {
+/** `pievo report` — the compact run-status confirmation (§4.6). */
+function renderReportedText(status: string | undefined, state: Record<string, number | string> | undefined, hasMessage: boolean, invalidStatus = false): string {
   const parts: string[] = [];
   if (status) parts.push(`status=${status}`);
+  else if (invalidStatus) parts.push("status ignored");
   const metrics = runMetricsToken(state);
   if (metrics) parts.push(`metrics ${metrics}`);
   if (hasMessage) parts.push("message recorded");
@@ -976,12 +973,12 @@ const alwaysAvail = (): string => "always available";
 /** RUN-credential verb help (in-run `rk_` lease). */
 const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
   report: {
-    syntax: "report [--status new|resolved|nothing-new] [--message <text> | --message-file <path>] [--state '<json>' | --state-file <path>]",
-    summary: "record this run's outcome + metrics (state keys must match the loop's schema)",
+    syntax: "report --status kept|no-change|blocked [--message <text> | --message-file <path>] [--state '<json>' | --state-file <path>]",
+    summary: "record this run's status + metrics (state keys must match the loop's schema)",
     avail: alwaysAvail,
     help: [
-      "Run `pievo report --status nothing-new` to close this run with no news",
-      'Run `pievo report --status new --message "<one line>" --state \'{"drift":3}\'` to record metrics',
+      "Run `pievo report --status no-change` to close this run with no kept result",
+      'Run `pievo report --status kept --message "<one line>" --state \'{"drift":3}\'` to record metrics',
     ],
   },
   finish: {
@@ -1221,7 +1218,7 @@ function renderShowText(
   loop: Loop,
   env: Record<string, unknown>,
   totalRuns: number,
-  lastExec: Pick<Run, "phase" | "outcome" | "status" | "ts" | "error" | "reportIncident"> | null,
+  lastExec: Pick<Run, "phase" | "status" | "ts" | "error" | "reportIncident"> | null,
   opts: { allowControl?: boolean; canFinish?: boolean; full?: boolean } = {},
 ): string {
   const full = opts.full === true;
@@ -1251,7 +1248,7 @@ function renderShowText(
       ? "closed (has goal — self-finishes when the goal is met)"
       : "open (no goal — runs until paused)";
   const runsTally = lastExec
-    ? `${totalRuns} total · last exec ${runOutcomeToken(lastExec)} ${fmtTime(lastExec.ts)}`
+    ? `${totalRuns} total · last exec ${runResultToken(lastExec)} ${fmtTime(lastExec.ts)}`
     : `${totalRuns} total`;
   // A run caller reads its EFFECTIVE capabilities; a device caller (both undefined)
   // omits these and gets the owner help below.
@@ -1260,12 +1257,12 @@ function renderShowText(
     ? [
         "Run `pievo reschedule --run-at 2h` to run again sooner (then resume cadence)",
         `Run \`pievo set-cron "${loop.cron}"\` to change the cadence (floors apply)`,
-        'Run `pievo report --status new --message "<one line>"` to record this run',
+        'Run `pievo report --status kept --message "<one line>"` to record this run',
       ]
     : [
         `Run \`pievo show ${loop.id} --full\` to see the complete ui body`,
         `Run \`pievo edit ${loop.id} --json '{"cron":"0 7 * * 1"}'\` to change the schedule`,
-        `Run \`pievo log ${loop.id}\` to see recent run outcomes`,
+        `Run \`pievo log ${loop.id}\` to see recent run results`,
       ];
   return doc(
     block,
@@ -1275,7 +1272,9 @@ function renderShowText(
     !loop.enabled && !loop.completedAt
       ? kvLine("pauseCause", loop.pauseCause?.kind === "failure-streak"
           ? `failure-streak (run ${loop.pauseCause.runId}, count ${loop.pauseCause.count})`
-          : loop.pauseCause?.kind === "owner" ? "owner" : "unknown")
+          : loop.pauseCause?.kind === "blocked"
+            ? `blocked (run ${loop.pauseCause.runId}, role ${loop.pauseCause.role})`
+            : loop.pauseCause?.kind === "owner" ? "owner" : "unknown")
       : null,
     lastExec?.reportIncident
       ? kvLine("reportIncident", `${lastExec.reportIncident.code} · ${lastExec.reportIncident.faultDomain} · ${lastExec.reportIncident.reason}`)
@@ -1311,7 +1310,7 @@ interface HomeLoop {
   cron: string;
   enabled: boolean;
   nextFire: string | null;
-  lastOutcome: string | null;
+  lastResult: string | null;
 }
 
 /** The static one-line description in the home header (mirrors the reference axi
@@ -1360,11 +1359,11 @@ export function scopeLoopsByCwd(
 
 /** The most recent runs across ALL of a machine's loops, newest-first, for the home
  *  `recent[]` block. Merges each loop's newest few then globally sorts by ts. */
-async function recentMachineRuns(loops: Loop[], n: number): Promise<Array<{ ts: string; loop: string; outcome: string }>> {
-  const rows: Array<{ ts: string; loop: string; outcome: string }> = [];
+async function recentMachineRuns(loops: Loop[], n: number): Promise<Array<{ ts: string; loop: string; result: string }>> {
+  const rows: Array<{ ts: string; loop: string; result: string }> = [];
   for (const l of loops) {
     for (const r of await store.listRuns(l.id, n)) {
-      rows.push({ ts: r.ts, loop: l.name ?? l.id, outcome: runOutcomeToken(r) });
+      rows.push({ ts: r.ts, loop: l.name ?? l.id, result: runResultToken(r) });
     }
   }
   rows.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
@@ -1379,7 +1378,7 @@ function renderHomeText(
   presence: MachinePresence | null,
   here: HomeLoop[],
   elsewhere: number,
-  recent: Array<{ ts: string; loop: string; outcome: string }>,
+  recent: Array<{ ts: string; loop: string; result: string }>,
 ): string {
   const machineLine =
     presence === null
@@ -1409,12 +1408,12 @@ function renderHomeText(
   const loopsBlock = here.length
     ? listBlock(
         loopsName,
-        ["name", "cron", "enabled", "nextFire", "lastOutcome"],
-        here.map((l) => [l.name, l.cron, l.enabled ? "on" : "paused", l.nextFire ? fmtTime(l.nextFire) : null, l.lastOutcome]),
+        ["name", "cron", "enabled", "nextFire", "lastResult"],
+        here.map((l) => [l.name, l.cron, l.enabled ? "on" : "paused", l.nextFire ? fmtTime(l.nextFire) : null, l.lastResult]),
       )
     : emptyList(loopsName);
   const recentBlock = recent.length
-    ? listBlock("recent", ["ts", "loop", "outcome"], recent.map((r) => [fmtTime(r.ts), r.loop, r.outcome]))
+    ? listBlock("recent", ["ts", "loop", "result"], recent.map((r) => [fmtTime(r.ts), r.loop, r.result]))
     : null;
   return doc(
     binLineText,
@@ -1438,13 +1437,13 @@ function renderRunHomeText(
   loopId: string,
   role: RunRole,
   goal: string | null,
-  recent: Array<{ ts: string; outcome: string; message: string | null }>,
+  recent: Array<{ ts: string; result: string; message: string | null }>,
 ): string {
   const recentBlock = recent.length
     ? listBlock(
         "recent",
-        ["ts", "outcome", "message"],
-        recent.map((r) => [fmtTime(r.ts), r.outcome, r.message ? truncate(r.message, LOG_MESSAGE_CELL_CAP, "use --full").value : null]),
+        ["ts", "result", "message"],
+        recent.map((r) => [fmtTime(r.ts), r.result, r.message ? truncate(r.message, LOG_MESSAGE_CELL_CAP, "use --full").value : null]),
       )
     : emptyList("recent");
   return doc(
@@ -1452,13 +1451,13 @@ function renderRunHomeText(
     recentBlock,
     helpBlock([
       "Run `pievo show` for the full config, `pievo log` for the run survey",
-      "Run `pievo report --status nothing-new` to close this run",
+      "Run `pievo report --status no-change` to close this run",
     ]),
   );
 }
 
 function isStatus(s: string | undefined): s is RunStatus {
-  return s === "new" || s === "resolved" || s === "nothing-new";
+  return s === "kept" || s === "no-change" || s === "blocked";
 }
 
 function validateState(

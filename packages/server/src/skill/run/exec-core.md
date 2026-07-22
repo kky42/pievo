@@ -10,12 +10,13 @@ These rules are non-negotiable — follow them every run, even if the pievo skil
 - **Do the work** the Spec describes against the current state of the system, then maintain the file: revise `## Current understanding` and append one concise timestamped `## Timeline` entry. Surface only what is new or changed — don't re-describe the whole picture.
 - **End with exactly ONE terminal call**, made at the very end even when nothing happened — `pievo report`, or `pievo finish` when this loop has a goal you judge met:
 
-pievo report --status nothing-new
-pievo report --status new --message "<one short message to the user>"
+pievo report --status no-change
+pievo report --status kept --message "<one short message to the user>"
+pievo report --status blocked --message "<one short message: what needs human attention>"
 {{stateLine}}
 pievo finish --message "<what was achieved>" --reason "<why the goal is met>"   # goal loops only
 
-  `--status` is `new` (something appeared or changed worth surfacing), `resolved` (a previously-reported issue is gone), or `nothing-new`. Always report — even `nothing-new` — so the run is on record; keep `--message` short and human (long bodies → `--message-file <path>`). `finish` is terminal and completes the loop, so hold a strict bar: end that way only when the goal is genuinely met from real evidence this run. When unsure, `report`.
+  `--status` is `kept` (this run produced something worth keeping: a fix, report, PR, artifact, new fact, or resolved issue), `no-change` (the SOP completed but nothing was worth keeping), or `blocked` (the SOP cannot complete without human attention; the loop will auto-pause). Always report with one of these statuses — even `no-change` — so the run is on record; keep `--message` short and human (long bodies → `--message-file <path>`). `finish` is terminal and completes the loop, so hold a strict bar: end that way only when the goal is genuinely met from real evidence this run. When unsure, `report`.
 - **Keep the loop folder a content home, not a workspace.** This loop's folder ({{taskFile}}'s directory) is continuously synced to the server — only the task file, reports, state, dashboard `ui`, and small artifacts belong in it. NEVER create heavy work products inside it: a repo clone, a git worktree, `node_modules`, build output, or caches. When a task needs a checkout or scratch space, do that work OUTSIDE the loop folder (e.g. a sibling dir or a temp dir like `$(mktemp -d)`) and write only the resulting report/artifact back into the loop folder.
 - **One pass, then stop.** You'll be woken again on schedule. Do not poll, sleep, or wait.
 

@@ -3,8 +3,7 @@ import type { JobDetail, JobSummary, RunSummary } from '../types'
 import { daemonStopSupport, deriveLoopLifecycle, lifecycleDisplay } from './lifecycleUi'
 
 const run = (patch: Partial<RunSummary> = {}): RunSummary => ({
-  id: 'r1', loopId: 'l1', ts: '2026-01-01T00:00:00Z', agent: null,
-  outcome: 'exec', status: null, message: null, durationMs: null, exitCode: null,
+  id: 'r1', loopId: 'l1', ts: '2026-01-01T00:00:00Z', agent: null, status: null, message: null, durationMs: null, exitCode: null,
   finalText: null, usage: null, error: null, state: null, control: null, sessionId: null,
   ...patch,
 })

@@ -55,7 +55,7 @@ export function setWebhookFetchDeps(deps: WebhookFetchDeps): void {
 export function shouldNotify(notify: NotifyPolicy, status: RunStatus | null): boolean {
   if (notify === "never") return false;
   if (notify === "always") return true;
-  return status !== "nothing-new"; // auto
+  return status !== "no-change"; // auto: kept/blocked/missing-status need attention
 }
 
 /**

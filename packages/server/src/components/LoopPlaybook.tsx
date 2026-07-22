@@ -653,7 +653,7 @@ function CostCurve() {
 }
 
 /* The exec runs the evolve animation logs before the evolve pass fires - the
- * same block/outcome language as the real Timeline component (lib/format.ts
+ * same block/result language as the real Timeline component (lib/format.ts
  * ST), scaled up so the story reads from across the room. Each run carries a
  * one-line note (dummy data in the shape of real runs) that the narration
  * line shows as its block lands. */

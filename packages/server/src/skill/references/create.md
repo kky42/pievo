@@ -18,7 +18,7 @@ Never silently guess how often the loop runs or what each run produces: propose 
 
 - **Cadence.** Choose **cron** for wall-clock work (for example, every day at 9am your time, every hour, or Monday morning) or **continuous** when the next exec should become ready a fixed number of minutes after the previous exec ends. Continuous delay is at least 1 minute.
 - **Per-run output.** Propose the concrete artifact or message format, e.g. a short markdown summary in `report.md`, a dated markdown product, or a one-line status.
-- **Cheap checks**: if the loop needs a cheap deterministic check, put it in the task file SOP. The exec agent runs the check first; if nothing changed, it reports `nothing-new` and stops.
+- **Cheap checks**: if the loop needs a cheap deterministic check, put it in the task file SOP. The exec agent runs the check first; if nothing changed, it reports `no-change` and stops.
 - **Markdown products**: if runs write markdown products, choose a small fixed `type:` vocabulary up front and use flat front matter (`type:`, `title:`, `date:`) so dashboard primitives can index them.
 - **Finish line — only for goal-shaped tasks**: only goal-shaped tasks get a one-line checkable `goal`. Monitor/digest loops omit `goal` and run until paused.
 
@@ -34,7 +34,7 @@ Write `<project>/pievo/<slug>/README.md`:
 # <Loop name>
 
 ## Spec
-What this loop checks or does and why, plus the concrete steps / commands / endpoints / files involved. State when to message the user vs. stay silent. If there is a cheap deterministic check, put it here as the first SOP step and say to report `nothing-new` when it finds no actionable change. If the loop writes markdown products, state the fixed front-matter vocabulary.
+What this loop checks or does and why, plus the concrete steps / commands / endpoints / files involved. State when to message the user vs. stay silent. If there is a cheap deterministic check, put it here as the first SOP step and say to report `no-change` when it finds no actionable change. If the loop writes markdown products, state the fixed front-matter vocabulary.
 
 ## Current understanding
 The baseline / known state / open issues seeded from this session; each run updates it.

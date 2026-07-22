@@ -161,7 +161,7 @@ test("a provisional reclaim defers the breaker; confirmed late failure pauses at
   await store.updateLoop(loop.id, { scheduleMode: "continuous", continuousDelayMinutes: 5 });
   for (let i = 0; i < 2; i += 1) {
     await store.addRun({
-      loopId: loop.id, userId: "u1", machineId, phase: "error", role: "exec", requestedBy: "system", outcome: "error", ts: isoAgo((23 - i) * MIN),
+      loopId: loop.id, userId: "u1", machineId, phase: "error", role: "exec", requestedBy: "system", ts: isoAgo((23 - i) * MIN),
     });
   }
   const running = await store.addRun({

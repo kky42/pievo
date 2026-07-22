@@ -798,8 +798,7 @@ test("finish completes a closed loop, cancels queued exec/evolve, preserves queu
 
   const r = (await store.getRun(run.id))!;
   expect(r.phase).toBe("done");
-  expect(r.outcome).toBe("exec");
-  expect(r.status).toBe("resolved");
+  expect(r.status).toBe("kept");
   expect(r.message).toBe("hit 100 signups");
 
   const l = (await store.getLoop(loop.id))!;
@@ -1332,8 +1331,8 @@ test("circuit breaker: the 3rd consecutive exec failure auto-pauses the loop wit
   // skipped rides phase `canceled`, so it must neither count nor reset the streak.
   const base = Date.now() - 60 * 60_000;
   for (let i = 0; i < 2; i++) {
-    (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "error", outcome: "error", role: "exec", ts: new Date(base + i * 60_000).toISOString() }));
-    if (i === 0) (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "canceled", outcome: "skipped", role: "exec", ts: new Date(base + i * 60_000 + 30_000).toISOString() }));
+    (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "error", role: "exec", ts: new Date(base + i * 60_000).toISOString() }));
+    if (i === 0) (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "canceled", role: "exec", ts: new Date(base + i * 60_000 + 30_000).toISOString() }));
   }
   expect((await store.getLoop(loop.id))!.enabled).toBe(true);
 
@@ -1346,6 +1345,43 @@ test("circuit breaker: the 3rd consecutive exec failure auto-pauses the loop wit
   expect(sent).toHaveLength(1);
   expect(sent[0]!.message).toMatch(/paused automatically/i);
   expect(sent[0]!.message).toMatch(/3/);
+});
+
+test("blocked status pauses the loop for any role and outranks canceled terminal state", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" });
+  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "edit", requestedBy: "owner", requestText: "fix", ts: new Date().toISOString() });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "edit", allowControl: true });
+  const gw = gateway();
+
+  expect((await gw.cli(rt, ["report", "--status", "blocked", "--message", "owner-only goal change required"])).status).toBe(200);
+  expect((await gw.report(rt, { result: "canceled", ok: false, exitCode: 143, error: "canceled by server request", durationMs: 1 })).status).toBe(200);
+
+  const finalized = (await store.getRun(run.id))!;
+  expect(finalized.phase).toBe("canceled");
+  expect(finalized.status).toBe("blocked");
+  const paused = (await store.getLoop(loop.id))!;
+  expect(paused.enabled).toBe(false);
+  expect(paused.pauseCause).toMatchObject({ kind: "blocked", runId: run.id, role: "edit" });
+  expect((await store.openRunsForLoop(loop.id)).filter((r) => r.phase === "pending" && r.requestedBy === "system")).toHaveLength(0);
+});
+
+test("invalid reported status is stored as missing status, not rejected", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" });
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const gw = gateway();
+
+  const res = await gw.cli(rt, ["report", "--status", "wibble", "--message", "done but malformed"]);
+  expect(res.status).toBe(200);
+  expect((res.body as any).text).toContain("status ignored");
+  expect(await store.getRun(run.id)).toMatchObject({ status: null, message: "done but malformed" });
 });
 
 test("continuous loop stops enqueueing after the 3rd exec error trips the breaker", async () => {
@@ -1394,7 +1430,7 @@ test("circuit breaker: notify=never still pauses, silently", async () => {
 
   const base = Date.now() - 60 * 60_000;
   for (let i = 0; i < 2; i++) {
-    (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "error", outcome: "error", role: "exec", ts: new Date(base + i * 60_000).toISOString() }));
+    (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "error", role: "exec", ts: new Date(base + i * 60_000).toISOString() }));
   }
   const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
   const rt = (await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true }));
@@ -1434,7 +1470,6 @@ test("an auto deferred pending run past the catch-up horizon retires as `skipped
 
   const retired = (await store.getRun(run.id))!;
   expect(retired.phase).toBe("canceled");
-  expect(retired.outcome).toBe("skipped");
   expect(retired.error).toBeNull();
   // Skipped is neither success nor failure: no push, and the failure streak
   // stays untouched (it counts only phase `error`).
@@ -1474,7 +1509,6 @@ async function seededLoopWithRuns(machineId: string, count: number) {
       phase: i % 2 === 0 ? "done" : "error",
       role: "exec",
       ts: `2026-06-01T00:00:${String(i + 1).padStart(2, "0")}Z`,
-      outcome: i % 2 === 0 ? "exec" : "error",
       sessionId: `sess-${i}`,
       ...(i % 2 === 0 ? { state: { mrr: 42 + i } } : { error: `boom ${i}` }),
     }));
@@ -1566,7 +1600,7 @@ test("a stale sweep observation that loses its phase CAS has zero side effects",
   const core = new gatewayMod.MachineGateway({
     addLoop(): void { calls.push("arm"); }, removeLoop(): void {}, advanceDueSchedules(): never[] { return []; },
   } as any, undefined, async () => { calls.push("notify"); });
-  await store.updateRun(run.id, { phase: "done", outcome: "exec" });
+  await store.updateRun(run.id, { phase: "done"});
 
   await (core as any).reclaimRun(run, "stale reclaim");
   expect((await store.getRun(run.id))!.phase).toBe("done");
@@ -1755,15 +1789,6 @@ test("show computes `next` in the loop's timezone", async () => {
 
 
 
-test("report whitelists the claimed outcome (unknown values fall back to the role default)", async () => {
-  const bogus = (await seededExecRun());
-  (await gateway().report(bogus.rt, { ok: true, durationMs: 5, outcome: "hijack" as any }));
-  expect((await store.getRun(bogus.run.id))!.outcome).toBe("exec"); // role default, not "hijack"
-
-  const direct = (await seededExecRun());
-  (await gateway().report(direct.rt, { ok: true, durationMs: 5, outcome: "direct" }));
-  expect((await store.getRun(direct.run.id))!.outcome).toBe("direct"); // known value passes
-});
 
 test("agent-api report clips --message to the 2000-char cap", async () => {
   const { run, rt } = (await seededExecRun());
@@ -1871,7 +1896,7 @@ test("cli branches by credential: dk_ prefix → device path, bare-UUID → run 
 
 test("cli run credential: log returns the run's OWN-loop history (closes the note.md seam)", async () => {
   const { runToken, loop, run } = (await seededCli());
-  (await store.updateRun(run.id, { status: "new", message: "did a thing", sessionId: "sess-abc" }));
+  (await store.updateRun(run.id, { status: "kept", message: "did a thing", sessionId: "sess-abc" }));
   const res = (await gateway().cli(runToken, ["log"]));
   expect(res.status).toBe(200);
   const body = res.body as any;
@@ -2124,7 +2149,7 @@ test("per-verb --help (run credential): role-aware syntax + availability from th
   // report --help is always available regardless of caps.
   const report = ((await gw.cli(runToken, ["report", "--help"])).body as { text: string }).text;
   expect(report).toContain("verb: report");
-  expect(report).toContain("--status new|resolved|nothing-new");
+  expect(report).toContain("--status kept|no-change|blocked");
   expect(report).toContain('availability: "always available"');
 
   // finish --help flips its availability with canFinish: allowed on a closed exec run…

@@ -62,8 +62,7 @@ export type RunRequester = "owner" | "system";
  *  legacy coalesce, or the offline catch-up window elapsed).
  *  Neither success nor failure — excluded from the failure streak (it rides
  *  phase `canceled`, and the streak counts only phase `error`). */
-export type RunOutcome = "silent" | "direct" | "exec" | "error" | "evolve" | "skipped";
-export type RunStatus = "new" | "resolved" | "nothing-new";
+export type RunStatus = "kept" | "no-change" | "blocked";
 
 export type ChannelType = "telegram" | "slack" | "feishu";
 
@@ -252,8 +251,7 @@ export const runs = pgTable(
      * old-image insert breakage; the new runtime always supplies both explicitly. */
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP::text`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP::text`),
-    outcome: text("outcome", { enum: ["silent", "direct", "exec", "error", "evolve", "skipped"] }),
-    status: text("status", { enum: ["new", "resolved", "nothing-new"] }),
+    status: text("status", { enum: ["kept", "no-change", "blocked"] }),
     message: text("message"),
     durationMs: integer("duration_ms"),
     exitCode: integer("exit_code"),

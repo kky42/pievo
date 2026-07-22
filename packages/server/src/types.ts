@@ -57,15 +57,9 @@ export interface ReportIncident {
 export type PauseCause =
   | { kind: 'owner'; at: string }
   | { kind: 'failure-streak'; at: string; runId: string; count: number }
+  | { kind: 'blocked'; at: string; runId: string; role: 'exec' | 'evolve' | 'edit' | string }
 
-export type RunOutcome = 'error' | 'silent' | 'exec' | 'agent' | 'direct' | string
-export type RunStatus =
-  | 'nothing-new'
-  | 'new'
-  | 'resolved'
-  | 'error'
-  | 'silent'
-  | string
+export type RunStatus = 'kept' | 'no-change' | 'blocked' | string
 
 export interface RunSummary {
   /** Run row id — lets the detail view fetch this run's trace directly. */
@@ -77,6 +71,7 @@ export interface RunSummary {
   queued?: boolean
   /** Claimed by the machine and executing now. */
   running?: boolean
+  phase?: 'pending' | 'running' | 'done' | 'error' | 'canceled' | string
   requestedBy?: 'owner' | 'system'
   /** Stopped by the user before it finished (phase canceled). */
   canceled?: boolean
@@ -86,7 +81,6 @@ export interface RunSummary {
   role?: 'exec' | 'evolve' | 'edit' | string
   /** Agent captured when this run was claimed; null for pending/legacy rows. */
   agent: CodingAgent | null
-  outcome: RunOutcome
   status: RunStatus | null
   message: string | null
   durationMs: number | null

@@ -85,6 +85,20 @@
       "when": 1784649067459,
       "tag": "0011_steep_marvel_zombies",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1784649067460,
+      "tag": "0012_blocked_run_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1784649067461,
+      "tag": "0013_drop_run_outcome",
+      "breakpoints": true
     }
   ]
 }

@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { useSyncExternalStore } from 'react'
 import type { RunSummary } from '../types'
-import { dotColor, dotLabel } from '../lib/format'
+import { dotColor, dotLabel, dotOpacity } from '../lib/format'
 
 /*
  * Hydration gate. `fmt`/`rel`/`until` (lib/format) read the wall clock and the
@@ -162,7 +162,7 @@ export function StatusPill({ run, colorText }: { run: RunSummary; colorText?: bo
       className="inline-flex items-center gap-1.5 font-medium"
       style={colorText ? { color: dotColor(run) } : undefined}
     >
-      <span className="size-2 rounded-full" style={{ background: dotColor(run) }} />
+      <span className="size-2 rounded-full" style={{ background: dotColor(run), opacity: dotOpacity(run) }} />
       {dotLabel(run)}
     </span>
   )

@@ -51,7 +51,6 @@ export interface ReportBody {
    * failure has no numeric exit and reports null. */
   exitCode: number | null;
   durationMs: number;
-  outcome?: "direct" | "silent" | "exec" | "evolve";
   message?: string;
   sessionId?: string;
   /** Provider-normalized token usage, summed across every subprocess attempt. */
@@ -283,7 +282,6 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
     ok,
     exitCode,
     durationMs: Date.now() - start,
-    outcome: d.role === "evolve" ? "evolve" : "exec",
     sessionId,
     usage,
     taskFileContent: readTaskFile(workdir, d.loop.taskFile, roots),

@@ -61,7 +61,7 @@ describe("runHome", () => {
   });
 
   test("posts `home` with the daemon-supplied context and prints the server `text` verbatim", async () => {
-    const toon = "bin: /home/u/.local/bin/pievo\nmachine: online · daemon pid 4821 · https://srv.test\nloops[1]{name,cron,enabled,nextFire,lastOutcome}:\n  Docs Sweep,\"0 6 * * 1\",on,—,—";
+    const toon = "bin: /home/u/.local/bin/pievo\nmachine: online · daemon pid 4821 · https://srv.test\nloops[1]{name,cron,enabled,nextFire,lastResult}:\n  Docs Sweep,\"0 6 * * 1\",on,—,—";
     const { fetchFn, calls } = stub((url, argv) =>
       url.includes("/api/machine/cli") && argv[0] === "home"
         ? { ok: true, body: { ok: true, text: toon, exitCode: 0 } }

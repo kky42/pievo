@@ -170,7 +170,7 @@ test("continuous activation, claim, terminal, and due transitions use nextCadenc
   const terminal = await store.finalizeRunningRun(
     loop.id,
     item.run.id,
-    { phase: "done", outcome: "exec", ts: terminalAt },
+    { phase: "done", ts: terminalAt },
     {},
     tokens.sha256(item.runToken),
   );
@@ -196,7 +196,7 @@ test("edit/evolve claims and terminals never move continuous exec cadence", asyn
     const terminal = await store.finalizeRunningRun(
       loop.id,
       item.run.id,
-      { phase: "done", outcome: role === "evolve" ? "evolve" : "direct", ts: new Date().toISOString() },
+      { phase: "done", ts: new Date().toISOString() },
       {},
       tokens.sha256(item.runToken),
     );
@@ -306,7 +306,7 @@ test("exec terminal lifecycle requests auto-evolve as system work", async () => 
     requestedBy: "system",
     ts: new Date().toISOString(),
   });
-  await store.finalizeRunningRun(loop.id, running.id, { phase: "done", outcome: "exec", ts: new Date().toISOString() });
+  await store.finalizeRunningRun(loop.id, running.id, { phase: "done", ts: new Date().toISOString() });
   expect((await pending(loop.id, "evolve"))[0]).toMatchObject({ requestedBy: "system" });
 });
 
@@ -316,7 +316,7 @@ test("terminal failure auto-pauses and cancels system work in the terminal trans
   for (let i = 0; i < 2; i++) {
     await store.addRun({
       loopId: loop.id, userId: loop.userId, machineId: loop.machineId,
-      phase: "error", role: "exec", requestedBy: "system", outcome: "error",
+      phase: "error", role: "exec", requestedBy: "system",
       ts: new Date(base + i).toISOString(),
     });
   }
@@ -330,7 +330,7 @@ test("terminal failure auto-pauses and cancels system work in the terminal trans
   const terminal = await store.finalizeRunningRun(
     loop.id,
     running.id,
-    { phase: "error", outcome: "error", error: "third", ts: new Date().toISOString() },
+    { phase: "error", error: "third", ts: new Date().toISOString() },
     {},
     undefined,
     3,
@@ -363,7 +363,7 @@ test("terminal-grace fences due cadence until one late reconcile retimes it", as
     loop.id,
     running.id,
     tokens.sha256(token),
-    { phase: "done", outcome: "exec", error: null, ts: actualAt },
+    { phase: "done", error: null, ts: actualAt },
   );
   expect(reconciled?.loop.nextCadenceAt).toBe(new Date(Date.parse(actualAt) + 5 * 60_000).toISOString());
   expect(await tokens.resolveLease(token)).toBeUndefined();
@@ -386,7 +386,7 @@ test("expired terminal-grace cannot reconcile after a successor claim", async ()
     loop.id,
     old.id,
     tokens.sha256(token),
-    { phase: "done", outcome: "exec", error: null, ts: new Date().toISOString() },
+    { phase: "done", error: null, ts: new Date().toISOString() },
   );
   expect(reconciled).toBeUndefined();
   expect((await store.getRun(old.id))?.phase).toBe("error");

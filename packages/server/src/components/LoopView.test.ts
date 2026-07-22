@@ -42,7 +42,7 @@ const HTML =
   '</div>'
 
 const mk = (ts: string, state: Record<string, number> | null): RunSummary =>
-  ({ id: 'r-' + ts, ts, outcome: 'new', status: null, message: null, state }) as unknown as RunSummary
+  ({ id: 'r-' + ts, ts, status: null, message: null, state }) as unknown as RunSummary
 
 // Detail order = newest-first
 const RUNS: RunSummary[] = [

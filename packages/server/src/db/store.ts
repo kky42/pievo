@@ -165,7 +165,7 @@ async function cancelPendingTx(
 ): Promise<void> {
   await tx
     .update(runs)
-    .set({ phase: "canceled", outcome: "skipped", message, ts: at, updatedAt: at })
+    .set({ phase: "canceled", message, ts: at, updatedAt: at })
     .where(where);
 }
 
@@ -362,7 +362,7 @@ export async function requestRunCancel(loopId: string, runId: string): Promise<R
     if (!run) return undefined;
     if (run.phase === "pending") {
       const at = nowIso();
-      return (await tx.update(runs).set({ phase: "canceled", outcome: "skipped", error: "stopped by user", ts: at, updatedAt: at })
+      return (await tx.update(runs).set({ phase: "canceled", error: "stopped by user", ts: at, updatedAt: at })
         .where(and(eq(runs.id, runId), eq(runs.phase, "pending"))).returning())[0] ?? run;
     }
     if (run.phase === "running" && !run.cancelRequestedAt) {
@@ -535,6 +535,23 @@ async function terminalLifecycleTx(
 
   let failureStreak = 0;
   let autoPaused = false;
+  if (run.status === "blocked" && !loop.completedAt) {
+    loop = (
+      await tx
+        .update(loops)
+        .set({ enabled: false, pauseCause: { kind: "blocked", at: terminalAt, runId: run.id, role: run.role }, nextCadenceAt: null, nextRunAt: null, updatedAt: terminalAt })
+        .where(eq(loops.id, currentLoop.id))
+        .returning()
+    )[0]!;
+    await cancelPendingTx(
+      tx,
+      and(eq(runs.loopId, currentLoop.id), eq(runs.phase, "pending"), eq(runs.requestedBy, "system")),
+      "canceled - loop auto-paused after a blocked run",
+      terminalAt,
+    );
+    autoPaused = true;
+  }
+
   if (run.role === "exec" && run.phase === "error") {
     failureStreak = await execFailureStreakTx(tx, currentLoop.id);
     if (failureAutopauseStreak > 0 && failureStreak >= failureAutopauseStreak && loop.enabled && !loop.completedAt) {
@@ -555,7 +572,7 @@ async function terminalLifecycleTx(
     }
   }
 
-  if (autoEvolve && run.role === "exec" && run.phase === "done" && loop.enabled && !loop.completedAt && canEvolve(loop)) {
+  if (autoEvolve && run.status !== "blocked" && run.role === "exec" && run.phase === "done" && loop.enabled && !loop.completedAt && canEvolve(loop)) {
     const counted = (
       await tx
         .select({ n: sql<number>`count(*)` })
@@ -641,7 +658,7 @@ export async function countTerminalReportIncidents(): Promise<number> {
 }
 
 /** Serialize all terminal handling for one reportId, even when the competing
- * runs belong to different loop locks or one outcome lands in the incident table. */
+ * runs belong to different loop locks or one terminal result lands in the incident table. */
 async function lockReportIdTx(tx: StoreTx, reportId: string): Promise<void> {
   const unsigned = BigInt(`0x${createHash("sha256").update(reportId).digest("hex").slice(0, 16)}`);
   const key = BigInt.asIntN(64, unsigned).toString();
@@ -1013,7 +1030,6 @@ export async function rejectTerminalReport(input: {
     const run = (await tx.update(runs)
       .set({
         phase: "error",
-        outcome: "error",
         error: input.incident.reason,
         reportIncident: input.incident,
         ts: input.incident.at,
@@ -1171,7 +1187,7 @@ export async function reclaimRun(
     const reclaimed = (
       await tx
         .update(runs)
-        .set({ phase: "error", outcome: "error", error: reason, ts: at, updatedAt: at })
+        .set({ phase: "error", error: reason, ts: at, updatedAt: at })
         .where(and(eq(runs.id, runId), eq(runs.phase, expected)))
         .returning()
     )[0];
@@ -1275,8 +1291,7 @@ export async function finishLoopRun(
         .update(runs)
         .set({
           phase: "done",
-          outcome: "exec",
-          status: "resolved",
+          status: "kept",
           ...(input.message !== undefined ? { message: input.message } : {}),
           ...(input.state !== undefined ? { state: input.state } : {}),
           ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {}),
@@ -1524,7 +1539,7 @@ export async function lastTerminalRunAt(loopId: string): Promise<string | null> 
   return row?.ts ?? null;
 }
 
-/** Newest scheduled (exec) run for a loop — the last-outcome anchor that a later
+/** Newest scheduled (exec) run for a loop — the last-result anchor that a later
  *  evolve/edit must never mask. Null ⇒ no exec run yet. */
 export async function lastExecRun(loopId: string): Promise<Run | undefined> {
   return (
@@ -1701,7 +1716,7 @@ export async function reclaimUnclaimedPendingRun(
     const reclaimed = (
       await tx
         .update(runs)
-        .set({ phase: "error", outcome: "error", error: reason, ts: at, updatedAt: at })
+        .set({ phase: "error", error: reason, ts: at, updatedAt: at })
         .where(and(
           eq(runs.id, runId),
           eq(runs.phase, "pending"),
@@ -1750,7 +1765,7 @@ export async function expirePendingRun(
     if (machine?.online) return false;
     const canceled = await tx
       .update(runs)
-      .set({ phase: "canceled", outcome: "skipped", message, ts: at, updatedAt: at })
+      .set({ phase: "canceled", message, ts: at, updatedAt: at })
       .where(and(
         eq(runs.id, runId),
         eq(runs.phase, "pending"),

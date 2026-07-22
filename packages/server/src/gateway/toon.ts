@@ -128,7 +128,7 @@ export function helpBlock(lines: string[]): string {
  * slug, both to stdout. Slugs: VALIDATION_ERROR, FORBIDDEN, NOT_FOUND, CONFLICT,
  * UNAUTHORIZED, RATE_LIMITED, ERROR.
  *
- *   error: "status must be new|resolved|nothing-new (got \"wibble\")"
+ *   error: "status must be kept|no-change|blocked (got \"wibble\")"
  *   code: VALIDATION_ERROR
  */
 export function errorBlock(message: string, code: string): string {

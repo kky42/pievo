@@ -27,7 +27,7 @@
  * The untrusted-data guard rides along in that prose (evolve reads run messages;
  * edit reads the loop's current config — both untrusted). `buildEvolveTask` no
  * longer dumps up to 12 runs as pretty-printed JSON (tens of KB of full messages +
- * full state); it emits a compact one-line-per-run SURVEY (ts / role / outcome-status
+ * full state); it emits a compact one-line-per-run SURVEY (ts / role / phase-status
  * / state KEYS only / session id / message clipped ~100 chars), headed by an
  * on-demand `pievo log --json` pointer. `buildEditTask` KEEPS its inlined current ui/schema:
  * that is current config, not history, and is genuinely useful for a surgical edit.
@@ -67,11 +67,11 @@ function formatSchemaFields(schema: StateField[]): string {
 function stateReportLine(loop: Loop): string {
   const schema = loop.stateSchema ?? [];
   return schema.length
-    ? `pievo report --status <s> --state '{${schema.map((f) => `"${f.key}":<n>`).join(",")}}'
-  # record this run's metrics for the trend chart. Fields (keys must match, values must be finite numbers):
+    ? `pievo report --status kept|no-change|blocked --state '{${schema.map((f) => `"${f.key}":<n>`).join(",")}}'
+  # record this run's status and metrics for the trend chart. Fields (keys must match, values must be finite numbers):
   #   ${formatSchemaFields(schema)}
   # report a subset if you only observed some; big payloads: --state-file <path>.`
-    : `pievo report --status new
+    : `pievo report --status kept|no-change|blocked
   # this loop has no metric schema, so this run records no chart metrics — just the status/message.
   # to start charting a trend, an evolve/edit pass can define a metric schema first.`;
 }
@@ -164,7 +164,7 @@ function surveyMessage(message: string | null): string {
  * survey altitude. The full session id remains concise correlation/continuation
  * metadata; only the message is clipped. */
 function surveyRow(r: Run): string {
-  const outcomeStatus = `${r.outcome ?? "—"}/${r.status ?? "—"}`;
+  const outcomeStatus = `${r.phase ?? "—"}/${r.status ?? "—"}`;
   const keys = r.state && typeof r.state === "object" ? Object.keys(r.state) : [];
   const metrics = keys.length ? keys.join(",") : "—";
   return [
@@ -186,7 +186,7 @@ function renderRecentRuns(runs: Run[]): string {
   const columns = [
     "ts".padEnd(24),
     "role".padEnd(7),
-    "outcome/status".padEnd(16),
+    "phase/status".padEnd(16),
     "metrics(keys)".padEnd(16),
     "session".padEnd(38),
     "message",
@@ -206,6 +206,6 @@ export function buildEvolveTask(loop: Loop, runs: Run[]): string {
     `Metric schema: ${schema}`,
     "Current ui:\n" + (loop.ui ? "```html\n" + loop.ui + "\n```" : "(none yet — author one if the data warrants it)"),
     renderRecentRuns(runs),
-    "Evolve this loop per your instructions: review the recent runs' log to sharpen and distill the task file, fitting the dashboard as the lighter lever. Finish by logging what this pass did — `pievo report --message '<one line: which levers you pulled and why, or \"no change\" and why>'` — an internal run-log line; evolution never notifies the user.",
+    "Evolve this loop per your instructions: review the recent runs' log to sharpen and distill the task file, fitting the dashboard as the lighter lever. Finish by logging what this pass did — `pievo report --status kept --message '<one line: which levers you pulled and why>'` (or `--status no-change`, or `--status blocked` when owner attention is required and the loop should pause) — an internal run-log line; evolution never notifies the user.",
   ].join("\n\n");
 }

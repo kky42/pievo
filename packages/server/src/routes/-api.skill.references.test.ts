@@ -106,7 +106,7 @@ describe('/api/skill/references/$', () => {
     // Surface-only-what-changed nuance.
     expect(body).toContain('surfaces only what is new or changed')
     // The report/finish grammar and the strict finish bar.
-    expect(body).toContain('pievo report --status nothing-new')
+    expect(body).toContain('pievo report --status no-change')
     expect(body).toContain('pievo finish --message')
     expect(body).toContain('selfFinish: allowed')
     expect(body).toContain('Never finish early')
@@ -135,7 +135,7 @@ describe('/api/skill/references/$', () => {
   test('evolve.md log survey names the shipped TOON columns (batch 5)', async () => {
     const body = flat(await (await call('/api/skill/references/evolve.md')).text())
     // The "reading the log" prose matches the server's `renderLogText` header + summary.
-    expect(body).toContain('runs[N]{ts,role,outcome,metrics,session,message}')
+    expect(body).toContain('runs[N]{ts,role,phase,status,metrics,session,message}')
     expect(body).toContain('`summary:`')
     // `pievo log` shows metric values as key=value; the task-message inline is keys-only.
     expect(body).toContain('concise `key=value` survey')

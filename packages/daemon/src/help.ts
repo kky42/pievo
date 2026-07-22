@@ -37,8 +37,8 @@ Loop setup and management
                           Apply a JSON patch and/or UI/schema files.
 
 In-run completion
-  report [--status new|resolved|nothing-new] [--message <text>]
-                          Record this run's outcome and optional state metrics.
+  report --status kept|no-change|blocked [--message <text>]
+                          Record this run's status and optional state metrics.
   finish [--message <text>] [--reason <text>]
                           Complete a closed loop whose goal was achieved.
   complete                Alias of finish.
@@ -66,9 +66,9 @@ const VERB_USAGE: Record<string, string> = {
   run: "pievo run stop <run>\n  Stop one pending or running run without pausing its loop.",
   log: "pievo log [<loop>] [--json] [--limit N]\n  Show recent runs. <loop> may be an id or unique name; defaults to the loop for the current directory.",
   show: "pievo show [<loop>] [--full] [--json]\n  Show editable config and recent state. <loop> may be an id or unique name; defaults to the loop for the current directory.",
-  loops: "pievo loops [--fields a,b] [--json]\n  List loops on this machine. Fields: timezone,notify,model,goal,taskFile,runs,lastOutcome.",
+  loops: "pievo loops [--fields a,b] [--json]\n  List loops on this machine. Fields: timezone,notify,model,goal,taskFile,runs,lastResult.",
   edit: "pievo edit <loop> [--json '<obj>'] [--ui-file <path>] [--schema-file <path.json>] [--dry-run]\n  Apply a JSON patch and/or one or more content files; at least one edit input is required. --dry-run previews before/after.",
-  report: "pievo report [--status new|resolved|nothing-new] [--message <text> | --message-file <path>] [--state '<json>' | --state-file <path>]\n  In-run only: record this run's outcome and optional schema-validated metrics.",
+  report: "pievo report --status kept|no-change|blocked [--message <text> | --message-file <path>] [--state '<json>' | --state-file <path>]\n  In-run only: record this run's status and optional schema-validated metrics.",
   finish: "pievo finish [--message <text> | --message-file <path>] [--reason <text>] [--state '<json>' | --state-file <path>]\n  In-run only: mark an exec run's closed-loop goal met.",
   complete: "pievo complete [--message <text> | --message-file <path>] [--reason <text>] [--state '<json>' | --state-file <path>]\n  In-run only alias of finish.",
 };

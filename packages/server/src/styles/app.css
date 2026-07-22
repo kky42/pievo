@@ -109,16 +109,25 @@
   --color-running-soft: rgba(255, 213, 0, 0.16);
 
   /*
-   * Functional run-status ramp mapped onto the Rubik semantics: gray = the
-   * quiet baseline, blue = new output, green = resolved, red = error. Reused by
-   * the timeline gauge, run table and status pills; tracks light/dark
-   * automatically since each points at a base token.
+   * Functional run-result ramp. Role chooses copy (exec/edit/evolve); severity
+   * chooses color: gray = normal no-change, green = kept, red = blocked/error,
+   * amber = protocol warning. Reused by the timeline gauge and status pills.
    */
-  --color-run-nothing: var(--color-secondary);
-  --color-run-new: var(--color-interactive);
-  --color-run-resolved: var(--color-success);
-  --color-run-error: var(--color-accent);
-  --color-run-silent: var(--color-disabled);
+  --color-run-kept: var(--color-success);
+  --color-run-no-change: var(--color-secondary);
+  --color-run-blocked: var(--color-accent);
+  --color-run-error: color-mix(in srgb, var(--color-accent) 82%, var(--color-running));
+  --color-run-warning: var(--color-running);
+  --color-run-canceled: var(--color-disabled);
+  --color-run-queued: var(--color-secondary);
+  --color-run-active-exec: var(--color-display);
+  --color-run-active-edit: color-mix(in srgb, var(--color-accent) 55%, var(--color-interactive));
+  --color-run-active-evolve: var(--color-interactive);
+  /* Legacy aliases kept for old CSS/test references while run result colors settle. */
+  --color-run-nothing: var(--color-run-no-change);
+  --color-run-new: var(--color-run-kept);
+  --color-run-resolved: var(--color-run-kept);
+  --color-run-silent: var(--color-run-canceled);
 
   /*
    * Diff line tints for the run-detail Changes view - green = added, red =

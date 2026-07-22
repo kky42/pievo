@@ -142,7 +142,6 @@ interface MachineReportBody {
   ok?: boolean;
   exitCode?: number | null;
   durationMs?: number;
-  outcome?: "direct" | "silent" | "exec" | "evolve";
   sessionId?: string;
   usage?: unknown;
   taskFileContent?: unknown;
@@ -159,11 +158,6 @@ const LONG_POLL_WAIT_MS = 20_000;
  *  and every gateway create/edit invalidates early, so a new or re-pathed loop
  *  folder is watched promptly; slower write paths are covered by the TTL. */
 const WATCH_CACHE_TTL_MS = 15_000;
-/** The run outcomes a report may claim (untrusted wire input; anything else falls
- *  back to the role default). Mirrors the runs.outcome enum minus "error", which
- *  only the server assigns. */
-const RUN_OUTCOMES = new Set(["direct", "silent", "exec", "evolve"]);
-
 /** `pievo log` recent-history window. */
 export const LOG_RUNS_DEFAULT = 8;
 const LOG_RUNS_MAX = 20;
@@ -1107,18 +1101,18 @@ export class MachineGateway {
     // when the column is actually selected (the default `pievo loops` computes
     // neither). The `--json` escape hatch mirrors `show --json`, which ALWAYS computes
     // both, so force them on for JSON — a plain `pievo loops --json` must report the
-    // real `runs`/`lastOutcome` per loop, never a lazy 0/null.
+    // real `runs`/`lastResult` per loop, never a lazy 0/null.
     const wantRuns = json || fields.includes("runs");
-    const wantLastOutcome = json || fields.includes("lastOutcome");
+    const wantLastResult = json || fields.includes("lastResult");
 
     const loops: LoopListRecord[] = await Promise.all(
       (await store.loopsForMachine(machineId)).map(async (l) => {
         // Derived cadence fire (P4): the NEXT time the cron fires in the loop's tz. A
         // paused loop shows no next fire (— in the cell), matching §4.2.
         const nextFire = l.enabled && l.scheduleMode === "cron" ? (nextFires(l.cron, l.timezone, 1)[0] ?? null) : null;
-        // The last-outcome cell tracks the newest EXEC (scheduled) run, aligning with
+        // The last-result cell tracks the newest EXEC (scheduled) run, aligning with
         // `show` — a later successful evolve/edit must never mask a failed scheduled run.
-        const last = wantLastOutcome ? await store.lastExecRun(l.id) : undefined;
+        const last = wantLastResult ? await store.lastExecRun(l.id) : undefined;
         return {
           id: l.id,
           name: l.name ?? l.id,
@@ -1138,7 +1132,7 @@ export class MachineGateway {
           workdir: l.workdir ?? null,
           nextFire,
           runs: wantRuns ? await store.countRuns(l.id) : 0,
-          lastOutcome: last ? runOutcomeToken(last) : null,
+          lastResult: last ? runResultToken(last) : null,
         };
       }),
     );
@@ -1182,7 +1176,6 @@ export class MachineGateway {
       ts: r.ts,
       role: r.role,
       phase: r.phase,
-      outcome: r.outcome ?? null,
       status: r.status ?? null,
       durationMs: r.durationMs ?? null,
       exitCode: r.exitCode ?? null,
@@ -1587,7 +1580,6 @@ export class MachineGateway {
     const ok = body.result ? body.result === "success" : !!body.ok;
     const canceled = body.result === "canceled";
     const message = reportMessage(body, run);
-    const claimedOutcome = RUN_OUTCOMES.has(body.outcome as string) ? body.outcome : undefined;
     const loopPatch: Partial<NewLoop> = {
       ...(typeof body.taskFileContent === "string"
         ? {
@@ -1606,7 +1598,6 @@ export class MachineGateway {
         sha256(runToken),
       {
         phase: canceled ? "canceled" : ok ? "done" : "error",
-        outcome: canceled ? "skipped" : ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
         ...coerceTelemetry(body),
         ...(message !== undefined ? { message } : {}),
         ...(canceled
@@ -1799,9 +1790,6 @@ export class MachineGateway {
     // Provider final text is only fallback.
     const message = reportMessage(body, run);
 
-    // Whitelist the claimed outcome (untrusted wire input) — anything outside the
-    // known enum falls back to the role default rather than landing in the column.
-    const claimedOutcome = RUN_OUTCOMES.has(body.outcome as string) ? body.outcome : undefined;
     let terminal: Awaited<ReturnType<typeof store.finalizeRunningRun>>;
     try {
       terminal = await store.finalizeRunningRun(
@@ -1809,7 +1797,6 @@ export class MachineGateway {
         lease.runId,
         {
         phase: canceled ? "canceled" : ok ? "done" : "error",
-        outcome: canceled ? "skipped" : ok ? claimedOutcome ?? (lease.role === "evolve" ? "evolve" : "exec") : "error",
         ...coerceTelemetry(body),
         ...(message !== undefined ? { message } : {}),
         ...(canceled
@@ -1895,7 +1882,7 @@ export class MachineGateway {
 
   /**
    * The `pievo finish` verb's effect (closed-loop self-termination): record THIS
-   * run as an ordinary success (phase=done, outcome=exec, status=resolved) with the
+   * run as an ordinary success (phase=done, status=kept) with the
    * run's summary/metrics, then stamp the loop terminal (completedAt=now,
    * completionReason, enabled=false), remove it from the scheduler, capture the end-
    * state snapshot, and fire a completion notification unless notify=never. Gated
@@ -1984,7 +1971,7 @@ export interface Applied {
 // verbs in `cli.ts` (whose `finalizeCli` strips the superset fields at the
 // `/api/machine/cli` boundary - the legacy endpoints keep them). Pure — no I/O,
 // no clock — so they're exercised both here (via the verb tests) and directly in
-// `toon.test.ts`. The time formatters + outcome/metric tokens are exported for
+// `toon.test.ts`. The time formatters + result/metric tokens are exported for
 // `cli.ts` so both files render cells identically.
 
 /** Compact a stored ISO timestamp to `YYYY-MM-DD HH:MM` (UTC, as stored) for a TOON
@@ -2023,8 +2010,8 @@ export function fmtTimeZoned(iso: string, timezone: string | null, opts: { secon
  *  agent scans for (schedule + when it next fires). */
 const LIST_DEFAULT_FIELDS: string[] = ["id", "name", "cron", "enabled", "nextFire"];
 /** The optional columns `--fields` may add (the "available" set an unknown field is
- *  measured against, §4.2). `runs`/`lastOutcome` are derived per loop. */
-const LIST_OPTIONAL_FIELDS: string[] = ["timezone", "notify", "model", "reasoningEffort", "goal", "taskFile", "runs", "lastOutcome"];
+ *  measured against, §4.2). `runs`/`lastResult` are derived per loop. */
+const LIST_OPTIONAL_FIELDS: string[] = ["timezone", "notify", "model", "reasoningEffort", "goal", "taskFile", "runs", "lastResult"];
 
 /** A loop's row for `pievo loops`: every renderable cell precomputed once (so the
  *  `--fields` selection is a pure column pick). The structured `loops` body carries the
@@ -2049,8 +2036,8 @@ interface LoopListRecord {
   nextFire: string | null;
   /** Derived: total run count. */
   runs: number;
-  /** Derived: the most recent run's outcome token, or null (no runs yet). */
-  lastOutcome: string | null;
+  /** Derived: the most recent run's result token, or null (no runs yet). */
+  lastResult: string | null;
 }
 
 /** One `loops` cell for a named column (scalar-rendered by `listBlock`). */
@@ -2068,7 +2055,7 @@ function loopCell(rec: LoopListRecord, field: string): Scalar {
     case "goal": return rec.goal;
     case "taskFile": return rec.taskFile;
     case "runs": return rec.runs;
-    case "lastOutcome": return rec.lastOutcome;
+    case "lastResult": return rec.lastResult;
     default: return null;
   }
 }
@@ -2097,13 +2084,13 @@ function renderLoopsText(loops: LoopListRecord[], fields: string[]): string {
   );
 }
 
-/** One run's `outcome` cell: an evolve pass reads `evolve`; otherwise `ok`/`failed`
- *  (from the phase) suffixed with the content status (`ok/nothing-new`). */
-export function runOutcomeToken(r: { phase: string; outcome: string | null; status: string | null }): string {
-  if (r.outcome === "evolve") return "evolve";
-  if (r.outcome === "skipped") return "skipped";
+/** One run's result cell, derived from phase + status. `blocked` is actionable
+ * and therefore outranks error/canceled for display just as it does for pause. */
+export function runResultToken(r: { phase: string; status: string | null }): string {
+  if (r.status === "blocked") return `blocked/${r.phase}`;
+  if (r.phase === "canceled") return "canceled";
   const base = r.phase === "error" ? "failed" : r.phase === "done" ? "ok" : r.phase;
-  return r.status ? `${base}/${r.status}` : base;
+  return r.status ? `${base}/${r.status}` : `${base}/missing-status`;
 }
 
 /** A run's reported metrics as `k=v,k=v` (or null → the em-dash), for the log cell. */
@@ -2120,7 +2107,6 @@ interface LogRun {
   ts: string;
   role: string;
   phase: string;
-  outcome: string | null;
   status: string | null;
   sessionId: string | null;
   state: Record<string, unknown> | null;
@@ -2142,7 +2128,7 @@ function renderLogText(name: string, loopId: string, runs: LogRun[], total: numb
   const rows: (string | number | null)[][] = runs.map((r) => [
     fmtTime(r.ts),
     r.role,
-    runOutcomeToken(r),
+    runResultToken(r),
     runMetricsToken(r.state),
     r.sessionId,
     r.message ? truncate(r.message, LOG_MESSAGE_CELL_CAP, "use --json").value : null,
@@ -2154,12 +2140,12 @@ function renderLogText(name: string, loopId: string, runs: LogRun[], total: numb
     `showing ${runs.length} of ${total}`,
     `${ok} ok`,
     ...(failed ? [`${failed} failed`] : []),
-    ...(lastExec ? [`last exec ${runOutcomeToken(lastExec)} ${fmtTime(lastExec.ts)}`] : []),
+    ...(lastExec ? [`last exec ${runResultToken(lastExec)} ${fmtTime(lastExec.ts)}`] : []),
   ].join(" · ");
   return doc(
     head,
     countLine(runs.length, { total }),
-    listBlock("runs", ["ts", "role", "outcome", "metrics", "session", "message"], rows),
+    listBlock("runs", ["ts", "role", "result", "metrics", "session", "message"], rows),
     `summary: ${summary}`,
     helpBlock(["Run `pievo log --json` for normalized run fields and token usage"]),
   );

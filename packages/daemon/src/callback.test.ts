@@ -58,10 +58,10 @@ describe("runCallback — unified dispatch", () => {
 
   test("posts argv to /api/machine/cli with the RUN token; renders text + exitCode", async () => {
     const calls = stubFetch(() => ({ status: 200, body: { text: "reported.", exitCode: 0 } }));
-    const code = await runCallback(["report", "--status", "nothing-new"]);
+    const code = await runCallback(["report", "--status", "no-change"]);
     expect(code).toBe(0);
     expect(calls[0]!.url).toBe("https://srv.test/api/machine/cli");
-    expect(JSON.parse(calls[0]!.init.body).argv).toEqual(["report", "--status", "nothing-new"]);
+    expect(JSON.parse(calls[0]!.init.body).argv).toEqual(["report", "--status", "no-change"]);
     expect(calls[0]!.init.headers.Authorization).toBe("Bearer run-tok-1");
     expect(stdout()).toContain("reported.");
   });
@@ -77,9 +77,9 @@ describe("runCallback — unified dispatch", () => {
     const msgFile = path.join(dir, "msg.txt");
     fs.writeFileSync(msgFile, "a long human message body");
     const calls = stubFetch(() => ({ status: 200, body: { text: "ok", exitCode: 0 } }));
-    await runCallback(["report", "--status", "new", "--message-file", msgFile]);
+    await runCallback(["report", "--status", "kept", "--message-file", msgFile]);
     const argv = JSON.parse(calls[0]!.init.body).argv;
-    expect(argv).toEqual(["report", "--status", "new", "--message", "a long human message body"]);
+    expect(argv).toEqual(["report", "--status", "kept", "--message", "a long human message body"]);
   });
 
   test("an unreadable file flag fails with exit 1, posts nothing", async () => {
@@ -96,11 +96,11 @@ describe("runCallback — unified dispatch", () => {
         ? { status: 404, body: { error: "not found" } }
         : { status: 200, body: { text: "reported (legacy).", exitCode: 0 } },
     );
-    const code = await runCallback(["report", "--status", "new", "--message", "hi"]);
+    const code = await runCallback(["report", "--status", "kept", "--message", "hi"]);
     expect(code).toBe(0);
     expect(calls[0]!.url).toContain("/api/machine/cli");
     expect(calls[1]!.url).toBe("https://srv.test/agent-api/loop");
-    expect(JSON.parse(calls[1]!.init.body).argv).toEqual(["report", "--status", "new", "--message", "hi"]);
+    expect(JSON.parse(calls[1]!.init.body).argv).toEqual(["report", "--status", "kept", "--message", "hi"]);
     expect(calls[1]!.init.headers.Authorization).toBe("Bearer run-tok-1");
     expect(stdout()).toContain("reported (legacy).");
   });
@@ -114,9 +114,9 @@ describe("runCallback — unified dispatch", () => {
     const survey = [
       'loop: "Docs Sweep" (loop-abc)',
       "count: 1 of 12 total",
-      "runs[1]{ts,role,outcome,metrics,session,message}:",
-      '  "2026-07-05 06:00",exec,ok/nothing-new,drift=0,sess-abc,"no drift"',
-      "summary: showing 1 of 12 · 1 ok · last exec ok/nothing-new 2026-07-05 06:00",
+      "runs[1]{ts,role,result,metrics,session,message}:",
+      '  "2026-07-05 06:00",exec,ok/no-change,drift=0,sess-abc,"no drift"',
+      "summary: showing 1 of 12 · 1 ok · last exec ok/no-change 2026-07-05 06:00",
     ].join("\n");
     const calls = stubFetch(() => ({
       status: 200,
@@ -130,7 +130,7 @@ describe("runCallback — unified dispatch", () => {
     // The key F2 assertion: stdout is NON-EMPTY and carries the survey.
     expect(stdout().length).toBeGreaterThan(0);
     expect(stdout()).toContain('loop: "Docs Sweep" (loop-abc)');
-    expect(stdout()).toContain("runs[1]{ts,role,outcome,metrics,session,message}:");
+    expect(stdout()).toContain("runs[1]{ts,role,result,metrics,session,message}:");
     expect(stdout()).toContain("summary:");
   });
 

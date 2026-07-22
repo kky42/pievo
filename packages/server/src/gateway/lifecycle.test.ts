@@ -98,13 +98,13 @@ test("paused loops claim owner work by role priority, stay paused after exec, an
 
   const edit = await store.claimReadyRunForMachine(machine.id);
   expect(edit?.run).toMatchObject({ role: "edit", requestedBy: "owner" });
-  await store.finalizeRunningRun(loop.id, edit!.run.id, { phase: "done", outcome: "direct", ts: new Date().toISOString() }, {}, tokens.sha256(edit!.runToken));
+  await store.finalizeRunningRun(loop.id, edit!.run.id, { phase: "done", ts: new Date().toISOString() }, {}, tokens.sha256(edit!.runToken));
   const evolve = await store.claimReadyRunForMachine(machine.id);
   expect(evolve?.run.role).toBe("evolve");
-  await store.finalizeRunningRun(loop.id, evolve!.run.id, { phase: "done", outcome: "evolve", ts: new Date().toISOString() }, {}, tokens.sha256(evolve!.runToken));
+  await store.finalizeRunningRun(loop.id, evolve!.run.id, { phase: "done", ts: new Date().toISOString() }, {}, tokens.sha256(evolve!.runToken));
   const exec = await store.claimReadyRunForMachine(machine.id);
   expect(exec?.run.role).toBe("exec");
-  await store.finalizeRunningRun(loop.id, exec!.run.id, { phase: "done", outcome: "exec", ts: new Date().toISOString() }, {}, tokens.sha256(exec!.runToken));
+  await store.finalizeRunningRun(loop.id, exec!.run.id, { phase: "done", ts: new Date().toISOString() }, {}, tokens.sha256(exec!.runToken));
   expect(await store.getLoop(loop.id)).toMatchObject({ enabled: false, nextCadenceAt: null, nextRunAt: null });
 
   const systemLoop = await seedLoop(machine.id, false);
@@ -318,7 +318,7 @@ test("same reportId is bound to runId and concurrent cross-loop reports finalize
   expect(await tokens.resolveLease(bToken)).toBeUndefined();
 });
 
-test("semantic-invalid terminal-grace telemetry preserves the completed outcome", async () => {
+test("semantic-invalid terminal-grace telemetry preserves the completed result", async () => {
   const machine = await seedMachine();
   const loop = await store.createLoop({ userId: "u1", machineId: machine.id, name: "closed", cron: "0 0 1 1 *", goal: "done", enabled: true });
   const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
@@ -340,10 +340,10 @@ test("semantic-invalid terminal-grace telemetry preserves the completed outcome"
   expect(await tokens.resolveLease(token)).toBeUndefined();
 });
 
-test("invalid terminal-grace telemetry preserves a canceled outcome", async () => {
+test("invalid terminal-grace telemetry preserves a canceled result", async () => {
   const machine = await seedMachine("m-canceled-telemetry");
   const loop = await seedLoop(machine.id);
-  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "canceled", outcome: "skipped", role: "exec", ts: new Date().toISOString() });
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "canceled", role: "exec", ts: new Date().toISOString() });
   const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id, role: "exec", allowControl: false });
   await tokens.terminalizeLease(run.id);
 
@@ -363,7 +363,7 @@ test("invalid exec participates in streak/autopause, preserves owner queue, and 
   const loop = await seedLoop(machine.id);
   const base = Date.now() - 60_000;
   for (let i = 0; i < 2; i++) await store.addRun({
-    loopId: loop.id, userId: "u1", machineId: machine.id, phase: "error", outcome: "error", role: "exec", ts: new Date(base + i).toISOString(),
+    loopId: loop.id, userId: "u1", machineId: machine.id, phase: "error", role: "exec", ts: new Date(base + i).toISOString(),
   });
   const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() });
   await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });

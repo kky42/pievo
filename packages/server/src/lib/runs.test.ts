@@ -6,7 +6,6 @@ const run = (id: string, ts: string, over: Partial<RunSummary> = {}): RunSummary
   id,
   loopId: 'loop-1',
   ts,
-  outcome: 'exec',
   status: null,
   message: null,
   durationMs: null,

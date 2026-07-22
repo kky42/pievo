@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { Tooltip } from '@base-ui/react/tooltip'
 import type { JobSummary, RunSummary } from '../types'
-import { dotColor, dotLabel, dur, fmt, isCompleted, until } from '../lib/format'
+import { dotColor, dotLabel, dotOpacity, dur, fmt, isCompleted, until } from '../lib/format'
 import { runPulseAnim, useHydrated } from './ui'
 
 /*
  * The signature data viz: a segmented bar of cube-sticker blocks (slight 4px
- * corner, hairline gaps) — one block per run, colored by outcome (mono ink for
+ * corner, hairline gaps) — one block per run, colored by phase/status (mono ink for
  * the quiet "no update" baseline, color only for meaning). Up to WINDOW blocks
  * show at once; older/newer overflow collapses into clickable "+N" pagers that
  * are themselves the SAME block shape, so the row reads as one continuous strip
@@ -38,7 +38,7 @@ function RunSeg({ run, onClick }: { run: RunSummary; onClick: () => void }) {
             }}
             aria-label={dotLabel(run)}
             className={`${SEG} cursor-pointer transition-opacity hover:opacity-70`}
-            style={{ background: dotColor(run), ...(run.running ? runPulseAnim : {}) }}
+            style={{ background: dotColor(run), opacity: dotOpacity(run), ...(run.running ? runPulseAnim : {}) }}
           />
         }
       />

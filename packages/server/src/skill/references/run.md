@@ -80,20 +80,24 @@ Every run ends with exactly ONE terminal call, made at the very end even when no
 happened. In almost every run that call is `pievo report` — the run's single channel
 to the user and the run log:
 
-    pievo report --status nothing-new
-    pievo report --status new --message "<one short message to the user>"
+    pievo report --status no-change
+    pievo report --status kept --message "<one short message to the user>"
+    pievo report --status blocked --message "<one short message: what needs human attention>"
 
 `--status` is one of:
 
-- `new` — something appeared or changed that's worth surfacing.
-- `resolved` — a previously-reported issue is now gone.
-- `nothing-new` — nothing worth saying (a known issue that simply persists is still
-  `nothing-new`).
+- `kept` — this run produced something worth keeping: a fix, report, PR, artifact,
+  new fact, improved method, or resolved issue.
+- `no-change` — the run completed its SOP but nothing was worth keeping. A known
+  issue that simply persists is still `no-change`.
+- `blocked` — the run cannot complete its SOP without human attention (for example
+  missing credentials, broken observation path, unavailable service, or a required
+  owner-only decision). The loop auto-pauses when a run reports `blocked`.
 
-Always report, even `nothing-new`, so the run is on record. Whether the user is
-actually messaged is the scheduler's call — it follows this loop's notify policy, not
-the run's. Keep `--message` short and human, and never dump logs into it; a long body
-belongs in a file passed with `--message-file <path>`.
+Always report with one of these statuses, even `no-change`, so the run is on record.
+Whether the user is actually messaged is the scheduler's call — it follows this
+loop's notify policy, not the run's. Keep `--message` short and human, and never dump
+logs into it; a long body belongs in a file passed with `--message-file <path>`.
 
 **Finishing a goal-driven loop.** A closed loop carries a goal — a finish line
 delivered in the run's prompt as a `Goal (finish line): <goal>` line — and each run is
@@ -119,8 +123,8 @@ Only one terminal call per run — `report` OR `finish`, never both.
 **Reporting is one-way.** `pievo report`/`finish` cannot ask a question and get an
 answer back within the run. If a run is blocked — missing credentials, an API down or
 hanging — it does not wait, retry, or poll indefinitely: it makes one bounded attempt,
-then `pievo report --status new --message "<one line on what is blocking>"` and
-exits. If finishing genuinely needs a human decision, the run says so plainly in that
+then `pievo report --status blocked --message "<one line on what needs human attention>"` and
+exits; the loop will pause. If finishing genuinely needs a human decision, the run says so plainly in that
 message.
 
 ## 4. Adjusting the schedule — only when a run warrants it
@@ -177,4 +181,4 @@ into a coherent dashboard over time.
 
 A run is one pass, not a session. It does its work once and exits; the scheduler wakes
 it again on cadence. A run never polls, sleeps, or waits for more — if there is nothing
-to do this pass, it reports `nothing-new` and stops.
+to do this pass, it reports `no-change` and stops.

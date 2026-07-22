@@ -39,6 +39,6 @@ no `set-goal` verb here. If asked, say so in your report so the owner can run
 
 Do not run the loop's task. Do not message the user out of band. When the change is
 applied, end with exactly ONE terminal call —
-`pievo report --status resolved --message "<one line: what you changed>"` — and stop.
+`pievo report --status kept --message "<one line: what you changed>"` — and stop.
 If the request is ambiguous, make the most reasonable minimal change and say what you
 assumed in the report message.

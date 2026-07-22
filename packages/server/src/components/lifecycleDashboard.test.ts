@@ -24,7 +24,7 @@ vi.mock('@tanstack/react-router', () => ({ Link: ({ children }: { children: Reac
 
 const runningRun = (cancelRequested = false): RunSummary => ({
   id: 'r1', loopId: 'l1', ts: '2026-01-01T00:00:00Z', running: true, cancelRequested,
-  agent: 'claude-code', outcome: 'exec', status: null, message: null, durationMs: null,
+  agent: 'claude-code', status: null, message: null, durationMs: null,
   exitCode: null, finalText: null, usage: null, error: null, state: null, control: null, sessionId: null,
 })
 

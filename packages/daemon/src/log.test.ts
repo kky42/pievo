@@ -65,7 +65,7 @@ describe("runLog", () => {
   });
 
   test("resolves the loop for the current workdir and prints the server survey (text sink over the legacy fallback)", async () => {
-    const survey = `loop: "Here" (loop-here)\ncount: 1 of 1 total\nruns[1]{ts,role,outcome,cost,metrics,session,message}:\n  2026-06-01 00:00,exec,exec,—,mrr=42,sess-r1,"did the thing"\nsummary: showing 1 of 1`;
+    const survey = `loop: "Here" (loop-here)\ncount: 1 of 1 total\nruns[1]{ts,role,result,cost,metrics,session,message}:\n  2026-06-01 00:00,exec,ok/missing-status,—,mrr=42,sess-r1,"did the thing"\nsummary: showing 1 of 1`;
     const { fetchFn, calls } = stubFetch({
       "/api/machine/loop": {
         body: { loops: [{ id: "loop-here", name: "Here", workdir: loopDir, taskFile: null }] },
@@ -75,7 +75,7 @@ describe("runLog", () => {
           ok: true,
           name: "Here",
           runs: [
-            { id: "r1", ts: "2026-06-01T00:00:02Z", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: 1500, error: null, message: "did the thing", sessionId: "sess-r1", state: { mrr: 42 }, transcript: "$ Bash echo hi", transcriptTruncated: false },
+            { id: "r1", ts: "2026-06-01T00:00:02Z", role: "exec", phase: "done", status: null, durationMs: 1500, error: null, message: "did the thing", sessionId: "sess-r1", state: { mrr: 42 }, transcript: "$ Bash echo hi", transcriptTruncated: false },
           ],
           text: survey,
           exitCode: 0,
@@ -157,7 +157,7 @@ describe("runLog", () => {
   });
 
   test("--limit and --json are forwarded / honored", async () => {
-    const runs = [{ id: "r1", ts: "t", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: null, error: null, message: null, sessionId: "sess-r1", state: { mrr: 42 }, transcript: "", transcriptTruncated: false }];
+    const runs = [{ id: "r1", ts: "t", role: "exec", phase: "done", status: null, durationMs: null, error: null, message: null, sessionId: "sess-r1", state: { mrr: 42 }, transcript: "", transcriptTruncated: false }];
     const { fetchFn, calls } = stubFetch({
       "/api/machine/loop": { body: { loops: [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }] } },
       "/api/machine/log": { body: { ok: true, name: "X", runs } },
@@ -185,7 +185,7 @@ describe("runLog", () => {
   });
 
   test("--json before the loop id keeps the id positional (boolean flag, no swallow)", async () => {
-    const runs = [{ id: "r1", ts: "t", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: null, error: null, message: null, transcript: "", transcriptTruncated: false }];
+    const runs = [{ id: "r1", ts: "t", role: "exec", phase: "done", status: null, durationMs: null, error: null, message: null, transcript: "", transcriptTruncated: false }];
     const { fetchFn, calls } = stubFetch({
       "/api/machine/loop": { body: { loops: [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }] } },
       "/api/machine/log": { body: { ok: true, name: "X", runs } },
@@ -251,7 +251,7 @@ function stubUnified(loops: LoopStub[], runsFor: (argv: string[]) => { ok: boole
 type LoopStub = { id: string; name: string; workdir: string | null; taskFile: string | null };
 
 describe("runLog — unified /api/machine/cli (new server)", () => {
-  const oneRun = [{ id: "r1", ts: "2026-06-01T00:00:02Z", role: "exec", phase: "done", outcome: "exec", status: null, durationMs: 1500, error: null, message: "did the thing", sessionId: "sess-r1", state: { mrr: 42 }, transcript: "$ Bash echo hi", transcriptTruncated: false }];
+  const oneRun = [{ id: "r1", ts: "2026-06-01T00:00:02Z", role: "exec", phase: "done", status: null, durationMs: 1500, error: null, message: "did the thing", sessionId: "sess-r1", state: { mrr: 42 }, transcript: "$ Bash echo hi", transcriptTruncated: false }];
 
   test("resolves the workdir loop and posts `loops` then `log <id>` to the unified endpoint", async () => {
     const survey = `loop: "Here" (loop-here)\ncount: 1 of 1 total\nsummary: showing 1 of 1`;
@@ -282,7 +282,7 @@ describe("runLog — unified /api/machine/cli (new server)", () => {
   });
 
   test("text sink: the default (non-transcript) log prints the server `text` verbatim, not its own render", async () => {
-    const toon = "loop: X (loop-x)\ncount: 1 of 1 total\nruns[1]{ts,role,outcome,cost,metrics,session,message}:\n  2026-06-01 00:00,exec,ok,—,mrr=42,sess-r1,\"did the thing\"\nsummary: showing 1 of 1 · 1 ok";
+    const toon = "loop: X (loop-x)\ncount: 1 of 1 total\nruns[1]{ts,role,result,cost,metrics,session,message}:\n  2026-06-01 00:00,exec,ok/missing-status,—,mrr=42,sess-r1,\"did the thing\"\nsummary: showing 1 of 1 · 1 ok";
     const { fetchFn } = stubUnified(
       [{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }],
       () => ({ ok: true, body: { ok: true, name: "X", runs: oneRun, text: toon, exitCode: 0 } }),

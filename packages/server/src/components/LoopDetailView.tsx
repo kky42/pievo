@@ -557,7 +557,7 @@ export function LoopDetailView({ id }: { id: string }) {
             )}
             {latestIncidentRun?.reportIncident && (
               <div className="mt-2 text-body leading-snug text-secondary">
-                {latestIncidentRun.outcome === 'error'
+                {latestIncidentRun.phase === 'error'
                   ? 'Last run failed · Terminal report rejected'
                   : 'Last run telemetry warning · Terminal report rejected'}
               </div>
@@ -599,7 +599,7 @@ export function LoopDetailView({ id }: { id: string }) {
               <span className="inline-flex min-w-0 items-center gap-2 text-body">
                 <span aria-hidden className="size-2.5 shrink-0 rounded-[2px]" style={{ background: dotColor(editRun) }} />
                 <span className="font-medium" style={{ color: dotColor(editRun) }}>
-                  {editRun.canceled ? 'Edit canceled' : editRun.outcome === 'error' ? 'Edit failed' : 'Edit applied'}
+                  {editRun.canceled ? 'Edit canceled' : editRun.phase === 'error' ? 'Edit failed' : 'Edit applied'}
                 </span>
                 {editRun.error && <span className="truncate text-secondary">· {editRun.error}</span>}
               </span>

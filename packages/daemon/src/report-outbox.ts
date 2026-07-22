@@ -141,7 +141,7 @@ export async function sendTerminalReport(serverUrl: string, report: PersistedRep
     if (body.reportId === report.reportId && res.status === 410 && body.code === "RETIRED") return { kind: "retired", reportId: report.reportId };
     if (res.ok && body.reportId === report.reportId) {
       // A handled rejection is a terminal transport ACK, not acceptance of the
-      // claimed outcome. Bind it to the exact durable bytes; tolerate additive
+      // claimed result. Bind it to the exact durable bytes; tolerate additive
       // response fields, but never clear the row for another payload/disposition.
       if (body.accepted === false && (
         body.payloadDigest !== report.payloadDigest ||

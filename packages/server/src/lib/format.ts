@@ -96,64 +96,67 @@ export interface StatusMeta {
  * for meaning. Mirrored by the --color-run-* tokens used in Tailwind classes.
  */
 export const ST = {
-  'nothing-new': { c: 'var(--color-secondary)', label: 'No update' },
-  new: { c: 'var(--color-display)', label: 'New' },
-  resolved: { c: 'var(--color-success)', label: 'Resolved' },
-  error: { c: 'var(--color-accent)', label: 'Error' },
-  silent: { c: 'var(--color-disabled)', label: 'Silent' },
-  evolve: { c: 'var(--color-interactive)', label: 'Evolved' },
+  kept: { c: 'var(--color-run-kept)', label: 'Kept' },
+  'no-change': { c: 'var(--color-run-no-change)', label: 'No change' },
+  blocked: { c: 'var(--color-run-blocked)', label: 'Blocked' },
+  error: { c: 'var(--color-run-error)', label: 'Error' },
+  warning: { c: 'var(--color-run-warning)', label: 'Missing status' },
+  canceled: { c: 'var(--color-run-canceled)', label: 'Canceled' },
+  queued: { c: 'var(--color-run-queued)', label: 'Queued' },
+  'active-exec': { c: 'var(--color-run-active-exec)', label: 'Running…' },
+  'active-edit': { c: 'var(--color-run-active-edit)', label: 'Editing…' },
+  'active-evolve': { c: 'var(--color-run-active-evolve)', label: 'Evolving…' },
 } satisfies Record<string, StatusMeta>
 
-const lookup = (k: string | null | undefined): StatusMeta | undefined =>
-  k ? (ST as Record<string, StatusMeta>)[k] : undefined
+const statusMeta = (k: string | null | undefined): StatusMeta | undefined =>
+  k === 'kept' || k === 'no-change' || k === 'blocked' ? ST[k] : undefined
 
-/**
- * Human labels for the *delivery outcome* of a run that carries no richer status.
- * These describe how a run finished — `direct`/`agent` mean a report reached the
- * user (verbatim vs relayed), `exec` means a normal run completed. We show the
- * user-facing meaning, not the internal enum, so "DIRECT" never leaks into the UI.
- */
-const OUTCOME_LABEL: Record<string, string> = {
-  direct: 'Reported',
-  agent: 'Reported',
-  exec: 'Ran',
-}
+const roleWord = (r: RunSummary): 'exec' | 'edit' | 'evolve' =>
+  r.role === 'edit' ? 'edit' : r.role === 'evolve' ? 'evolve' : 'exec'
 
-/** Safety net for any unmapped status/outcome string — Title-case, never raw. */
-const titleCase = (s: string): string =>
-  s ? s.charAt(0).toUpperCase() + s.slice(1).replace(/-/g, ' ') : s
+const keptLabel = (r: RunSummary): string =>
+  roleWord(r) === 'edit' ? 'Edited' : roleWord(r) === 'evolve' ? 'Improved' : 'Kept'
 
 export function dotColor(r: RunSummary): string {
-  if (r.queued) return ST.silent.c
-  // An in-flight evolve pass pulses in its own blue; other runs pulse display ink.
-  if (r.running) return r.role === 'evolve' ? ST.evolve.c : ST.new.c
-  if (r.canceled) return ST.silent.c
-  if (r.outcome === 'error') return ST.error.c
-  if (r.outcome === 'evolve') return ST.evolve.c
-  if (r.outcome === 'silent') return ST.silent.c
-  return (lookup(r.status) ?? ST['nothing-new']).c
+  if (r.running) return ST[`active-${roleWord(r)}`].c
+  if (r.status === 'blocked') return ST.blocked.c
+  if (r.queued) return ST.queued.c
+  if (r.phase === 'error') return ST.error.c
+  if (r.canceled || r.phase === 'canceled') return ST.canceled.c
+  if (r.phase === 'done' && !statusMeta(r.status)) return ST.warning.c
+  return (statusMeta(r.status) ?? ST['no-change']).c
+}
+
+export function dotOpacity(r: RunSummary): number {
+  if (r.running || r.status === 'blocked' || r.phase === 'error') return 1
+  if (r.queued) return 0.7
+  if (r.canceled || r.phase === 'canceled') return 0.5
+  if (r.phase === 'done' && !statusMeta(r.status)) return 0.9
+  if (r.status === 'no-change') return 0.55
+  return 1
 }
 
 export function dotLabel(r: RunSummary): string {
-  if (r.queued) return 'Queued'
+  if (r.queued) return ST.queued.label
   if (r.running) {
     if (r.cancelRequested) return 'Stopping…'
-    return r.role === 'evolve' ? 'Evolving…' : 'Running…'
+    return ST[`active-${roleWord(r)}`].label
   }
-  // Only daemon-confirmed (or never-started) user cancellation says Canceled.
-  if (r.canceled && r.error === 'stopped by user') return 'Canceled'
-  // A deferred run retired without executing (machine offline at fire time) -
-  // it rides phase `canceled`, so it keeps the honest Skipped label.
-  if (r.outcome === 'skipped') return 'Skipped'
-  if (r.canceled) return 'Canceled'
-  if (r.cancelRequested && r.outcome === 'error') return 'Failed while stopping'
-  if (r.cancelRequested && r.outcome !== 'silent' && r.outcome !== 'evolve') return 'Succeeded while stopping'
-  if (r.outcome === 'error') return ST.error.label
-  if (r.outcome === 'evolve') return ST.evolve.label
-  if (r.outcome === 'silent') return ST.silent.label
-  // Prefer the run's status (No update / New / Resolved …); otherwise map the
-  // delivery outcome to a human label so internal enums never reach the UI.
-  return lookup(r.status)?.label ?? OUTCOME_LABEL[r.outcome] ?? titleCase(r.outcome)
+  // Blocked is actionability, so it outranks canceled/error visual labels.
+  if (r.status === 'blocked') return ST.blocked.label
+  if (r.phase === 'error') {
+    if (r.cancelRequested) return 'Failed while stopping'
+    return ST.error.label
+  }
+  if (r.canceled || r.phase === 'canceled') {
+    if (r.error === 'stopped by user') return 'Canceled'
+    return 'Canceled'
+  }
+  if (r.cancelRequested && r.phase === 'done') return 'Succeeded while stopping'
+  if (r.status === 'kept') return keptLabel(r)
+  if (r.status === 'no-change') return ST['no-change'].label
+  if (r.phase === 'done') return ST.warning.label
+  return ST['no-change'].label
 }
 
 export const lastRunOf = (j: JobSummary): RunSummary | null => {

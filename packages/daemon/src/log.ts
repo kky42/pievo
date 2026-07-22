@@ -34,7 +34,6 @@ interface RunRow {
   ts: string;
   role: string;
   phase: string;
-  outcome: string | null;
   status: string | null;
   durationMs: number | null;
   error: string | null;
