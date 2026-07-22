@@ -8,6 +8,7 @@ import type { ArtifactFileWithMeta } from "../db/store.js";
 import type { Loop, Run } from "../db/schema.js";
 import type { ArtifactSummary, JobDetail, JobFull, JobSummary, RunSummary } from "../types.js";
 import { machinePresence } from "../lib/machinePresence.js";
+import { MIN_DAEMON_VERSION, daemonNeedsUpdate } from "../gateway/compat.js";
 
 const SUMMARY_RUNS = 18;
 
@@ -136,7 +137,17 @@ export async function toJobDetail(loop: Loop): Promise<JobDetail> {
     taskFileSyncedAt: loop.taskFileSyncedAt ?? null,
     // Presence drives calm asleep-vs-offline copy. Manual work may queue while
     // offline and is claimed after reconnect.
-    machine: { id: loop.machineId, name: m?.name || "", online: presence === "online", presence, lastSeen: m?.lastSeen ?? null, daemonProtocol: m?.daemonProtocol ?? null },
+    machine: {
+      id: loop.machineId,
+      name: m?.name || "",
+      online: presence === "online",
+      presence,
+      lastSeen: m?.lastSeen ?? null,
+      daemonProtocol: m?.daemonProtocol ?? null,
+      daemonVersion: m?.daemonVersion ?? null,
+      needsUpdate: daemonNeedsUpdate(m?.daemonVersion),
+      requiredDaemonVersion: MIN_DAEMON_VERSION,
+    },
     runs: fullRuns,
   };
 }

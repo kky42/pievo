@@ -181,6 +181,7 @@ export async function runDaemon(args: string[] = []): Promise<number> {
   const outbox = new PendingReportOutbox(path.join(PIEVO_DIR, "pending-reports.sqlite"));
   const runtimeStatusFile = path.join(PIEVO_DIR, "runtime-status.json");
   let blockedRunId: string | undefined;
+  let lastNeedsUpdateKey: string | undefined;
   let runConflict: { daemonRunId: string; serverRunId: string } | undefined;
   let runtimeState: { currentRun: CurrentRun | null; cancelPending: boolean; persistenceError?: string; outboxPath?: string } = { currentRun: null, cancelPending: false };
   const persistRuntime = () => {
@@ -220,7 +221,7 @@ export async function runDaemon(args: string[] = []): Promise<number> {
       if (res.status === 426) logger.error("daemon protocol rejected; run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart` (protocol 2 required)");
       else if (!res.ok) logger.warn({ status: res.status, statusText: res.statusText }, "poll non-ok");
       else {
-        const data = await res.json() as { delivery?: Delivery | null; cancelRunId?: string; blockedRunId?: string | null; runConflict?: { daemonRunId: string; serverRunId: string }; watch?: WatchSpec[]; watchDigest?: string };
+        const data = await res.json() as { delivery?: Delivery | null; cancelRunId?: string; blockedRunId?: string | null; runConflict?: { daemonRunId: string; serverRunId: string }; needsUpdate?: { current: string | null; required: string; command: string }; watch?: WatchSpec[]; watchDigest?: string };
         if (Array.isArray(data.watch)) watchManager.reconcile(data.watch);
         if (typeof data.watchDigest === "string") watchDigest = data.watchDigest;
         if (typeof data.cancelRunId === "string") runtime.cancel(data.cancelRunId);
@@ -232,6 +233,9 @@ export async function runDaemon(args: string[] = []): Promise<number> {
         runConflict = nextRunConflict(runConflict, incomingConflict, runtime.currentRun());
         persistRuntime();
         if (data.blockedRunId) logger.warn({ runId: data.blockedRunId }, "previous run state is unknown; no new work will start");
+        const needsUpdateKey = data.needsUpdate ? `${data.needsUpdate.current ?? "unknown"}->${data.needsUpdate.required}` : undefined;
+        if (data.needsUpdate && needsUpdateKey !== lastNeedsUpdateKey) logger.error(data.needsUpdate, "daemon update required by server; no new work will start");
+        lastNeedsUpdateKey = needsUpdateKey;
         if (runConflict) logger.error(runConflict, "local/server run conflict; no new work will start");
         if (data.delivery) runtime.start(data.delivery, server, roots);
       }

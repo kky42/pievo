@@ -17,7 +17,7 @@ function detail(summary: JobSummary, machine: Partial<JobDetail['machine']> = {}
   return {
     job: { id: summary.id, cron: summary.cron, scheduleMode: 'cron', continuousDelayMinutes: 1, enabled: summary.enabled, notify: 'auto' },
     summary, taskFileContent: null, taskFileSyncedAt: null, runs: summary.runs,
-    machine: { id: 'm1', name: 'MacBook Pro', online: true, presence: 'online', lastSeen: null, daemonProtocol: 2, ...machine },
+    machine: { id: 'm1', name: 'MacBook Pro', online: true, presence: 'online', lastSeen: null, daemonProtocol: 2, daemonVersion: '2.0.1', needsUpdate: false, requiredDaemonVersion: '2.0.1', ...machine },
   }
 }
 

@@ -287,9 +287,29 @@ export function MachinesModal({
                 </div>
               </details>
             )}
+            {m.needsUpdate && (
+              <div className="flex flex-col gap-1.5 rounded-control border border-warn/40 bg-warn/10 p-3">
+                <div className="text-label font-medium text-primary">Daemon needs update before this server will dispatch runs.</div>
+                <div className="text-label text-secondary">
+                  running {m.daemonVersion ? `v${m.daemonVersion}` : 'unknown version'} · required v{m.requiredDaemonVersion}
+                </div>
+                {cliConfig ? (
+                  <div className="flex items-start gap-2">
+                    <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-control bg-display p-3 font-mono text-caption leading-relaxed text-paper">
+                      {daemonUpgradeCommand(cliConfig.pievoCli, cliConfig.customCli)}
+                    </pre>
+                    <CopyButton text={daemonUpgradeCommand(cliConfig.pievoCli, cliConfig.customCli)} />
+                  </div>
+                ) : (
+                  <div className="text-label text-secondary">
+                    {configErr ? 'Could not load the upgrade command. Close and try again.' : 'Loading upgrade command…'}
+                  </div>
+                )}
+              </div>
+            )}
             {/* Outdated-daemon hint: only when both versions are known and the
                 daemon is genuinely behind (never on unknown/equal/newer). */}
-            {isOutdated(m.daemonVersion, m.latestDaemonVersion) && (
+            {!m.needsUpdate && isOutdated(m.daemonVersion, m.latestDaemonVersion) && (
               <div className="flex flex-col gap-1.5">
                 <div className="text-label text-secondary">
                   daemon v{m.daemonVersion} · upgrade available (v{m.latestDaemonVersion})

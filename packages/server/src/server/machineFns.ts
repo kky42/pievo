@@ -24,6 +24,7 @@ import { requestScope, type RequestScope } from '../auth.js'
 import { machineIdFromToken, mintDeviceToken, rememberConnectKey, sha256 } from '../gateway/tokens.js'
 import { machineInScope, tokenVisibleTo } from './machineScope.js'
 import { latestDaemonVersion } from './daemonVersion.js'
+import { MIN_DAEMON_VERSION, daemonNeedsUpdate } from '../gateway/compat.js'
 import { ensureServer } from './boot.js'
 import type { MachineSummary } from '../types'
 
@@ -70,6 +71,8 @@ async function toSummary(m: Machine, scope: RequestScope): Promise<MachineSummar
     daemonProtocol: m.daemonProtocol ?? null,
     // Same for every machine (cached npm latest); non-blocking + fail-silent.
     latestDaemonVersion: latestDaemonVersion.get(),
+    needsUpdate: daemonNeedsUpdate(m.daemonVersion),
+    requiredDaemonVersion: MIN_DAEMON_VERSION,
     token: tokenVisibleTo(m, scope) ? (m.token ?? null) : null,
     loopCount: (await store.loopsForMachine(m.id)).length,
   }

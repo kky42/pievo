@@ -129,6 +129,10 @@ export interface MachineSummary {
    *  npm is unreachable. Same for every machine — the web compares it against
    *  `daemonVersion` to show an "upgrade available" hint. */
   latestDaemonVersion: string | null
+  /** True when this server will not dispatch runs to the machine until its daemon is upgraded. */
+  needsUpdate: boolean
+  /** Minimum daemon version required before this server will dispatch runs. */
+  requiredDaemonVersion: string
   /** Plaintext device token (so the UI can re-show the connect command). Under
    *  the auth gate it is serialized ONLY to the machine's owner — null for
    *  everyone else (the token fully impersonates the machine). */
@@ -240,7 +244,7 @@ export interface JobDetail {
    *  claim immediately, but manual work remains queued; `presence` distinguishes a calm
    *  "asleep" (recently seen, likely just idle) from a hard "offline", and
    *  `lastSeen` (ISO) feeds the "last seen 3m ago" hint. */
-  machine: { id: string; name: string; online: boolean; presence: MachinePresence; lastSeen: string | null; daemonProtocol: number | null }
+  machine: { id: string; name: string; online: boolean; presence: MachinePresence; lastSeen: string | null; daemonProtocol: number | null; daemonVersion: string | null; needsUpdate: boolean; requiredDaemonVersion: string }
   /** The loop's owning team + whether it is the caller's active team. Present only
    *  when the auth gate is on (open mode has a single workspace, so no chip). Lets
    *  the loop header show which team owns the loop and, when a member opens it from

@@ -40,7 +40,7 @@ function makeDetail(over: { state?: DetailState; online?: boolean; protocol?: nu
     job: { id: 'l1', cron: '0 6 * * *', scheduleMode: 'cron', continuousDelayMinutes: 1, enabled, notify: 'auto', agent: 'claude-code', exec: { executor: 'claude-code', workdir: '/tmp/project' } },
     summary: { id: 'l1', name: 'Lifecycle loop', cron: '0 6 * * *', kind: 'exec:claude-code', enabled, notify: 'auto', nextRun: null, running, lastRunTs: running ? r.ts : null, graduation: null, completedAt, deleteRequestedAt, runs: running ? [r] : [], runCount: running ? 1 : 0 },
     taskFileContent: null, taskFileSyncedAt: null, runs: running ? [r] : [],
-    machine: { id: 'm1', name: 'MacBook Pro', online: over.online ?? true, presence: (over.online ?? true) ? 'online' : 'offline', lastSeen: null, daemonProtocol: over.protocol === undefined ? 2 : over.protocol },
+    machine: { id: 'm1', name: 'MacBook Pro', online: over.online ?? true, presence: (over.online ?? true) ? 'online' : 'offline', lastSeen: null, daemonProtocol: over.protocol === undefined ? 2 : over.protocol, daemonVersion: '2.0.1', needsUpdate: false, requiredDaemonVersion: '2.0.1' },
   }
 }
 

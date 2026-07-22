@@ -429,6 +429,25 @@ export function LoopDetailView({ id }: { id: string }) {
     </div>
   )
 
+  const needsUpdateEl = detail.machine.needsUpdate && (
+    <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-control border border-warn/40 bg-warn/10 px-4 py-2.5">
+      <span className="inline-flex items-center gap-2 text-meta font-medium text-primary">
+        <span aria-hidden className="size-2 rounded-full bg-warn" />
+        Daemon update required
+      </span>
+      <span className="text-meta text-secondary">
+        This server requires v{detail.machine.requiredDaemonVersion}; {detail.machine.name ? `“${detail.machine.name}”` : 'the bound machine'} reports {detail.machine.daemonVersion ? `v${detail.machine.daemonVersion}` : 'an unknown version'}. Queued work will wait.
+      </span>
+      <button
+        type="button"
+        onClick={() => setMachinesOpen(true)}
+        className="ml-auto cursor-pointer text-meta font-medium text-interactive underline underline-offset-2 transition-colors hover:text-display"
+      >
+        Update daemon
+      </button>
+    </div>
+  )
+
   const offlineEl = !online && (
     <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-control border border-hairline bg-raised px-4 py-2.5">
       <span className="inline-flex items-center gap-2 text-meta font-medium text-secondary">
@@ -567,6 +586,7 @@ export function LoopDetailView({ id }: { id: string }) {
 
         <div className="mt-5 border-t border-hairline pt-4">
           {crossTeamEl}
+          {needsUpdateEl}
           {offlineEl}
           {actionErrEl}
           {flashLine}

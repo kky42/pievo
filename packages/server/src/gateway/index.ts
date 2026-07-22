@@ -61,6 +61,7 @@ import {
   type Scalar,
 } from "./toon.js";
 import { normalizeProviderSetting, validateSchema, validateUi } from "./validate.js";
+import { MIN_DAEMON_VERSION, daemonNeedsUpdate, daemonUpgradeCommand } from "./compat.js";
 import { clipText, nowIso, stripNul, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
 
 const log = logger.child({ mod: "gateway" });
@@ -715,9 +716,12 @@ export class MachineGateway {
     if (current && (typeof current.runId !== "string" || !["executing", "reporting"].includes(current.stage))) {
       return { status: 400, body: { error: "invalid currentRun", code: "VALIDATION_ERROR" } };
     }
-    const base = await this.poll(deviceToken, request.info, current ? [current.runId] : undefined, request.watchDigest, !current);
+    const machineId = isDeviceTokenShape(deviceToken) ? machineIdFromToken(deviceToken) : "";
+    const priorMachine = machineId ? await store.getMachine(machineId) : undefined;
+    const reportedVersion = typeof request.info?.version === "string" ? clipText(request.info.version, 64) : priorMachine?.daemonVersion;
+    const needsUpdate = daemonNeedsUpdate(reportedVersion);
+    const base = await this.poll(deviceToken, request.info, current ? [current.runId] : undefined, request.watchDigest, !current && !needsUpdate);
     if (base.status !== 200) return base;
-    const machineId = machineIdFromToken(deviceToken);
     const machine = await store.getMachine(machineId);
     if (machine?.daemonProtocol !== 2) await store.updateMachine(machineId, { daemonProtocol: 2 });
     const running = await store.runningRunForMachine(machineId);
@@ -727,6 +731,7 @@ export class MachineGateway {
       status: 200,
       body: {
         delivery: current ? null : body.deliveries[0] ?? null,
+        ...(needsUpdate ? { needsUpdate: { current: reportedVersion ?? null, required: MIN_DAEMON_VERSION, command: daemonUpgradeCommand() } } : {}),
         ...(cancelRunId ? { cancelRunId } : {}),
         ...(current && running && current.runId !== running.id
           ? { runConflict: { daemonRunId: current.runId, serverRunId: running.id } }

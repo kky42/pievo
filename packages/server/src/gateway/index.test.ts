@@ -621,6 +621,40 @@ test("concurrent polls deliver a pending run exactly once (atomic pending->runni
   expect(again).toHaveLength(0);
 });
 
+test("pollV2 with an old or unknown daemon version does not claim pending work", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() });
+
+  const unknown = await gateway().pollV2(token, { protocolVersion: 2, info: { host: "mac" } });
+  expect(unknown.status).toBe(200);
+  expect((unknown.body as any).delivery).toBeNull();
+  expect((unknown.body as any).needsUpdate.current).toBeNull();
+  expect((await store.getRun(run.id))!.phase).toBe("pending");
+
+  const old = await gateway().pollV2(token, { protocolVersion: 2, info: { host: "mac", version: "2.0.0" } });
+  expect(old.status).toBe(200);
+  expect((old.body as any).delivery).toBeNull();
+  expect((old.body as any).needsUpdate).toMatchObject({ current: "2.0.0", required: "2.0.1" });
+  expect((await store.getRun(run.id))!.phase).toBe("pending");
+});
+
+test("pollV2 with a compatible daemon version can claim pending work", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() });
+
+  const res = await gateway().pollV2(token, { protocolVersion: 2, info: { host: "mac", version: "2.0.1" } });
+  expect(res.status).toBe(200);
+  expect((res.body as any).delivery.runId).toBe(run.id);
+  expect((res.body as any).needsUpdate).toBeUndefined();
+  expect((await store.getRun(run.id))!.phase).toBe("running");
+});
+
 test("poll claims only one ready run per loop and honors edit > evolve > exec", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
