@@ -286,10 +286,9 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
     usage,
     taskFileContent: readTaskFile(workdir, d.loop.taskFile, roots),
     error,
-    // Every role sends finalText: the server only uses it as a message FALLBACK
-    // when the run didn't `pievo report --message` itself, and evolve/steer are
-    // notification-exempt server-side — so an evolve pass that forgets to report
-    // still leaves a readable run-log line instead of a blank timeline block.
+    // Preserve the provider's final response independently from the required
+    // `pievo report --message`. History detail exposes both without treating the
+    // free-form final response as a successful protocol report.
     finalText,
   }, error === "canceled by server request" ? "canceled" : undefined, ok);
 }

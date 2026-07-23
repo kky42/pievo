@@ -38,8 +38,8 @@ Existing loops may still put `## Current understanding` or a per-run `## Timelin
 Start at the Cookbook cursor N. Never request exhaustive history.
 
 1. Aggregate first: `pievo log --summary --after N --json`.
-2. If the aggregate warrants inspection, request a filtered bounded list, for example `pievo log --after N --role exec --limit 20 --json` or narrow with status/phase/through filters.
-3. Inspect at most a few decisive runs with `pievo log --run <index> --json`; add `--diff` only when artifact changes matter.
+2. If the aggregate warrants inspection, request a filtered bounded list, for example `pievo log --after N --role exec --limit 20 --json`. The list reports `count` and `total`; when `count < total`, narrow with status/phase/through filters instead of replaying everything.
+3. Inspect at most a few decisive runs with `pievo log --run <index> --json`; add `--diff` only when artifact changes matter. List `requestText` is only the owner's original steer message, `message` is the formal report, and `finalTextAvailable` signals that detail has a richer final response. Detail keeps `message`, `error`, and `finalText` distinct.
 
 Use the loop content home for current artifact evidence. Use selected run diffs only for historical snapshot changes; a diff does not replace inspecting the current live files.
 

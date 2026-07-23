@@ -119,7 +119,9 @@ computes pure functions. Run instructions: `README.md`.
   intent, records one validation-pending boundary, and never advances the cursor. Per-loop
   `runIndex` is allocated under the loop lock at claim (or unclaimed terminalization), and
   `summary.through` stops before an indexed open-run gap; summary/detail/diff all carry
-  explicit row/byte/work caps.
+  explicit row/byte/work caps. Agent history has one role-independent evidence shape:
+  steer-only `requestText` is owner intent, `message`/`error`/`finalText` stay distinct,
+  list only signals final-text availability, and displayed token usage excludes caches.
 - `allowControl` defaults TRUE; `false` means the owner pins the schedule. A run's
   self-schedule surface is only `reschedule` + `set-cron`, with cadence floors
   (`PIEVO_SELF_CRON_FLOOR_MINUTES`, `PIEVO_SELF_RESCHEDULE_FLOOR_MINUTES`)

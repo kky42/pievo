@@ -142,6 +142,24 @@ describe('LoopDetailView flat lifecycle actions', () => {
     expect(host!.textContent).toContain('Last run telemetry warning · Terminal report rejected')
   })
 
+  it('shows one input-plus-output token total and ignores cache telemetry', async () => {
+    const d = makeDetail({ state: 'active', running: true })
+    const run = d.runs[0]!
+    run.usage = { inputTokens: 1_000, outputTokens: 250, cacheReadTokens: 50_000, cacheCreationTokens: 10_000 }
+    h.detail = d
+    host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host)
+    await act(async () => { root!.render(createElement(RunDetailView, { loopId: 'l1', runId: 'r1' })) })
+    await act(async () => { await Promise.resolve() })
+    expect(host!.textContent).toContain('Token usage1.3k tokens')
+    expect(host!.textContent).not.toContain('50,000')
+    expect(host!.textContent).not.toContain('in ·')
+
+    run.usage = { cacheReadTokens: 50_000, cacheCreationTokens: 10_000 }
+    await act(async () => { root!.render(createElement(RunDetailView, { loopId: 'l1', runId: 'r1' })) })
+    await act(async () => { await Promise.resolve() })
+    expect(host!.textContent).not.toContain('Token usage')
+  })
+
   it('renders terminal report diagnostics on the run page', async () => {
     const d = makeDetail({ state: 'active', running: true })
     const run = d.runs[0]!

@@ -1812,18 +1812,19 @@ test("cli branches by credential: dk_ prefix → device path, bare-UUID → run 
 
 test("cli run credential: log returns the run's OWN-loop history (closes the note.md seam)", async () => {
   const { runToken, loop, machineId } = (await seededCli());
-  const historical = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "steer", requestedBy: "owner", status: "kept", message: "did a thing", sessionId: "sess-abc", ts: new Date().toISOString() });
-  const res = (await gateway().cli(runToken, ["log"]));
+  const historical = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "steer", requestedBy: "owner", requestText: "focus here", status: "kept", message: "did a thing", sessionId: "sess-abc", ts: new Date().toISOString() });
+  const res = (await gateway().cli(runToken, ["log", "--json"]));
   expect(res.status).toBe(200);
   const body = res.body as any;
-  expect(body.text).toContain(loop.id); // loopId is render-only (stripped); the survey text carries it
-  expect(body.runs.some((r: any) => r.id === historical.id && r.role === "steer" && r.message === "did a thing")).toBe(true); // runs channel retained
+  const parsed = JSON.parse(body.text);
+  expect(parsed.runs.some((r: any) => r.runIndex === historical.runIndex && r.role === "steer" && r.requestText === "focus here" && r.message === "did a thing")).toBe(true);
+  expect(body.runs).toBeUndefined(); // canonical history is one text channel; legacy runs marks an old server
   // Batch 4 wired a `log` case into dispatch, so the legacy `/agent-api/loop`
   // transport now yields the run's OWN-loop log too — the help that advertises
   // `log` is truthful on both transports (the seam is closed everywhere).
-  const legacy = (await gateway().agentApi(runToken, ["log"]));
+  const legacy = (await gateway().agentApi(runToken, ["log", "--json"]));
   expect(legacy.status).toBe(200);
-  expect((legacy.body as { text: string }).text).toContain(loop.id);
+  expect(JSON.parse((legacy.body as { text: string }).text).runs).toHaveLength(1);
 });
 
 test("cli run credential: show is scoped to the run's own loop with its caps", async () => {

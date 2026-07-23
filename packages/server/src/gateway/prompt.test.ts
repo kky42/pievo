@@ -65,6 +65,9 @@ test("exec payload carries identity and uses Spec then bounded Cookbook evidence
   expect(task).toContain("README.md");
   expect(task.indexOf("README.md")).toBeLessThan(task.indexOf("COOKBOOK.md"));
   expect(task).toContain("pievo log --summary --after");
+  expect(task).toContain("count < total");
+  expect(task).toContain("finalTextAvailable");
+  expect(task).toContain("requestText");
   expect(task).toContain('--message "<concise result or no-go reason>"');
   expect(task).toContain('--metrics \'{"runtime":<number|null>}\'');
   expect(task).toContain("Normally do not append to `## Timeline`");
@@ -91,6 +94,9 @@ test("evolve payload progressively reviews bounded history without inlining run 
   expect(task).toContain("pievo log --run");
   expect(task).toContain("--diff");
   expect(task).toContain("summary.through");
+  expect(task).toContain("count < total");
+  expect(task).toContain("finalTextAvailable");
+  expect(task).toContain("requestText");
   expect(task).toContain("Use the loop content home for current artifact evidence");
   expect(task).toContain("a diff does not replace inspecting the current live files");
   expect(task).toContain('<loop-embed file="latest.md"></loop-embed>');

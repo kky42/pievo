@@ -45,8 +45,10 @@ Keep repo clones, git worktrees, `node_modules`, build output, caches, and other
 Run history has stable per-loop indexes. Start from Cookbook's cursor N and avoid exhaustive replay:
 
 1. `pievo log --summary --after N --json` — aggregate the unconsolidated window first.
-2. `pievo log --after N --role exec --limit 20 --json` — request a bounded filtered list only if needed; `--through`, status, phase, and role filters can narrow it further.
+2. `pievo log --after N --role exec --limit 20 --json` — request a bounded filtered list only if needed. Check `count` against `total`; when `count < total`, use `--through`, status, phase, or role filters to isolate useful evidence rather than paging through everything.
 3. `pievo log --run <index> --json` — inspect at most a few decisive runs; add `--diff` only when artifact changes matter.
+
+List rows use one schema for every role. `requestText` is null except for an owner's original steer message; it never contains the generated exec/evolve prompt. `message` is the formal `pievo report` summary. `finalTextAvailable` means detail also has the coding agent's final response. Detail keeps `message`, `error`, and `finalText` separate: a final response can explain an error or carry extra evidence, but it is not a substitute for the required report. `tokenUsage` is input plus output tokens; cache telemetry is deliberately omitted.
 
 The summary's `through` is the covered terminal boundary. Evolve advances the Cookbook cursor only to a `summary.through` it actually reviewed. A selective detail read does not justify skipping an unreviewed interval.
 

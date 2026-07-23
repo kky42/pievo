@@ -7,7 +7,7 @@ The user turn below names the execution workspace (cwd), exact task file, loop c
 Act through the `pievo` command on your PATH. These verbs act on this run's loop, so no id is needed. Owner-side `pievo edit <id> --json` is a separate direct-config surface.
 
 1. Read the exact task file named below and its required `## Spec`, then read the named Cookbook beside it.
-2. Read current config with `pievo show --json`. Use `pievo log --summary --after <Consolidated-through-index> --json` only when recent evidence is relevant; inspect a bounded list or a few details with `pievo log --after N`, `pievo log --run <index>`, and optionally `--diff`. Never replay history exhaustively.
+2. Read current config with `pievo show --json`. Use `pievo log --summary --after <Consolidated-through-index> --json` only when recent evidence is relevant. A bounded list reports `count` and `total`; when `count < total`, narrow it instead of replaying history. Its `requestText` preserves an owner's original steer message, `message` is the formal report, and `finalTextAvailable` signals richer detail. Inspect only a few decisive runs with `pievo log --after N`, `pievo log --run <index>`, and optionally `--diff`.
 3. Apply only the requested change:
    - Schedule/envelope: `set-cron`, `set-schedule`, `set-tz`, `set-name`, `notify`, `set-model`, `pause`, `resume`, or `reschedule --run-at`.
    - Standing instructions: edit only the task file's `## Spec`.

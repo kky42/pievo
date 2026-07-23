@@ -111,9 +111,9 @@ export const EDITABLE_LOOP_FIELDS = new Set([
   "agent",
 ]);
 const MIN_INTERVAL_MS = 60_000;
-/** Run messages (report --message / finalText fallback).
- *  Run errors share the same cap. Exported for `cli.ts` (the report verb
- *  clip to the same budget). */
+/** Formal `report --message` text. Provider finalText is stored separately;
+ *  it never satisfies the successful-run reporting protocol. Run errors share
+ *  this cap. Exported for `cli.ts` so the report verb uses the same budget. */
 export const MESSAGE_CAP = 2000;
 /** A claude-code session id is a UUID-ish token — anything longer is garbage. */
 const SESSION_ID_CAP = 200;

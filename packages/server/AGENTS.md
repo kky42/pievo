@@ -175,9 +175,14 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   protocol; prompt/docs consume that seam rather than reproducing history queries.
   `runs.runIndex` is allocated under the loop lock at claim (or unclaimed terminalization),
   so priority order—not enqueue order—is history order; `summary.through` stops before any
-  indexed open-run gap. Summary selects only aggregate fields and fails loud above 5,000
-  rows; JSON responses cap at 512KB; run diffs cap files, blob input, and emitted chars
-  before expensive reads/jsdiff. Prompt behavior is pinned in `gateway/prompt.test.ts`;
+  indexed open-run gap. Agent-facing list/detail use one role-independent evidence
+  shape: steer-only `requestText` is the original owner instruction (never a generated
+  prompt), `message`/`error`/`finalText` remain distinct, list only signals
+  `finalTextAvailable`, and `tokenUsage` is input+output while full cache telemetry stays
+  stored. Lists expose `count`/`total`; prompts teach filtering before selective detail.
+  Summary selects only aggregate fields and fails loud above 5,000 rows; JSON responses
+  cap at 512KB; run diffs cap files, blob input, and emitted chars before expensive
+  reads/jsdiff. Prompt behavior is pinned in `gateway/prompt.test.ts`;
   served public prose is pinned in `routes/-api.skill.references.test.ts`.
 - Skill `.md` edits compile into the server bundle via `?raw` and ride the next daemon
   tarball through the unchanged selective `sync-skill.mjs` whitelist. Dashboard prose

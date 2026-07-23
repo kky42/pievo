@@ -33,6 +33,11 @@ function Field({ k, children }: { k: string; children: React.ReactNode }) {
   )
 }
 
+function visibleTokenUsage(usage: RunSummary['usage']): number | null {
+  if (!usage || (usage.inputTokens === undefined && usage.outputTokens === undefined)) return null
+  return (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)
+}
+
 /** Per-run artifact diff vs the previous run (Phase 3), rendered as a colored diff
  *  view. Lazy by runId; degrades to a calm fallback for runs with no snapshot. */
 function Changes({ run }: { run: RunSummary }) {
@@ -163,6 +168,7 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
   }, [loopId, runId, load])
 
   const run = detail?.runs.find((r) => r.id === runId) ?? olderRun
+  const tokenUsage = visibleTokenUsage(run?.usage ?? null)
 
   // Not in the latest window → walk older pages by cursor until we find it or run
   // out (try/finally so searchDone always settles, even on a transient failure —
@@ -334,11 +340,9 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
               {run.status && <Field k="Status">{run.status}</Field>}
               {run.durationMs != null && <Field k="Duration">{dur(run.durationMs)}</Field>}
               {run.exitCode != null && <Field k="Exit code">{run.exitCode}</Field>}
-              {run.usage && (
+              {tokenUsage != null && (
                 <Field k="Token usage">
-                  <span className="text-disabled">
-                    {fnum((run.usage.inputTokens ?? 0) + (run.usage.cacheReadTokens ?? 0) + (run.usage.cacheCreationTokens ?? 0))} in · {fnum(run.usage.outputTokens ?? 0)} out
-                  </span>
+                  <span className="text-disabled">{fnum(tokenUsage)} tokens</span>
                 </Field>
               )}
               {run.metrics != null && (

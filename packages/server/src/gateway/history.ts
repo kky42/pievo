@@ -17,7 +17,6 @@ export const HISTORY_DIFF_INPUT_BYTES_MAX = 2 * 1024 * 1024;
 export const HISTORY_SUMMARY_ROWS_MAX = 5_000;
 export const HISTORY_METRIC_KEYS_MAX = 100;
 export const HISTORY_PROFILE_KEYS_MAX = 50;
-export const HISTORY_PROFILE_VALUE_CAP = 256;
 export const HISTORY_CONTROL_ACTIONS_MAX = 50;
 export const HISTORY_CONTROL_ARGS_CAP = 8 * 1024;
 export const HISTORY_JSON_TEXT_CAP = 512 * 1024;
@@ -192,21 +191,13 @@ async function selectedThrough(loopId: string, q: WindowSpec): Promise<number | 
   return row?.n == null ? null : Number(row.n);
 }
 
-function resultToken(run: Pick<Run, "phase" | "status">): string {
-  if (run.status === "blocked") return `blocked/${run.phase}`;
-  if (run.phase === "canceled") return "canceled";
-  const base = run.phase === "error" ? "failed" : run.phase === "done" ? "ok" : run.phase;
-  return run.status ? `${base}/${run.status}` : `${base}/missing-status`;
-}
-
-function compactUsage(usage: RunUsage | null): string | null {
-  if (!usage) return null;
-  const parts: string[] = [];
-  if (usage.inputTokens !== undefined) parts.push(`in=${usage.inputTokens}`);
-  if (usage.outputTokens !== undefined) parts.push(`out=${usage.outputTokens}`);
-  if (usage.cacheReadTokens !== undefined) parts.push(`cache-read=${usage.cacheReadTokens}`);
-  if (usage.cacheCreationTokens !== undefined) parts.push(`cache-write=${usage.cacheCreationTokens}`);
-  return parts.length ? parts.join(";") : null;
+/** Agent-facing history intentionally exposes one provider-neutral total while
+ * retaining the full usage breakdown in storage for diagnostics. Older runs may
+ * have only one side of the telemetry; absent sides contribute zero, while a run
+ * with neither input nor output remains unknown. */
+function totalTokenUsage(usage: RunUsage | null): number | null {
+  if (!usage || (usage.inputTokens === undefined && usage.outputTokens === undefined)) return null;
+  return (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
 }
 
 function compactMetrics(metrics: Record<string, unknown> | null): string | null {
@@ -225,52 +216,24 @@ function boundedText(value: string | null, cap = HISTORY_DETAIL_TEXT_CAP): { val
   return { value: value.slice(0, cap), truncated: value.length > cap, totalChars: value.length };
 }
 
-function boundedMetrics(metrics: Record<string, unknown> | null) {
-  if (!metrics) return null;
-  const keys = Object.keys(metrics).sort();
-  const kept = keys.slice(0, HISTORY_METRIC_KEYS_MAX);
-  const truncatedValues: string[] = [];
-  const values = Object.fromEntries(kept.map((key) => {
-    const value = metrics[key];
-    if (typeof value === "string" && value.length > 1_000) {
-      truncatedValues.push(key);
-      return [key, value.slice(0, 1_000)];
-    }
-    return [key, value];
-  }));
-  return {
-    values,
-    truncated: keys.length > kept.length || truncatedValues.length > 0,
-    truncatedValues,
-    totalKeys: keys.length,
-  };
-}
-
 function normalizedListRun(run: Run) {
+  const ownerSteerText = run.role === "steer" && run.requestedBy === "owner" ? run.requestText : null;
+  const requestText = boundedText(ownerSteerText ?? null, HISTORY_MESSAGE_CAP);
   const message = boundedText(run.message ?? null, HISTORY_MESSAGE_CAP);
-  const model = boundedText(run.model ?? null, HISTORY_PROFILE_VALUE_CAP);
-  const reasoningEffort = boundedText(run.reasoningEffort ?? null, HISTORY_PROFILE_VALUE_CAP);
   return {
-    id: run.id,
     runIndex: run.runIndex!,
     terminalAt: run.ts,
     role: run.role,
-    requestedBy: run.requestedBy,
+    requestText: requestText.value,
+    requestTextTruncated: requestText.truncated,
     phase: run.phase,
     status: run.status ?? null,
-    result: resultToken(run),
     durationMs: run.durationMs ?? null,
-    usage: run.usage ?? null,
-    metrics: boundedMetrics(run.metrics ?? null),
-    agent: run.agent ?? null,
-    model: model.value,
-    modelTruncated: model.truncated,
-    reasoningEffort: reasoningEffort.value,
-    reasoningEffortTruncated: reasoningEffort.truncated,
-    sessionId: run.sessionId ?? null,
+    tokenUsage: totalTokenUsage(run.usage ?? null),
+    metrics: run.metrics ?? null,
     message: message.value,
     messageTruncated: message.truncated,
-    messageTotalChars: message.totalChars,
+    finalTextAvailable: !!run.finalText?.trim(),
   };
 }
 
@@ -300,16 +263,20 @@ async function listHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
     selectedThrough(loop.id, q),
   ]);
   const normalized = rows.map(normalizedListRun);
-  const data = { loop: { id: loop.id, name: loop.name ?? loop.id }, through, count: normalized.length, total: Number(counted[0]?.n ?? 0), runs: normalized };
+  const data = { through, count: normalized.length, total: Number(counted[0]?.n ?? 0), runs: normalized };
   if (q.json) {
     const text = jsonText(data);
-    return text ? response(data, text, { runs: normalized }) : { status: 413, body: { error: "history JSON exceeds the response cap; lower --limit" } };
+    return text ? response(data, text) : { status: 413, body: { error: "history JSON exceeds the response cap; lower --limit" } };
   }
   const table = rows.length
-    ? listBlock("runs", ["index", "terminal", "role", "result", "durationMs", "usage", "metrics", "agent", "session", "message"], rows.map((run) => [
-        run.runIndex!, fmt(run.ts), run.role, resultToken(run), run.durationMs ?? null, compactUsage(run.usage ?? null),
-        compactMetrics(run.metrics ?? null), run.agent ?? null, run.sessionId ?? null,
+    ? listBlock("runs", ["index", "terminal", "role", "requestText", "phase", "status", "durationMs", "tokenUsage", "metrics", "message", "finalTextAvailable"], rows.map((run) => [
+        run.runIndex!, fmt(run.ts), run.role,
+        run.role === "steer" && run.requestedBy === "owner" && run.requestText
+          ? truncate(run.requestText, HISTORY_MESSAGE_CAP, "use --run for detail").value : null,
+        run.phase, run.status ?? null, run.durationMs ?? null, totalTokenUsage(run.usage ?? null),
+        compactMetrics(run.metrics ?? null),
         run.message ? truncate(run.message, HISTORY_MESSAGE_CAP, "use --run for detail").value : null,
+        !!run.finalText?.trim(),
       ]))
     : emptyList("runs");
   return response(data, doc(
@@ -318,7 +285,7 @@ async function listHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
     `count: ${rows.length} of ${Number(counted[0]?.n ?? 0)} matching`,
     table,
     helpBlock(["Use `pievo log --summary` for aggregates", "Use `pievo log --run <index>` for one run"]),
-  ), { runs: normalized });
+  ));
 }
 
 type SummaryRun = Pick<Run,
@@ -341,27 +308,17 @@ const SUMMARY_COLUMNS = {
 };
 
 type NumberStat = { total: number; average: number; samples: number };
-interface UsageStat {
-  runSamples: number;
-  inputTokens: NumberStat | null;
-  outputTokens: NumberStat | null;
-  cacheReadTokens: NumberStat | null;
-  cacheCreationTokens: NumberStat | null;
-}
-
 function numberStat(values: number[]): NumberStat | null {
   if (!values.length) return null;
   const total = values.reduce((sum, value) => sum + value, 0);
   return { total, average: total / values.length, samples: values.length };
 }
 
-const usageKeys: Array<keyof RunUsage> = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"];
-function usageStat(rows: SummaryRun[]): UsageStat {
-  const withUsage = rows.filter((run) => run.usage && usageKeys.some((key) => run.usage?.[key] !== undefined));
-  return Object.assign({ runSamples: withUsage.length }, Object.fromEntries(usageKeys.map((key) => [
-    key,
-    numberStat(withUsage.flatMap((run) => typeof run.usage?.[key] === "number" ? [run.usage[key]!] : [])),
-  ]))) as unknown as UsageStat;
+function tokenUsageStat(rows: SummaryRun[]): NumberStat | null {
+  return numberStat(rows.flatMap((run) => {
+    const total = totalTokenUsage(run.usage ?? null);
+    return total === null ? [] : [total];
+  }));
 }
 
 function durationStat(rows: SummaryRun[]): NumberStat | null {
@@ -455,10 +412,10 @@ async function summaryHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> 
       byRole: Object.fromEntries(ROLES.map((role) => [role, durationStat(rows.filter((run) => run.role === role))])),
       execByStatus: Object.fromEntries(["kept", "no-change"].map((status) => [status, durationStat(rows.filter((run) => run.role === "exec" && run.status === status))])),
     },
-    usage: {
-      overall: usageStat(rows),
-      byRole: Object.fromEntries(ROLES.map((role) => [role, usageStat(rows.filter((run) => run.role === role))])),
-      execByStatus: Object.fromEntries(["kept", "no-change"].map((status) => [status, usageStat(rows.filter((run) => run.role === "exec" && run.status === status))])),
+    tokenUsage: {
+      overall: tokenUsageStat(rows),
+      byRole: Object.fromEntries(ROLES.map((role) => [role, tokenUsageStat(rows.filter((run) => run.role === role))])),
+      execByStatus: Object.fromEntries(["kept", "no-change"].map((status) => [status, tokenUsageStat(rows.filter((run) => run.role === "exec" && run.status === status))])),
     },
     metrics: { values: metrics, totalKeys: metricKeys.length, truncated: metricKeys.length > keptMetricKeys.length },
     executionProfiles: {
@@ -480,7 +437,7 @@ async function summaryHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> 
     ["total", summary.total], ["openNow", summary.openNow], ["execNoChangeStreak", execNoChangeStreak],
     ["byRole", { raw: JSON.stringify(byRole) }], ["phases", { raw: JSON.stringify(phases) }],
     ["reportedStatusByRole", { raw: JSON.stringify(reportedStatusByRole) }],
-    ["duration", { raw: JSON.stringify(summary.duration) }], ["usage", { raw: JSON.stringify(summary.usage) }],
+    ["duration", { raw: JSON.stringify(summary.duration) }], ["tokenUsage", { raw: JSON.stringify(summary.tokenUsage) }],
     ["metrics", { raw: JSON.stringify(summary.metrics) }], ["executionProfiles", { raw: JSON.stringify(summary.executionProfiles) }],
     ["latestTerminalIndexByRole", { raw: JSON.stringify(latestTerminalIndexByRole) }],
   ]);
@@ -511,44 +468,52 @@ async function detailHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
   const run = (await db.select().from(runs).where(and(eq(runs.loopId, loop.id), selector)).limit(1))[0];
   if (!run) return { status: 404, body: { error: "no such run in this loop" } };
   const snapshot = await store.getRunSnapshot(run.id);
-  const requestText = boundedText(run.requestText ?? null);
+  const ownerSteerText = run.role === "steer" && run.requestedBy === "owner" ? run.requestText : null;
+  const requestText = boundedText(ownerSteerText ?? null);
   const message = boundedText(run.message ?? null);
   const error = boundedText(run.error ?? null);
   const finalText = boundedText(run.finalText ?? null);
-  const model = boundedText(run.model ?? null, HISTORY_PROFILE_VALUE_CAP);
-  const reasoningEffort = boundedText(run.reasoningEffort ?? null, HISTORY_PROFILE_VALUE_CAP);
   const control = (run.control ?? []).slice(0, HISTORY_CONTROL_ACTIONS_MAX).map((action) => ({
     ...action,
     args: boundedText(JSON.stringify(action.args), HISTORY_CONTROL_ARGS_CAP),
   }));
   const detail = {
-    identity: { id: run.id, runIndex: run.runIndex ?? null, loopId: run.loopId, role: run.role, requestedBy: run.requestedBy, requestText: requestText.value },
-    timestamps: { createdAt: run.createdAt, updatedAt: run.updatedAt, terminalAt: TERMINAL_PHASES.includes(run.phase as typeof TERMINAL_PHASES[number]) ? run.ts : null, phaseAt: run.ts, heartbeatAt: run.heartbeatAt ?? null, cancelRequestedAt: run.cancelRequestedAt ?? null },
-    execution: { agent: run.agent ?? null, model: model.value, reasoningEffort: reasoningEffort.value, sessionId: run.sessionId ?? null, durationMs: run.durationMs ?? null, exitCode: run.exitCode ?? null, usage: run.usage ?? null },
-    outcome: { phase: run.phase, status: run.status ?? null, result: resultToken(run), message: message.value, error: error.value, finalText: finalText.value },
-    truncation: { requestText, message, error, finalText, model, reasoningEffort },
-    metrics: boundedMetrics(run.metrics ?? null),
+    runIndex: run.runIndex ?? null,
+    terminalAt: TERMINAL_PHASES.includes(run.phase as typeof TERMINAL_PHASES[number]) ? run.ts : null,
+    role: run.role,
+    requestText: requestText.value,
+    requestTextTruncated: requestText.truncated,
+    phase: run.phase,
+    status: run.status ?? null,
+    durationMs: run.durationMs ?? null,
+    tokenUsage: totalTokenUsage(run.usage ?? null),
+    metrics: run.metrics ?? null,
+    message: message.value,
+    messageTruncated: message.truncated,
+    error: error.value,
+    errorTruncated: error.truncated,
+    finalText: finalText.value,
+    finalTextTruncated: finalText.truncated,
     control,
     controlTruncated: (run.control?.length ?? 0) > HISTORY_CONTROL_ACTIONS_MAX,
-    reportIncident: run.reportIncident ?? null,
     diffAvailable: !!snapshot,
     diff: q.diff ? await boundedDiff(run.id) : { included: false, available: !!snapshot },
   };
   const json = jsonText(detail);
   if (!json) return { status: 413, body: { error: "run detail exceeds the response cap" } };
-  if (q.json) return response(detail, json, { run: detail });
+  if (q.json) return response(detail, json);
   const text = detailBlock("run", [
-    ["index", run.runIndex ?? null], ["id", run.id], ["role", run.role], ["requestedBy", run.requestedBy],
-    ["phase", run.phase], ["status", run.status ?? null], ["terminalAt", detail.timestamps.terminalAt],
-    ["agent", run.agent ?? null], ["model", detail.execution.model], ["reasoningEffort", detail.execution.reasoningEffort],
-    ["durationMs", run.durationMs ?? null], ["usage", { raw: JSON.stringify(run.usage ?? null) }],
-    ["metrics", { raw: JSON.stringify(detail.metrics) }], ["session", run.sessionId ?? null],
-    ["message", detail.outcome.message], ["error", detail.outcome.error], ["finalText", detail.outcome.finalText],
-    ["truncation", { raw: JSON.stringify(detail.truncation) }],
-    ["control", { raw: JSON.stringify(detail.control) }], ["reportIncident", { raw: JSON.stringify(detail.reportIncident) }],
+    ["index", detail.runIndex], ["terminalAt", detail.terminalAt], ["role", detail.role],
+    ["requestText", detail.requestText], ["requestTextTruncated", detail.requestTextTruncated],
+    ["phase", detail.phase], ["status", detail.status], ["durationMs", detail.durationMs],
+    ["tokenUsage", detail.tokenUsage], ["metrics", { raw: JSON.stringify(detail.metrics) }],
+    ["message", detail.message], ["messageTruncated", detail.messageTruncated],
+    ["error", detail.error], ["errorTruncated", detail.errorTruncated],
+    ["finalText", detail.finalText], ["finalTextTruncated", detail.finalTextTruncated],
+    ["control", { raw: JSON.stringify(detail.control) }], ["controlTruncated", detail.controlTruncated],
     ["diffAvailable", detail.diffAvailable], ["diff", { raw: JSON.stringify(detail.diff) }],
   ]);
-  return response(detail, text, { run: detail });
+  return response(detail, text);
 }
 
 /** Deep history seam. The caller supplies one already-authorized loop; parsing,
