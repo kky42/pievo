@@ -65,13 +65,25 @@ function gateway() {
   );
 }
 
+function pollV3(
+  gw: InstanceType<typeof gatewayMod.MachineGateway>,
+  token: string,
+  info?: { host?: string; platform?: string; arch?: string; version?: string },
+) {
+  return gw.pollV3(token, {
+    protocolVersion: 3,
+    currentRuns: [],
+    info: { version: "2.1.0", ...info },
+  });
+}
+
 // ---- gated mode: forged tokens are rejected (the audit's H-01 reproduction) ----
 
 test("gated mode: a forged bearer token cannot self-register via poll", async () => {
   enableGate();
   const gw = gateway();
   const forged = "dk_unauthenticated_gated_repro"; // the audit's exact repro token
-  const res = await gw.poll(forged, { host: "attacker-gated" });
+  const res = await pollV3(gw, forged, { host: "attacker-gated" });
   expect(res.status).toBe(401);
   // No machine row was minted.
   expect(await store.getMachine(tokens.machineIdFromToken(forged))).toBeUndefined();
@@ -90,7 +102,7 @@ test("gated mode: an EXPIRED connect-key does not enroll", async () => {
   await (db.client as any).exec(
     `UPDATE connect_keys SET minted_at = '${new Date(Date.now() - tokens.CONNECT_KEY_TTL_MS - 1000).toISOString()}'`,
   );
-  const res = await gw.poll(deviceToken, { host: "late" });
+  const res = await pollV3(gw, deviceToken, { host: "late" });
   expect(res.status).toBe(401);
   expect(await store.getMachine(tokens.machineIdFromToken(deviceToken))).toBeUndefined();
 });
@@ -100,7 +112,7 @@ test("gated mode: an EXPIRED connect-key does not enroll", async () => {
 test("malformed device tokens are rejected early with 401", async () => {
   const gw = gateway();
   for (const bad of ["", "no-prefix", "dk_", "dk_x", "Bearer dk_abc", "dk_has space"]) {
-    const res = await gw.poll(bad);
+    const res = await pollV3(gw, bad);
     expect(res.status, `token ${JSON.stringify(bad)}`).toBe(401);
     expect((res.body as { error: string }).error).toMatch(/invalid device token/);
   }
@@ -112,7 +124,7 @@ test("open mode: an unknown dk_ token still self-registers into the shared works
   // Gate OFF (default in tests) ⇒ open/dev mode keeps anonymous BYOA enrollment.
   const gw = gateway();
   const token = tokens.mintDeviceToken();
-  const res = await gw.poll(token, { host: "dev-box" });
+  const res = await pollV3(gw, token, { host: "dev-box" });
   expect(res.status).toBe(200);
   const machine = await store.getMachine(tokens.machineIdFromToken(token));
   expect(machine?.userId).toBe("shared");
@@ -126,7 +138,7 @@ test("a token whose id collides with a registered machine but whose hash differs
   const machineId = tokens.machineIdFromToken(token);
   // A pre-existing machine on that id, but registered under a DIFFERENT token hash.
   await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "some-other-hash", online: true });
-  const res = await gw.poll(token, { host: "x" });
+  const res = await pollV3(gw, token, { host: "x" });
   expect(res.status).toBe(401);
   expect((res.body as { error: string }).error).toMatch(/mismatch/);
 });

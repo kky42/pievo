@@ -130,63 +130,61 @@ describe("runDaemonStatus", () => {
   test("a poisoned durable report is actionable and visibly blocks work", async () => {
     const cap = capture({
       readPid: () => undefined, server: "", token: undefined,
-      reportDiagnostics: () => ({ pendingRunId: "run-7", poisoned: true, lastError: "REPORT_CONFLICT: payload differs" }),
+      reportDiagnostics: () => ({ pendingRunIds: ["run-7"], poisonedRunIds: ["run-7"], lastError: "REPORT_CONFLICT: payload differs" }),
     });
     await runDaemonStatus([], cap);
     expect(cap.stdout()).toContain("terminal report: needs attention (run-7)");
     expect(cap.stdout()).toContain("REPORT_CONFLICT");
-    expect(cap.stdout()).toContain("new work is blocked");
+    expect(cap.stdout()).toContain("affected loop remains occupied");
   });
 
-  test("uses durable local runtime diagnostics for the truthful stage and blocked prior run", async () => {
+  test("uses durable local runtime diagnostics for the truthful stages", async () => {
     const cap = capture({
       readPid: () => ({ pid: 12 }), alive: () => true,
       server: "https://srv.example", token: "dk_x",
-      runtimeDiagnostics: () => ({ currentRun: { runId: "run-local", stage: "reporting" }, cancelPending: true, blockedRunId: "run-old" }),
-      fetchOnline: async () => ({ online: true, name: "MacBook", daemonProtocol: 2, currentRun: { runId: "run-local", stage: "executing" } }),
+      runtimeDiagnostics: () => ({
+        protocolVersion: 3,
+        currentRuns: [{ runId: "run-local", stage: "reporting" }],
+        cancelPendingRunIds: ["run-local"],
+      }),
+      fetchOnline: async () => ({ online: true, name: "MacBook", daemonProtocol: 3, currentRuns: [{ runId: "run-local", stage: "executing" }] }),
     });
     await runDaemonStatus([], cap);
     expect(cap.stdout()).toContain("current run: run-local (reporting)");
     expect(cap.stdout()).not.toContain("run-local (executing)");
     expect(cap.stdout()).toContain("cancel pending");
-    expect(cap.stdout()).toContain("blocked prior run: run-old");
   });
 
-  test("surfaces run conflicts and local report persistence failures actionably", async () => {
+  test("surfaces local report persistence failures actionably", async () => {
     const cap = capture({
       readPid: () => ({ pid: 12 }), alive: () => true,
       server: "", token: undefined,
       runtimeDiagnostics: () => ({
-        protocolVersion: 2,
-        currentRun: { runId: "run-local", stage: "reporting" },
-        runConflict: { daemonRunId: "run-local", serverRunId: "run-server" },
+        protocolVersion: 3,
+        currentRuns: [{ runId: "run-local", stage: "reporting" }],
         persistenceError: "SQLITE_FULL: database or disk is full",
         outboxPath: "/home/me/.pievo/pending-reports.sqlite",
       }),
     });
     await runDaemonStatus([], cap);
-    expect(cap.stdout()).toContain("run conflict: daemon run-local, server run-server");
     expect(cap.stdout()).toContain("SQLITE_FULL");
     expect(cap.stdout()).toContain("/home/me/.pievo/pending-reports.sqlite");
-    expect(cap.stdout()).toContain("new work is blocked");
+    expect(cap.stdout()).toContain("affected runs remain occupied");
   });
 
-  test("shows protocol, current run, cancellation, and blocked-prior diagnostics from the server", async () => {
+  test("shows protocol and current runs from the server", async () => {
     const cap = capture({
       readPid: () => ({ pid: 12 }), alive: () => true,
       server: "https://srv.example", token: "dk_x",
       fetchOnline: async () => ({
-        online: false, name: "MacBook", daemonProtocol: 1,
-        currentRun: { runId: "run-9", stage: "executing", cancelPending: true },
-        blockedRunId: "run-old",
+        online: true, name: "MacBook", daemonProtocol: 1,
+        currentRuns: [{ runId: "run-9", stage: "executing", cancelPending: true }],
       }),
     });
     await runDaemonStatus([], cap);
-    expect(cap.stdout()).toContain("daemon upgrade required: protocol 1 -> 2");
+    expect(cap.stdout()).toContain("daemon upgrade required: protocol 1 -> 3");
     expect(cap.stdout()).toContain("current run: run-9 (executing)");
     expect(cap.stdout()).toContain("cancel pending");
-    expect(cap.stdout()).toContain("previous run state is unknown");
-    expect(cap.stdout()).toContain("no new work will start");
   });
 });
 

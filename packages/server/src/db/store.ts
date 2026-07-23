@@ -625,8 +625,15 @@ export async function getRun(id: string): Promise<Run | undefined> {
   return (await db.select().from(runs).where(eq(runs.id, id)))[0];
 }
 
-export async function runningRunForMachine(machineId: string): Promise<Run | undefined> {
-  return (await db.select().from(runs).where(and(eq(runs.machineId, machineId), eq(runs.phase, "running"))).limit(1))[0];
+export async function runningRunsForMachine(machineId: string): Promise<Run[]> {
+  return db.select().from(runs)
+    .where(and(eq(runs.machineId, machineId), eq(runs.phase, "running")))
+    .orderBy(asc(runs.createdAt), asc(runs.id));
+}
+
+export async function runningRunForLoop(loopId: string): Promise<Run | undefined> {
+  return (await db.select().from(runs)
+    .where(and(eq(runs.loopId, loopId), eq(runs.phase, "running"))).limit(1))[0];
 }
 
 export async function getReportReceipt(reportId: string) {
@@ -1365,25 +1372,27 @@ export interface ClaimedRun {
   runToken: string;
 }
 
-/** Claim and lease mint are one atomic loop-lock transaction. A cancel can win
- * before this commit or delete the inserted lease afterward, but can never race
- * through the historical running-without-a-lease gap. */
-export async function claimReadyRunForMachine(machineId: string, at = nowIso()): Promise<ClaimedRun | undefined> {
-  const runToken = `rk_${randomBytes(16).toString("hex")}`;
-  const tokenHash = createHash("sha256").update(runToken).digest("hex");
+/** Claim one ready loop and mint its lease atomically. Repeated polls may add
+ * unlimited cross-loop concurrency; the loop index remains the final same-loop
+ * serialization invariant. Reported local runs exclude their loops even if the
+ * server has already terminalized an older process. */
+export async function claimReadyRunForMachine(
+  machineId: string,
+  at = nowIso(),
+  excludeRunIds: string[] = [],
+): Promise<ClaimedRun | undefined> {
   return db.transaction(async (tx) => {
-    // The machine row is the cross-loop claim mutex. The partial unique index is
-    // the final database defense if a future caller bypasses this seam.
     const machine = (await tx.select({ id: machines.id }).from(machines).where(eq(machines.id, machineId)).for("update"))[0];
     if (!machine) return undefined;
-    const occupied = (await tx.select({ id: runs.id }).from(runs).where(and(eq(runs.machineId, machineId), eq(runs.phase, "running"))).limit(1))[0];
-    if (occupied) return undefined;
-    const blockedLease = (await tx.select({ tokenHash: runLeases.tokenHash }).from(runLeases).where(and(
-      eq(runLeases.machineId, machineId),
-      inArray(runLeases.state, ["active", "terminal-grace"]),
-      or(eq(runLeases.state, "active"), gt(runLeases.expiresAt, at)),
-    )).limit(1))[0];
-    if (blockedLease) return undefined;
+
+    const excludedLoops = new Set<string>();
+    if (excludeRunIds.length) {
+      const rows = await tx.select({ loopId: runs.loopId }).from(runs).where(and(
+        eq(runs.machineId, machineId),
+        inArray(runs.id, [...new Set(excludeRunIds)]),
+      ));
+      for (const row of rows) excludedLoops.add(row.loopId);
+    }
 
     const next = (await tx
       .select({ run: runs, loop: loops })
@@ -1393,29 +1402,37 @@ export async function claimReadyRunForMachine(machineId: string, at = nowIso()):
         eq(runs.machineId, machineId), eq(runs.phase, "pending"), isNull(runs.cancelRequestedAt),
         or(eq(loops.enabled, true), eq(runs.requestedBy, "owner")),
         isNull(loops.deleteRequestedAt),
+        excludedLoops.size ? notInArray(loops.id, [...excludedLoops]) : undefined,
+        sql`not exists (select 1 from runs occupied where occupied.loop_id = ${loops.id} and occupied.phase = 'running')`,
+        sql`not exists (select 1 from run_leases authority where authority.loop_id = ${loops.id} and (authority.state = 'active' or (authority.state = 'terminal-grace' and authority.expires_at > ${at})))`,
       ))
-      .orderBy(sql`case ${runs.role} when 'steer' then 0 when 'evolve' then 1 else 2 end`, asc(runs.createdAt))
+      .orderBy(sql`case ${runs.role} when 'steer' then 0 when 'evolve' then 1 else 2 end`, asc(runs.createdAt), asc(runs.id))
       .limit(1))[0];
     if (!next) return undefined;
+
     let loop = (await tx.select().from(loops).where(eq(loops.id, next.loop.id)).for("update"))[0];
     const candidate = (await tx.select().from(runs).where(eq(runs.id, next.run.id)).limit(1).for("update"))[0];
     if (!loop || !candidate || candidate.phase !== "pending" || candidate.cancelRequestedAt || loop.deleteRequestedAt || (!loop.enabled && candidate.requestedBy !== "owner")) return undefined;
+    const occupied = (await tx.select({ id: runs.id }).from(runs)
+      .where(and(eq(runs.loopId, loop.id), eq(runs.phase, "running"))).limit(1))[0];
+    const authority = (await tx.select({ tokenHash: runLeases.tokenHash }).from(runLeases).where(and(
+      eq(runLeases.loopId, loop.id),
+      inArray(runLeases.state, ["active", "terminal-grace"]),
+      or(eq(runLeases.state, "active"), gt(runLeases.expiresAt, at)),
+    )).limit(1))[0];
+    if (occupied || authority) return undefined;
+
     const runIndex = await ensureRunIndexTx(tx, candidate);
     const run = (await tx.update(runs).set({
-      phase: "running",
-      runIndex,
-      agent: loop.agent,
-      model: loop.model,
-      reasoningEffort: loop.reasoningEffort,
-      heartbeatAt: null,
-      ts: at,
-      updatedAt: at,
-    })
-      .where(and(eq(runs.id, candidate.id), eq(runs.phase, "pending"), isNull(runs.cancelRequestedAt))).returning())[0];
+      phase: "running", runIndex, agent: loop.agent, model: loop.model,
+      reasoningEffort: loop.reasoningEffort, heartbeatAt: null, ts: at, updatedAt: at,
+    }).where(and(eq(runs.id, candidate.id), eq(runs.phase, "pending"), isNull(runs.cancelRequestedAt))).returning())[0];
     if (!run) return undefined;
     if (run.role === "exec" && loop.scheduleMode === "continuous" && loop.nextCadenceAt != null) {
       loop = (await tx.update(loops).set({ nextCadenceAt: null, updatedAt: at }).where(eq(loops.id, loop.id)).returning())[0]!;
     }
+    const runToken = `rk_${randomBytes(16).toString("hex")}`;
+    const tokenHash = createHash("sha256").update(runToken).digest("hex");
     const structural = run.role === "evolve" || run.role === "steer";
     await tx.insert(runLeases).values({ tokenHash, runId: run.id, loopId: loop.id, machineId, role: run.role,
       allowControl: structural || loop.allowControl, canSetUi: structural, canSetSchema: structural, createdAt: at });
@@ -1450,20 +1467,6 @@ export async function listRunsBefore(loopId: string, beforeTs: string, limit = 1
 
 export async function lastRun(loopId: string): Promise<Run | undefined> {
   return (await db.select().from(runs).where(eq(runs.loopId, loopId)).orderBy(desc(runs.ts)).limit(1))[0];
-}
-
-/** Latest terminal of any role. For a pending row this is the earliest reliable
- * evidence that a same-loop blocker ended and the daemon could claim again. */
-export async function lastTerminalRunAt(loopId: string): Promise<string | null> {
-  const row = (
-    await db
-      .select({ ts: runs.ts })
-      .from(runs)
-      .where(and(eq(runs.loopId, loopId), inArray(runs.phase, ["done", "error", "canceled"])))
-      .orderBy(desc(runs.ts))
-      .limit(1)
-  )[0];
-  return row?.ts ?? null;
 }
 
 /** Newest scheduled (exec) run for a loop — the last-result anchor that a later
@@ -1525,8 +1528,15 @@ export async function markPendingRunDeferred(
 ): Promise<Loop | undefined> {
   if (expected.requestedBy !== "system") return undefined;
   return db.transaction(async (tx) => {
-    const observed = (await tx.select({ loopId: runs.loopId }).from(runs).where(eq(runs.id, runId)).limit(1))[0];
+    const observed = (await tx.select({ loopId: runs.loopId, machineId: runs.machineId }).from(runs).where(eq(runs.id, runId)).limit(1))[0];
     if (!observed) return undefined;
+    // Match claim's machine→loop lock order so reconnect/poll cannot deadlock
+    // with the offline deferred-marker transaction.
+    const machine = (
+      await tx.select({ online: machines.online }).from(machines)
+        .where(eq(machines.id, observed.machineId)).limit(1).for("update")
+    )[0];
+    if (!machine || machine.online) return undefined;
     const loop = (await tx.select().from(loops).where(eq(loops.id, observed.loopId)).for("update"))[0];
     if (!loop) return undefined;
     const current = (
@@ -1545,15 +1555,6 @@ export async function markPendingRunDeferred(
         .for("update")
     )[0];
     if (!current || current.deferredAt) return undefined;
-    const machine = (
-      await tx
-        .select({ online: machines.online })
-        .from(machines)
-        .where(eq(machines.id, current.machineId))
-        .limit(1)
-        .for("update")
-    )[0];
-    if (!machine || machine.online) return undefined;
     const stamped = (
       await tx
         .update(runs)
@@ -1592,71 +1593,6 @@ export async function hasPendingRun(loopId: string): Promise<boolean> {
 /** Is a run for this loop still open (drives the "skip overlapping tick" guard)? */
 export async function openRunsForLoop(loopId: string): Promise<Run[]> {
   return db.select().from(runs).where(and(eq(runs.loopId, loopId), inArray(runs.phase, ["pending", "running"])));
-}
-
-/** Recheck a never-claimed pending row from its sweep snapshot under the loop
- * lock. Coalescing/promotion refreshes updatedAt, so stale sweep work loses the
- * CAS before it can turn renewed owner intent into an error. */
-export async function reclaimUnclaimedPendingRun(
-  runId: string,
-  expected: Pick<Run, "requestedBy" | "updatedAt">,
-  at: string,
-  timeoutMs: number,
-  reason: string,
-  failureAutopauseStreak = 0,
-): Promise<FinalizeRunningRunResult | undefined> {
-  return db.transaction(async (tx) => {
-    const observed = (await tx.select({ loopId: runs.loopId }).from(runs).where(eq(runs.id, runId)).limit(1))[0];
-    if (!observed) return undefined;
-    const loop = (await tx.select().from(loops).where(eq(loops.id, observed.loopId)).for("update"))[0];
-    if (!loop) return undefined;
-    const current = (
-      await tx
-        .select()
-        .from(runs)
-        .where(and(
-          eq(runs.id, runId),
-          eq(runs.loopId, loop.id),
-          eq(runs.phase, "pending"),
-          eq(runs.requestedBy, expected.requestedBy),
-          eq(runs.updatedAt, expected.updatedAt),
-        ))
-        .limit(1)
-        .for("update")
-    )[0];
-    if (!current) return undefined;
-    const machine = (await tx.select({ online: machines.online }).from(machines).where(eq(machines.id, current.machineId)).limit(1))[0];
-    if (!machine?.online) return undefined;
-    const blocker = (
-      await tx
-        .select({ ts: runs.ts })
-        .from(runs)
-        .where(and(eq(runs.loopId, loop.id), inArray(runs.phase, ["done", "error", "canceled"])))
-        .orderBy(desc(runs.ts))
-        .limit(1)
-    )[0];
-    const running = (
-      await tx.select({ id: runs.id }).from(runs).where(and(eq(runs.loopId, loop.id), eq(runs.phase, "running"))).limit(1)
-    )[0];
-    const eligibleAt = Math.max(Date.parse(current.updatedAt), blocker ? Date.parse(blocker.ts) || 0 : 0);
-    if (running || Date.parse(at) - eligibleAt <= timeoutMs) return undefined;
-    const runIndex = await ensureRunIndexTx(tx, current);
-    const reclaimed = (
-      await tx
-        .update(runs)
-        .set({ phase: "error", runIndex, error: reason, ts: at, updatedAt: at })
-        .where(and(
-          eq(runs.id, runId),
-          eq(runs.phase, "pending"),
-          eq(runs.requestedBy, expected.requestedBy),
-          eq(runs.updatedAt, expected.updatedAt),
-        ))
-        .returning()
-    )[0];
-    if (!reclaimed) return undefined;
-    const lifecycle = await terminalLifecycleTx(tx, loop, reclaimed, at, {}, false, failureAutopauseStreak);
-    return { run: reclaimed, ...lifecycle };
-  });
 }
 
 /** Expire one offline system row only if the sweep snapshot is still exact and

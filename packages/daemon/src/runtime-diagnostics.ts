@@ -2,11 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 export type RuntimeDiagnostics = {
-  protocolVersion: 2;
-  currentRun?: { runId: string; stage: "executing" | "reporting" };
-  cancelPending?: boolean;
-  blockedRunId?: string;
-  runConflict?: { daemonRunId: string; serverRunId: string };
+  protocolVersion: 3;
+  currentRuns?: Array<{ runId: string; stage: "executing" | "reporting" }>;
+  cancelPendingRunIds?: string[];
   persistenceError?: string;
   outboxPath?: string;
 };
@@ -39,7 +37,7 @@ export function writeRuntimeDiagnostics(file: string, value: RuntimeDiagnostics)
 export function readRuntimeDiagnostics(file: string): RuntimeDiagnostics | undefined {
   try {
     const value = JSON.parse(fs.readFileSync(file, "utf8")) as RuntimeDiagnostics;
-    if (value?.protocolVersion !== 2) return undefined;
+    if (value?.protocolVersion !== 3) return undefined;
     return value;
   } catch {
     return undefined;

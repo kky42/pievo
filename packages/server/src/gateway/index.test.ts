@@ -89,8 +89,21 @@ function textOf(res: any): string {
   return String(res.body?.text ?? "");
 }
 
+function pollV3(
+  gw: InstanceType<typeof gatewayMod.MachineGateway>,
+  token: string,
+  request: Partial<Parameters<InstanceType<typeof gatewayMod.MachineGateway>["pollV3"]>[1]> = {},
+) {
+  return gw.pollV3(token, {
+    ...request,
+    protocolVersion: 3,
+    currentRuns: request.currentRuns ?? [],
+    info: { version: "2.1.0", ...request.info },
+  });
+}
+
 test("protocol rejection uses upgrade terminology and gives the restart flow", async () => {
-  const res = await gateway().pollV2("not-a-device-token", { protocolVersion: 1 });
+  const res = await gateway().pollV3("not-a-device-token", { protocolVersion: 2, currentRuns: [] });
   expect(res.status).toBe(426);
   expect((res.body as any).error).toContain("daemon upgrade required");
   expect((res.body as any).error).toContain("npm install -g @kky42/pievo@latest");
@@ -698,44 +711,46 @@ test("concurrent polls deliver a pending run exactly once (atomic pending->runni
   // pending->running claim must let exactly ONE of them deliver the run - the old
   // unconditional read-then-write let both, double-executing it on the machine.
   const gw = gateway();
-  const results = await Promise.all([gw.poll(token), gw.poll(token)]);
-  const delivered = results.flatMap((r) => (r.body as { deliveries: Array<{ runId: string }> }).deliveries);
+  const results = await Promise.all([pollV3(gw, token), pollV3(gw, token)]);
+  const delivered = results
+    .map((r) => (r.body as { delivery: { runId: string } | null }).delivery)
+    .filter((delivery): delivery is { runId: string } => delivery !== null);
   expect(delivered.filter((d) => d.runId === run.id)).toHaveLength(1);
   expect((await store.getRun(run.id))!.phase).toBe("running");
 
   // A later poll sees the run as already claimed - no re-delivery, no error.
-  const again = ((await gw.poll(token)).body as { deliveries: unknown[] }).deliveries;
-  expect(again).toHaveLength(0);
+  const again = await pollV3(gw, token, { currentRuns: [{ runId: run.id, stage: "executing" }] });
+  expect((again.body as any).delivery).toBeNull();
 });
 
-test("pollV2 with an old or unknown daemon version does not claim pending work", async () => {
+test("pollV3 with an old or unknown daemon version does not claim pending work", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
   const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() });
 
-  const unknown = await gateway().pollV2(token, { protocolVersion: 2, info: { host: "mac" } });
+  const unknown = await gateway().pollV3(token, { protocolVersion: 3, currentRuns: [], info: { host: "mac" } });
   expect(unknown.status).toBe(200);
   expect((unknown.body as any).delivery).toBeNull();
   expect((unknown.body as any).needsUpdate.current).toBeNull();
   expect((await store.getRun(run.id))!.phase).toBe("pending");
 
-  const old = await gateway().pollV2(token, { protocolVersion: 2, info: { host: "mac", version: "2.0.2" } });
+  const old = await gateway().pollV3(token, { protocolVersion: 3, currentRuns: [], info: { host: "mac", version: "2.0.2" } });
   expect(old.status).toBe(200);
   expect((old.body as any).delivery).toBeNull();
-  expect((old.body as any).needsUpdate).toMatchObject({ current: "2.0.2", required: "2.0.4" });
+  expect((old.body as any).needsUpdate).toMatchObject({ current: "2.0.2", required: "2.1.0" });
   expect((await store.getRun(run.id))!.phase).toBe("pending");
 });
 
-test("pollV2 with a compatible daemon version can claim pending work", async () => {
+test("pollV3 with a compatible daemon version can claim pending work", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", model: "snapshot-model", reasoningEffort: "high", agent: "codex" });
   const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() });
 
-  const res = await gateway().pollV2(token, { protocolVersion: 2, info: { host: "mac", version: "2.0.4" } });
+  const res = await gateway().pollV3(token, { protocolVersion: 3, currentRuns: [], info: { host: "mac", version: "2.1.0" } });
   expect(res.status).toBe(200);
   expect((res.body as any).delivery).toMatchObject({ runId: run.id, runIndex: 1 });
   expect((res.body as any).needsUpdate).toBeUndefined();
@@ -752,18 +767,19 @@ test("poll claims only one ready run per loop and honors steer > evolve > exec",
   await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "latest" });
 
   const gw = gateway();
-  const first = (await gw.poll(token)).body as { deliveries: Array<{ runId: string; role: string; task: string }> };
-  expect(first.deliveries).toHaveLength(1);
-  expect(first.deliveries[0]!.role).toBe("steer");
-  expect(first.deliveries[0]!.task).toContain("latest");
+  const first = (await pollV3(gw, token)).body as { delivery: { runId: string; role: string; task: string; runToken: string } | null };
+  expect(first.delivery).not.toBeNull();
+  expect(first.delivery!.role).toBe("steer");
+  expect(first.delivery!.task).toContain("latest");
   expect((await store.openRunsForLoop(loop.id)).filter((r) => r.phase === "pending")).toHaveLength(2);
 
   // Even a second poll cannot drain the other roles while steer is running.
-  expect(((await gw.poll(token)).body as { deliveries: unknown[] }).deliveries).toHaveLength(0);
-  await store.updateRun(first.deliveries[0]!.runId, { phase: "done" });
-  await tokens.retireLease((first.deliveries[0] as any).runToken);
-  const second = (await gw.poll(token)).body as { deliveries: Array<{ role: string }> };
-  expect(second.deliveries.map((d) => d.role)).toEqual(["evolve"]);
+  const whileSteering = await pollV3(gw, token, { currentRuns: [{ runId: first.delivery!.runId, stage: "executing" }] });
+  expect((whileSteering.body as any).delivery).toBeNull();
+  await store.updateRun(first.delivery!.runId, { phase: "done" });
+  await tokens.retireLease(first.delivery!.runToken);
+  const second = (await pollV3(gw, token)).body as { delivery: { role: string } | null };
+  expect(second.delivery?.role).toBe("evolve");
 });
 
 test("set-tz applies the timezone through an allowControl run token", async () => {
@@ -1182,10 +1198,9 @@ test("a deferred pending run on an OFFLINE machine gets ONE calm note, stays cla
   expect(sent[0]!.message).not.toMatch(/fail/i);
 
   // CATCH-UP: the machine's next poll claims the deferred run — nothing was lost.
-  const res = (await gw.poll(token));
+  const res = await pollV3(gw, token);
   expect(res.status).toBe(200);
-  const deliveries = (res.body as { deliveries: Array<{ runId: string }> }).deliveries;
-  expect(deliveries.map((d) => d.runId)).toContain(run.id);
+  expect((res.body as { delivery: { runId: string } | null }).delivery?.runId).toBe(run.id);
   expect((await store.getRun(run.id))!.phase).toBe("running");
 });
 
@@ -1504,29 +1519,21 @@ test("a pending reclaim CAS cannot overwrite a concurrent poll claim", async () 
   expect(calls).toEqual([]);
 });
 
-test("stale online pending observation cannot error a concurrently promoted/coalesced row", async () => {
+test("sweep keeps an online pending row as durable queued work", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
+  const activeLoop = await store.createLoop({ userId: "u1", machineId, name: "active", cron: "0 0 1 1 *", enabled: true });
+  const waitingLoop = await store.createLoop({ userId: "u1", machineId, name: "waiting", cron: "0 0 1 1 *", enabled: true });
+  await store.addRun({ loopId: activeLoop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
   const old = new Date(Date.now() - 30 * 60_000).toISOString();
-  const pending = await store.addRun({
-    loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec",
+  const waiting = await store.addRun({
+    loopId: waitingLoop.id, userId: "u1", machineId, phase: "pending", role: "exec",
     requestedBy: "system", ts: old, createdAt: old, updatedAt: old,
   });
-  const staleUpdatedAt = pending.updatedAt;
-  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "owner" });
 
-  const reclaimed = await store.reclaimUnclaimedPendingRun(
-    pending.id,
-    { requestedBy: "system", updatedAt: staleUpdatedAt },
-    new Date().toISOString(),
-    20 * 60_000,
-    "run never claimed",
-    3,
-  );
-  expect(reclaimed).toBeUndefined();
-  expect(await store.getRun(pending.id)).toMatchObject({ phase: "pending", requestedBy: "owner" });
+  await gateway().sweep();
+  expect(await store.getRun(waiting.id)).toMatchObject({ phase: "pending", error: null });
 });
 
 test("stale offline expiration cannot cancel a concurrently promoted/coalesced row", async () => {
@@ -1577,7 +1584,7 @@ test("stale deferred stamping cannot overwrite a concurrently promoted owner row
   });
 });
 
-test("sweep is INACTIVITY-based: a >20min run with a fresh activeRunIds heartbeat is NOT reclaimed", async () => {
+test("sweep is INACTIVITY-based: a >20min run reported in currentRuns is NOT reclaimed", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
@@ -1588,11 +1595,11 @@ test("sweep is INACTIVITY-based: a >20min run with a fresh activeRunIds heartbea
   const gw = gateway();
   // Another machine cannot heartbeat this run.
   const otherToken = tokens.mintDeviceToken();
-  await gw.poll(otherToken, { host: "other" }, [run.id]);
+  await pollV3(gw, otherToken, { info: { host: "other" }, currentRuns: [{ runId: run.id, stage: "executing" }] });
   expect((await store.getRun(run.id))!.heartbeatAt).toBeNull();
 
-  // The owning daemon's activeRunIds heartbeat refreshes the dedicated stamp.
-  (await gw.poll(token, undefined, [run.id]));
+  // The owning daemon's currentRuns heartbeat refreshes the dedicated stamp.
+  await pollV3(gw, token, { currentRuns: [{ runId: run.id, stage: "executing" }] });
   expect((await store.getRun(run.id))!.heartbeatAt).toBeTruthy();
   (await gw.sweep());
   expect((await store.getRun(run.id))!.phase).toBe("running"); // never falsely failed
@@ -1604,13 +1611,18 @@ test("sweep is INACTIVITY-based: a >20min run with a fresh activeRunIds heartbea
   expect((await store.getRun(run.id))!.error).toBe("machine timed out / disconnected");
 });
 
-test("activeRunIds heartbeat refresh is scoped to the machine's single run", async () => {
+test("currentRuns heartbeat refresh is scoped to the owning machine", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "never" });
   const run = await store.addRun({ id: "single-active", loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
-  await gateway().poll(token, undefined, [run.id, run.id]);
+  await pollV3(gateway(), token, {
+    currentRuns: [
+      { runId: run.id, stage: "executing" },
+      { runId: run.id, stage: "executing" },
+    ],
+  });
   expect((await store.getRun(run.id))?.heartbeatAt).toBeTruthy();
 });
 
@@ -1744,16 +1756,16 @@ test("poll persists the daemon version, updating only when it changes", async ()
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   // First poll self-registers and records the reported version.
-  (await gateway().poll(token, { host: "mac", platform: "darwin", arch: "arm64", version: "0.8.0" }));
+  await gateway().pollV3(token, { protocolVersion: 3, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64", version: "0.8.0" } });
   expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.8.0");
   // A newer version on the next poll updates it.
-  (await gateway().poll(token, { host: "mac", platform: "darwin", arch: "arm64", version: "0.9.0" }));
+  await gateway().pollV3(token, { protocolVersion: 3, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64", version: "0.9.0" } });
   expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.9.0");
   // A poll with no version leaves it as-is (older daemons don't report it).
-  (await gateway().poll(token, { host: "mac", platform: "darwin", arch: "arm64" }));
+  await gateway().pollV3(token, { protocolVersion: 3, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64" } });
   expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.9.0");
   // An over-long version is clipped defensively (untrusted wire input).
-  (await gateway().poll(token, { host: "mac", version: "9".repeat(200) }));
+  await gateway().pollV3(token, { protocolVersion: 3, currentRuns: [], info: { host: "mac", version: "9".repeat(200) } });
   expect((await store.getMachine(machineId))!.daemonVersion!.length).toBe(64);
 });
 
@@ -1878,13 +1890,25 @@ test("cli device stop is update-gated before mutation and never falsely advertis
   expect((await store.getLoop(loop.id))?.enabled).toBe(true);
   expect((await store.getRun(run.id))?.cancelRequestedAt).toBeNull();
 
-  await store.updateMachine(loop.machineId, { daemonProtocol: 2 });
+  await store.updateMachine(loop.machineId, { daemonProtocol: 3 });
   const stopped = await gw.cli(deviceToken, ["stop", loop.id]);
   expect(stopped.status).toBe(200);
   expect(textOf(stopped)).toContain("stop requested; waiting for");
   expect((await store.getLoop(loop.id))?.enabled).toBe(false);
   expect((await store.getRun(run.id))?.cancelRequestedAt).toBeTruthy();
   expect((await store.getRun(run.id))?.phase).toBe("running");
+});
+
+test("cli stop finds the requested loop's run when another loop is also running", async () => {
+  const { deviceToken, machineId } = await seededCli();
+  const target = await store.createLoop({ userId: "u1", machineId, name: "target", cron: "0 0 1 1 *", enabled: true });
+  const targetRun = await store.addRun({ loopId: target.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  await tokens.registerRunLease({ runId: targetRun.id, loopId: target.id, machineId, role: "exec", allowControl: true });
+
+  const rejected = await gateway().cli(deviceToken, ["stop", target.id]);
+  expect(rejected.status).toBe(426);
+  expect((await store.getLoop(target.id))?.enabled).toBe(true);
+  expect((await store.getRun(targetRun.id))?.cancelRequestedAt).toBeNull();
 });
 
 test("cli delete is protocol-gated before requesting deletion when a run is active", async () => {
@@ -1898,7 +1922,7 @@ test("cli delete is protocol-gated before requesting deletion when a run is acti
 
 test("cli device run stop preserves loop state and reports terminal runs truthfully", async () => {
   const { deviceToken, loop, run } = await seededCli();
-  await store.updateMachine(loop.machineId, { daemonProtocol: 2 });
+  await store.updateMachine(loop.machineId, { daemonProtocol: 3 });
   const gw = gateway();
   const stopped = await gw.cli(deviceToken, ["run", "stop", run.id]);
   expect(stopped.status).toBe(200);
@@ -1911,7 +1935,7 @@ test("cli force delete requires prior request, explicit marker, and team-owner a
   const { deviceToken, loop } = await seededCli();
   await store.ensureTeam("team-cli", "CLI", "u1");
   await store.updateLoop(loop.id, { teamId: "team-cli" });
-  await store.updateMachine(loop.machineId, { daemonProtocol: 2 });
+  await store.updateMachine(loop.machineId, { daemonProtocol: 3 });
   const gw = gateway();
 
   const noRequest = await gw.cli(deviceToken, ["delete", loop.id, "--force", "--confirmation", "delete-server-data-anyway"]);
@@ -1934,7 +1958,7 @@ test("cli force delete logs, reports reachability truthfully, and honors a false
   const first = await seededCli();
   await store.ensureTeam("team-force", "Force", "u1");
   await store.updateLoop(first.loop.id, { teamId: "team-force" });
-  await store.updateMachine(first.loop.machineId, { daemonProtocol: 2, online: false, lastSeen: null });
+  await store.updateMachine(first.loop.machineId, { daemonProtocol: 3, online: false, lastSeen: null });
   await store.requestDeleteLoop(first.loop.id);
   const audit: Array<Record<string, unknown>> = [];
   const forced = await gateway(undefined, { destructiveLog: (event) => audit.push(event) }).cli(first.deviceToken, [

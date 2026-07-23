@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import type { JobDetail, RunDiffResult, RunSummary } from '../types'
 import { dur, fmt, fnum, until } from '../lib/format'
-import { DAEMON_UPGRADE_REQUIRED } from '../lib/lifecycleUi'
+import { DAEMON_UPGRADE_REQUIRED, DASHBOARD_PROTOCOL } from '../lib/lifecycleUi'
 import { getJobDetail, getRunDiff, loadOlderRuns, stopRun } from '../server/loopApi'
 import { DiffView } from './DiffView'
 import { btn, btnDanger, Loading, Pill, runPulseStyle, sectionHeadCls, StatusPill } from './ui'
@@ -260,8 +260,8 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
               type="button"
               onClick={onStop}
               className={btnDanger}
-              disabled={!!run.running && detail.machine.daemonProtocol !== 2}
-              title={run.running && detail.machine.daemonProtocol !== 2 ? DAEMON_UPGRADE_REQUIRED : undefined}
+              disabled={!!run.running && detail.machine.daemonProtocol !== DASHBOARD_PROTOCOL}
+              title={run.running && detail.machine.daemonProtocol !== DASHBOARD_PROTOCOL ? DAEMON_UPGRADE_REQUIRED : undefined}
             >
               Stop run
             </button>

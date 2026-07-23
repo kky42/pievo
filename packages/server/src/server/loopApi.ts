@@ -31,6 +31,7 @@ import { ensureServer } from './boot.js'
 import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
 import { normalizeProviderSetting, validateSchema, validateSteerInstruction } from '../gateway/validate.js'
 import { machinePresence } from '../lib/machinePresence.js'
+import { DAEMON_PROTOCOL_VERSION } from '../gateway/compat.js'
 import { TEMPLATES } from './templates.js'
 
 function backend() {
@@ -312,7 +313,7 @@ export const stopJob = createServerFn({ method: 'POST' })
     if (!owned) return { error: 'not found' }
     if (await store.hasRunningRun(id)) {
       const machine = await store.getMachine(owned.loop.machineId)
-      if (machine?.daemonProtocol !== 2) return { error: 'Daemon upgrade required to stop a running process' }
+      if (machine?.daemonProtocol !== DAEMON_PROTOCOL_VERSION) return { error: 'Daemon upgrade required to stop a running process' }
     }
     const stopped = await store.stopLoop(id)
     if (!stopped) return { error: 'not found' }
@@ -337,7 +338,7 @@ export const deleteJob = createServerFn({ method: 'POST' })
       actor.userId && owned.loop.teamId &&
       (await store.getTeamMember(owned.loop.teamId, actor.userId))?.role === 'owner'
     )
-    if (!unreachable && await store.hasRunningRun(id) && machine?.daemonProtocol !== 2) {
+    if (!unreachable && await store.hasRunningRun(id) && machine?.daemonProtocol !== DAEMON_PROTOCOL_VERSION) {
       return { error: 'Daemon upgrade required to stop a running process' }
     }
     scheduler.removeLoop(id)
@@ -432,7 +433,7 @@ export const stopRun = createServerFn({ method: 'POST' })
     const run = await store.getRun(id)
     const owned = run ? await ownedLoop(run.loopId) : undefined
     if (!run || !owned) return { error: 'run not found' }
-    if (run.phase === 'running' && (await store.getMachine(owned.loop.machineId))?.daemonProtocol !== 2) {
+    if (run.phase === 'running' && (await store.getMachine(owned.loop.machineId))?.daemonProtocol !== DAEMON_PROTOCOL_VERSION) {
       return { error: 'Daemon upgrade required to stop a running process' }
     }
     const result = await store.requestRunCancel(run.loopId, id)

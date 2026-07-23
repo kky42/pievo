@@ -61,7 +61,7 @@ import {
   type Scalar,
 } from "./toon.js";
 import { normalizeProviderSetting, validateSchema, validateUi } from "./validate.js";
-import { MIN_DAEMON_VERSION, daemonNeedsUpdate, daemonUpgradeCommand } from "./compat.js";
+import { DAEMON_PROTOCOL_VERSION, MIN_DAEMON_VERSION, daemonNeedsUpdate, daemonUpgradeCommand } from "./compat.js";
 import { clipText, nowIso, stripNul, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
 
 const log = logger.child({ mod: "gateway" });
@@ -120,9 +120,6 @@ const SESSION_ID_CAP = 200;
 /** A loop's goal (setpoint) is a one-line, checkable statement — clip generously
  *  but keep it a single line's worth (not a document). Shared by createLoop/editLoop. */
 const GOAL_CAP = 2000;
-/** The 2MB machine-body cap is the primary bound; this generous secondary cap
- * covers machines running thousands of independent loops without query abuse. */
-const MAX_ACTIVE_RUN_IDS = 5_000;
 /** Keep heartbeat throttling safely inside custom short timeout windows. */
 export function heartbeatRefreshMs(runTimeoutMs: number): number {
   if (!Number.isFinite(runTimeoutMs) || runTimeoutMs <= 0) return 1;
@@ -406,8 +403,8 @@ export class MachineGateway {
    * A RUNNING run that went silent is reclaimed as timed out; a PENDING run on
    * an OFFLINE machine is NOT failed — it is held as a deferred catch-up (the
    * pending row is the durable inbox; the daemon's next poll claims it, and later
-   * same-role fires coalesce into it), bounded by DEFERRED_MAX_MS.
-   * Only a pending run a healthy ONLINE machine never claims becomes an error.
+   * same-role fires coalesce into it), bounded by DEFERRED_MAX_MS while offline.
+   * Online pending rows never synthesize an execution error.
    */
   async sweep(): Promise<void> {
     const now = Date.now();
@@ -417,23 +414,13 @@ export class MachineGateway {
       }
     }
     for (const run of await store.openRuns()) {
-      // A future queued run is not stale before it is eligible to claim. For a
-      // pending row also start the claimability clock after the latest same-loop
-      // blocker terminal; a 21-minute wait behind another role is not instantly
-      // stale when that blocker ends.
-      const blockerAt = run.phase === "pending" ? await store.lastTerminalRunAt(run.loopId) : null;
-      const eligibleAt = Math.max(Date.parse(run.updatedAt), blockerAt ? Date.parse(blockerAt) || 0 : 0);
-      const age = now - eligibleAt;
       const pendingLifetime = now - Date.parse(run.createdAt);
       if (run.phase === "pending") {
         const machine = await store.getMachine(run.machineId);
         if (machine?.online) {
-          // A queued follow-up may legitimately wait behind this loop's running
-          // role for longer than RUN_TIMEOUT_MS. Only a READY, UNBLOCKED row an
-          // online daemon still never claims is a delivery anomaly.
-          if (!(await store.hasRunningRun(run.loopId)) && age > RUN_TIMEOUT_MS) {
-            await this.reclaimRun(run, "run never claimed");
-          }
+          // Pending is the durable inbox. An online daemon may be busy, rolling
+          // versions, or retrying another report; only a claimed run has a
+          // heartbeat contract. Never turn queued work into a synthetic error.
         } else if (run.requestedBy === "system" && pendingLifetime > DEFERRED_MAX_MS) {
           // The machine never came back inside the catch-up horizon — retire
           // the queue slot honestly: skipped, not failed, no alert.
@@ -463,7 +450,7 @@ export class MachineGateway {
         }
       } else if (run.phase === "running") {
         // INACTIVITY-based timeout. `heartbeatAt` is refreshed only when the daemon
-        // explicitly lists this run in `activeRunIds`; claim time is the fallback
+        // explicitly lists this run in protocol-v3 `currentRuns`; claim time is the fallback
         // until the first heartbeat arrives.
         const heardAt = Math.max(Date.parse(run.ts), run.heartbeatAt ? Date.parse(run.heartbeatAt) || 0 : 0);
         if (now - heardAt > RUN_TIMEOUT_MS) {
@@ -492,27 +479,18 @@ export class MachineGateway {
    *  (`TERMINAL_GRACE_MS`) during which exactly ONE late wake-report may reconcile
    *  the run — see `report()`'s terminal-grace branch. The credential is still
    *  bounded: agent-api mutations are refused while terminal-grace, and the
-   *  reconciliation retires the lease single-shot. A pending run (no lease minted
-   *  yet) is unaffected — the terminalize is a no-op there. */
+   *  reconciliation retires the lease single-shot. Pending rows are durable inbox
+   *  entries and are never reclaimed by this path. */
   private async reclaimRun(run: Run, reason: string): Promise<void> {
-    if (run.phase !== "pending" && run.phase !== "running") return;
+    if (run.phase !== "running") return;
     const at = nowIso();
-    const reclaimed = run.phase === "pending"
-      ? await store.reclaimUnclaimedPendingRun(
-          run.id,
-          { requestedBy: run.requestedBy, updatedAt: run.updatedAt },
-          at,
-          RUN_TIMEOUT_MS,
-          reason,
-          AUTOPAUSE_STREAK,
-        )
-      : await store.reclaimRun(run.id, "running", reason, at, TERMINAL_GRACE_MS);
+    const reclaimed = await store.reclaimRun(run.id, "running", reason, at, TERMINAL_GRACE_MS);
     // A claim/report/cancel won after sweep read openRuns(). The phase guard is
     // the side-effect gate: never notify or mutate stale work.
     if (!reclaimed) return;
     // A running timeout remains provisional during terminal grace: a late
     // success can correct it. Alert normally, but do not permanently trip the
-    // breaker on that provisional third failure. Never-claimed errors are final.
+    // breaker on that provisional third failure.
     await this.notifyRunFailure(run.loopId, run.role, reason, reclaimed);
     if (reclaimed.loop.enabled) this.scheduler.addLoop(reclaimed.loop);
     else this.scheduler.removeLoop(reclaimed.loop.id);
@@ -544,12 +522,12 @@ export class MachineGateway {
 
   // ---- POST /api/machine/poll ----
 
-  async poll(
+  private async pollCore(
     deviceToken: string,
     info?: { host?: string; platform?: string; arch?: string; version?: string },
-    activeRunIds?: string[],
-    /** The daemon's echo of the last watch digest it applied — matching ⇒ the
-     *  watch array is omitted from the response (an old daemon never echoes). */
+    currentRunIds?: string[],
+    /** The daemon's echo of the last watch digest it applied; matching means
+     * the response can omit the unchanged watch array. */
     watchDigest?: string,
     claimWork = true,
   ): Promise<HttpResult> {
@@ -625,11 +603,10 @@ export class MachineGateway {
 
     // Provider-neutral liveness: dedupe body-bounded ids, then refresh all stale
     // rows in one UPDATE scoped to this machine + running phase.
-    if (Array.isArray(activeRunIds)) {
+    if (Array.isArray(currentRunIds)) {
       const ids = new Set<string>();
-      for (const value of activeRunIds) {
+      for (const value of currentRunIds) {
         if (typeof value === "string") ids.add(value);
-        if (ids.size >= MAX_ACTIVE_RUN_IDS) break;
       }
       if (ids.size) {
         const now = Date.now();
@@ -642,12 +619,13 @@ export class MachineGateway {
       }
     }
 
-    const deliveries: Delivery[] = [];
+    let delivery: Delivery | null = null;
     if (claimWork) {
-      // Timers are latency hints; the singular claim is machine-serialized.
+      // Each poll adds at most one run. Repeated active polls have no configured
+      // concurrency ceiling, while a transport failure can strand only one claim.
       await this.scheduler.advanceDueSchedules(machineId);
-      const claimed = await store.claimReadyRunForMachine(machineId);
-      if (claimed) deliveries.push(await buildDelivery(claimed.loop, claimed.run, claimed.runToken, machine.roots ?? []));
+      const claimed = await store.claimReadyRunForMachine(machineId, undefined, currentRunIds ?? []);
+      if (claimed) delivery = await buildDelivery(claimed.loop, claimed.run, claimed.runToken, machine.roots ?? []);
     }
 
     // Watch set: every loop bound to this machine (not just those with a pending
@@ -657,7 +635,7 @@ export class MachineGateway {
     // loop whose folder must be watched before it writes). The daemon resolves
     // the actual folder per loop (dirname(taskFile) → workdir).
     let cached = this.watchCache.get(machineId);
-    if (!cached || deliveries.length || Date.now() - cached.at > WATCH_CACHE_TTL_MS) {
+    if (!cached || delivery || Date.now() - cached.at > WATCH_CACHE_TTL_MS) {
       const watch: WatchEntry[] = (await store.loopsForMachine(machineId))
         .map((l) => ({
           loopId: l.id,
@@ -669,31 +647,27 @@ export class MachineGateway {
       this.watchCache.set(machineId, cached);
     }
 
-    if (deliveries.length) log.info({ machineId, exec: deliveries.length }, "poll: delivered");
-    // A matching digest echo means the daemon already holds this exact watch set —
-    // omit the array. An old daemon never echoes, so it always gets the full list
-    // (omission requires proof the client speaks the digest protocol, never a default).
+    if (delivery) log.info({ machineId, runId: delivery.runId }, "poll: delivered");
+    // Omit the watch array only when the matching digest proves the daemon
+    // already holds this exact set.
     return {
       status: 200,
       body: {
-        deliveries,
+        delivery,
         watchDigest: cached.digest,
         ...(watchDigest === cached.digest ? {} : { watch: cached.watch }),
       },
     };
   }
 
-  /** Breaking protocol-v2 single-flight poll seam. */
-  async pollV2(deviceToken: string, request: {
+  /** Protocol-v3 poll: plural local state, one new delivery per poll. */
+  async pollV3(deviceToken: string, request: {
     protocolVersion?: number;
-    currentRun?: { runId: string; stage: "executing" | "reporting" };
+    currentRuns?: Array<{ runId: string; stage: "executing" | "reporting" }>;
     watchDigest?: string;
     info?: { host?: string; platform?: string; arch?: string; version?: string };
   }): Promise<HttpResult> {
-    if (request.protocolVersion !== 2) {
-      // Do not leave stale v2 capability behind when a machine rolls back to an
-      // incompatible daemon. Update only an already-authenticated machine; this
-      // mismatch path is not an enrollment surface.
+    if (request.protocolVersion !== DAEMON_PROTOCOL_VERSION) {
       if (isDeviceTokenShape(deviceToken)) {
         const machineId = machineIdFromToken(deviceToken);
         const machine = await store.getMachine(machineId);
@@ -704,91 +678,52 @@ export class MachineGateway {
           await store.updateMachine(machineId, { daemonProtocol: reported });
         }
       }
-      return { status: 426, body: { error: "daemon upgrade required; run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`", code: "UPGRADE_REQUIRED", requiredProtocol: 2 } };
+      return { status: 426, body: { error: "daemon upgrade required; run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`", code: "UPGRADE_REQUIRED", requiredProtocol: DAEMON_PROTOCOL_VERSION } };
     }
-    const current = request.currentRun;
-    if (current && (typeof current.runId !== "string" || !["executing", "reporting"].includes(current.stage))) {
-      return { status: 400, body: { error: "invalid currentRun", code: "VALIDATION_ERROR" } };
+    const validCurrent = (value: { runId: string; stage: "executing" | "reporting" }): boolean =>
+      typeof value?.runId === "string" && ["executing", "reporting"].includes(value.stage);
+    if (!Array.isArray(request.currentRuns) || request.currentRuns.some((run) => !validCurrent(run))) {
+      return { status: 400, body: { error: "invalid currentRuns", code: "VALIDATION_ERROR" } };
     }
+    const currentIds = [...new Set(request.currentRuns.map((run) => run.runId))];
     const machineId = isDeviceTokenShape(deviceToken) ? machineIdFromToken(deviceToken) : "";
     const priorMachine = machineId ? await store.getMachine(machineId) : undefined;
     const reportedVersion = typeof request.info?.version === "string" ? clipText(request.info.version, 64) : priorMachine?.daemonVersion;
     const needsUpdate = daemonNeedsUpdate(reportedVersion);
-    const base = await this.poll(deviceToken, request.info, current ? [current.runId] : undefined, request.watchDigest, !current && !needsUpdate);
+    const base = await this.pollCore(deviceToken, request.info, currentIds, request.watchDigest, !needsUpdate);
     if (base.status !== 200) return base;
     const machine = await store.getMachine(machineId);
-    if (machine?.daemonProtocol !== 2) await store.updateMachine(machineId, { daemonProtocol: 2 });
-    const running = await store.runningRunForMachine(machineId);
-    const body = base.body as { deliveries: Delivery[]; watchDigest: string; watch?: WatchEntry[] };
-    const cancelRunId = current && running?.id === current.runId && running.cancelRequestedAt ? current.runId : undefined;
+    if (machine?.daemonProtocol !== DAEMON_PROTOCOL_VERSION) await store.updateMachine(machineId, { daemonProtocol: DAEMON_PROTOCOL_VERSION });
+    const running = await store.runningRunsForMachine(machineId);
+    const currentSet = new Set(currentIds);
+    const body = base.body as { delivery: Delivery | null; watchDigest: string; watch?: WatchEntry[] };
     return {
       status: 200,
       body: {
-        delivery: current ? null : body.deliveries[0] ?? null,
+        delivery: body.delivery,
+        cancelRunIds: running.filter((run) => currentSet.has(run.id) && run.cancelRequestedAt).map((run) => run.id),
         ...(needsUpdate ? { needsUpdate: { current: reportedVersion ?? null, required: MIN_DAEMON_VERSION, command: daemonUpgradeCommand() } } : {}),
-        ...(cancelRunId ? { cancelRunId } : {}),
-        ...(current && running && current.runId !== running.id
-          ? { runConflict: { daemonRunId: current.runId, serverRunId: running.id } }
-          : {}),
-        ...(!current && running && !body.deliveries.length ? { blockedRunId: running.id } : {}),
         watchDigest: body.watchDigest,
         ...(body.watch ? { watch: body.watch } : {}),
       },
     };
   }
 
-  /** Protocol-v2 idle polls long-poll automatically; active/reporting polls never park. */
-  async pollV2Wait(deviceToken: string, request: Parameters<MachineGateway["pollV2"]>[1], waitMs = LONG_POLL_WAIT_MS): Promise<HttpResult> {
-    if (request.currentRun || request.protocolVersion !== 2) return this.pollV2(deviceToken, request);
+  /** Idle v3 polls long-poll; active/reporting polls return immediately. */
+  async pollV3Wait(deviceToken: string, request: Parameters<MachineGateway["pollV3"]>[1], waitMs = LONG_POLL_WAIT_MS): Promise<HttpResult> {
+    if (request.currentRuns?.length || request.protocolVersion !== DAEMON_PROTOCOL_VERSION) return this.pollV3(deviceToken, request);
     const machineId = machineIdFromToken(deviceToken);
     const waiter = this.armPollWaiter(machineId, Math.min(Math.max(waitMs, 0), LONG_POLL_WAIT_MS));
     try {
-      const first = await this.pollV2(deviceToken, request);
+      const first = await this.pollV3(deviceToken, request);
       if (first.status !== 200) return first;
-      const body = first.body as { delivery?: Delivery | null; blockedRunId?: string };
-      if (body.delivery || body.blockedRunId) return first;
+      if ((first.body as { delivery?: Delivery | null }).delivery) return first;
       const woken = await waiter.promise;
       if (!woken) {
         await store.setMachineOnline(machineId, true);
         return first;
       }
-      return this.pollV2(deviceToken, request);
-    } finally {
-      waiter.cancel();
-    }
-  }
-
-  /**
-   * Legacy long-poll wrapper over `poll()`: when the daemon opted in (`wait:true`) and
-   * the immediate pass claimed nothing, park the request on the machine's waiter
-   * until the Dispatcher wakes it (a run went pending) or the bounded window
-   * elapses, then re-claim. Old daemons never send `wait` and keep the classic
-   * instant response. The waiter is armed BEFORE the first claim pass, so a run
-   * that goes pending while the pass is in flight can never slip past the park.
-   */
-  async pollWait(
-    deviceToken: string,
-    info?: { host?: string; platform?: string; arch?: string; version?: string },
-    activeRunIds?: string[],
-    opts?: { wait?: boolean; watchDigest?: string; waitMs?: number },
-  ): Promise<HttpResult> {
-    if (!opts?.wait) return this.poll(deviceToken, info, activeRunIds, opts?.watchDigest);
-    const machineId = machineIdFromToken(deviceToken);
-    const waitMs = Math.min(Math.max(opts.waitMs ?? LONG_POLL_WAIT_MS, 0), LONG_POLL_WAIT_MS);
-    const waiter = this.armPollWaiter(machineId, waitMs);
-    try {
-      const first = await this.poll(deviceToken, info, activeRunIds, opts.watchDigest);
-      if (first.status !== 200) return first;
-      if ((first.body as { deliveries: Delivery[] }).deliveries.length) return first;
-      const woken = await waiter.promise;
-      if (!woken) {
-        // Timed out empty: re-stamp before returning so the ~20s hold never eats
-        // into the 30s ONLINE_TTL budget (the first pass's stamp is now that old).
-        await store.setMachineOnline(machineId, true);
-        return first;
-      }
-      // Woken: re-run the claim pass (identity/heartbeats were already applied).
-      return await this.poll(deviceToken, undefined, undefined, opts.watchDigest);
+      return this.pollV3(deviceToken, request);
     } finally {
       waiter.cancel();
     }
@@ -809,7 +744,8 @@ export class MachineGateway {
     if (!machine) return { status: 200, body: { online: false, name: null, lastSeen: null, daemonProtocol: null } };
     const fresh = !!machine.lastSeen && Date.now() - Date.parse(machine.lastSeen) < ONLINE_TTL_MS;
     const online = !!machine.online && fresh;
-    const running = await store.runningRunForMachine(machineId);
+    const running = await store.runningRunsForMachine(machineId);
+    const currentRuns = running.map((run) => ({ runId: run.id, stage: "executing" as const, cancelPending: run.cancelRequestedAt != null }));
     return {
       status: 200,
       body: {
@@ -817,10 +753,7 @@ export class MachineGateway {
         name: machine.name || null,
         lastSeen: machine.lastSeen ?? null,
         daemonProtocol: machine.daemonProtocol ?? null,
-        ...(running ? {
-          ...(online ? { currentRun: { runId: running.id, stage: "executing", cancelPending: running.cancelRequestedAt != null } } : { blockedRunId: running.id }),
-          ...(running.cancelRequestedAt ? { cancelPending: true } : {}),
-        } : {}),
+        currentRuns: online ? currentRuns : [],
       },
     };
   }

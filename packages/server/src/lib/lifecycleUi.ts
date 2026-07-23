@@ -1,6 +1,6 @@
 import type { JobDetail, JobSummary } from '../types'
 
-export const DASHBOARD_PROTOCOL = 2
+export const DASHBOARD_PROTOCOL = 3
 export const DAEMON_UPGRADE_REQUIRED = 'Daemon upgrade required to stop a running process. Run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.'
 
 export type LoopLifecycle = 'deleting' | 'stopping' | 'paused-finishing' | 'paused' | 'active'

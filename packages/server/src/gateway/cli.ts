@@ -25,6 +25,7 @@ import { machinePresence, type MachinePresence } from "../lib/machinePresence.js
 import { logger } from "../logger.js";
 import { selfCronFloorMinutes, selfRescheduleFloorMinutes } from "../env.js";
 import { machineIdFromToken, resolveLease, type RunLease } from "./tokens.js";
+import { DAEMON_PROTOCOL_VERSION } from "./compat.js";
 import {
   ABSENT,
   codeForStatus,
@@ -239,15 +240,14 @@ export class CliGateway {
   private async requireStopProtocol(machineId: string, running: NewRun | undefined): Promise<HttpResult | undefined> {
     if (!running) return undefined;
     const machine = await store.getMachine(machineId);
-    if (machine?.daemonProtocol === 2) return undefined;
+    if (machine?.daemonProtocol === DAEMON_PROTOCOL_VERSION) return undefined;
     return { status: 426, body: { text: STOP_UPGRADE_REQUIRED, exitCode: 1 } };
   }
 
   private async stopOwnerLoop(machineId: string, loopId: string): Promise<HttpResult> {
     const loop = await this.ownedLoop(machineId, loopId);
     if (!loop) return { status: 404, body: { error: "no such loop on this machine" } };
-    const running = await store.runningRunForMachine(machineId);
-    const target = running?.loopId === loop.id ? running : undefined;
+    const target = await store.runningRunForLoop(loop.id);
     const upgrade = await this.requireStopProtocol(machineId, target);
     if (upgrade) return upgrade;
     const result = await store.stopLoop(loop.id);
@@ -275,8 +275,7 @@ export class CliGateway {
       this.destructiveLog({ action: "force-delete", loopId: loop.id, machineId, actorUserId: actor, machineReachability: reachability });
       return { status: 200, body: { text: forceDeleteWarning(reachability) } };
     }
-    const running = await store.runningRunForMachine(machineId);
-    const target = running?.loopId === loop.id ? running : undefined;
+    const target = await store.runningRunForLoop(loop.id);
     const upgrade = await this.requireStopProtocol(machineId, target);
     if (upgrade) return upgrade;
     const result = await store.requestDeleteLoop(loop.id);

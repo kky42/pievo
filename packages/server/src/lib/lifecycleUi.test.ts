@@ -17,7 +17,7 @@ function detail(summary: JobSummary, machine: Partial<JobDetail['machine']> = {}
   return {
     job: { id: summary.id, cron: summary.cron, scheduleMode: 'cron', continuousDelayMinutes: 1, enabled: summary.enabled, notify: 'auto' },
     summary, taskFileContent: null, taskFileSyncedAt: null, runs: summary.runs,
-    machine: { id: 'm1', name: 'MacBook Pro', online: true, presence: 'online', lastSeen: null, daemonProtocol: 2, daemonVersion: '2.0.4', needsUpdate: false, requiredDaemonVersion: '2.0.4', ...machine },
+    machine: { id: 'm1', name: 'MacBook Pro', online: true, presence: 'online', lastSeen: null, daemonProtocol: 3, daemonVersion: '2.1.0', needsUpdate: false, requiredDaemonVersion: '2.1.0', ...machine },
   }
 }
 
@@ -37,7 +37,7 @@ describe('Dashboard lifecycle derivation', () => {
   })
 
   it('reports breaking protocol support explicitly', () => {
-    expect(daemonStopSupport(2)).toEqual({ supported: true, label: 'Daemon protocol 2 · Stop supported' })
+    expect(daemonStopSupport(3)).toEqual({ supported: true, label: 'Daemon protocol 3 · Stop supported' })
     expect(daemonStopSupport(1)).toEqual({ supported: false, label: 'Daemon protocol 1 · upgrade required' })
     expect(daemonStopSupport(null)).toEqual({ supported: false, label: 'Daemon protocol unknown · upgrade required' })
   })

@@ -70,7 +70,21 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
   if (m === "POST" && p === "/api/machine/poll") {
     const tok = bearer(req);
     if (!tok) return send(res, 401, { error: "missing device token" });
-    const r = await gateway.poll(tok);
+    const body = await json(req) as {
+      protocolVersion?: number;
+      currentRuns?: Array<{ runId: string; stage: "executing" | "reporting" }>;
+      watchDigest?: string;
+      host?: string;
+      platform?: string;
+      arch?: string;
+      version?: string;
+    };
+    const r = await gateway.pollV3Wait(tok, {
+      protocolVersion: body.protocolVersion,
+      currentRuns: body.currentRuns,
+      watchDigest: body.watchDigest,
+      info: body,
+    });
     return send(res, r.status, r.body);
   }
   if (m === "POST" && p === "/agent-api/loop") {

@@ -260,7 +260,7 @@ export function MachinesModal({
               </button>
             </div>
             <div className="text-label text-secondary">{daemonStopSupport(m.daemonProtocol).label}</div>
-            {m.daemonProtocol !== 2 && (
+            {!daemonStopSupport(m.daemonProtocol).supported && (
               <div className="text-label text-accent">Daemon upgrade required to stop a running process</div>
             )}
             {/* Offline → offer the exact command to bring this machine back (same token).

@@ -20,14 +20,14 @@ export const Route = createFileRoute('/api/machine/poll')({
           arch?: string
           version?: string
           protocolVersion?: number
-          currentRun?: { runId: string; stage: 'executing' | 'reporting' }
+          currentRuns?: Array<{ runId: string; stage: 'executing' | 'reporting' }>
           /** Echo of the last applied watch digest — matching ⇒ `watch` omitted. */
           watchDigest?: string
         }
         const { getGateway } = await import('../server/boot.js')
-        const r = await (await getGateway()).pollV2Wait(token, {
+        const r = await (await getGateway()).pollV3Wait(token, {
           protocolVersion: body.protocolVersion,
-          currentRun: body.currentRun,
+          currentRuns: body.currentRuns,
           watchDigest: typeof body.watchDigest === 'string' ? body.watchDigest : undefined,
           info: body,
         })

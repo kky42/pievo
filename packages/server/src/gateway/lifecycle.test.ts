@@ -40,22 +40,23 @@ async function seedLoop(machineId: string, enabled = true) {
   return store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled });
 }
 
-test("a machine claims only one running run across loops", async () => {
+test("repeated claims allow cross-loop concurrency but never two runs for one loop", async () => {
   const machine = await seedMachine();
   const a = await seedLoop(machine.id);
   const b = await seedLoop(machine.id);
   await store.enqueueRun(a.id, { role: "exec", requestedBy: "owner" });
   await store.enqueueRun(b.id, { role: "steer", requestedBy: "owner", requestText: "steer" });
 
-  const claims = await Promise.all([
+  const claims = (await Promise.all([
     store.claimReadyRunForMachine(machine.id),
     store.claimReadyRunForMachine(machine.id),
-  ]);
+  ])).filter((claim): claim is NonNullable<typeof claim> => !!claim);
 
-  expect(claims.filter(Boolean)).toHaveLength(1);
+  expect(claims).toHaveLength(2);
+  expect(new Set(claims.map((claim) => claim.loop.id))).toEqual(new Set([a.id, b.id]));
   await expect(store.addRun({ loopId: b.id, userId: "u1", machineId: machine.id, phase: "running", role: "exec", ts: new Date().toISOString() })).rejects.toThrow();
   const running = (await Promise.all([store.listRuns(a.id), store.listRuns(b.id)])).flat().filter((r) => r.phase === "running");
-  expect(running).toHaveLength(1);
+  expect(running).toHaveLength(2);
 });
 
 test("pause leaves a running run and lease intact, preserving its queued owner follow-up", async () => {
@@ -167,7 +168,7 @@ test("delete waits for execution authority and force delete retires it", async (
   expect((await tokens.resolveLease(token))?.state).toBe("retired");
 });
 
-test("protocol v2 is explicit, single-flight, and repeats cancellation", async () => {
+test("protocol v3 rejects old protocols and repeats per-run cancellation", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
   await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
@@ -177,17 +178,77 @@ test("protocol v2 is explicit, single-flight, and repeats cancellation", async (
   await store.requestRunCancel(loop.id, run.id);
   const gw = gateway();
 
-  await store.updateMachine(machineId, { daemonProtocol: 2 });
-  expect((await gw.pollV2(deviceToken, { protocolVersion: 1 })).status).toBe(426);
-  expect((await store.getMachine(machineId))?.daemonProtocol).toBe(1);
-  const first = await gw.pollV2(deviceToken, { protocolVersion: 2, currentRun: { runId: run.id, stage: "executing" } });
-  const second = await gw.pollV2(deviceToken, { protocolVersion: 2, currentRun: { runId: run.id, stage: "reporting" } });
-  expect(first.body).toMatchObject({ delivery: null, cancelRunId: run.id });
-  expect(second.body).toMatchObject({ delivery: null, cancelRunId: run.id });
-  const conflict = await gw.pollV2(deviceToken, { protocolVersion: 2, currentRun: { runId: "daemon-run-a", stage: "executing" } });
-  expect(conflict.body).toMatchObject({ delivery: null, runConflict: { daemonRunId: "daemon-run-a", serverRunId: run.id } });
-  const blocked = await gw.pollV2(deviceToken, { protocolVersion: 2 });
-  expect(blocked.body).toMatchObject({ delivery: null, blockedRunId: run.id });
+  expect((await gw.pollV3(deviceToken, { protocolVersion: 2, currentRuns: [] })).status).toBe(426);
+  expect((await store.getMachine(machineId))?.daemonProtocol).toBe(2);
+  const first = await gw.pollV3(deviceToken, { protocolVersion: 3, currentRuns: [{ runId: run.id, stage: "executing" }] });
+  const second = await gw.pollV3(deviceToken, { protocolVersion: 3, currentRuns: [{ runId: run.id, stage: "reporting" }] });
+  expect(first.body).toMatchObject({ delivery: null, cancelRunIds: [run.id] });
+  expect(second.body).toMatchObject({ delivery: null, cancelRunIds: [run.id] });
+});
+
+test("protocol v3 skips a local run's loop and returns one delivery per poll", async () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  const occupiedLoop = await seedLoop(machineId);
+  const freeLoop = await seedLoop(machineId);
+  const older = await store.addRun({
+    loopId: occupiedLoop.id, userId: "u1", machineId, phase: "error", role: "exec",
+    ts: new Date().toISOString(), error: "server already reclaimed this run",
+  });
+  await store.enqueueRun(occupiedLoop.id, { role: "exec", requestedBy: "owner" });
+  await store.enqueueRun(freeLoop.id, { role: "exec", requestedBy: "owner" });
+
+  const result = await gateway().pollV3(deviceToken, {
+    protocolVersion: 3,
+    currentRuns: [{ runId: older.id, stage: "executing" }],
+    info: { version: "2.1.0" },
+  });
+  expect((result.body as any).delivery.loop.id).toBe(freeLoop.id);
+  expect((await store.listRuns(occupiedLoop.id)).some((run) => run.phase === "pending")).toBe(true);
+});
+
+test("repeated v3 polls accumulate cross-loop concurrency and target cancellations", async () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  const a = await seedLoop(machineId);
+  const b = await seedLoop(machineId);
+  await store.enqueueRun(a.id, { role: "exec", requestedBy: "owner" });
+  await store.enqueueRun(b.id, { role: "exec", requestedBy: "owner" });
+  const gw = gateway();
+
+  const first = (await gw.pollV3(deviceToken, { protocolVersion: 3, currentRuns: [], info: { version: "2.1.0" } }).then((r) => (r.body as any).delivery));
+  const second = (await gw.pollV3(deviceToken, {
+    protocolVersion: 3,
+    currentRuns: [{ runId: first.runId, stage: "executing" }],
+    info: { version: "2.1.0" },
+  }).then((r) => (r.body as any).delivery));
+  expect(new Set([first.loop.id, second.loop.id])).toEqual(new Set([a.id, b.id]));
+
+  for (const delivery of [first, second]) await store.requestRunCancel(delivery.loop.id, delivery.runId);
+  const polled = await gw.pollV3(deviceToken, {
+    protocolVersion: 3,
+    currentRuns: [first, second].map((delivery) => ({ runId: delivery.runId, stage: "executing" as const })),
+    info: { version: "2.1.0" },
+  });
+  expect(new Set((polled.body as any).cancelRunIds)).toEqual(new Set([first.runId, second.runId]));
+  expect((polled.body as any).delivery).toBeNull();
+});
+
+test("an active v3 poll never enters the idle long-poll", async () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  const result = await Promise.race([
+    gateway().pollV3Wait(deviceToken, {
+      protocolVersion: 3,
+      currentRuns: [{ runId: "local-run", stage: "executing" }],
+      info: { version: "2.1.0" },
+    }, 1_000).then(() => "returned"),
+    new Promise<string>((resolve) => setTimeout(() => resolve("parked"), 100)),
+  ]);
+  expect(result).toBe("returned");
 });
 
 test("report authentication precedes invalid handling; uncorrelatable ids stay nonterminal", async () => {

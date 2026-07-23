@@ -73,7 +73,7 @@ const detailWithTeam = (team: JobDetail['team']): JobDetail =>
     },
     taskFileContent: null,
     taskFileSyncedAt: null,
-    machine: { id: 'm1', name: 'repro-box', online: true, presence: 'online', lastSeen: null, daemonProtocol: 2 },
+    machine: { id: 'm1', name: 'repro-box', online: true, presence: 'online', lastSeen: null, daemonProtocol: 3 },
     team,
     runs: [],
   }) as unknown as JobDetail

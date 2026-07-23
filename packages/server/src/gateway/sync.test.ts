@@ -428,7 +428,11 @@ test("poll response carries the watch set for every loop bound to the machine", 
   // A second loop on the same machine, one with a taskFile.
   (await store.createLoop({ userId: "u1", machineId, name: "L2", cron: "0 0 1 1 *", enabled: true, notify: "auto", taskFile: "/proj/pievo/l2/README.md", workdir: "/proj" }));
   const machineGw = new gatewayMod.MachineGateway(scheduler, new MemoryBlobStore());
-  const res = (await machineGw.poll(token));
+  const res = await machineGw.pollV3(token, {
+    protocolVersion: 3,
+    currentRuns: [],
+    info: { version: "2.1.0" },
+  });
   const watch = (res.body as any).watch as Array<{ loopId: string; workdir: string | null; taskFile: string | null }>;
   expect(watch).toHaveLength(2);
   const withTask = watch.find((w) => w.taskFile)!;

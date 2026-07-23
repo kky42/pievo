@@ -27,6 +27,20 @@ describe("PendingReportOutbox", () => {
     reopened.close();
   });
 
+  test("multiple reports retry independently and a poisoned row does not block another loop", async () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-outbox-"));
+    const box = new PendingReportOutbox(path.join(root, "pending.sqlite"));
+    const first = box.put("rk_1", report());
+    const second = box.put("rk_2", report({ reportId: "22222222-2222-4222-8222-222222222222", runId: "run-2" }));
+
+    box.applyAck({ kind: "conflict", reportId: first.reportId, error: "different payload" });
+    expect(box.ready().map((row) => row.runId)).toEqual(["run-2"]);
+    box.applyAck({ kind: "ack", reportId: second.reportId });
+    expect(box.all().map((row) => row.runId)).toEqual(["run-1"]);
+    expect(box.diagnostics()).toMatchObject({ pendingRunIds: ["run-1"], poisonedRunIds: ["run-1"] });
+    box.close();
+  });
+
   test("only a matching structured ACK or RETIRED removes a report", async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-outbox-"));
     const box = new PendingReportOutbox(path.join(root, "pending.sqlite"));
@@ -93,9 +107,9 @@ describe("PendingReportOutbox", () => {
     const box = new PendingReportOutbox(path.join(root, "pending.sqlite"));
     box.put("rk_secret", report());
     box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "REPORT_CONFLICT", reportId: "wrong" }), { status: 409 })));
-    expect(box.diagnostics()).toMatchObject({ pendingRunId: "run-1", poisoned: false });
+    expect(box.diagnostics()).toMatchObject({ pendingRunIds: ["run-1"], poisonedRunIds: [] });
     box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "REPORT_CONFLICT", reportId: report().reportId }), { status: 409 })));
-    expect(box.diagnostics()).toMatchObject({ pendingRunId: "run-1", poisoned: true });
+    expect(box.diagnostics()).toMatchObject({ pendingRunIds: ["run-1"], poisonedRunIds: ["run-1"] });
     expect(box.peek()).toBeDefined();
     box.close();
   });
@@ -105,9 +119,9 @@ describe("PendingReportOutbox", () => {
     const box = new PendingReportOutbox(path.join(root, "pending.sqlite"));
     box.put("rk_secret", report());
     box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "REPORT_INVALID", reportId: "wrong", issues: ["result"] }), { status: 422 })));
-    expect(box.diagnostics().poisoned).toBe(false);
+    expect(box.diagnostics().poisonedRunIds).toEqual([]);
     box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "REPORT_INVALID", reportId: report().reportId, issues: ["result"] }), { status: 422 })));
-    expect(box.diagnostics()).toMatchObject({ poisoned: true, pendingRunId: "run-1" });
+    expect(box.diagnostics()).toMatchObject({ poisonedRunIds: ["run-1"], pendingRunIds: ["run-1"] });
     expect(box.diagnostics().lastError).toContain("REPORT_INVALID");
     box.close();
   });

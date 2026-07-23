@@ -61,13 +61,14 @@ computes pure functions. Run instructions: `README.md`.
 - Manual/system work uses the durable run queue in `runs.phase=pending`
   (`requestedBy: owner|system`, role-scoped `requestText`; no separate queue table).
   Recurring work stays in `loops.nextCadenceAt` until due; `nextRunAt` is the
-  independent one-shot fact. Protocol-v2 **HTTP poll** is machine-single-flight:
-  it atomically claims at most one run across all bound loops (priority
-  `steer > evolve > exec`) and inserts its run lease in that SAME transaction. An
-  idle daemon long-polls; an executing/reporting daemon sends its one `currentRun`
-  and receives no delivery. Timers/Dispatcher wakeups are latency hints, while DB
-  facts + poll advancement are authoritative. Terminal reports persist first in the
-  daemon SQLite outbox and finalize idempotently by `reportId`; synced files + run
+  independent one-shot fact. Protocol-v3 **HTTP poll** reports `currentRuns` and
+  may atomically claim one ready run per poll (priority `steer > evolve > exec`).
+  Active daemons keep polling, so there is no machine run cap; the DB's partial
+  unique index enforces only one running run per loop. The response carries one
+  optional `delivery` plus run-targeted cancellations.
+  Timers/Dispatcher wakeups are latency hints, while DB facts + poll advancement
+  are authoritative. Terminal reports persist independently in the plural daemon
+  SQLite outbox and finalize idempotently by `reportId`; synced files + run
   snapshots remain the artifact/diff authority. A correlatable but semantically invalid
   terminal payload is handled on that SAME `/machine/report` seam after lease auth: the
   server atomically records a structured run incident, terminalizes an active run as
@@ -413,9 +414,10 @@ computes pure functions. Run instructions: `README.md`.
   fetches go through `boundedFetch`; kills take the whole process group.
 - Exec timeout defaults to 12 hours and accepts a positive millisecond override via
   `PIEVO_EXEC_TIMEOUT_MS` (missing/zero/invalid/negative falls back to 12h). The guard
-  against a vanished machine is also the SERVER's inactivity-based sweep: protocol-v2
-  polls carry one provider-neutral `currentRun` (`executing|reporting`), refreshing
-  its `heartbeatAt`; a run is reclaimed only after `RUN_TIMEOUT_MS` of silence.
+  against a vanished machine is also the SERVER's inactivity-based sweep: protocol-v3
+  polls carry provider-neutral `currentRuns` (`executing|reporting`), refreshing
+  each `heartbeatAt`; a run is reclaimed only
+  after `RUN_TIMEOUT_MS` of silence.
   Cancellation intent is durable and does not terminalize a running run; only the
   daemon's actual terminal result may produce `canceled`.
 - **The run credential is a RUN LEASE (`tokens.ts`, Batch 6)**, not a mint→revoke
@@ -436,7 +438,7 @@ computes pure functions. Run instructions: `README.md`.
   is invisible to an in-flight run, and a long-sleep wake-report survives a
   restart inside its grace window. Loop deletion preserves retired tombstones.
 - **The old revoke/reclaim scatter collapses to ONE terminalize transition +
-  retire + prune.** Normal poll delivery uses `store.claimReadyRunsForMachine` to
+  retire + prune.** Normal poll delivery uses `store.claimReadyRunForMachine` to
   claim + insert an `active` lease atomically. `terminal-grace` is report-only:
   `store.reclaimRun` opens the wake-reconciliation window under the loop lock, so a
   stale observation cannot mutate the winning report's lease.
@@ -659,10 +661,11 @@ computes pure functions. Run instructions: `README.md`.
   lease is batch 6, not here.)
 - A run launches its selected provider EXACTLY ONCE. There is no provider retry or
   resume path today; captured session ids are terminal metadata reserved for future
-  use. Each invocation produces one normalized token-usage result. The fixed
-  single-flight slot reports `currentRun` + stage, keeping the server heartbeat fresh;
-  after execution, its exact serialized terminal payload is stored in the local SQLite
-  outbox and replayed to a definitive ACK before the slot accepts more work.
+  use. Each invocation produces one normalized token-usage result. The daemon reports
+  every active run in `currentRuns`; different loops execute concurrently without a
+  machine cap. After each execution, its exact serialized terminal payload is stored
+  as an independent local SQLite outbox row and replayed to a definitive ACK before
+  that run leaves reporting. One poisoned/slow report never blocks other loops.
 - **`runner.ts` skips the sys file + `--append-system-prompt-file` when the delivery's
   `systemPrompt` is empty** (batches 1-2 make it empty; an OLD server that still
   populates it keeps working — the flag path is preserved when the string is non-empty).

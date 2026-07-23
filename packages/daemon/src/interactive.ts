@@ -219,7 +219,7 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     const cliArgv = isRunStop
       ? ["run", "stop", id]
       : [verb!, id, ...(force ? ["--force", "--confirmation", FORCE_DELETE_CONFIRMATION] : [])];
-    // Lifecycle verbs require protocol-v2 semantics. A server without the unified
+    // Lifecycle verbs require protocol-v3 semantics. A server without the unified
     // endpoint cannot safely implement Stop/Delete, so the 404 fallback is an explicit
     // upgrade-required response, never a legacy edit call or a false success.
     const legacy: LegacyFallback = async () => ({

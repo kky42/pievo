@@ -15,7 +15,7 @@ afterEach(() => {
 test("an ENOSPC temp-file failure reuses the reserved status block", () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-runtime-status-"));
   const file = path.join(root, "runtime-status.json");
-  writeRuntimeDiagnostics(file, { protocolVersion: 2, outboxPath: "/tmp/reports.sqlite" });
+  writeRuntimeDiagnostics(file, { protocolVersion: 3, outboxPath: "/tmp/reports.sqlite" });
   expect(fs.statSync(file).size).toBe(4096);
 
   const realWrite = fs.writeFileSync.bind(fs);
@@ -25,7 +25,7 @@ test("an ENOSPC temp-file failure reuses the reserved status block", () => {
   }) as typeof fs.writeFileSync);
 
   writeRuntimeDiagnostics(file, {
-    protocolVersion: 2,
+    protocolVersion: 3,
     persistenceError: "SQLITE_FULL: database or disk is full",
     outboxPath: "/tmp/reports.sqlite",
   });

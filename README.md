@@ -73,7 +73,7 @@ Upgrade with `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.
 
 ## How it works
 
-Pievo is one server process plus one daemon per machine. The server never runs an LLM and never executes your code - it only schedules, stores artifacts, authenticates, and notifies. Execution happens on **your** machine via the [`@kky42/pievo`](https://www.npmjs.com/package/@kky42/pievo) daemon, talking to your local coding agent.
+Pievo is one server process plus one daemon per machine. The server never runs an LLM and never executes your code - it only schedules, stores artifacts, authenticates, and notifies. Execution happens on **your** machine via the [`@kky42/pievo`](https://www.npmjs.com/package/@kky42/pievo) daemon, talking to your local coding agent. Different loops on that machine can run concurrently with no machine-wide cap; each individual loop remains serialized.
 
 ```mermaid
 flowchart LR

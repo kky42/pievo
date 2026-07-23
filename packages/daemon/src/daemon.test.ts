@@ -55,13 +55,14 @@ describe("runDaemon", () => {
 });
 
 describe("poll transport helpers", () => {
-  test("buildPollBody: protocol v2 carries one fixed slot and no capacity surface", async () => {
+  test("buildPollBody: protocol v3 reports all active runs", async () => {
     const { buildPollBody } = await import("./daemon.js");
     const info = { host: "mac", platform: "darwin" };
-    expect(buildPollBody(info, null, undefined)).toEqual({ protocolVersion: 2, host: "mac", platform: "darwin" });
-    expect(buildPollBody(info, { runId: "r1", stage: "reporting" }, "d1")).toEqual({
-      protocolVersion: 2, host: "mac", platform: "darwin",
-      currentRun: { runId: "r1", stage: "reporting" }, watchDigest: "d1",
+    expect(buildPollBody(info, [], undefined)).toEqual({ protocolVersion: 3, host: "mac", platform: "darwin", currentRuns: [] });
+    expect(buildPollBody(info, [{ runId: "r1", stage: "reporting" }, { runId: "r2", stage: "executing" }], "d1")).toEqual({
+      protocolVersion: 3, host: "mac", platform: "darwin",
+      currentRuns: [{ runId: "r1", stage: "reporting" }, { runId: "r2", stage: "executing" }],
+      watchDigest: "d1",
     });
   });
 

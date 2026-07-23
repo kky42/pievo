@@ -284,7 +284,7 @@ export const runs = pgTable(
     // The queue seam coalesces under a loop-row lock; this partial unique index is
     // the final invariant if another process races or a future caller regresses.
     uniqueIndex("runs_loop_role_pending_idx").on(t.loopId, t.role).where(sql`${t.phase} = 'pending'`),
-    uniqueIndex("one_running_run_per_machine").on(t.machineId).where(sql`${t.phase} = 'running'`),
+    uniqueIndex("one_running_run_per_loop").on(t.loopId).where(sql`${t.phase} = 'running'`),
   ],
 );
 

@@ -305,31 +305,35 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
 
 ## Run telemetry
 
-- Poll liveness is provider-neutral: a protocol-v2 daemon sends its one `currentRun` and stage (`executing|reporting`); the machine/phase-scoped update refreshes that run's `heartbeatAt` (claim `ts` is the pre-first-heartbeat fallback). Offline pending notification dedup uses separate `runs.deferredAt`.
+- Poll liveness is provider-neutral: a protocol-v3 daemon sends `currentRuns` with each stage (`executing|reporting`); the machine/phase-scoped update refreshes every listed run's `heartbeatAt` (claim `ts` is the pre-first-heartbeat fallback). Offline pending notification dedup uses separate `runs.deferredAt`.
 - Claim atomically copies `loops.agent` to nullable `runs.agent`, preserving the actual executor as run history even after an owner edits the loop agent. Final reports store normalized `exitCode`, `durationMs`, `sessionId`, `finalText`, `error`, and provider-neutral token `usage`; each run has exactly one provider invocation. `sessionId` is metadata for future use — there is no current resume UI or command generation. Dollar cost, provider activity/progress, slim transcripts, and transcript-derived run artifacts are not stored or rendered. Live artifact sync + `artifact_files`/`blobs`/`run_snapshots` remain the file/diff authority.
 - `/machine/report` treats a correlatable but semantically invalid terminal payload as a durable terminal attempt, never a poison retry: after lease auth, `store.rejectTerminalReport` loop-locks, rechecks the hashed lease, writes `runs.reportIncident`, applies the ordinary failure lifecycle (or preserves a terminal-grace outcome), consumes the lease, and inserts the exact 200 ACK in `terminal_report_incidents`. The receipt key is `sha256(reportId + daemon-byte-compatible JSON payload digest)` and survives loop deletion; payload drift after a normal same-run commit replays that authoritative ACK, while rejected attempts replay only on an exact digest and a cross-run reportId conflict terminalizes the currently leased run. Missing/non-string/NUL/over-cap reportIds remain authenticated, mutation-free 400s. Per-reportId transaction advisory locking serializes normal and incident receipts across different loop locks.
 
 ## Poll transport (long-poll + hot-path budget)
 
-- `/api/machine/poll` is the breaking protocol-v2 `gateway.pollV2Wait()` seam.
+- `/api/machine/poll` is the breaking protocol-v3 `gateway.pollV3Wait()` seam.
   Idle requests park automatically on the per-machine waiter (held <=
-  `LONG_POLL_WAIT_MS` 20s); executing/reporting requests never park and receive no
-  delivery. Dispatcher wakeups resolve the in-memory waiter so durable pending work
+  `LONG_POLL_WAIT_MS` 20s); executing/reporting requests never park and may receive
+  one delivery from another free loop. Dispatcher wakeups resolve the in-memory waiter so durable pending work
   claims promptly; a deploy merely drops the hint and the daemon re-polls. A
   protocol mismatch returns `426 UPGRADE_REQUIRED` and updates the authenticated
   machine's stored protocol so Dashboard capability cannot stay stale.
-- Daemon side (`daemon.ts`): one fixed slot sends `currentRun` + stage; it is cleared
-  only after execution's exact terminal payload is durable in the local SQLite
-  outbox and receives a definitive report ACK. Startup replays that outbox before
-  its first poll. `nextPollDelayMs(elapsed)` keeps the short-poll/held-poll cadence.
+- Daemon side (`daemon.ts`): an unbounded per-run map sends `currentRuns`; each entry
+  clears only after execution's exact terminal payload is durable in its own local
+  SQLite outbox row and receives a definitive report ACK. A nonblocking sequential
+  report worker skips poisoned rows, so report transport cannot cap other loops. Startup begins replay immediately but
+  keeps polling, heartbeating, and accepting unrelated loops while report transport
+  is in flight. `nextPollDelayMs(elapsed)` keeps the short-poll/held-poll cadence.
 - Poll hot-path DB budget: `machines.lastSeen` re-stamps only when the flag must
   flip or the stamp is older than `LAST_SEEN_REFRESH_MS` (10s) - an idle poll is
   read-only when no schedule fact is due. Poll first calls
   `advanceDueSchedules(machineId)`, then `store.claimReadyRunForMachine`: a
-  targeted pending scan plus machine advisory lock gives one claim across all
-  loops on that machine, picks `steer > evolve > exec`, and inserts the hashed run
-  lease before committing; the partial unique machine-running index is the final
-  defense. `openRuns()` remains sweep-only.
+  targeted pending scan plus machine row lock claims at most one free loop and
+  inserts its hashed run lease before committing. Active polls repeat, so there is
+  no configured machine cap; `one_running_run_per_loop` is the final DB defense.
+  Pending rows are durable inbox entries and are never failed merely because an
+  online daemon has not claimed them. Protocol v3 requires daemon 2.1.0; older
+  daemons receive `426 UPGRADE_REQUIRED`. `openRuns()` remains sweep-only.
 - Watch set: served from a per-machine cache (`WATCH_CACHE_TTL_MS` 15s), response
   always carries `watchDigest`; when the daemon echoes a matching digest the
   `watch` array is OMITTED. Omission requires the echo (proof the client speaks
@@ -366,8 +370,8 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   loop-lock transaction. Reclaim terminalizes its lease and writes provisional
   cadence atomically; due advancement fences on terminal-grace, and one unexpired
   late report may replace that fact before consuming the lease. Expiry is rechecked
-  after taking the lock. The terminal transaction also computes the exec failure
-  streak and atomically auto-pauses/clears facts/cancels pending system work.
+  after taking the lock. The terminal transaction also computes the exec failure streak and atomically
+  auto-pauses/clears facts/cancels pending system work.
 - Migration 0003 converts and clears legacy steer/evolve markers but retains their
   deprecated columns/defaults only to reduce old-image SELECT/INSERT breakage. This
   is not rollback support: migrations are forward-only, post-migration legacy writes
@@ -379,7 +383,8 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
 
 ## Gateway layout (the MachineGateway decomposition)
 
-- `gateway/index.ts` (`MachineGateway`) is the run-lifecycle core: poll/pollWait,
+- `gateway/index.ts` (`MachineGateway`) is the run-lifecycle core: public
+  protocol-v3 `pollV3`/`pollV3Wait` over private `pollCore`,
   report/reclaimRun/sweep, `maintainStorage` (retention/GC), the
   owner verbs (createLoop/listLoops/editLoop/loopLog/renderLoopLog), and the
   presence/watch state.
