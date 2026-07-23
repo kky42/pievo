@@ -544,8 +544,6 @@ export function LoopDetailView({ id }: { id: string }) {
                 {detail.machine.name || 'machine'}
               </span>
               {metaDot}
-              <span title="Breaking daemon/server lifecycle protocol">{protocolSupport.label}</span>
-              {metaDot}
               <code className="font-mono text-label text-disabled">{s.id}</code>
             </div>
             {s.goal && (
