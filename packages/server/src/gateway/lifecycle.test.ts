@@ -202,7 +202,7 @@ test("protocol v3 skips a local run's loop and returns one delivery per poll", a
   const result = await gateway().pollV3(deviceToken, {
     protocolVersion: 3,
     currentRuns: [{ runId: older.id, stage: "executing" }],
-    info: { version: "2.1.0" },
+    info: { version: "2.2.0" },
   });
   expect((result.body as any).delivery.loop.id).toBe(freeLoop.id);
   expect((await store.listRuns(occupiedLoop.id)).some((run) => run.phase === "pending")).toBe(true);
@@ -218,11 +218,11 @@ test("repeated v3 polls accumulate cross-loop concurrency and target cancellatio
   await store.enqueueRun(b.id, { role: "exec", requestedBy: "owner" });
   const gw = gateway();
 
-  const first = (await gw.pollV3(deviceToken, { protocolVersion: 3, currentRuns: [], info: { version: "2.1.0" } }).then((r) => (r.body as any).delivery));
+  const first = (await gw.pollV3(deviceToken, { protocolVersion: 3, currentRuns: [], info: { version: "2.2.0" } }).then((r) => (r.body as any).delivery));
   const second = (await gw.pollV3(deviceToken, {
     protocolVersion: 3,
     currentRuns: [{ runId: first.runId, stage: "executing" }],
-    info: { version: "2.1.0" },
+    info: { version: "2.2.0" },
   }).then((r) => (r.body as any).delivery));
   expect(new Set([first.loop.id, second.loop.id])).toEqual(new Set([a.id, b.id]));
 
@@ -230,7 +230,7 @@ test("repeated v3 polls accumulate cross-loop concurrency and target cancellatio
   const polled = await gw.pollV3(deviceToken, {
     protocolVersion: 3,
     currentRuns: [first, second].map((delivery) => ({ runId: delivery.runId, stage: "executing" as const })),
-    info: { version: "2.1.0" },
+    info: { version: "2.2.0" },
   });
   expect(new Set((polled.body as any).cancelRunIds)).toEqual(new Set([first.runId, second.runId]));
   expect((polled.body as any).delivery).toBeNull();
@@ -244,7 +244,7 @@ test("an active v3 poll never enters the idle long-poll", async () => {
     gateway().pollV3Wait(deviceToken, {
       protocolVersion: 3,
       currentRuns: [{ runId: "local-run", stage: "executing" }],
-      info: { version: "2.1.0" },
+      info: { version: "2.2.0" },
     }, 1_000).then(() => "returned"),
     new Promise<string>((resolve) => setTimeout(() => resolve("parked"), 100)),
   ]);

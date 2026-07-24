@@ -66,7 +66,7 @@ Preview with `--dry-run`.
 <pievo-cli> edit <loop-id> --schema-file schema.json
 ```
 
-Explicit `--json` keys win over file flags. You can only edit loops bound to this machine.
+Explicit `--json` keys win over file flags. Follow `dashboard.md` when changing UI. You can only edit loops bound to this machine.
 
 ## Diagnose a rejected terminal report
 

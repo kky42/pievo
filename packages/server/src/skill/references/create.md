@@ -85,7 +85,7 @@ Rules:
 
 ### Dashboard at create
 
-When the product shape is already known, author the initial `ui` now so the loop has a day-one dashboard. Use the primitives from `evolve.md` §3 and bind only declared metrics / documented product types. The common exact forms are `<loop-chart series="score:Score"></loop-chart>` and `<loop-embed file="latest.md"></loop-embed>`; artifact paths are relative to the loop folder. Never substitute `metric`, `src`, or `name` for those attributes — dry-run rejects broken primitives.
+When the product shape is known, author the initial `ui` now so the loop has a day-one dashboard. Read `dashboard.md`; bind only declared metrics and documented product types. Keep the UI small and verify it with `--dry-run`.
 - `notify`: `auto` (only when there's something to say) | `always` | `never`.
 - Don't add `timezone`, `claim`, or auth fields — `pievo new` injects the timezone, connect-key claim, and device token.
 

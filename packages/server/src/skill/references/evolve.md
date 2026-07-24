@@ -54,15 +54,10 @@ Interpret evidence according to the Spec's mode when stated (`maintenance`, `opt
 
 ## 3. Dashboard and metric schema
 
-Read current config with `pievo show --json`. Use dashboard changes only when stable metrics or typed products warrant them.
+Read current config with `pievo show --json`. Use dashboard changes only when stable metrics or typed products warrant them. Follow `dashboard.md` for the exact chart and artifact grammar.
 
 - Metric schema: `pievo set-schema --file <path>` with an additive JSON array of `{key, label?, unit?}`. Do not drop keys still reported or bound by UI.
-- UI: `pievo set-ui --file <path>` with small English-only HTML. Custom primitives use ONLY these exact data attributes:
-  - `<loop-chart series="score:Score:%"></loop-chart>`
-  - `<loop-embed file="latest.md"></loop-embed>` or `<loop-embed match="reports/*.md"></loop-embed>`
-  - `<loop-calendar match="reports/*.md"></loop-calendar>`
-  - `<loop-kanban columns="open,merged" match="cards/*.md"></loop-kanban>`
-  `series`, `file`, `match`, and `columns` paths/keys are loop-relative. Do not invent `metric`, `src`, `name`, `type`, or `height` attributes; they are unsupported and stripped.
+- UI: `pievo set-ui --file <path>` with small English-only HTML. Validate command output; a rejection changes nothing.
 - Preserve dashboard-bound front-matter types, filenames/dates, and metric keys. Fix the Spec first when future products need a consistent convention.
 
 ## 4. Apply and compact

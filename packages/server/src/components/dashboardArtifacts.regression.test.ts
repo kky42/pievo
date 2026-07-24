@@ -129,6 +129,10 @@ describe('LoopChart container-driven sizing', () => {
     expect(src).toMatch(/style=\{\{ height: HEIGHT \}\}/)
   })
 
+  it('keeps explicit Y domains fixed instead of expanding to outliers', () => {
+    expect(src.match(/allowDataOverflow=\{Array\.isArray\(spec\.yDomain\)\}/g)).toHaveLength(3)
+  })
+
   it('never reintroduces a stretched fixed viewBox', () => {
     expect(src).not.toMatch(/viewBox=/) // the attribute, not the word (comments explain the old bug)
   })

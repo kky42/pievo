@@ -1,55 +1,76 @@
-/**
- * Numeric helpers for the trend chart. Pure functions, covered by stats.test.ts.
- * Anything fancier (win-probability, lift, verdicts for an A/B loop) is computed
- * by the exec agent each run and reported as plain numeric metrics — the render
- * layer only plots series + substitutes `{{latest.*}}` scalars.
- */
-import type { Json, RunSummary } from '../types'
+import type { ChartRun } from '../types'
+import type { YDomain } from './chartSpec'
 
-export interface SeriesPoint {
-  t: string
-  v: number
+export interface ChartRow {
+  __x: string | number
+  __runIndex: number
+  __status: string | null
+  [key: string]: string | number | null
 }
 
-/** Per-run numeric metrics snapshots → one series per numeric field (chronological). */
-export function numericSeries(runsNewestFirst: RunSummary[]): Record<string, SeriesPoint[]> {
-  const chron = (runsNewestFirst ?? []).slice().reverse()
-  const series: Record<string, SeriesPoint[]> = {}
-  for (const r of chron) {
-    const obj =
-      r.metrics && typeof r.metrics === 'object' && !Array.isArray(r.metrics)
-        ? (r.metrics as Record<string, Json>)
-        : {}
-    for (const k in obj) {
-      const v = obj[k]
-      if (typeof v === 'number' && isFinite(v)) (series[k] ??= []).push({ t: r.ts, v })
+export interface ScatterRow {
+  x: number
+  y: number
+  runIndex: number
+  status: string | null
+  ts: string
+}
+
+export const finiteMetric = (run: ChartRun, key: string): number | null => {
+  const value = run.metrics?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+const chronological = (runs: ChartRun[]): ChartRun[] =>
+  runs.slice().sort((a, b) => a.runIndex - b.runIndex)
+
+export function seriesChartRows(runs: ChartRun[], keys: string[], x: 'time' | 'runIndex'): ChartRow[] {
+  return chronological(runs).flatMap((run) => {
+    const values = keys.map((key) => [key, finiteMetric(run, key)] as const)
+    if (!values.some(([, value]) => value != null)) return []
+    const row: ChartRow = {
+      __x: x === 'time' ? run.ts : run.runIndex,
+      __runIndex: run.runIndex,
+      __status: run.status,
     }
+    for (const [key, value] of values) if (value != null) row[key] = value
+    return [row]
+  })
+}
+
+export function scatterChartRows(runs: ChartRun[], xKey: string, yKey: string): ScatterRow[] {
+  return chronological(runs).flatMap((run) => {
+    const x = finiteMetric(run, xKey)
+    const y = finiteMetric(run, yKey)
+    return x == null || y == null ? [] : [{ x, y, runIndex: run.runIndex, status: run.status, ts: run.ts }]
+  })
+}
+
+export function progressChartRows(runs: ChartRun[], yKey: string): ScatterRow[] {
+  return chronological(runs).flatMap((run) => {
+    const y = finiteMetric(run, yKey)
+    return y == null ? [] : [{ x: run.runIndex, y, runIndex: run.runIndex, status: run.status, ts: run.ts }]
+  })
+}
+
+/** Running best follows persisted kept decisions only. There is no renderer-side keep threshold. */
+export function runningBest(rows: ScatterRow[], direction: 'min' | 'max'): Array<{ x: number; y: number }> {
+  let best: number | null = null
+  const out: Array<{ x: number; y: number }> = []
+  for (const row of rows) {
+    if (row.status === 'kept') best = best == null ? row.y : direction === 'min' ? Math.min(best, row.y) : Math.max(best, row.y)
+    if (best != null) out.push({ x: row.x, y: best })
   }
-  return series
+  return out
 }
 
-/**
- * One Recharts data row: the run timestamp plus each requested metric present
- * at it. The timestamp field is `__t` (not `t`) so a loop whose declared metrics
- * key is literally `t` can't overwrite it.
- */
-export interface SeriesRow {
-  __t: string
-  [key: string]: string | number
-}
-
-/**
- * Merge per-key series into the row-oriented array Recharts consumes
- * (`[{__t, k1, k2}, …]`, chronological). Rows are the union of the requested
- * keys' timestamps - a run that reported only some keys leaves the others
- * absent on that row (the chart bridges the gap via `connectNulls`).
- */
-export function seriesRows(data: Record<string, SeriesPoint[]>, keys: string[]): SeriesRow[] {
-  const ts = new Set<string>()
-  for (const k of keys) for (const p of data[k] ?? []) ts.add(p.t)
-  const sorted = [...ts].sort() // ISO timestamps - lexical order IS chronological
-  const idx = new Map(sorted.map((t, i) => [t, i]))
-  const rows: SeriesRow[] = sorted.map((t) => ({ __t: t }))
-  for (const k of keys) for (const p of data[k] ?? []) rows[idx.get(p.t)!]![k] = p.v
-  return rows
+export function chartDomain(values: number[], requested: YDomain): [number, number] | ['auto', 'auto'] {
+  if (Array.isArray(requested)) return requested
+  if (!values.length) return ['auto', 'auto']
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  if (requested === 'zero') return [Math.min(0, min), Math.max(0, max)]
+  const span = max - min
+  const pad = span > 0 ? span * 0.1 : Math.max(Math.abs(max) * 0.05, 1)
+  return [min - pad, max + pad]
 }

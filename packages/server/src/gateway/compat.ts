@@ -9,7 +9,7 @@ import { isOutdated } from "../lib/semver.js";
  * daemons that report a version can be known-safe for breaking protocol changes.
  */
 export const DAEMON_PROTOCOL_VERSION = 3;
-export const MIN_DAEMON_VERSION = "2.1.0";
+export const MIN_DAEMON_VERSION = "2.2.0";
 
 export function daemonNeedsUpdate(current: string | null | undefined, required = MIN_DAEMON_VERSION): boolean {
   if (!current) return true;

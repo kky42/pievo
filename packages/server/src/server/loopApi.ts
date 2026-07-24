@@ -13,6 +13,7 @@ import { createServerFn } from '@tanstack/react-start'
 import type {
   ArtifactContent,
   ArtifactSummary,
+  ChartRun,
   CodingAgent,
   JobDetail,
   JobPayload,
@@ -172,6 +173,17 @@ export const loadOlderRuns = createServerFn({ method: 'GET' })
     if (!(await ownedLoop(data.loopId))) return []
     const limit = Math.min(Math.max(data.limit ?? 16, 1), 100)
     return (await store.listRunsBefore(data.loopId, data.beforeTs, limit)).map(toRunSummary)
+  })
+
+/** GET — the latest 100 successful exec rows needed by dashboard charts. This is a
+ * compact, authorized read: role filtering happens before the fixed limit, and
+ * messages/provider telemetry never ride the response. */
+export const getChartRuns = createServerFn({ method: 'GET' })
+  .validator((d: { loopId: string }) => d)
+  .handler(async ({ data }): Promise<ChartRun[]> => {
+    await backend()
+    if (!(await ownedLoop(data.loopId))) return []
+    return store.listChartRuns(data.loopId, 100)
   })
 
 /** GET — the loop's current live-synced files (metadata only; path-sorted). */

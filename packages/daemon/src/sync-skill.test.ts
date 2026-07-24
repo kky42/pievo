@@ -1,8 +1,8 @@
 /**
  * The bundled skill that ships in the npm tarball must be EXACTLY the public
- * surface — SKILL.md + references/{create,update,evolve,run}.md — and nothing else.
+ * surface — SKILL.md + references/{create,update,evolve,dashboard,run}.md — and nothing else.
  * The server's src/skill/ also holds INTERNAL run prompts under run/ (exec-core,
- * edit) that are server-side run-dispatch only; a naive recursive copy would leak
+ * steer) that are server-side run-dispatch only; a naive recursive copy would leak
  * them into every user's installed ~/.claude/skills/pievo/. This runs the real
  * sync-skill.mjs and asserts the selectivity (guards against a regression to
  * `cpSync(src, dst, {recursive})`).
@@ -34,7 +34,7 @@ function listTree(dir: string): string[] {
 test("sync-skill bundles ONLY the public surface (no internal run prompts)", () => {
   execFileSync("node", [script], { stdio: "pipe" });
   const files = listTree(bundle);
-  expect(files).toEqual(["SKILL.md", "references/create.md", "references/update.md", "references/evolve.md", "references/run.md"].sort());
+  expect(files).toEqual(["SKILL.md", "references/create.md", "references/update.md", "references/evolve.md", "references/dashboard.md", "references/run.md"].sort());
   // Explicitly: the internal run prompts never reach the tarball.
   expect(files).not.toContain("run/exec-core.md");
   expect(files).not.toContain("run/steer.md");

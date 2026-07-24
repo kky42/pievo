@@ -47,7 +47,7 @@ import {
   type TeamMember,
   type TeamInvite,
 } from "./schema.js";
-import type { ReportIncident, ReportIncidentDisposition } from "../types.js";
+import type { ChartRun, ReportIncident, ReportIncidentDisposition } from "../types.js";
 
 // ---- coercion helpers (carried from c0 store.ts) ----
 
@@ -1450,6 +1450,28 @@ export async function listRuns(loopId: string, limit = 30): Promise<Run[]> {
     .orderBy(desc(runs.ts))
     .limit(limit);
   return rows.reverse();
+}
+
+/** Latest successful exec runs for dashboard charts, returned oldest-first. Filtering
+ * happens before LIMIT so evolve/steer rows never shrink the chart window. */
+export async function listChartRuns(loopId: string, limit = 100): Promise<ChartRun[]> {
+  const rows = await db
+    .select({
+      runIndex: runs.runIndex,
+      ts: runs.ts,
+      status: runs.status,
+      metrics: runs.metrics,
+    })
+    .from(runs)
+    .where(and(
+      eq(runs.loopId, loopId),
+      eq(runs.role, "exec"),
+      isNotNull(runs.runIndex),
+      eq(runs.phase, "done"),
+    ))
+    .orderBy(desc(runs.runIndex), desc(runs.ts))
+    .limit(limit);
+  return rows.reverse().flatMap((row) => row.runIndex == null ? [] : [{ ...row, runIndex: row.runIndex }]);
 }
 
 /** One older page: runs strictly before `beforeTs`, newest-first then capped,

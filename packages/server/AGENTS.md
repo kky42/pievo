@@ -185,10 +185,10 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   reads/jsdiff. Prompt behavior is pinned in `gateway/prompt.test.ts`;
   served public prose is pinned in `routes/-api.skill.references.test.ts`.
 - Skill `.md` edits compile into the server bundle via `?raw` and ride the next daemon
-  tarball through the unchanged selective `sync-skill.mjs` whitelist. Dashboard prose
-  must name the exact custom attrs (`series`, `file|match`, `columns`); `validateUi`
-  now rejects primitives missing them so DOMPurify cannot silently strip an invented
-  `metric`/`src`/`name` into an empty panel.
+  tarball through the selective `sync-skill.mjs` whitelist. `lib/chartSpec.ts` is the
+  chart grammar authority (`type` plus type-specific axes/`series`/`direction`/domain);
+  artifact primitives require exact `file|match`/`columns` attrs. `validateUi` rejects
+  missing, inapplicable, or invented attrs before DOMPurify can create an empty panel.
 
 ## axi-conformance CLI (batch 6 — daemon text sink + content-first home)
 
@@ -337,8 +337,10 @@ fields are retired. Ships server-first (deploys); the daemon changes ride the ne
   inserts its hashed run lease before committing. Active polls repeat, so there is
   no configured machine cap; `one_running_run_per_loop` is the final DB defense.
   Pending rows are durable inbox entries and are never failed merely because an
-  online daemon has not claimed them. Protocol v3 requires daemon 2.1.0; older
-  daemons receive `426 UPGRADE_REQUIRED`. `openRuns()` remains sweep-only.
+  online daemon has not claimed them. Protocol v3 requires daemon 2.2.0 (the
+  first package shipping the new dashboard skill grammar); older protocol-v3
+  daemons receive HTTP 200 with `needsUpdate` and no delivery. `426 UPGRADE_REQUIRED`
+  is reserved for protocol mismatch. `openRuns()` remains sweep-only.
 - Watch set: served from a per-machine cache (`WATCH_CACHE_TTL_MS` 15s), response
   always carries `watchDigest`; when the daemon echoes a matching digest the
   `watch` array is OMITTED. Omission requires the echo (proof the client speaks

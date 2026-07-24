@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import DOMPurify, { type Config } from 'dompurify'
 import parse, { Element, type HTMLReactParserOptions } from 'html-react-parser'
-import type { ArtifactSummary, RunSummary } from '../types'
-import { buildBindingContext, parseSeries, resolveBindings } from '../lib/binding'
-import { numericSeries } from '../lib/stats'
-import { getArtifacts } from '../server/loopApi'
+import type { ArtifactSummary, ChartRun, RunSummary } from '../types'
+import { buildBindingContext, resolveBindings } from '../lib/binding'
+import { CHART_ATTRS, parseChartSpec } from '../lib/chartSpec'
+import { getArtifacts, getChartRuns } from '../server/loopApi'
 import { LoopChart } from './LoopChart'
 import { LoopEmbed } from './LoopEmbed'
 import { LoopCalendar } from './LoopCalendar'
@@ -19,21 +19,21 @@ import { LoopKanban } from './LoopKanban'
  * else (A/B panels, stat tiles, layout, text) is the agent's own HTML — there are
  * NO opinionated panel components.
  *
- *   <loop-chart series="mrr:MRR:$, paid:Paid"></loop-chart>   multi-series trend chart
+ *   <loop-chart type="line" x="runIndex" series="mrr:MRR:$"></loop-chart>
  *   <loop-embed match="reports/digest-*.md"></loop-embed>      newest matching artifact, embedded
  *   <loop-calendar match="reports/*.md"></loop-calendar>       month calendar of produced files
  *   <loop-kanban columns="a,b,c" match="notes/*.md">           typed products as a board, columns = type
  *
  * Registering a new primitive means moving three things together: LOOP_TAGS +
  * the sanitizer config below, the parser swap in `options`, and the skill's
- * authoring docs (references/evolve.md §3, run/steer.md) - the sanitizer
+ * authoring docs (references/dashboard.md plus concise run-prompt examples) - the sanitizer
  * allowlist and the skill prose must never drift apart.
  */
 
 const LOOP_TAGS = ['loop-chart', 'loop-embed', 'loop-calendar', 'loop-kanban']
 
 /** Data-bearing attributes on the loop-* primitives (all parsed by us, never markup). */
-const LOOP_ATTRS = ['series', 'file', 'match', 'full', 'columns']
+const LOOP_ATTRS = [...CHART_ATTRS, 'file', 'match', 'full', 'columns']
 
 const ARTIFACT_RETRY_MAX = 3
 const ARTIFACT_RETRY_MS = 4000
@@ -54,7 +54,7 @@ const SANITIZE_CONFIG: Config = {
   },
 }
 
-// `series="cpu:CPU:℃, inlet:进风口:℃"` and `match="reports/digest-*.md"` carry
+// Chart specs and `match="reports/digest-*.md"` carry
 // colons/commas/globs/unicode that DOMPurify otherwise strips from the attribute
 // value (leaving an empty <loop-*> that renders nothing). These attrs hold only
 // data we parse ourselves — no markup — so force-keep them on loop-* elements.
@@ -83,8 +83,11 @@ export function LoopView({
     return DOMPurify.sanitize(resolveBindings(html, ctx), SANITIZE_CONFIG)
   }, [html, runs])
 
-  // One numeric-series pass shared by every loop-chart in the template.
-  const data = useMemo(() => numericSeries(runs), [runs])
+  // Charts read a compact, authorized window of the latest 100 successful exec runs. The
+  // server applies role=exec before LIMIT, so evolve/steer rows never shrink it.
+  const wantsCharts = /<loop-chart\b/.test(clean)
+  const [chartData, setChartData] = useState<{ loopId: string; runs: ChartRun[] } | null>(null)
+  const chartRuns = chartData?.loopId === loopId ? chartData.runs : null
 
   // The artifact-backed primitives share ONE lazy artifact-list fetch - made
   // only when the template actually uses them, so a chart-only dashboard pays
@@ -100,6 +103,13 @@ export function LoopView({
   const [artifacts, setArtifacts] = useState<ArtifactSummary[] | null>(null)
   const newestRunId = runs[0]?.id
   const newestRunLive = runs[0]?.running === true
+  useEffect(() => {
+    if (!wantsCharts) return
+    let alive = true
+    getChartRuns({ data: { loopId } }).then((list) => alive && setChartData({ loopId, runs: list })).catch(() => {})
+    return () => { alive = false }
+  }, [wantsCharts, loopId, newestRunId, newestRunLive])
+
   useEffect(() => {
     if (!wantsArtifacts) return
     let alive = true
@@ -124,7 +134,11 @@ export function LoopView({
       replace: (node) => {
         if (!(node instanceof Element)) return undefined
         const a = node.attribs ?? {}
-        if (node.name === 'loop-chart') return <LoopChart data={data} series={parseSeries(a.series)} />
+        if (node.name === 'loop-chart') {
+          const parsed = parseChartSpec(a)
+          if (!parsed.ok) return <div className="rounded-control border border-[var(--color-wire)] bg-[var(--color-raised)] p-3 text-meta text-[var(--color-secondary)]">This chart uses an outdated or invalid configuration.</div>
+          return chartRuns ? <LoopChart runs={chartRuns} spec={parsed.value} /> : null
+        }
         if (node.name === 'loop-embed')
           return (
             <LoopEmbed
@@ -151,7 +165,7 @@ export function LoopView({
         return undefined
       },
     }),
-    [data, loopId, taskFile, artifacts],
+    [chartRuns, loopId, taskFile, artifacts],
   )
 
   // `.loopview` is a responsive grid (app.css): independent top-level panels sit

@@ -73,7 +73,7 @@ function pollV3(
   return gw.pollV3(token, {
     protocolVersion: 3,
     currentRuns: [],
-    info: { version: "2.1.0", ...info },
+    info: { version: "2.2.0", ...info },
   });
 }
 

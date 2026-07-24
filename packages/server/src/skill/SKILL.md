@@ -24,6 +24,8 @@ Read the reference for the job (they live on disk next to this file, under
 - **How a loop stays coherent and improves over time** (the evolution pass that
   sharpens its **task** from its own run history, then fits its dashboard to the
   data): **`references/evolve.md`**.
+- **Dashboard UI** (charts over exec metrics plus embed/calendar/kanban artifact
+  views): **`references/dashboard.md`**.
 - **How a loop behaves each time it runs** (the runtime protocol: the task file as
   memory, surfacing only what changed, the required report grammar, the
   schedule levers, and front-matter product conventions): **`references/run.md`**.

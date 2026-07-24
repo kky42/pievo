@@ -3,13 +3,14 @@
  * just writes the prompt to a file and runs claude with it). Ported from c0's
  * loop-prompt.ts, bound to the new Loop row and the renamed `pievo` CLI. Prompt
  * prose lives as markdown loaded + `{{token}}`-filled here. ALL prompt prose lives
- * under src/skill/: the public authoring trio (create/update/evolve) in
- * skill/references/, and the INTERNAL run prompts (exec-core, steer) in skill/run/ —
+ * under src/skill/: public authoring references in skill/references/, and the
+ * INTERNAL run prompts (exec-core, steer) in skill/run/ —
  * server-side run-dispatch only, never served or bundled. The `evolve` text is the
  * SINGLE source of truth shared with the installable agent skill
  * (skill/references/evolve.md) — run-dispatch and the skill read the same file, so
- * the evolution guidance can't drift. `steer` is a run-token verb prompt with no
- * authoring twin (see skill/references/update.md for the authoring CLI).
+ * the evolution guidance can't drift. The shared dashboard reference is appended
+ * to evolve/steer turns so UI mutation remains self-contained. `steer` is a run-token
+ * verb prompt with no authoring twin (see skill/references/update.md for the owner CLI).
  *
  * Run-experience redesign, Batch 1: the exec run's instructions now live entirely
  * in the FIRST USER TURN (`buildExecTask` ← exec-core.md), not the system prompt.
@@ -34,11 +35,13 @@ import type { Loop, MetricField } from "../db/schema.js";
 // `?raw` resolves identically from skill/run/ as it did from scheduler/prompts/.
 import execCore from "../skill/run/exec-core.md?raw";
 import evolve from "../skill/references/evolve.md?raw";
+import dashboard from "../skill/references/dashboard.md?raw";
 import steer from "../skill/run/steer.md?raw";
 
 const PROMPTS: Record<string, string> = {
   "exec-core": execCore,
   evolve,
+  dashboard,
   steer,
 };
 
@@ -147,6 +150,7 @@ export function buildSteerPrompt(): string {
 export function buildSteerTask(loop: Loop, instruction: string, runIndex: number): string {
   return [
     loadPrompt("steer"),
+    loadPrompt("dashboard"),
     `[loop steer #${runIndex} · ${loop.name || loop.id}]`,
     `Objective: ${loop.goal ?? "(none configured; follow task-file ## Spec)"}`,
     `Execution workspace (cwd): ${loop.workdir ?? "(daemon-selected scratch directory)"}`,
@@ -163,6 +167,7 @@ export function buildSteerTask(loop: Loop, instruction: string, runIndex: number
 export function buildEvolveTask(loop: Loop, runIndex: number): string {
   return [
     loadPrompt("evolve"),
+    loadPrompt("dashboard"),
     `[loop evolve #${runIndex} · ${loop.name || loop.id}]`,
     `Objective: ${loop.goal ?? "(none configured; follow task-file ## Spec)"}`,
     `Execution workspace (cwd): ${loop.workdir ?? "(daemon-selected scratch directory)"}`,

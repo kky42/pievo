@@ -1,7 +1,7 @@
 /**
  * The path-safe /api/skill/references/<file> fallback route. Exercises the GET
  * handler directly (vitest resolves the `?raw` skill imports the same way the
- * nitro build does) — the four exact reference names serve their bundled bytes
+ * nitro build does) — the five exact reference names serve their bundled bytes
  * as markdown, and everything else (unknown name, nested path, traversal) is a
  * clean JSON 404. This is the prod behavior; the Vite dev static layer swallows
  * `.md` paths before the route runs, so it can only be observed off the dev server.
@@ -22,7 +22,7 @@ const call = (pathname: string) =>
 const flat = (s: string) => s.replace(/\s+/g, ' ')
 
 describe('/api/skill/references/$', () => {
-  for (const name of ['create.md', 'update.md', 'evolve.md', 'run.md']) {
+  for (const name of ['create.md', 'update.md', 'evolve.md', 'dashboard.md', 'run.md']) {
     test(`serves ${name} as markdown`, async () => {
       const res = await call(`/api/skill/references/${name}`)
       expect(res.status).toBe(200)
@@ -94,13 +94,11 @@ describe('/api/skill/references/$', () => {
     const body = flat(await (await call('/api/skill/references/create.md')).text())
     // The follow-up round: when the product shape is already known (template-driven
     // loops), author the initial `ui` in the create config instead of deferring to an
-    // evolve pass — and cross-reference evolve.md §3 rather than duplicating it.
+    // evolve pass — and cross-reference dashboard.md rather than duplicating it.
     expect(body).toContain('Dashboard at create')
     expect(body).toContain('day-one dashboard')
-    expect(body).toContain('evolve.md` §3')
-    expect(body).toContain('<loop-chart series="score:Score"></loop-chart>')
-    expect(body).toContain('<loop-embed file="latest.md"></loop-embed>')
-    expect(body).toContain('dry-run rejects broken primitives')
+    expect(body).toContain('dashboard.md')
+    expect(body).toContain('verify it with `--dry-run`')
     // `ui` is now a documented (optional) config field.
     expect(body).toContain('`ui` is optional')
   })
@@ -153,9 +151,22 @@ describe('/api/skill/references/$', () => {
     expect(body).toContain('Execution workspace (cwd)')
     expect(body).toContain('Loop content home')
     expect(body).toContain('a diff does not replace inspecting the current live files')
-    expect(body).toContain('<loop-chart series="score:Score:%"></loop-chart>')
+    expect(body).toContain('dashboard.md')
+    expect(body).toContain('pievo set-ui --file')
+  })
+
+  test('dashboard.md owns the concise chart and artifact grammar', async () => {
+    const body = flat(await (await call('/api/skill/references/dashboard.md')).text())
+    expect(body).toContain('latest 100 successful **exec** runs')
+    expect(body).toContain('<loop-chart type="line"')
+    expect(body).toContain('<loop-chart type="scatter"')
+    expect(body).toContain('<loop-chart type="progress"')
+    expect(body).toContain('Pievo applies no keep threshold')
+    expect(body).toContain('y-domain="auto"')
     expect(body).toContain('<loop-embed file="latest.md"></loop-embed>')
-    expect(body).toContain('Do not invent `metric`, `src`, `name`, `type`, or `height` attributes')
+    expect(body).toContain('<loop-calendar match="reports/*.md"></loop-calendar>')
+    expect(body).toContain('<loop-kanban columns="open,merged"')
+    expect(body).toContain('old chart-only `series="…"` form is unsupported')
   })
 
   test('run.md is dual-audience (in-run enrichment + owner-readable), not steer-run mechanics', async () => {

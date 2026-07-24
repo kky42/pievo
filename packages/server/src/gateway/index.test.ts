@@ -98,7 +98,7 @@ function pollV3(
     ...request,
     protocolVersion: 3,
     currentRuns: request.currentRuns ?? [],
-    info: { version: "2.1.0", ...request.info },
+    info: { version: "2.2.0", ...request.info },
   });
 }
 
@@ -739,7 +739,7 @@ test("pollV3 with an old or unknown daemon version does not claim pending work",
   const old = await gateway().pollV3(token, { protocolVersion: 3, currentRuns: [], info: { host: "mac", version: "2.0.2" } });
   expect(old.status).toBe(200);
   expect((old.body as any).delivery).toBeNull();
-  expect((old.body as any).needsUpdate).toMatchObject({ current: "2.0.2", required: "2.1.0" });
+  expect((old.body as any).needsUpdate).toMatchObject({ current: "2.0.2", required: "2.2.0" });
   expect((await store.getRun(run.id))!.phase).toBe("pending");
 });
 
@@ -750,7 +750,7 @@ test("pollV3 with a compatible daemon version can claim pending work", async () 
   const loop = await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", model: "snapshot-model", reasoningEffort: "high", agent: "codex" });
   const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: new Date().toISOString() });
 
-  const res = await gateway().pollV3(token, { protocolVersion: 3, currentRuns: [], info: { host: "mac", version: "2.1.0" } });
+  const res = await gateway().pollV3(token, { protocolVersion: 3, currentRuns: [], info: { host: "mac", version: "2.2.0" } });
   expect(res.status).toBe(200);
   expect((res.body as any).delivery).toMatchObject({ runId: run.id, runIndex: 1 });
   expect((res.body as any).needsUpdate).toBeUndefined();

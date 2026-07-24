@@ -1,66 +1,58 @@
 import { describe, expect, it } from 'vitest'
-import { numericSeries, seriesRows } from './stats'
-import type { RunSummary } from '../types'
+import { chartDomain, progressChartRows, runningBest, scatterChartRows, seriesChartRows } from './stats'
+import type { ChartRun } from '../types'
 
-const run = (ts: string, metrics: RunSummary['metrics']): RunSummary => ({
-  id: `run-${ts}`,
-  loopId: 'loop-1',
-  ts,
-  agent: null,
-  status: 'no-change',
-  message: null,
-  durationMs: null,
-  exitCode: null,
-  finalText: null,
-  usage: null,
-  error: null,
+const run = (runIndex: number, status: string | null, metrics: ChartRun['metrics']): ChartRun => ({
+  runIndex,
+  ts: `2026-07-${String(runIndex).padStart(2, '0')}T00:00:00Z`,
+  status,
   metrics,
-  control: null,
-  sessionId: null,
 })
 
-describe('numericSeries', () => {
-  it('builds one chronological series per numeric field (newest-first input)', () => {
-    const series = numericSeries([
-      run('2026-06-17T00:00:00Z', { mrr: 9200 }),
-      run('2026-06-16T00:00:00Z', { mrr: 9300 }),
-    ])
-    expect(series.mrr).toEqual([
-      { t: '2026-06-16T00:00:00Z', v: 9300 },
-      { t: '2026-06-17T00:00:00Z', v: 9200 },
-    ])
-  })
-})
+describe('dashboard chart data', () => {
+  const runs = [
+    run(5, 'kept', { x: 50, score: 0.8, cost: 12 }),
+    run(2, 'kept', { x: 20, score: 1, cost: null }),
+    run(3, 'no-change', { x: 30, score: null, cost: 10 }),
+    run(4, 'no-change', { x: 40, score: 0.9, cost: 11 }),
+  ]
 
-describe('seriesRows', () => {
-  it('merges per-key series into chronological Recharts rows', () => {
-    const series = numericSeries([
-      run('2026-06-17T00:00:00Z', { mrr: 9200, paid: 41 }),
-      run('2026-06-16T00:00:00Z', { mrr: 9300, paid: 40 }),
-    ])
-    expect(seriesRows(series, ['mrr', 'paid'])).toEqual([
-      { __t: '2026-06-16T00:00:00Z', mrr: 9300, paid: 40 },
-      { __t: '2026-06-17T00:00:00Z', mrr: 9200, paid: 41 },
+  it('sorts by runIndex, omits invalid values, and leaves sparse series values absent', () => {
+    expect(seriesChartRows(runs, ['score', 'cost'], 'runIndex')).toEqual([
+      { __x: 2, __runIndex: 2, __status: 'kept', score: 1 },
+      { __x: 3, __runIndex: 3, __status: 'no-change', cost: 10 },
+      { __x: 4, __runIndex: 4, __status: 'no-change', score: 0.9, cost: 11 },
+      { __x: 5, __runIndex: 5, __status: 'kept', score: 0.8, cost: 12 },
     ])
   })
 
-  it('leaves a key absent on rows where its run did not report it (gap, not zero)', () => {
-    const series = numericSeries([
-      run('2026-06-17T00:00:00Z', { mrr: 9200 }), // paid missing this run
-      run('2026-06-16T00:00:00Z', { mrr: 9300, paid: 40 }),
+  it('builds scatter pairs only when both metrics are finite', () => {
+    expect(scatterChartRows(runs, 'x', 'score').map(({ x, y, runIndex, status }) => ({ x, y, runIndex, status }))).toEqual([
+      { x: 20, y: 1, runIndex: 2, status: 'kept' },
+      { x: 40, y: 0.9, runIndex: 4, status: 'no-change' },
+      { x: 50, y: 0.8, runIndex: 5, status: 'kept' },
     ])
-    const rows = seriesRows(series, ['mrr', 'paid'])
-    expect(rows).toHaveLength(2)
-    expect(rows[1]).toEqual({ __t: '2026-06-17T00:00:00Z', mrr: 9200 })
-    expect('paid' in rows[1]!).toBe(false)
   })
 
-  it('keeps the timestamp intact when a metric is literally named "t"', () => {
-    const series = numericSeries([run('2026-06-16T00:00:00Z', { t: 21.5 })])
-    expect(seriesRows(series, ['t'])).toEqual([{ __t: '2026-06-16T00:00:00Z', t: 21.5 }])
+  it('colors every persisted kept point equally and applies no keep threshold', () => {
+    const points = progressChartRows([
+      run(1, 'kept', { score: 1 }),
+      run(2, 'kept', { score: 0.999999 }),
+      run(3, 'no-change', { score: 0.5 }),
+      run(4, 'kept', { score: 1.1 }),
+    ], 'score')
+    expect(points.filter((point) => point.status === 'kept')).toHaveLength(3)
+    expect(runningBest(points, 'min')).toEqual([
+      { x: 1, y: 1 },
+      { x: 2, y: 0.999999 },
+      { x: 3, y: 0.999999 },
+      { x: 4, y: 0.999999 },
+    ])
   })
 
-  it('ignores unknown keys and returns no rows when nothing matches', () => {
-    expect(seriesRows({}, ['nope'])).toEqual([])
+  it('uses padded auto domains and honors zero and explicit domains', () => {
+    expect(chartDomain([0.949, 0.951], 'auto')).toEqual([0.9488, 0.9511999999999999])
+    expect(chartDomain([4, 8], 'zero')).toEqual([0, 8])
+    expect(chartDomain([4, 8], [3, 9])).toEqual([3, 9])
   })
 })

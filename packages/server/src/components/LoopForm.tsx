@@ -341,7 +341,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed; cha
               value={f.ui}
               onChange={(v) => set('ui', v)}
               minHeight="240px"
-              placeholder={'<h3>{{latest.mrr}}$</h3>\n<loop-chart series="mrr:MRR:$"></loop-chart>'}
+              placeholder={'<h3>{{latest.mrr}}$</h3>\n<loop-chart type="line" x="runIndex" series="mrr:MRR:$"></loop-chart>'}
             />
           </Suspense>
           <div className={hintCls}>

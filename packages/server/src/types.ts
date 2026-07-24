@@ -61,6 +61,13 @@ export type PauseCause =
 
 export type RunStatus = 'kept' | 'no-change' | 'blocked' | string
 
+export interface ChartRun {
+  runIndex: number
+  ts: string
+  status: RunStatus | null
+  metrics: Record<string, number | null> | null
+}
+
 export interface RunSummary {
   /** Run row id — lets the detail view fetch this run's trace directly. */
   id: string

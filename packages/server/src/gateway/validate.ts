@@ -12,6 +12,7 @@
 import * as store from "../db/store.js";
 import type { MetricField } from "../db/schema.js";
 import { stripNul, WIRE_TEXT_CAP } from "./http.js";
+import { CHART_ATTRS, chartMetricKeys, parseChartSpec } from "../lib/chartSpec.js";
 
 /** Normalize an optional provider-owned setting without validating its vocabulary.
  * Pievo deliberately treats model ids and reasoning efforts as opaque text; null or
@@ -45,8 +46,16 @@ export function validateUi(html: string): { ok: true; value: string | null } | {
   }
   const value = store.coerceUi(trimmed) ?? null;
   if (!value) return { ok: true, value: null };
+  for (const match of value.matchAll(/<loop-chart\b([^>]*)>/gi)) {
+    const parsedAttrs = parseStrictCustomAttrs(match[1] ?? "");
+    if (!parsedAttrs.ok) return parsedAttrs;
+    const attrs = parsedAttrs.value;
+    const unknown = Object.keys(attrs).filter((name) => !CHART_ATTRS.includes(name as (typeof CHART_ATTRS)[number]));
+    if (unknown.length) return { ok: false, detail: `<loop-chart> unsupported attribute: ${unknown.join(", ")}` };
+    const spec = parseChartSpec(attrs);
+    if (!spec.ok) return spec;
+  }
   const required = [
-    { tag: "loop-chart", attrs: ["series"] },
     { tag: "loop-embed", attrs: ["file", "match"] },
     { tag: "loop-kanban", attrs: ["columns"] },
   ] as const;
@@ -91,16 +100,34 @@ export async function validateSchema(loopId: string, input: unknown): Promise<{ 
   return { ok: true, value: schema };
 }
 
+const CUSTOM_ATTR = /([a-zA-Z][a-zA-Z0-9-]*)\s*=\s*(["'])([^"']*)\2/g;
+
+function parseCustomAttrs(raw: string): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  for (const match of raw.matchAll(CUSTOM_ATTR)) attrs[match[1]!.toLowerCase()] = match[3]!;
+  return attrs;
+}
+
+function parseStrictCustomAttrs(raw: string): { ok: true; value: Record<string, string> } | { ok: false; detail: string } {
+  const attrs: Record<string, string> = {};
+  for (const match of raw.matchAll(CUSTOM_ATTR)) {
+    const name = match[1]!.toLowerCase();
+    if (name in attrs) return { ok: false, detail: `<loop-chart> duplicate attribute: ${name}` };
+    attrs[name] = match[3]!;
+  }
+  if (raw.replace(CUSTOM_ATTR, "").trim()) return { ok: false, detail: "<loop-chart> attributes must use quoted name=\"value\" syntax" };
+  return { ok: true, value: attrs };
+}
+
 async function schemaKeysInUse(loopId: string): Promise<string[]> {
   const keys = new Set<string>();
   const loop = await store.getLoop(loopId);
   if (loop?.ui) {
     for (const m of loop.ui.matchAll(/\{\{\s*latest\.([a-zA-Z0-9_-]+)[^}]*\}\}/g)) keys.add(m[1]!);
-    for (const m of loop.ui.matchAll(/(?:series|key)=["']([^"']+)["']/g)) {
-      for (const part of m[1]!.split(",")) {
-        const key = part.trim().split(":")[0]?.trim();
-        if (key) keys.add(key);
-      }
+    for (const match of loop.ui.matchAll(/<loop-chart\b([^>]*)>/gi)) {
+      const attrs = parseCustomAttrs(match[1] ?? "");
+      const spec = parseChartSpec(attrs);
+      if (spec.ok) for (const key of chartMetricKeys(spec.value)) keys.add(key);
     }
   }
   for (const run of await store.listRuns(loopId, 100)) {

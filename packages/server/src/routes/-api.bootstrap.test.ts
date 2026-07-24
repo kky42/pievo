@@ -43,6 +43,7 @@ describe('/api/bootstrap', () => {
     expect(body).toContain('pievo daemon start')
     // The skill isn't on disk yet, so the references are fetched over HTTP.
     expect(body).toContain('/api/skill/references/create.md')
+    expect(body).toContain('/api/skill/references/dashboard.md')
     // Still a quick check-in, not a full interview.
     expect(body).toContain('keep questions to quick')
   })

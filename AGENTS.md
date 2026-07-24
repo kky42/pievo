@@ -132,7 +132,7 @@ computes pure functions. Run instructions: `README.md`.
 - ALL prompt prose lives here, split by audience:
   1. `bootstrap.md` - first-contact onboarding, served at `/api/bootstrap`; never
      bundled or installed.
-  2. `SKILL.md` + `references/{create,update,evolve,run}.md` - the PUBLIC installable
+  2. `SKILL.md` + `references/{create,update,evolve,dashboard,run}.md` - the PUBLIC installable
      skill, bundled into the daemon npm package and auto-installed at USER scope for
      EVERY coding agent pievo knows about (`SKILL_TARGET_AGENTS` in
      `daemon/src/skill-install.ts` - Claude Code `~/.claude/skills/pievo` + Codex
@@ -152,18 +152,20 @@ computes pure functions. Run instructions: `README.md`.
      the OWNER authoring CLI (`pievo edit <id> --json`) - a merge would ship
      run-token instructions in the public bundle.
 - `references/evolve.md` doubles as the evolve RUN prompt (same `?raw` import), so
-  skill and run-dispatch cannot drift. `references/run.md` is the PUBLIC runtime
+  skill and run-dispatch cannot drift. The concise `references/dashboard.md` is also
+  appended to evolve/steer user turns so dashboard mutation stays self-contained even
+  when skill installation failed. `references/run.md` is the PUBLIC runtime
   protocol (dual-audience: in-run enrichment + owner docs) - task-file discipline,
   report grammar, schedule levers, and front-matter conventions;
   the server-injected exec CORE stays
   authoritative and self-sufficient, so run.md is enrichment, never a dependency.
 - **HARD GUARDRAIL**: `packages/daemon/scripts/sync-skill.mjs` is a SELECTIVE
-  whitelist copy (exactly `SKILL.md` + the 4 references). Never make it recursive -
+  whitelist copy (exactly `SKILL.md` + the 5 references). Never make it recursive -
   that would ship the internal run prompts and `bootstrap.md` into the public npm
   tarball. Guarded by `sync-skill.test.ts`. Edit the source files; never fork
   the content. `packages/daemon/skill/` is generated + gitignored.
 - References are also served at `/api/skill/references/<file>` (static map, only
-  the 4 exact names resolve; in dev vite's static layer 404s the `.md` path - the
+  the 5 exact names resolve; in dev vite's static layer 404s the `.md` path - the
   handler works in prod, covered by unit test).
 - Skill/prompt markdown compiles INTO the server bundle via `?raw` imports, so a
   prompt-only `.md` edit requires a new server build/deployment just like code.
@@ -551,11 +553,12 @@ computes pure functions. Run instructions: `README.md`.
   with no whitelist change; `--dry-run` reports `ui` as a presence flag (like
   `ui`), not the markup. `create.md`'s "Dashboard at create" step tells the
   agent to author the initial `ui` when the product shape is already known
-  (cross-refs `evolve.md` §3).
+  (cross-refs `references/dashboard.md`).
   **A dropped dashboard is never silent**: the REAL create response echoes `ui`
   presence (and the CLI prints `dashboard ui: applied|not applied`). `validateUi`
-  rejects custom primitives missing their required data attrs (`loop-chart.series`,
-  `loop-embed.file|match`, `loop-kanban.columns`); create drops invalid UI with a loud
+  rejects invalid custom primitives (chart grammar requires explicit `type` and
+  type-specific axes/series; embed/kanban require `file|match`/`columns`);
+  create drops invalid UI with a loud
   warning while edit/set-ui reject without mutating. Empty UI still clears explicitly.
 - `describe()`/`validCadence` probe crons in the LOOP's timezone (fire times shift
   with it).
@@ -712,16 +715,19 @@ computes pure functions. Run instructions: `README.md`.
   wide content scrolls inside its own pane (dashboard `overflow-x-auto`, `.taskmd
   table` as a scrolling block, `Timeline` row `min-w-0 overflow-x-auto`). Guarded by
   the `*.regression.test.ts` files - keep them green.
-- Dashboard generative-UI primitives are `loop-embed`/`loop-calendar`/`loop-kanban`
-  (registry in `LoopView.tsx`; `loop-kanban` in `components/LoopKanban.tsx` is a
+- Dashboard generative-UI primitives are `loop-chart`/`loop-embed`/`loop-calendar`/`loop-kanban`
+  (registry in `LoopView.tsx`; chart syntax is deliberately incompatible with the old
+  chart-only `series` form and is documented once in `references/dashboard.md`;
+  charts use the compact authorized latest-100-successful-exec query, filtering before LIMIT;
+  `loop-kanban` in `components/LoopKanban.tsx` is a
   collection view grouping front-matter-`type`d markdown artifacts into columns -
   `columns` REQUIRED + comma-separated, unmatched types collect in a trailing
   "Other" column, task file always excluded). Registering one means moving THREE
   things together: (1) `LOOP_TAGS`/`LOOP_ATTRS` + the DOMPurify `uponSanitizeAttribute`
   force-keep hook (data-bearing attrs like `columns`/`match` are otherwise stripped,
   silently blanking the element); (2) the html-react-parser `replace` swap; (3) the
-  skill authoring docs (`evolve.md` §3 + `skill/run/steer.md`, plus `create.md` §2
-  for the `type` vocabulary). Board row is the ONLY horizontal-scroll container
+  skill authoring docs (`references/dashboard.md` plus concise pointers/examples in
+  create/evolve/steer). Board row is the ONLY horizontal-scroll container
   (`min-w-0 overflow-x-auto`, columns `shrink-0` fixed-width) - a wide board scrolls
   inside its pane, never widening the page. Skill markdown + UI copy is ENGLISH ONLY.
 - Recharts stays OUT of the base client bundle (`LoopDetailView` lazy-loads the

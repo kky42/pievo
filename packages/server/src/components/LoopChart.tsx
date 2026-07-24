@@ -1,199 +1,156 @@
 import { useId } from 'react'
 import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
+  Area, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer,
+  Scatter, ScatterChart, Tooltip, XAxis, YAxis,
 } from 'recharts'
-import type { MetricField } from '../types'
-import { seriesRows, type SeriesPoint } from '../lib/stats'
+import type { ChartRun, MetricField } from '../types'
+import type { ChartSpec } from '../lib/chartSpec'
+import { chartDomain, finiteMetric, progressChartRows, runningBest, scatterChartRows, seriesChartRows } from '../lib/stats'
 import { fnum, md, tsShort } from '../lib/format'
 
-/**
- * `<loop-chart series="mrr:MRR:$, paid:Paid">` - the loop's run-history trend,
- * rendered by Recharts in the shadcn/ui-charts grammar, themed entirely by the
- * theme tokens (`--color-chart-1..5` ramp, hairline grid, mono ticks,
- * flat tooltip - no shadows, no decorative color). One series renders as a
- * gradient area; multiple series render as plain lines (overlapping translucent
- * fills go muddy in a monochrome palette). A single-point series renders a dot
- * instead of nothing, so a young loop's dashboard is never blank.
- *
- * `data` is the shared `numericSeries(runs)` map computed once by LoopView.
- */
-
-/** Distinct strokes for multiple series - display ink first, then the signal colors. */
 const STROKES = [
-  'var(--color-chart-1)',
-  'var(--color-chart-2)',
-  'var(--color-chart-3)',
-  'var(--color-chart-4)',
-  'var(--color-chart-5)',
+  'var(--color-chart-1)', 'var(--color-chart-2)', 'var(--color-chart-3)',
+  'var(--color-chart-4)', 'var(--color-chart-5)',
 ]
-
-/**
- * Fixed pixel height: ResponsiveContainer tracks the CONTAINER width while the
- * height stays constant - the fix for the old stretched-viewBox renderer, which
- * scaled like an image (≈4px-fat strokes and a ~340px-tall chart at the loop
- * page's full dashboard width). Also the initial render size before the
- * ResizeObserver measures (and the only size in a non-browser render).
- */
 const HEIGHT = 190
 const INITIAL = { width: 640, height: HEIGHT }
-
 const TICK = { fontSize: 10, fontFamily: 'var(--font-mono)', fill: 'var(--color-secondary)' }
-
 const TOOLTIP_STYLE = {
-  background: 'var(--color-surface)',
-  border: '1px solid var(--color-wire)',
-  borderRadius: 8,
-  boxShadow: 'none',
-  padding: '6px 10px',
-  fontFamily: 'var(--font-mono)',
-  fontSize: 11,
+  background: 'var(--color-surface)', border: '1px solid var(--color-wire)', borderRadius: 8,
+  boxShadow: 'none', padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 11,
 } as const
 
-/** "$12.4k" / "40℃" / "7" - the unit placement the legend has always used. */
-const withUnit = (v: number, unit: string): string => (unit === '$' ? `$${fnum(v)}` : `${fnum(v)}${unit}`)
+const withUnit = (value: number, unit = ''): string => unit === '$' ? `$${fnum(value)}` : `${fnum(value)}${unit}`
+const metricValues = (runs: ChartRun[], keys: string[]): number[] =>
+  runs.flatMap((run) => keys.map((key) => finiteMetric(run, key)).filter((value): value is number => value != null))
 
-export function LoopChart({
-  data,
-  series,
-}: {
-  data: Record<string, SeriesPoint[]>
-  series: MetricField[]
-}) {
+const axisDomain = (runs: ChartRun[], keys: string[], spec: ChartSpec) => chartDomain(metricValues(runs, keys), spec.yDomain)
+const axisValue = (value: number, domain: [number, number] | ['auto', 'auto']): string => {
+  if (typeof domain[0] !== 'number' || typeof domain[1] !== 'number') return fnum(value)
+  const span = Math.abs(domain[1] - domain[0])
+  const digits = span < 0.001 ? 6 : span < 0.01 ? 5 : span < 0.1 ? 4 : span < 1 ? 3 : span < 10 ? 2 : span < 100 ? 1 : 0
+  return value.toFixed(digits)
+}
+
+function ChartFrame({ children, caption }: { children: React.ReactNode; caption?: React.ReactNode }) {
+  return (
+    <figure className="my-2 min-w-0">
+      <div className="min-w-0" style={{ height: HEIGHT }}>{children}</div>
+      {caption ? <figcaption className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-label text-[var(--color-secondary)]">{caption}</figcaption> : null}
+    </figure>
+  )
+}
+
+export function LoopChart({ runs, spec }: { runs: ChartRun[]; spec: ChartSpec }) {
+  if (spec.type === 'scatter') return <ScatterPlot runs={runs} spec={spec} />
+  if (spec.type === 'progress') return <ProgressPlot runs={runs} spec={spec} />
+  return <SeriesPlot runs={runs} spec={spec} />
+}
+
+function SeriesPlot({ runs, spec }: { runs: ChartRun[]; spec: Extract<ChartSpec, { type: 'line' | 'area' }> }) {
   const gradientId = useId()
-  if (!series.length) return null
-  // A single reported point plots as a labeled dot (the old renderer required
-  // >= 2 points and rendered nothing at all for a young loop).
-  const plotted = series
-    .map((f) => ({ field: f, pts: data[f.key] ?? [] }))
-    .filter((s) => s.pts.length >= 1)
-  if (!plotted.length) return null
-
-  const keys = plotted.map((s) => s.field.key)
-  const rows = seriesRows(data, keys)
-  const single = plotted.length === 1
-  const unitOf = new Map(plotted.map((s) => [s.field.key, s.field.unit ?? '']))
-
-  const xAxis = (
-    <XAxis
-      dataKey="__t"
-      tickLine={false}
-      axisLine={false}
-      tickMargin={8}
-      minTickGap={28}
-      interval="preserveStartEnd"
-      tick={TICK}
-      tickFormatter={(t: string) => md(t)}
-    />
-  )
-  const yAxis = (
-    <YAxis
-      width={34}
-      tickCount={4}
-      tickLine={false}
-      axisLine={false}
-      tick={TICK}
-      tickFormatter={(v: number) => fnum(v)}
-    />
-  )
-  const grid = <CartesianGrid vertical={false} stroke="var(--color-hairline)" />
-  const tooltip = (
-    <Tooltip
-      // No position tween: Recharts' default tooltip carries a
-      // `transition: transform 400ms`, so when the active point jumps the box
-      // SLIDES between positions. Near the chart's right edge that slide passes
-      // through an out-of-bounds spot, and because the dashboard box is
-      // `overflow-x-auto` the browser flashes a horizontal scrollbar for the
-      // ~400ms tween. Jumping straight to the final (in-viewBox, clamped)
-      // position keeps the tooltip fully visible AND never overflows the
-      // container - and matches the "fade, don't slide" motion the series use.
-      isAnimationActive={false}
-      cursor={{ stroke: 'var(--color-wire)', strokeDasharray: '3 3' }}
-      contentStyle={TOOLTIP_STYLE}
-      labelStyle={{ color: 'var(--color-secondary)', marginBottom: 2 }}
-      itemStyle={{ color: 'var(--color-primary)', padding: '1px 0' }}
-      labelFormatter={(t) => tsShort(String(t))}
-      formatter={(v, name, item) => [
-        withUnit(Number(v), unitOf.get(String(item?.dataKey)) ?? ''),
-        String(name),
-      ]}
-    />
-  )
-
-  // Per-series props shared by Area/Line. Dots only when a series is a single
-  // point (nothing to stroke); animation off - Nothing motion is "fade, don't
-  // slide", and the dashboard re-renders on every poll.
-  const seriesProps = (s: (typeof plotted)[number], idx: number) => {
-    const color = STROKES[idx % STROKES.length]!
-    return {
-      dataKey: s.field.key,
-      name: s.field.label ?? s.field.key,
-      type: 'monotone' as const,
-      stroke: color,
-      strokeWidth: 1.5,
-      dot: s.pts.length === 1 ? { r: 3.5, strokeWidth: 0, fill: color } : false,
-      activeDot: { r: 3, strokeWidth: 0, fill: color },
-      connectNulls: true,
-      isAnimationActive: false,
-    }
-  }
-
+  const keys = spec.series.map((field) => field.key)
+  const rows = seriesChartRows(runs, keys, spec.x)
+  if (!rows.length) return null
+  const units = new Map(spec.series.map((field) => [field.key, field.unit ?? '']))
+  const domain = axisDomain(runs, keys, spec)
+  const latest = new Map<string, number>()
+  for (const row of rows) for (const key of keys) if (typeof row[key] === 'number') latest.set(key, row[key] as number)
   const margin = { top: 6, right: 12, left: 0, bottom: 0 }
 
   return (
-    <figure className="my-2 min-w-0">
-      <div className="min-w-0" style={{ height: HEIGHT }}>
-        <ResponsiveContainer width="100%" height="100%" initialDimension={INITIAL}>
-          {single ? (
-            <AreaChart data={rows} margin={margin}>
-              <defs>
-                <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={STROKES[0]} stopOpacity={0.28} />
-                  <stop offset="95%" stopColor={STROKES[0]} stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
-              {grid}
-              {xAxis}
-              {yAxis}
-              {tooltip}
-              <Area {...seriesProps(plotted[0]!, 0)} fill={`url(#${gradientId})`} />
-            </AreaChart>
-          ) : (
-            <LineChart data={rows} margin={margin}>
-              {grid}
-              {xAxis}
-              {yAxis}
-              {tooltip}
-              {plotted.map((s, idx) => (
-                <Line {...seriesProps(s, idx)} key={s.field.key} />
-              ))}
-            </LineChart>
-          )}
-        </ResponsiveContainer>
-      </div>
-      <figcaption className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-label text-[var(--color-secondary)]">
-        {plotted.map((s, idx) => {
-          const last = s.pts[s.pts.length - 1]
-          if (!last) return null
-          return (
-            <span key={s.field.key} className="inline-flex items-center gap-1.5">
-              <span
-                className="inline-block h-[2px] w-3 align-middle"
-                style={{ background: STROKES[idx % STROKES.length] }}
-              />
-              {s.field.label ?? s.field.key}
-              <span className="text-[var(--color-display)]">{withUnit(last.v, s.field.unit ?? '')}</span>
-            </span>
-          )
-        })}
-      </figcaption>
-    </figure>
+    <ChartFrame caption={spec.series.map((field, index) => {
+      const value = latest.get(field.key)
+      return value == null ? null : (
+        <span key={field.key} className="inline-flex items-center gap-1.5">
+          <span className="inline-block h-[2px] w-3" style={{ background: STROKES[index % STROKES.length] }} />
+          {field.label ?? field.key}<span className="text-[var(--color-display)]">{withUnit(value, field.unit)}</span>
+        </span>
+      )
+    })}>
+      <ResponsiveContainer width="100%" height="100%" initialDimension={INITIAL}>
+        <ComposedChart data={rows} margin={margin}>
+          {spec.type === 'area' ? (
+            <defs><linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={STROKES[0]} stopOpacity={0.28}/><stop offset="95%" stopColor={STROKES[0]} stopOpacity={0.02}/></linearGradient></defs>
+          ) : null}
+          <CartesianGrid vertical={false} stroke="var(--color-hairline)" />
+          <XAxis dataKey="__x" type={spec.x === 'runIndex' ? 'number' : 'category'} domain={spec.x === 'runIndex' ? ['dataMin', 'dataMax'] : undefined} tick={TICK} tickLine={false} axisLine={false} tickMargin={8} minTickGap={28} tickFormatter={(value) => spec.x === 'time' ? md(String(value)) : String(value)} />
+          <YAxis width={60} domain={domain} allowDataOverflow={Array.isArray(spec.yDomain)} tick={TICK} tickLine={false} axisLine={false} tickFormatter={(value: number) => axisValue(value, domain)} />
+          <Tooltip isAnimationActive={false} contentStyle={TOOLTIP_STYLE} labelFormatter={(value) => spec.x === 'time' ? tsShort(String(value)) : `run #${value}`} formatter={(value, name, item) => [withUnit(Number(value), units.get(String(item?.dataKey))), String(name)]} />
+          {spec.type === 'area' ? (
+            <Area {...seriesProps(spec.series[0]!, 0)} connectNulls dot={rows.length === 1 ? { r: 3.5, strokeWidth: 0 } : false} fill={`url(#${gradientId})`} />
+          ) : spec.series.map((field, index) => (
+            <Line {...seriesProps(field, index)} key={field.key} connectNulls dot={spec.colorBy === 'status' ? statusDot(field.key) : rows.length === 1 ? { r: 3.5, strokeWidth: 0 } : false} />
+          ))}
+        </ComposedChart>
+      </ResponsiveContainer>
+    </ChartFrame>
   )
+}
+
+function ScatterPlot({ runs, spec }: { runs: ChartRun[]; spec: Extract<ChartSpec, { type: 'scatter' }> }) {
+  const rows = scatterChartRows(runs, spec.xKey, spec.yKey)
+  if (!rows.length) return null
+  const domain = chartDomain(rows.map((row) => row.y), spec.yDomain)
+  const xDomain = chartDomain(rows.map((row) => row.x), 'auto')
+  const kept = rows.filter((row) => row.status === 'kept')
+  const other = rows.filter((row) => row.status !== 'kept')
+  const groups = spec.colorBy === 'status'
+    ? [{ name: 'Other', rows: other, fill: 'var(--color-disabled)' }, { name: 'Kept', rows: kept, fill: 'var(--color-success)' }]
+    : [{ name: spec.yLabel ?? spec.yKey, rows, fill: STROKES[0] }]
+  return (
+    <ChartFrame>
+      <ResponsiveContainer width="100%" height="100%" initialDimension={INITIAL}>
+        <ScatterChart margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
+          <CartesianGrid stroke="var(--color-hairline)" />
+          <XAxis type="number" dataKey="x" name={spec.xLabel ?? spec.xKey} domain={xDomain} tickFormatter={(value: number) => axisValue(value, xDomain)} tick={TICK} tickLine={false} axisLine={false} />
+          <YAxis type="number" dataKey="y" name={spec.yLabel ?? spec.yKey} domain={domain} allowDataOverflow={Array.isArray(spec.yDomain)} width={60} tickFormatter={(value: number) => axisValue(value, domain)} tick={TICK} tickLine={false} axisLine={false} />
+          <Tooltip isAnimationActive={false} contentStyle={TOOLTIP_STYLE} cursor={{ stroke: 'var(--color-wire)', strokeDasharray: '3 3' }} labelFormatter={(_, payload) => payload?.[0]?.payload ? `run #${payload[0].payload.runIndex}` : ''} formatter={(value, name, item) => [withUnit(Number(value), String(item?.dataKey) === 'x' ? spec.xUnit : spec.yUnit), String(name)]} />
+          {groups.map((group) => <Scatter key={group.name} name={group.name} data={group.rows} fill={group.fill} isAnimationActive={false} />)}
+          {spec.colorBy ? <Legend verticalAlign="top" align="right" /> : null}
+        </ScatterChart>
+      </ResponsiveContainer>
+    </ChartFrame>
+  )
+}
+
+function ProgressPlot({ runs, spec }: { runs: ChartRun[]; spec: Extract<ChartSpec, { type: 'progress' }> }) {
+  const rows = progressChartRows(runs, spec.yKey)
+  if (!rows.length) return null
+  const kept = rows.filter((row) => row.status === 'kept')
+  const other = rows.filter((row) => row.status !== 'kept')
+  const best = runningBest(rows, spec.direction)
+  const domain = chartDomain(rows.map((row) => row.y), spec.yDomain)
+  return (
+    <ChartFrame>
+      <ResponsiveContainer width="100%" height="100%" initialDimension={INITIAL}>
+        <ComposedChart margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
+          <CartesianGrid vertical={false} stroke="var(--color-hairline)" />
+          <XAxis type="number" dataKey="x" domain={['dataMin', 'dataMax']} tick={TICK} tickLine={false} axisLine={false} />
+          <YAxis type="number" dataKey="y" domain={domain} allowDataOverflow={Array.isArray(spec.yDomain)} width={60} tickFormatter={(value: number) => axisValue(value, domain)} tick={TICK} tickLine={false} axisLine={false} />
+          <Tooltip isAnimationActive={false} contentStyle={TOOLTIP_STYLE} labelFormatter={(_, payload) => payload?.[0]?.payload ? `run #${payload[0].payload.runIndex ?? payload[0].payload.x}` : ''} />
+          <Scatter name="Other" data={other} fill="var(--color-disabled)" isAnimationActive={false} />
+          <Scatter name="Kept" data={kept} fill="var(--color-success)" isAnimationActive={false} />
+          {best.length ? <Line name="Running best" data={best} dataKey="y" type="stepAfter" stroke="var(--color-success)" strokeWidth={2} dot={false} isAnimationActive={false} /> : null}
+          <Legend verticalAlign="top" align="right" />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </ChartFrame>
+  )
+}
+
+const seriesProps = (field: MetricField, index: number) => ({
+  dataKey: field.key,
+  name: field.label ?? field.key,
+  type: 'linear' as const,
+  stroke: STROKES[index % STROKES.length],
+  strokeWidth: 1.5,
+  activeDot: { r: 3, strokeWidth: 0 },
+  isAnimationActive: false,
+})
+
+const statusDot = (key: string) => (props: any) => {
+  const value = props?.payload?.[key]
+  if (typeof value !== 'number') return <g />
+  return <circle cx={props.cx} cy={props.cy} r={2.8} fill={props.payload.__status === 'kept' ? 'var(--color-success)' : 'var(--color-disabled)'} />
 }

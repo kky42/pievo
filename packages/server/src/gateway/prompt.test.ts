@@ -99,6 +99,7 @@ test("evolve payload progressively reviews bounded history without inlining run 
   expect(task).toContain("requestText");
   expect(task).toContain("Use the loop content home for current artifact evidence");
   expect(task).toContain("a diff does not replace inspecting the current live files");
+  expect(task).toContain("# Dashboard UI");
   expect(task).toContain('<loop-embed file="latest.md"></loop-embed>');
   expect(task).toContain("exactly one Timeline boundary");
   expect(task).toContain("never pass `--metrics`");
@@ -116,7 +117,8 @@ test("steer payload carries owner authority and records an unproven boundary wit
   expect(task).toContain("pievo show --json");
   expect(task).toContain("owner's instruction");
   expect(task).toContain("validation pending");
-  expect(task).toContain('<loop-chart series="score:Score"></loop-chart>');
+  expect(task).toContain("# Dashboard UI");
+  expect(task).toContain('<loop-chart type="scatter"');
   expect(task).toContain('<loop-embed file="latest.md"></loop-embed>');
   expect(task).toContain("does not advance `Consolidated through`");
   expect(task).toContain("never pass `--metrics`");

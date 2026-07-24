@@ -4,13 +4,14 @@ import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, it, expect, vi } from 'vitest'
 import { LoopView } from './LoopView'
-import { getArtifacts } from '../server/loopApi'
-import type { RunSummary } from '../types'
+import { getArtifacts, getChartRuns } from '../server/loopApi'
+import type { ChartRun, RunSummary } from '../types'
 
 // The artifact-list fetch resolves empty so mounted embed/calendar tests can
 // observe the post-fetch state without a server.
 vi.mock('../server/loopApi', () => ({
   getArtifacts: vi.fn(async () => []),
+  getChartRuns: vi.fn(async () => CHART_RUNS),
   getArtifact: vi.fn(async () => ({ text: 'digest body' })),
 }))
 
@@ -34,11 +35,10 @@ class RO {
 globalThis.ResizeObserver ??= RO as unknown as typeof ResizeObserver
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-// Exact production template + runs for loop-mqm5j7q4-0415991c
 const HTML =
   '<div><h3>🌡️ homelab iLO 温度</h3>' +
   '<div>CPU {{latest.cpu}}℃ 进风口 {{latest.inlet}}℃</div>' +
-  '<loop-chart series="cpu:CPU:℃, inlet:进风口:℃" window="24" points="24" range="24h"></loop-chart>' +
+  '<loop-chart type="line" x="runIndex" series="cpu:CPU:℃,inlet:进风口:℃"></loop-chart>' +
   '</div>'
 
 const mk = (ts: string, metrics: Record<string, number | null> | null): RunSummary =>
@@ -51,6 +51,11 @@ const RUNS: RunSummary[] = [
   mk('2026-06-20T12:00:01.146Z', { cpu: 40, inlet: 31 }),
   mk('2026-06-20T11:05:18.210Z', null),
   mk('2026-06-20T11:00:01.850Z', { cpu: 40, inlet: 30 }),
+]
+const CHART_RUNS: ChartRun[] = [
+  { runIndex: 1, ts: '2026-06-20T11:00:01.850Z', status: 'kept', metrics: { cpu: 40, inlet: 30, batch: 16 } },
+  { runIndex: 2, ts: '2026-06-20T12:00:01.146Z', status: 'no-change', metrics: { cpu: null, inlet: 31, batch: 32 } },
+  { runIndex: 4, ts: '2026-06-20T13:00:02.108Z', status: 'kept', metrics: { cpu: 40.2, inlet: 31, batch: 64 } },
 ]
 
 /** Static render — fine for the sanitize/binding surface (no effects needed). */
@@ -72,24 +77,51 @@ async function mount(html: string, runs: RunSummary[] = RUNS): Promise<string> {
 }
 
 describe('LoopView <loop-chart>', () => {
-  it('renders a multi-series chart from the real template + runs', async () => {
+  it('renders a multi-series runIndex chart and preserves labels through sanitize', async () => {
     const out = await mount(HTML)
-    // Regression: DOMPurify used to strip the colon/comma-laden `series` value,
-    // leaving an empty <loop-chart> that rendered nothing. The Recharts chart
-    // draws at its initialDimension, one line per series.
     expect(out).toContain('<svg')
-    expect(out.match(/recharts-line-curve/g)).toHaveLength(2) // one stroked curve per series
-    expect(out).toContain('进风口') // legend label survived sanitize
-    expect(out).toContain('40℃') // {{latest.cpu}} binding resolved
+    expect(out.match(/recharts-line-curve/g)).toHaveLength(2)
+    expect(out).toContain('进风口')
+    expect(out).toContain('40℃')
   })
 
-  it('renders a single-point series as a dot instead of nothing', async () => {
-    const out = await mount('<loop-chart series="cpu:CPU:℃"></loop-chart>', [
-      mk('2026-06-20T13:00:02.108Z', { cpu: 40 }),
-    ])
-    expect(out).toContain('<svg')
-    expect(out).toContain('recharts-area') // single series → gradient area chart
-    expect(out).toContain('recharts-dot') // the lone point is a visible dot
+  it('renders a single area point as a visible dot', async () => {
+    vi.mocked(getChartRuns).mockResolvedValueOnce([CHART_RUNS[0]!])
+    const out = await mount('<loop-chart type="area" x="time" series="cpu:CPU:℃"></loop-chart>')
+    expect(out).toContain('recharts-area')
+    expect(out).toContain('recharts-dot')
+  })
+
+  it('renders area, scatter, and progress charts from sparse synthetic runs', async () => {
+    const area = await mount('<loop-chart type="area" x="time" series="cpu:CPU:℃"></loop-chart>')
+    const scatter = await mount('<loop-chart type="scatter" x="metric.batch" y="metric.cpu" color-by="status"></loop-chart>')
+    const progress = await mount('<loop-chart type="progress" x="runIndex" y="metric.cpu" direction="max"></loop-chart>')
+    expect(area).toContain('recharts-area')
+    expect(scatter).toContain('recharts-scatter')
+    expect(scatter).toContain('Kept')
+    expect(progress).toContain('Running best')
+  })
+
+  it('keeps stale chart data across a transient refresh failure', async () => {
+    const html = '<loop-chart type="line" x="runIndex" series="cpu:CPU"></loop-chart>'
+    const live = { ...RUNS[0]!, running: true }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => root.render(createElement(LoopView, { html, runs: [live], loopId: 'loop-1' })))
+    expect(host.innerHTML).toContain('<svg')
+    vi.mocked(getChartRuns).mockRejectedValueOnce(new Error('blip'))
+    await act(async () => root.render(createElement(LoopView, { html, runs: [{ ...live, running: false }], loopId: 'loop-1' })))
+    expect(host.innerHTML).toContain('<svg')
+    await act(async () => root.unmount())
+    host.remove()
+  })
+
+  it('shows a diagnostic for the deliberately unsupported old chart grammar', () => {
+    const out = render('<h3>Still here</h3><loop-chart series="cpu:CPU"></loop-chart>')
+    expect(out).toContain('Still here')
+    expect(out).toContain('outdated or invalid configuration')
+    expect(out).not.toContain('<svg')
   })
 
   it('does not fall back to an older metric when the newest observation is null', () => {
@@ -101,17 +133,6 @@ describe('LoopView <loop-chart>', () => {
     expect(out).not.toContain('CPU 40')
   })
 
-  it('drops a stale <loop-sparkline> tag without crashing (retired primitive)', () => {
-    // The sparkline primitive was retired in favor of <loop-chart>. Old dashboards
-    // may still contain the tag; the sanitizer strips the now-unallowlisted element
-    // and the surrounding template renders normally — no crash, no error banner.
-    const out = render(
-      '<div><h3>temps</h3><loop-sparkline key="cpu"></loop-sparkline>' +
-        '<loop-chart series="cpu:CPU:℃"></loop-chart></div>',
-    )
-    expect(out).toContain('temps') // surrounding markup survives
-    expect(out).not.toContain('loop-sparkline') // the unknown tag is gone
-  })
 })
 
 describe('LoopView artifact primitives', () => {

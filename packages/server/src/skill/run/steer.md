@@ -11,7 +11,7 @@ Act through the `pievo` command on your PATH. These verbs act on this run's loop
 3. Apply only the requested change:
    - Schedule/envelope: `set-cron`, `set-schedule`, `set-tz`, `set-name`, `notify`, `set-model`, `pause`, `resume`, or `reschedule --run-at`.
    - Standing instructions: edit only the task file's `## Spec`.
-   - Dashboard/schema when requested: `pievo set-ui --file <path>` or `pievo set-schema --file <path>`. Custom UI uses exact attributes: `<loop-chart series="score:Score"></loop-chart>`, `<loop-embed file="latest.md"></loop-embed>` (or `match="reports/*.md"`), `<loop-calendar match="reports/*.md"></loop-calendar>`, and `<loop-kanban columns="open,merged" match="cards/*.md"></loop-kanban>`. Paths are loop-relative. Never invent `metric`, `src`, `name`, `type`, or `height` attributes.
+   - Dashboard/schema when requested: follow the dashboard reference included below, then use `pievo set-ui --file <path>` or `pievo set-schema --file <path>`. Rejected set commands change nothing.
 4. Update COOKBOOK.md with one concise `## Timeline` decision boundary for this steer, referencing this run index and marking the result **validation pending**. Fold older useful decisions into `## Knowledge` to keep the file bounded. Do not advance `Consolidated through` and do not claim the change is proven.
 5. Existing loops may have `## Current understanding` or a per-run `## Timeline` in the task file. Move useful learned context into Cookbook, leave the task file with its authoritative Spec, and record that migration as this steer boundary; do not preserve a per-exec timeline model.
 

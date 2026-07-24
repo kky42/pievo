@@ -9,20 +9,8 @@
  * The loop reports declared numeric metrics each run; the template binds them by
  * key. There is no domain-specific stats machinery here.
  */
-import type { Json, RunSummary, MetricField } from '../types'
+import type { Json, RunSummary } from '../types'
 import { fnum } from './format'
-
-/** Parse a `<loop-chart series="key:label:unit, ...">` attribute into MetricField[]. */
-export function parseSeries(attr?: string): MetricField[] {
-  if (!attr) return []
-  return attr
-    .split(',')
-    .map((s) => {
-      const [key, label, unit] = s.split(':').map((x) => x.trim())
-      return { key: key ?? '', ...(label ? { label } : {}), ...(unit ? { unit } : {}) }
-    })
-    .filter((f) => f.key)
-}
 
 export interface BindingContext {
   latest: Record<string, string>

@@ -431,7 +431,7 @@ test("poll response carries the watch set for every loop bound to the machine", 
   const res = await machineGw.pollV3(token, {
     protocolVersion: 3,
     currentRuns: [],
-    info: { version: "2.1.0" },
+    info: { version: "2.2.0" },
   });
   const watch = (res.body as any).watch as Array<{ loopId: string; workdir: string | null; taskFile: string | null }>;
   expect(watch).toHaveLength(2);

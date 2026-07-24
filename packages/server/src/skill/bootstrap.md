@@ -70,7 +70,8 @@ task file and config, and runs `pievo new`. Pass the **connect-key** as
 `--connect-key` so the created loop resolves back to the web dialog, and declare
 which coding agent you are with `--agent claude-code` (or `--agent codex`).
 create.md carries the flow through to telling the user it's live — you don't need
-to add anything here.
+to add anything here. If it calls for a day-one dashboard, also fetch
+`<server-url>/api/skill/references/dashboard.md` for the exact UI grammar.
 
 ## Editing and evolving, later
 
@@ -81,3 +82,5 @@ the same way if needed:
   change what it does): `<server-url>/api/skill/references/update.md`.
 - **How a loop refines itself over time** — the evolution pass that improves the
   loop from its own run history: `<server-url>/api/skill/references/evolve.md`.
+- **Dashboard UI** — charts and artifact views:
+  `<server-url>/api/skill/references/dashboard.md`.
