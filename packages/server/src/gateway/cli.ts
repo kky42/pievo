@@ -91,9 +91,9 @@ export class CliGateway {
   async agentApi(runToken: string, argv: string[]): Promise<HttpResult> {
     const lease = await resolveLease(runToken);
     if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
-    // A terminal-grace lease (sweep-reclaimed) accepts only its ONE
-    // final report/enrichment — never further agent-api mutations.
-    if (lease.state === "terminal-grace") {
+    // A reconciled lease accepts only its ONE final report/enrichment — never
+    // further agent-api mutations, whether or not it still blocks scheduling.
+    if (lease.state === "terminal-grace" || lease.state === "reconciliation-only") {
       return { status: 409, body: { text: errorBlock(TERMINAL_GRACE_MSG, "CONFLICT"), exitCode: 1 } };
     }
     const out = await this.dispatch(lease, createHash("sha256").update(runToken).digest("hex"), argv);
@@ -307,9 +307,9 @@ export class CliGateway {
   private async runCli(runToken: string, argv: string[]): Promise<HttpResult> {
     const lease = await resolveLease(runToken);
     if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
-    // Finished or sweep-reclaimed: terminal-grace accepts only the final report,
-    // never further CLI commands. Same rule agentApi enforces.
-    if (lease.state === "terminal-grace") {
+    // Finished or sweep-reclaimed authority accepts only the final report, never
+    // further CLI commands. Same rule agentApi enforces.
+    if (lease.state === "terminal-grace" || lease.state === "reconciliation-only") {
       return { status: 409, body: { text: errorBlock(TERMINAL_GRACE_MSG, "CONFLICT"), exitCode: 1 } };
     }
     const verb = argv[0] ?? "";

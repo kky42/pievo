@@ -17,9 +17,9 @@ function delivery(overrides: Partial<Delivery> = {}): Delivery {
 
 describe("poll protocol v3", () => {
   test("advertises every current run in one canonical shape", () => {
-    expect(buildPollBody({ host: "mac" }, [], "watch")).toEqual({ protocolVersion: 3, host: "mac", currentRuns: [], watchDigest: "watch" });
+    expect(buildPollBody({ host: "mac" }, [], "watch", "daemon-1")).toEqual({ protocolVersion: 3, host: "mac", daemonInstanceId: "daemon-1", recoveryComplete: true, currentRuns: [], watchDigest: "watch" });
     const runs = [{ runId: "r1", stage: "executing" as const }, { runId: "r2", stage: "reporting" as const }];
-    expect(buildPollBody({ host: "mac" }, runs, undefined)).toEqual({ protocolVersion: 3, host: "mac", currentRuns: runs });
+    expect(buildPollBody({ host: "mac" }, runs, undefined, "daemon-1")).toEqual({ protocolVersion: 3, host: "mac", daemonInstanceId: "daemon-1", recoveryComplete: true, currentRuns: runs });
   });
 });
 
@@ -66,6 +66,18 @@ describe("concurrent persistence boundary", () => {
     await runtime.sendPending("https://example.test", true);
     expect(sent).toEqual(["run-1", "run-2"]);
     expect(maxInFlight).toBe(1);
+    expect(runtime.currentRuns()).toEqual([]);
+    box.close();
+  });
+
+  test("a poisoned durable report is visible for diagnostics but not advertised as recoverable", () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-v3-"));
+    const box = new PendingReportOutbox(path.join(root, "outbox.sqlite"));
+    const reportId = "88888888-8888-4888-8888-888888888888";
+    box.put("rk_1", { reportId, runId: "run-poisoned", result: "success", durationMs: 1, exitCode: 0 });
+    box.applyAck({ kind: "invalid", reportId, error: "REPORT_INVALID: terminal report rejected" });
+    const runtime = new ConcurrentRuntime(box);
+    expect(box.diagnostics().poisonedRunIds).toEqual(["run-poisoned"]);
     expect(runtime.currentRuns()).toEqual([]);
     box.close();
   });

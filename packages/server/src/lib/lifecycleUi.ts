@@ -24,6 +24,11 @@ export function daemonStopSupport(protocol: number | null | undefined): { suppor
 /** Exact user-facing lifecycle wording, including uncertainty boundaries. */
 export function lifecycleDisplay(detail: JobDetail): string {
   const state = deriveLoopLifecycle(detail.summary)
+  if (detail.summary.queued && detail.summary.reconciliationBlocking) {
+    return detail.machine.presence === 'online'
+      ? 'Queued · machine is checking an interrupted run'
+      : 'Queued · waiting for machine recovery'
+  }
   const running = detail.summary.runs.find((run) => run.running)
   if (running && detail.machine.daemonProtocol !== DASHBOARD_PROTOCOL) {
     return DAEMON_UPGRADE_REQUIRED

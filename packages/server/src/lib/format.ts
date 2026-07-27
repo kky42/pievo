@@ -103,6 +103,7 @@ export const ST = {
   warning: { c: 'var(--color-run-warning)', label: 'Missing status' },
   canceled: { c: 'var(--color-run-canceled)', label: 'Canceled' },
   queued: { c: 'var(--color-run-queued)', label: 'Queued' },
+  reconciling: { c: 'var(--color-run-warning)', label: 'Reconciling…' },
   'active-exec': { c: 'var(--color-run-active-exec)', label: 'Running…' },
   'active-steer': { c: 'var(--color-run-active-steer)', label: 'Steering…' },
   'active-evolve': { c: 'var(--color-run-active-evolve)', label: 'Evolving…' },
@@ -118,6 +119,7 @@ const keptLabel = (r: RunSummary): string =>
   roleWord(r) === 'steer' ? 'Steered' : roleWord(r) === 'evolve' ? 'Improved' : 'Kept'
 
 export function dotColor(r: RunSummary): string {
+  if (r.reconciliation) return ST.reconciling.c
   if (r.running) return ST[`active-${roleWord(r)}`].c
   if (r.status === 'blocked') return ST.blocked.c
   if (r.queued) return ST.queued.c
@@ -128,7 +130,7 @@ export function dotColor(r: RunSummary): string {
 }
 
 export function dotOpacity(r: RunSummary): number {
-  if (r.running || r.status === 'blocked' || r.phase === 'error') return 1
+  if (r.reconciliation || r.running || r.status === 'blocked' || r.phase === 'error') return 1
   if (r.queued) return 0.7
   if (r.canceled || r.phase === 'canceled') return 0.5
   if (r.phase === 'done' && !statusMeta(r.status)) return 0.9
@@ -137,6 +139,8 @@ export function dotOpacity(r: RunSummary): number {
 }
 
 export function dotLabel(r: RunSummary): string {
+  if (r.reconciliation === 'blocking') return 'Waiting for machine recovery'
+  if (r.reconciliation === 'report-only') return 'Awaiting late report'
   if (r.queued) return ST.queued.label
   if (r.running) {
     if (r.cancelRequested) return 'Stopping…'

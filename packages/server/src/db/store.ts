@@ -389,7 +389,10 @@ export async function tryDeleteLoop(id: string): Promise<boolean> {
     if (!loop?.deleteRequestedAt) return false;
     const open = (await tx.select({ id: runs.id }).from(runs).where(and(eq(runs.loopId, id), inArray(runs.phase, ["pending", "running"]))).limit(1))[0];
     const authority = (await tx.select({ id: runLeases.tokenHash }).from(runLeases).where(and(eq(runLeases.loopId, id), inArray(runLeases.state, ["active", "terminal-grace"]))).limit(1))[0];
-    return open || authority ? false : deleteLoopDataTx(tx, id);
+    if (open || authority) return false;
+    await tx.update(runLeases).set({ state: "retired", expiresAt: null })
+      .where(and(eq(runLeases.loopId, id), eq(runLeases.state, "reconciliation-only")));
+    return deleteLoopDataTx(tx, id);
   });
 }
 
@@ -399,7 +402,7 @@ export async function forceDeleteLoop(id: string): Promise<boolean> {
     if (!loop) return false;
     // Retired is durable acknowledgement evidence, not execution authority. It
     // never blocks claims and has no wall-clock expiry.
-    await tx.update(runLeases).set({ state: "retired", expiresAt: null }).where(and(eq(runLeases.loopId, id), inArray(runLeases.state, ["active", "terminal-grace", "retired"])));
+    await tx.update(runLeases).set({ state: "retired", expiresAt: null }).where(and(eq(runLeases.loopId, id), inArray(runLeases.state, ["active", "terminal-grace", "reconciliation-only", "retired"])));
     return deleteLoopDataTx(tx, id);
   });
 }
@@ -942,6 +945,8 @@ export interface FinalizeRunningRunResult {
   loop: Loop;
   failureStreak: number;
   autoPaused: boolean;
+  /** The daemon had already removed execution exclusion before this report. */
+  reportOnly?: boolean;
 }
 
 /** Consume a retired tombstone when its reportId is owned by another run.
@@ -997,7 +1002,7 @@ export async function rejectTerminalReport(input: {
   loopId: string;
   runId: string;
   leaseTokenHash: string;
-  leaseState: "active" | "terminal-grace";
+  leaseState: "active" | "terminal-grace" | "reconciliation-only";
   reportId: string;
   payloadDigest: string;
   disposition: ReportIncidentDisposition;
@@ -1024,9 +1029,11 @@ export async function rejectTerminalReport(input: {
       eq(runLeases.tokenHash, input.leaseTokenHash),
       eq(runLeases.runId, input.runId),
       eq(runLeases.loopId, input.loopId),
-      eq(runLeases.state, input.leaseState),
+      input.leaseState === "active"
+        ? eq(runLeases.state, "active")
+        : inArray(runLeases.state, ["terminal-grace", "reconciliation-only"]),
     ];
-    if (input.leaseState === "terminal-grace") leaseConditions.push(gt(runLeases.expiresAt, now));
+    if (input.leaseState !== "active") leaseConditions.push(gt(runLeases.expiresAt, now));
     const lease = (await tx.select().from(runLeases).where(and(...leaseConditions)).limit(1).for("update"))[0];
     if (!lease) return { state: "invalid-lease" as const };
 
@@ -1040,7 +1047,7 @@ export async function rejectTerminalReport(input: {
       createdAt: input.incident.at,
     };
 
-    if (input.leaseState === "terminal-grace") {
+    if (lease.state !== "active") {
       const run = (await tx.update(runs)
         .set({ reportIncident: input.incident, updatedAt: input.incident.at })
         .where(and(eq(runs.id, input.runId), eq(runs.loopId, input.loopId), inArray(runs.phase, ["done", "error", "canceled"])))
@@ -1172,8 +1179,30 @@ export async function reclaimRun(
   });
 }
 
-/** Consume one terminal-grace lease and reconcile its reclaimed error exactly
- * once. Keeping the lease check/delete beside the run + loop writes closes the
+/** A daemon's completed recovery snapshot is authoritative for execution
+ * exclusion. Reclaimed runs absent from that snapshot retain late-report authority
+ * until their original expiry, but stop blocking queued work immediately. */
+export async function releaseAbsentReconciliations(
+  machineId: string,
+  recoverableRunIds: string[],
+  at = nowIso(),
+): Promise<string[]> {
+  const conditions = [
+    eq(runLeases.machineId, machineId),
+    eq(runLeases.state, "terminal-grace"),
+    gt(runLeases.expiresAt, at),
+  ];
+  const ids = [...new Set(recoverableRunIds)];
+  if (ids.length) conditions.push(notInArray(runLeases.runId, ids));
+  const released = await db.update(runLeases)
+    .set({ state: "reconciliation-only" })
+    .where(and(...conditions))
+    .returning({ runId: runLeases.runId });
+  return released.map((row) => row.runId);
+}
+
+/** Consume one terminal reconciliation lease and reconcile its reclaimed error
+ * exactly once. Keeping the lease check/delete beside the run + loop writes closes the
  * error→error double-report hole where a phase CAS alone cannot distinguish the
  * first real failure from a second concurrent one. */
 export async function reconcileReclaimedRun(
@@ -1200,14 +1229,14 @@ export async function reconcileReclaimedRun(
     const leaseNow = nowIso();
     const lease = (
       await tx
-        .select({ tokenHash: runLeases.tokenHash })
+        .select({ tokenHash: runLeases.tokenHash, state: runLeases.state })
         .from(runLeases)
         .where(
           and(
             eq(runLeases.tokenHash, leaseTokenHash),
             eq(runLeases.runId, runId),
             eq(runLeases.loopId, loopId),
-            eq(runLeases.state, "terminal-grace"),
+            inArray(runLeases.state, ["terminal-grace", "reconciliation-only"]),
             gt(runLeases.expiresAt, leaseNow),
           ),
         )
@@ -1229,12 +1258,15 @@ export async function reconcileReclaimedRun(
         .returning()
     )[0];
     if (!run) return undefined;
-    // The provisional reclaim fact was never materialized while terminal-grace
-    // existed. Replace it with the real terminal cadence in this same commit.
-    const lifecycle = await terminalLifecycleTx(tx, current, run, at, loopPatch, true, failureAutopauseStreak);
+    // Once the daemon has disavowed execution, a successor may already be open.
+    // Preserve the old run's late result, but never let it retime or reconfigure
+    // the loop, trip the breaker, or otherwise mutate the successor lifecycle.
+    const lifecycle = lease.state === "reconciliation-only"
+      ? { loop: current, failureStreak: 0, autoPaused: false }
+      : await terminalLifecycleTx(tx, current, run, at, loopPatch, true, failureAutopauseStreak);
     await tx.delete(runLeases).where(eq(runLeases.runId, runId));
     if (receipt) await tx.insert(runReportReceipts).values(receipt);
-    return { run, ...lifecycle };
+    return { run, ...lifecycle, reportOnly: lease.state === "reconciliation-only" };
   });
 }
 
@@ -1450,6 +1482,24 @@ export async function listRuns(loopId: string, limit = 30): Promise<Run[]> {
     .orderBy(desc(runs.ts))
     .limit(limit);
   return rows.reverse();
+}
+
+/** Live reconciliation projection for dashboard/run-detail reads. */
+export async function reconciliationStatesForRuns(
+  loopId: string,
+  runIds: string[],
+  at = nowIso(),
+): Promise<Map<string, "blocking" | "report-only">> {
+  if (!runIds.length) return new Map();
+  const rows = await db.select({ runId: runLeases.runId, state: runLeases.state })
+    .from(runLeases)
+    .where(and(
+      eq(runLeases.loopId, loopId),
+      inArray(runLeases.runId, [...new Set(runIds)]),
+      inArray(runLeases.state, ["terminal-grace", "reconciliation-only"]),
+      gt(runLeases.expiresAt, at),
+    ));
+  return new Map(rows.map((row) => [row.runId, row.state === "terminal-grace" ? "blocking" as const : "report-only" as const]));
 }
 
 /** Latest successful exec runs for dashboard charts, returned oldest-first. Filtering

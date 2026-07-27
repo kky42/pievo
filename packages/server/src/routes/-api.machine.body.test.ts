@@ -8,7 +8,7 @@
 import { describe, expect, test } from 'vitest'
 
 import { MACHINE_BODY_CAP, readJsonBody } from '../gateway/http'
-import { Route as PollRoute } from './api.machine.poll'
+import { gatewayPollRequest, Route as PollRoute } from './api.machine.poll'
 import { Route as ReportRoute } from './machine.report'
 import { Route as LoopRoute } from './api.machine.loop'
 import { Route as AgentApiRoute } from './agent-api.loop'
@@ -78,6 +78,20 @@ describe('readJsonBody', () => {
 
   test('declared content-length is rejected before streaming', async () => {
     expect(await readJsonBody(req('{}', { 'content-length': '999999' }), 2048)).toEqual({ kind: 'too-large' })
+  })
+})
+
+test('poll route forwards a completed daemon recovery snapshot', () => {
+  expect(gatewayPollRequest({
+    protocolVersion: 3,
+    daemonInstanceId: 'daemon-new',
+    recoveryComplete: true,
+    currentRuns: [{ runId: 'run-1', stage: 'reporting' }],
+  })).toMatchObject({
+    protocolVersion: 3,
+    daemonInstanceId: 'daemon-new',
+    recoveryComplete: true,
+    currentRuns: [{ runId: 'run-1', stage: 'reporting' }],
   })
 })
 

@@ -113,6 +113,23 @@ test("lifecycle request markers and daemon protocol surface at the Dashboard bou
   expect(detail.machine.daemonProtocol).toBe(2);
 });
 
+test("terminal reconciliation state crosses the dashboard boundary and explains queued blocking", async () => {
+  const loop = await seed("claude-code");
+  const interrupted = await store.addRun({ loopId: loop.id, userId: "u1", machineId: loop.machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+  await (await import("../gateway/tokens.js")).registerRunLease({ runId: interrupted.id, loopId: loop.id, machineId: loop.machineId, role: "exec", allowControl: true });
+  await store.reclaimRun(interrupted.id, "running", "machine timed out / disconnected");
+  await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "queued" });
+
+  const blocked = await adapters.toJobDetail((await store.getLoop(loop.id))!);
+  expect(blocked.summary.reconciliationBlocking).toBe(true);
+  expect(blocked.runs.find((run) => run.id === interrupted.id)?.reconciliation).toBe("blocking");
+
+  await store.releaseAbsentReconciliations(loop.machineId, []);
+  const released = await adapters.toJobDetail((await store.getLoop(loop.id))!);
+  expect(released.summary.reconciliationBlocking).toBe(false);
+  expect(released.runs.find((run) => run.id === interrupted.id)?.reconciliation).toBe("report-only");
+});
+
 test("report incidents and pause causes cross the client adapter boundary", async () => {
   const loop = await seed("claude-code");
   const paused = await store.pauseLoop(loop.id);

@@ -16,13 +16,14 @@ function nextRun(loop: Loop): string | null {
   return [loop.nextRunAt, loop.nextCadenceAt].filter((v): v is string => v != null).sort()[0] ?? null;
 }
 
-export function toRunSummary(r: Run): RunSummary {
+export function toRunSummary(r: Run, reconciliation?: "blocking" | "report-only"): RunSummary {
   return {
     id: r.id,
     loopId: r.loopId,
     ts: r.ts,
     queued: r.phase === "pending",
     running: r.phase === "running",
+    ...(reconciliation ? { reconciliation } : {}),
     phase: r.phase,
     requestedBy: r.requestedBy,
     canceled: r.phase === "canceled",
@@ -50,6 +51,11 @@ export function toRunSummary(r: Run): RunSummary {
   };
 }
 
+export async function toRunSummaries(loopId: string, rows: Run[]): Promise<RunSummary[]> {
+  const states = await store.reconciliationStatesForRuns(loopId, rows.map((run) => run.id));
+  return rows.map((run) => toRunSummary(run, states.get(run.id)));
+}
+
 /** One live artifact_files row (with its blob meta joined) → the compact UI shape
  *  (metadata only; the bytes are fetched lazily by getArtifact / the download
  *  route. The front-matter `meta` rides along so the
@@ -66,7 +72,7 @@ export function toArtifactSummary(row: ArtifactFileWithMeta): ArtifactSummary {
 }
 
 export async function toJobSummary(loop: Loop): Promise<JobSummary> {
-  const runs = (await store.listRuns(loop.id, SUMMARY_RUNS)).map(toRunSummary);
+  const runs = await toRunSummaries(loop.id, await store.listRuns(loop.id, SUMMARY_RUNS));
   return {
     id: loop.id,
     name: loop.name ?? loop.id,
@@ -82,6 +88,7 @@ export async function toJobSummary(loop: Loop): Promise<JobSummary> {
     nextRun: nextRun(loop),
     running: await store.hasRunningRun(loop.id),
     queued: await store.hasPendingRun(loop.id),
+    reconciliationBlocking: runs.some((run) => run.reconciliation === "blocking"),
     lastRunTs: runs.length ? runs[runs.length - 1]!.ts : null,
     graduation: null, // shadow/graduation is post-v1
     goal: loop.goal ?? null,
@@ -123,7 +130,7 @@ function toJobFull(loop: Loop): JobFull {
 }
 
 export async function toJobDetail(loop: Loop): Promise<JobDetail> {
-  const fullRuns = (await store.listRuns(loop.id, 100)).map(toRunSummary).reverse(); // newest first
+  const fullRuns = (await toRunSummaries(loop.id, await store.listRuns(loop.id, 100))).reverse(); // newest first
   const m = await store.getMachine(loop.machineId);
   const presence = machinePresence(m?.online, m?.lastSeen);
   return {

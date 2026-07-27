@@ -29,7 +29,7 @@ import * as store from '../db/store.js'
 import type { MetricField } from '../db/schema.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
-import { toJobDetail, toJobSummary, toRunSummary } from './adapters.js'
+import { toJobDetail, toJobSummary, toRunSummaries } from './adapters.js'
 import { normalizeProviderSetting, validateSchema, validateSteerInstruction } from '../gateway/validate.js'
 import { machinePresence } from '../lib/machinePresence.js'
 import { DAEMON_PROTOCOL_VERSION } from '../gateway/compat.js'
@@ -172,7 +172,7 @@ export const loadOlderRuns = createServerFn({ method: 'GET' })
     await backend()
     if (!(await ownedLoop(data.loopId))) return []
     const limit = Math.min(Math.max(data.limit ?? 16, 1), 100)
-    return (await store.listRunsBefore(data.loopId, data.beforeTs, limit)).map(toRunSummary)
+    return toRunSummaries(data.loopId, await store.listRunsBefore(data.loopId, data.beforeTs, limit))
   })
 
 /** GET — the latest 100 successful exec rows needed by dashboard charts. This is a

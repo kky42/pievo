@@ -73,6 +73,8 @@ export function LoopCard({
           <Pill>Deleting</Pill>
         ) : job.running ? (
           <Pill tone="running" dot="pulse">Running</Pill>
+        ) : job.queued && job.reconciliationBlocking ? (
+          <Pill tone="outline">Queued · waiting for machine recovery</Pill>
         ) : job.queued ? (
           <Pill tone="outline">Queued</Pill>
         ) : null}

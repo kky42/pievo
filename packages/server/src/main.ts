@@ -73,6 +73,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
     const body = await json(req) as {
       protocolVersion?: number;
       currentRuns?: Array<{ runId: string; stage: "executing" | "reporting" }>;
+      daemonInstanceId?: string;
+      recoveryComplete?: boolean;
       watchDigest?: string;
       host?: string;
       platform?: string;
@@ -82,6 +84,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse): Promi
     const r = await gateway.pollV3Wait(tok, {
       protocolVersion: body.protocolVersion,
       currentRuns: body.currentRuns,
+      daemonInstanceId: body.daemonInstanceId,
+      recoveryComplete: body.recoveryComplete,
       watchDigest: body.watchDigest,
       info: body,
     });

@@ -78,6 +78,9 @@ export interface RunSummary {
   queued?: boolean
   /** Claimed by the machine and executing now. */
   running?: boolean
+  /** Interrupted terminal report authority: blocking waits for daemon recovery;
+   * report-only no longer fences queued work. */
+  reconciliation?: 'blocking' | 'report-only'
   phase?: 'pending' | 'running' | 'done' | 'error' | 'canceled' | string
   requestedBy?: 'owner' | 'system'
   /** Stopped by the user before it finished (phase canceled). */
@@ -168,6 +171,8 @@ export interface JobSummary {
   running?: boolean
   /** True when one or more durable queue rows are waiting. */
   queued?: boolean
+  /** A reclaimed process is still fencing this loop pending daemon recovery. */
+  reconciliationBlocking?: boolean
   lastRunTs: string | null
   graduation: string | null
   /** Optional standing objective. It guides runs but does not end the loop. */

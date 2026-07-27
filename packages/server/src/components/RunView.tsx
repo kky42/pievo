@@ -199,7 +199,7 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
   }, [detail, run, searchDone, loopId, runId])
 
   // Keep a live run fresh until its terminal fields and file snapshot settle.
-  const running = !!(run?.queued || run?.running)
+  const running = !!(run?.queued || run?.running || run?.reconciliation)
   useEffect(() => {
     if (!running) return
     const t = setInterval(() => void poll(), 3_000)
@@ -284,7 +284,17 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
                 Queued; it starts when this loop is free and the machine polls.
               </div>
             </Card>
-          ) : run.running ? <RunningState run={run} /> : null}
+          ) : run.running ? <RunningState run={run} /> : run.reconciliation ? (
+            <Card label="Recovery">
+              <div className="text-body text-secondary">
+                {run.reconciliation === 'blocking'
+                  ? detail.machine.presence === 'online'
+                    ? 'The machine is online and checking an interrupted run. Queued work starts automatically after recovery.'
+                    : 'Waiting for the machine to reconnect and check an interrupted run. Queued work starts automatically; no action is required.'
+                  : 'This interrupted run no longer blocks queued work. Pievo will still accept its saved report if it arrives.'}
+              </div>
+            </Card>
+          ) : null}
 
           {run.reportIncident && (
             <Card label="Terminal report rejected">

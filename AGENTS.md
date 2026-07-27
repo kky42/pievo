@@ -72,7 +72,7 @@ computes pure functions. Run instructions: `README.md`.
   snapshots remain the artifact/diff authority. A correlatable but semantically invalid
   terminal payload is handled on that SAME `/machine/report` seam after lease auth: the
   server atomically records a structured run incident, terminalizes an active run as
-  error (or preserves a terminal-grace outcome), consumes the lease, and stores an
+  error (or preserves a terminal reconciliation outcome), consumes the lease, and stores an
   exact-digest durable 200 ACK. This frees the daemon slot without a second poll protocol;
   exec incidents use the ordinary failure streak/circuit breaker, annotated by
   `loops.pauseCause` when auto-paused.
@@ -460,18 +460,19 @@ computes pure functions. Run instructions: `README.md`.
   idempotently repairs terminal-run active leases.
   ALL loop deletion paths preserve retired tombstones; only the matching report→410
   receipt transaction consumes them (ordinary Delete and Force-delete cannot differ).
-- **Sweep-reclaimed runs are NOT retired immediately** - the usual cause is a laptop
-  that merely fell ASLEEP mid-run, and on wake the daemon delivers the real (often
-  successful) result. `reclaimRun` TERMINALIZES the run's lease (grace) instead of
-  retiring it, so `report()`'s `phase==="error" && lease.state==="terminal-grace"`
-  branch honors exactly ONE late wake-report: a success flips the run back to `done`
-  (clears the false error, records message/artifacts, retracts via the normal success
-  push; the failure streak self-corrects since it's derived from persisted rows), a
-  real failure replaces the generic reclaim reason (no second push). Single-shot
-  (lease retired after). While terminal-grace, `agentApi`/`runCli` refuse mutations
-  with 409 and queue claims for that loop stand down, preventing overlap with the
-  old process (only the final report reconciles). The daemon's `runner.ts` `report()`
-  logs a clear line on a 401 (already retired) instead of silently dropping it.
+- **Sweep-reclaimed runs separate execution exclusion from late-report retention.**
+  `reclaimRun` first moves the lease to blocking `terminal-grace`. Protocol-v3 polls
+  carry a per-start `daemonInstanceId`, `recoveryComplete:true`, and the daemon's full
+  `currentRuns` snapshot (outbox rows are hydrated before polling). Any grace run absent
+  from that completed snapshot becomes `reconciliation-only`: queued work may claim in
+  the SAME poll, while the old token can still submit exactly one report until the
+  original 24h deadline. A report-only reconcile updates only the old run/receipt—never
+  loop cadence/config, snapshots, notifications, breaker, or successor lifecycle.
+  Runs still reported `executing|reporting` remain blocking; poisoned outbox rows are
+  diagnostic evidence but are not advertised as recoverable. Both reconciliation states
+  reject run-token mutations with 409 and expire to durable `retired`. Dashboard run
+  projections expose `blocking|report-only`, keep reconciliation pages polling, and
+  explain queued recovery waits instead of showing an unexplained error.
 - **Pending rows are the durable queue/inbox.** Same-role requests coalesce with a
   stable id; authority only promotes `system → owner`, latest owner steer text wins,
   and a running role may retain one pending follow-up. Pause cancels pending system

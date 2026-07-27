@@ -314,7 +314,7 @@ export const runLeases = pgTable(
     allowControl: boolean("allow_control").notNull().default(false),
     canSetUi: boolean("can_set_ui").notNull().default(false),
     canSetSchema: boolean("can_set_schema").notNull().default(false),
-    state: text("state", { enum: ["active", "terminal-grace", "retired"] }).notNull().default("active"),
+    state: text("state", { enum: ["active", "terminal-grace", "reconciliation-only", "retired"] }).notNull().default("active"),
     /** Null while active/retired; ISO only during terminal-grace. */
     expiresAt: text("expires_at"),
     createdAt: text("created_at").notNull(),

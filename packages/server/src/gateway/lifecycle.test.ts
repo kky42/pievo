@@ -186,6 +186,51 @@ test("protocol v3 rejects old protocols and repeats per-run cancellation", async
   expect(second.body).toMatchObject({ delivery: null, cancelRunIds: [run.id] });
 });
 
+test("a complete daemon recovery snapshot releases an absent reclaimed run and immediately delivers queued steer", async () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  const loop = await seedLoop(machineId);
+  const interrupted = await store.addRun({
+    loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec",
+    ts: new Date(Date.now() - 21 * 60_000).toISOString(),
+  });
+  const runToken = await tokens.registerRunLease({ runId: interrupted.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  await store.reclaimRun(interrupted.id, "running", "machine timed out / disconnected");
+  await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "adjust it" });
+
+  const result = await gateway().pollV3(deviceToken, {
+    protocolVersion: 3,
+    daemonInstanceId: "daemon-new",
+    recoveryComplete: true,
+    currentRuns: [],
+    info: { version: "2.3.0" },
+  });
+
+  expect((result.body as any).delivery).toMatchObject({ loop: { id: loop.id }, role: "steer" });
+  expect((await tokens.resolveLease(runToken))?.state).toBe("reconciliation-only");
+});
+
+test("a complete recovery snapshot keeps a reclaimed run blocking while it is executing or reporting", async () => {
+  for (const stage of ["executing", "reporting"] as const) {
+    const deviceToken = tokens.mintDeviceToken();
+    const machineId = tokens.machineIdFromToken(deviceToken);
+    await store.createMachine({ id: machineId, userId: "u1", name: stage, tokenHash: tokens.sha256(deviceToken), online: true });
+    const loop = await seedLoop(machineId);
+    const interrupted = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
+    const runToken = await tokens.registerRunLease({ runId: interrupted.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+    await store.reclaimRun(interrupted.id, "running", "machine timed out / disconnected");
+    await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "wait" });
+
+    const result = await gateway().pollV3(deviceToken, {
+      protocolVersion: 3, daemonInstanceId: `daemon-${stage}`, recoveryComplete: true,
+      currentRuns: [{ runId: interrupted.id, stage }], info: { version: "2.3.0" },
+    });
+    expect((result.body as any).delivery).toBeNull();
+    expect((await tokens.resolveLease(runToken))?.state).toBe("terminal-grace");
+  }
+});
+
 test("protocol v3 skips a local run's loop and returns one delivery per poll", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);

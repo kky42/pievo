@@ -4,7 +4,8 @@
  * LEASE (`rk_…`) is minted per delivery, bound to one run, and carries the
  * run's least-privilege caps — the CLI dispatch authorizes the `pievo` shim
  * against it. Its lifecycle is a small state machine (`active` →
- * `terminal-grace` → `retired`), not a mint→revoke pair; see `RunLease` below.
+ * `terminal-grace` → `reconciliation-only`/`retired`), not a mint→revoke pair;
+ * see `RunLease` below.
  *
  * Leases and connect-key bindings are DURABLE (run_leases / connect_keys
  * tables): they must survive a deploy, or every restart 401s the in-flight
@@ -15,7 +16,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 
-import { and, eq, isNotNull, lt } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, lt } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { connectKeys, runLeases, type CodingAgent, type RunRole } from "../db/schema.js";
@@ -130,7 +131,9 @@ export interface RunLeaseCaps {
  *   active ──[normal report / canceled]──────────────────────────▶ deleted
  *      │
  *      └────[sweep reclaim]───▶ terminal-grace ──[reconcile]─────▶ deleted
- *                                      └──[expiry]──▶ retired ──[410 receipt]──▶ deleted
+ *                                      │
+ *                                      ├──[daemon disavows]──▶ reconciliation-only ──[reconcile]──▶ deleted
+ *                                      └──[expiry]────────────▶ retired ──[410 receipt]──────────▶ deleted
  *
  * `terminal-grace` marks terminal-report-only authority for a swept run awaiting
  * reconciliation. Agent-api
@@ -139,9 +142,9 @@ export interface RunLeaseCaps {
  * `retired`; it is deleted only when a matching 410 receipt commits.
  */
 export interface RunLease extends RunLeaseCaps {
-  state: "active" | "terminal-grace" | "retired";
+  state: "active" | "terminal-grace" | "reconciliation-only" | "retired";
   /** Absolute expiry (ms epoch). `Infinity` for active and retired rows;
-   *  terminal-grace alone carries a deadline. */
+   *  both reconciliation states carry the same late-report deadline. */
   expiresAt: number;
 }
 
@@ -195,10 +198,10 @@ export async function resolveLease(token: string, now: number = Date.now()): Pro
   const tokenHash = sha256(token);
   let row = (await db.select().from(runLeases).where(eq(runLeases.tokenHash, tokenHash)))[0];
   if (!row) return undefined;
-  if (row.state === "terminal-grace" && row.expiresAt != null && now > Date.parse(row.expiresAt)) {
+  if ((row.state === "terminal-grace" || row.state === "reconciliation-only") && row.expiresAt != null && now > Date.parse(row.expiresAt)) {
     row = (await db.update(runLeases)
       .set({ state: "retired", expiresAt: null })
-      .where(and(eq(runLeases.tokenHash, tokenHash), eq(runLeases.state, "terminal-grace"), isNotNull(runLeases.expiresAt), lt(runLeases.expiresAt, new Date(now).toISOString())))
+      .where(and(eq(runLeases.tokenHash, tokenHash), inArray(runLeases.state, ["terminal-grace", "reconciliation-only"]), isNotNull(runLeases.expiresAt), lt(runLeases.expiresAt, new Date(now).toISOString())))
       .returning())[0] ?? (await db.select().from(runLeases).where(eq(runLeases.tokenHash, tokenHash)))[0];
     if (!row) return undefined;
   }
@@ -232,7 +235,7 @@ export async function retireLease(token: string): Promise<void> {
 export async function pruneExpiredLeases(now: number = Date.now()): Promise<void> {
   await db.update(runLeases)
     .set({ state: "retired", expiresAt: null })
-    .where(and(eq(runLeases.state, "terminal-grace"), isNotNull(runLeases.expiresAt), lt(runLeases.expiresAt, new Date(now).toISOString())));
+    .where(and(inArray(runLeases.state, ["terminal-grace", "reconciliation-only"]), isNotNull(runLeases.expiresAt), lt(runLeases.expiresAt, new Date(now).toISOString())));
 }
 
 // ---- `new` idempotency (content-hash → the loop it created) ----

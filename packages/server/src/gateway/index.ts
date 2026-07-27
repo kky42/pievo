@@ -530,6 +530,7 @@ export class MachineGateway {
      * the response can omit the unchanged watch array. */
     watchDigest?: string,
     claimWork = true,
+    recoveryComplete = false,
   ): Promise<HttpResult> {
     // Reject malformed tokens (empty / wrong prefix / junk) before any DB work —
     // a cheap filter at the enrollment surface (the auth boundary is the gate below).
@@ -619,6 +620,11 @@ export class MachineGateway {
       }
     }
 
+    // A completed daemon recovery snapshot separates execution exclusion from
+    // late-report retention. Anything absent can no longer execute locally, so
+    // it keeps report-only authority but stops fencing queued work.
+    if (recoveryComplete) await store.releaseAbsentReconciliations(machineId, currentRunIds ?? []);
+
     let delivery: Delivery | null = null;
     if (claimWork) {
       // Each poll adds at most one run. Repeated active polls have no configured
@@ -664,6 +670,8 @@ export class MachineGateway {
   async pollV3(deviceToken: string, request: {
     protocolVersion?: number;
     currentRuns?: Array<{ runId: string; stage: "executing" | "reporting" }>;
+    daemonInstanceId?: string;
+    recoveryComplete?: boolean;
     watchDigest?: string;
     info?: { host?: string; platform?: string; arch?: string; version?: string };
   }): Promise<HttpResult> {
@@ -685,12 +693,15 @@ export class MachineGateway {
     if (!Array.isArray(request.currentRuns) || request.currentRuns.some((run) => !validCurrent(run))) {
       return { status: 400, body: { error: "invalid currentRuns", code: "VALIDATION_ERROR" } };
     }
+    if (request.recoveryComplete === true && (typeof request.daemonInstanceId !== "string" || !request.daemonInstanceId || request.daemonInstanceId.length > 200)) {
+      return { status: 400, body: { error: "daemonInstanceId is required for a completed recovery snapshot", code: "VALIDATION_ERROR" } };
+    }
     const currentIds = [...new Set(request.currentRuns.map((run) => run.runId))];
     const machineId = isDeviceTokenShape(deviceToken) ? machineIdFromToken(deviceToken) : "";
     const priorMachine = machineId ? await store.getMachine(machineId) : undefined;
     const reportedVersion = typeof request.info?.version === "string" ? clipText(request.info.version, 64) : priorMachine?.daemonVersion;
     const needsUpdate = daemonNeedsUpdate(reportedVersion);
-    const base = await this.pollCore(deviceToken, request.info, currentIds, request.watchDigest, !needsUpdate);
+    const base = await this.pollCore(deviceToken, request.info, currentIds, request.watchDigest, !needsUpdate, request.recoveryComplete === true);
     if (base.status !== 200) return base;
     const machine = await store.getMachine(machineId);
     if (machine?.daemonProtocol !== DAEMON_PROTOCOL_VERSION) await store.updateMachine(machineId, { daemonProtocol: DAEMON_PROTOCOL_VERSION });
@@ -1517,21 +1528,22 @@ export class MachineGateway {
     }
 
     const deleting = reconciled.loop.deleteRequestedAt != null;
-    if (!deleting) try {
+    const reportOnly = reconciled.reportOnly === true;
+    if (!deleting && !reportOnly) try {
       await store.putRunSnapshot(lease.runId, lease.loopId, await store.buildLoopManifest(lease.loopId));
       await store.pruneRunSnapshots(lease.loopId, snapshotRetention());
     } catch (err) {
       log.warn({ runId: lease.runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
     }
     const finalized = reconciled.run;
-    if (!deleting && ok && lease.role !== "evolve" && lease.role !== "steer") {
+    if (!deleting && !reportOnly && ok && lease.role !== "evolve" && lease.role !== "steer") {
       const loop = await store.getLoop(lease.loopId);
       if (finalized.message && loop && shouldNotify(loop.notify, finalized.status ?? null)) {
         this.pushNotify(loop, finalized.message);
       }
     }
-    this.scheduler.addLoop(reconciled.loop);
-    if (!deleting && !ok && !canceled && lease.role === "exec") {
+    if (!reportOnly) this.scheduler.addLoop(reconciled.loop);
+    if (!deleting && !reportOnly && !ok && !canceled && lease.role === "exec") {
       // The provisional reclaim already sent the failure alert, but the real
       // failure must still be allowed to trip the circuit breaker.
       await this.notifyRunFailure(lease.loopId, lease.role, finalized.error ?? null, reconciled, { alert: false });
@@ -1558,7 +1570,7 @@ export class MachineGateway {
   ): Promise<HttpResult> {
     const reportId = body.reportId!;
     const run = await store.getRun(lease.runId);
-    const telemetryOnly = lease.state === "terminal-grace" && (run?.phase === "done" || run?.phase === "error" || run?.phase === "canceled");
+    const telemetryOnly = lease.state !== "active" && (run?.phase === "done" || run?.phase === "error" || run?.phase === "canceled");
     const disposition = telemetryOnly ? "telemetry-rejected" as const : "run-error" as const;
     const incident = incidentDiagnosis(code, issues, reportId, payloadDigest);
     const ackBody = {
@@ -1655,7 +1667,7 @@ export class MachineGateway {
     const run = await store.getRun(lease.runId);
     if (run?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease, body);
     if (run?.phase === "done") return { status: 409, body: { error: "run already finalized", code: "REPORT_NOT_FINALIZED", reportId } };
-    if (run?.phase === "error" && lease.state === "terminal-grace") {
+    if (run?.phase === "error" && (lease.state === "terminal-grace" || lease.state === "reconciliation-only")) {
       return this.reconcileReclaimedReport(runToken, lease, run, body);
     }
 

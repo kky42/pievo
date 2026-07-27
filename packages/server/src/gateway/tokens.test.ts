@@ -84,6 +84,17 @@ test("an expired terminal-grace lease becomes a durable retired tombstone", asyn
   expect((await tokens.resolveLease(token))?.state).toBe("retired");
 });
 
+test("a reconciliation-only lease keeps the same deadline and expires to retired", async () => {
+  const c = caps();
+  const token = await tokens.registerRunLease(c);
+  const at = Date.now();
+  await tokens.terminalizeLease(c.runId, at);
+  const store = await import("../db/store.js");
+  await store.releaseAbsentReconciliations(c.machineId, [], new Date(at).toISOString());
+  expect((await tokens.resolveLease(token, at))?.state).toBe("reconciliation-only");
+  expect((await tokens.resolveLease(token, at + tokens.TERMINAL_GRACE_MS + 1))?.state).toBe("retired");
+});
+
 test("terminalizeLease is idempotent — a second call keeps the FIRST grace window", async () => {
   const token = await tokens.registerRunLease(caps());
   const runId = (await tokens.resolveLease(token))!.runId;

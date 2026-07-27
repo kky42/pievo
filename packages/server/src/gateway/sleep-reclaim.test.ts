@@ -176,6 +176,31 @@ test("terminal-grace fences due cadence; late success consumes grace and retimes
   expect(await store.claimReadyRunForMachine(machineId)).toBeDefined();
 });
 
+test("a report-only late success updates only the old run after queued work starts", async () => {
+  const { sent, fn } = recordingNotify();
+  const gw = gateway(fn);
+  const { machineId, loop } = await seedMachineLoop(21 * MIN);
+  await store.updateLoop(loop.id, { scheduleMode: "continuous", continuousDelayMinutes: 5 });
+  const interrupted = await store.addRun({
+    loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", requestedBy: "system", ts: isoAgo(21 * MIN),
+  });
+  const rt = await tokens.registerRunLease({ runId: interrupted.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  await store.updateRun(interrupted.id, { status: "kept", message: "old result" });
+  await gw.sweep();
+  await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "new work" });
+  await store.releaseAbsentReconciliations(machineId, []);
+  const successor = await store.claimReadyRunForMachine(machineId);
+  expect(successor?.run.role).toBe("steer");
+  const before = await store.getLoop(loop.id);
+  const alertsBefore = sent.length;
+
+  expect((await gw.report(rt, { result: "success", finalText: "late old result", taskFileContent: "stale task" })).status).toBe(200);
+  expect(await store.getRun(interrupted.id)).toMatchObject({ phase: "done", message: "old result" });
+  expect((await store.getRun(successor!.run.id))?.phase).toBe("running");
+  expect(await store.getLoop(loop.id)).toMatchObject({ nextCadenceAt: before?.nextCadenceAt, taskFileContent: before?.taskFileContent });
+  expect(sent).toHaveLength(alertsBefore);
+});
+
 test("a provisional reclaim defers the breaker; confirmed late failure pauses atomically without duplicate alert", async () => {
   const { sent, fn } = recordingNotify();
   const gw = gateway(fn);

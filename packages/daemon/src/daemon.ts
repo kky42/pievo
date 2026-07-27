@@ -46,7 +46,11 @@ export class ConcurrentRuntime {
     private readonly sendReport: SendReport = (serverUrl, report, signal) => sendTerminalReport(serverUrl, report, undefined, signal),
   ) {
     for (const pending of outbox.all()) {
-      this.active.set(pending.runId, { stage: "reporting", abortController: new AbortController(), cancelRequested: false });
+      // A report the server durably rejected cannot be recovered by retrying and
+      // must not keep its loop fenced forever after daemon restart.
+      if (!pending.lastError?.startsWith("REPORT_")) {
+        this.active.set(pending.runId, { stage: "reporting", abortController: new AbortController(), cancelRequested: false });
+      }
     }
     this.emitState();
   }
@@ -162,7 +166,7 @@ export class ConcurrentRuntime {
         const ack = await this.sendReport(serverUrl, report, this.reportAbort.signal);
         if (this.reportAbort.signal.aborted) break;
         this.outbox.applyAck(ack);
-        if (!this.outbox.get(report.reportId)) this.active.delete(report.runId);
+        if (!this.outbox.get(report.reportId) || ack.kind === "conflict" || ack.kind === "invalid") this.active.delete(report.runId);
         if (ack.kind === "conflict" || ack.kind === "invalid") {
           logger.error({ runId: report.runId }, `${ack.kind === "conflict" ? "REPORT_CONFLICT" : "REPORT_INVALID"}: terminal report needs attention`);
         }
@@ -187,8 +191,9 @@ export function buildPollBody(
   info: Record<string, unknown>,
   currentRuns: CurrentRun[],
   watchDigest: string | undefined,
+  daemonInstanceId: string,
 ): Record<string, unknown> {
-  return { protocolVersion: 3, ...info, currentRuns, ...(watchDigest ? { watchDigest } : {}) };
+  return { protocolVersion: 3, ...info, daemonInstanceId, recoveryComplete: true, currentRuns, ...(watchDigest ? { watchDigest } : {}) };
 }
 
 export function nextPollDelayMs(elapsedMs: number, pollMs = POLL_MS): number {
@@ -206,6 +211,7 @@ export async function runDaemon(args: string[] = []): Promise<number> {
   if (!token || !server) { logger.error("run `pievo daemon start --server-url <url> --connect-key <dk_…>` first"); return 1; }
   const roots = (process.env.PIEVO_ROOTS || "").split(",").map((s) => s.trim()).filter(Boolean);
   const info = { host: os.hostname(), platform: process.platform, arch: process.arch, version: daemonVersion() };
+  const daemonInstanceId = randomUUID();
   const existing = verifiedRunningPid();
   if (existing !== undefined) { logger.error({ pid: existing }, "daemon already running — use `pievo daemon stop` first"); return 1; }
 
@@ -246,7 +252,7 @@ export async function runDaemon(args: string[] = []): Promise<number> {
     try {
       const res = await boundedFetch(`${server}/api/machine/poll`, {
         method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(buildPollBody(info, runtime.currentRuns(), watchDigest)),
+        body: JSON.stringify(buildPollBody(info, runtime.currentRuns(), watchDigest, daemonInstanceId)),
       }, POLL_TIMEOUT_MS, pollAbort.signal);
       if (res.status === 426) logger.error("daemon protocol rejected; run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart` (protocol 3 required)");
       else if (!res.ok) logger.warn({ status: res.status, statusText: res.statusText }, "poll non-ok");
