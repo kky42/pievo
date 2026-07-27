@@ -141,10 +141,6 @@ export async function executeDelivery(
   signal?: AbortSignal,
   deviceToken?: string,
 ): Promise<TerminalReport> {
-  return executeDeliveryImpl(d, serverUrl, roots, signal, deviceToken);
-}
-
-async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], signal?: AbortSignal, deviceToken?: string): Promise<TerminalReport> {
   const start = Date.now();
   const canceled = () => signal?.aborted && signal.reason === RUN_CANCEL_REASON;
   const terminalReport = (body: ReportBody, ok: boolean, forcedResult?: TerminalResult): TerminalReport => ({

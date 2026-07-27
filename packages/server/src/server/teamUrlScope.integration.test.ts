@@ -76,7 +76,6 @@ async function getDefaultTeam(): Promise<string> {
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pievo-teamurl-'))
   process.env.PIEVO_DATA_DIR = tmp
-  process.env.PIEVO_DB_PATH = path.join(tmp, 'test.db')
   process.env.PIEVO_LOG_LEVEL = 'silent'
   process.env.GITHUB_CLIENT_ID = 'gh-id'
   process.env.GITHUB_CLIENT_SECRET = 'gh-secret'

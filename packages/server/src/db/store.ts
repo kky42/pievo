@@ -781,39 +781,6 @@ export async function recordRunReportOnce(input: {
   });
 }
 
-/** Phase-guarded run transition under the owning loop lock. Sweep reclaim
- * therefore competes at the same linearization point as claim/report/cancel. */
-export async function transitionRunPhase(
-  id: string,
-  expected: "pending" | "running",
-  patch: Partial<NewRun>,
-): Promise<Run | undefined> {
-  return db.transaction(async (tx) => {
-    const observed = (await tx.select({ loopId: runs.loopId }).from(runs).where(eq(runs.id, id)).limit(1))[0];
-    if (!observed) return undefined;
-    const loop = (await tx.select({ id: loops.id }).from(loops).where(eq(loops.id, observed.loopId)).for("update"))[0];
-    if (!loop) return undefined;
-    const at = typeof patch.ts === "string" ? patch.ts : nowIso();
-    const currentRun = (await tx.select().from(runs)
-      .where(and(eq(runs.id, id), eq(runs.loopId, observed.loopId), eq(runs.phase, expected)))
-      .limit(1).for("update"))[0];
-    if (!currentRun) return undefined;
-    const terminal = patch.phase === "done" || patch.phase === "error" || patch.phase === "canceled";
-    const runIndex = terminal ? await ensureRunIndexTx(tx, currentRun) : currentRun.runIndex;
-    const run = (
-      await tx
-        .update(runs)
-        .set({ ...patch, ...(runIndex != null ? { runIndex } : {}), updatedAt: at })
-        .where(and(eq(runs.id, id), eq(runs.loopId, observed.loopId), eq(runs.phase, expected)))
-        .returning()
-    )[0];
-    if (run && (patch.phase === "done" || patch.phase === "error")) {
-      await terminalLifecycleTx(tx, (await tx.select().from(loops).where(eq(loops.id, observed.loopId)))[0]!, run, at);
-    }
-    return run;
-  });
-}
-
 export interface FinalizeRunningRunResult {
   run: Run;
   loop: Loop;

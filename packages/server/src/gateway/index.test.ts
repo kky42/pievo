@@ -16,7 +16,6 @@ let schedulerMod: typeof import("../scheduler/index.js");
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-gateway-"));
   process.env.PIEVO_DATA_DIR = tmp;
-  process.env.PIEVO_DB_PATH = path.join(tmp, "test.db");
   process.env.PIEVO_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();
@@ -477,6 +476,7 @@ test("protocol-v4 recovery fields and exact currentRuns items are required befor
     { ...base, daemonInstanceId: "test-daemon", recoveryComplete: "true" },
     { ...base, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [{ runId: "", stage: "executing" }] },
     { ...base, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [{ runId: "local-run", stage: "executing", unknown: true }] },
+    { ...base, daemonInstanceId: "test-daemon", recoveryComplete: true, unknown: true },
   ];
   for (const request of invalidRequests) {
     expect((await gateway().pollV4(token, request as any)).status).toBe(400);

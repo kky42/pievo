@@ -26,15 +26,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { REEXEC_WRAPPER_MARKER, reexecWrapperContents } from "./reexec-wrapper.js";
+
 /** The re-exec wrapper prefix that uniquely marks a `pievo` file as OUR shim (vs a
  *  real installed binary). Any existing `pievo` that doesn't start with this is
  *  foreign and must never be overwritten. */
-export const SHIM_MARKER = "#!/bin/sh\nexec ";
-
-/** Single-quote a string for safe interpolation into the /bin/sh wrapper. */
-function shQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
+export const SHIM_MARKER = REEXEC_WRAPPER_MARKER;
 
 /** Is the re-exec entry inside an ephemeral npx / npm cache (`/_npx/`, `/_cacache/`)?
  *  A shim that re-execs such a path breaks once the cache is pruned, so we refuse to
@@ -46,14 +43,7 @@ export function isEphemeralEntry(entry: string): boolean {
 }
 
 /** The re-exec wrapper body (same shape as `callback-bin.ts`'s callback shim). */
-export function shimContents(
-  execPath = process.execPath,
-  execArgv = process.execArgv,
-  entry = process.argv[1] ?? "",
-): string {
-  const parts = [execPath, ...execArgv, entry].map(shQuote);
-  return `#!/bin/sh\nexec ${parts.join(" ")} "$@"\n`;
-}
+export const shimContents = reexecWrapperContents;
 
 export interface BinShimDeps {
   env?: NodeJS.ProcessEnv;

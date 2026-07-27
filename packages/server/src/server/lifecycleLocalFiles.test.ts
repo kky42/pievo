@@ -18,7 +18,6 @@ beforeAll(async () => {
   fs.mkdirSync(workdir)
   fs.writeFileSync(sentinel, 'local project data stays local\n')
   process.env.PIEVO_DATA_DIR = path.join(tmp, 'server-data')
-  process.env.PIEVO_DB_PATH = path.join(tmp, 'server.db')
   process.env.PIEVO_LOG_LEVEL = 'silent'
   db = await import('../db/index.js')
   await db.runMigrations()

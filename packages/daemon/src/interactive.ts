@@ -9,6 +9,7 @@ import { createInterface } from "node:readline/promises";
 
 import type { PostCliDeps } from "./cli-client.js";
 import { postCli, printCliResponse } from "./cli-client.js";
+import { parseLongOptions } from "./long-options.js";
 
 type Flags = Record<string, string | boolean>;
 const BOOLEAN_FLAGS = new Set(["dry-run", "force", "help"]);
@@ -24,31 +25,12 @@ export interface InteractiveDeps {
   confirmForceDelete?: () => Promise<boolean>;
 }
 
-/** `--k v` / `--k=v` pairs, bare `--flag` → true; everything else is positional. */
-export function parseFlags(args: string[], booleanFlags: ReadonlySet<string> = BOOLEAN_FLAGS): { positional: string[]; flags: Flags } {
-  const positional: string[] = [];
-  const flags: Flags = {};
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i]!;
-    if (a.startsWith("--")) {
-      const body = a.slice(2);
-      const eq = body.indexOf("=");
-      if (eq >= 0) {
-        // `--fields=timezone,model` — the value rides on the same token.
-        flags[body.slice(0, eq)] = body.slice(eq + 1);
-        continue;
-      }
-      const next = args[i + 1];
-      if (!booleanFlags.has(body) && next !== undefined && !next.startsWith("--")) {
-        flags[body] = next;
-        i++;
-      } else {
-        flags[body] = true;
-      }
-    } else {
-      positional.push(a);
-    }
-  }
+/** Preserve the interactive parser interface while sharing long-option scanning. */
+export function parseFlags(
+  args: string[],
+  booleanFlags: ReadonlySet<string> = BOOLEAN_FLAGS,
+): { positional: string[]; flags: Flags } {
+  const { positional, flags } = parseLongOptions(args, (key) => !booleanFlags.has(key));
   return { positional, flags };
 }
 

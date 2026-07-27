@@ -103,15 +103,6 @@ export function emptyList(name: string): string {
 }
 
 /**
- * An inline array value on one line: `key[N]: a<sep>b<sep>c` (each item
- * scalar-rendered). Used for short lists that read better inline than as a block,
- * such as `applied[2]: schedule, model`.
- */
-export function inlineArray(key: string, items: Scalar[], sep = ", "): string {
-  return `${key}[${items.length}]: ${items.map(scalar).join(sep)}`;
-}
-
-/**
  * A contextual-disclosure help block (P9): `help[N]:` then each command template
  * indented two spaces, verbatim (they carry backticks + `<placeholders>`).
  */

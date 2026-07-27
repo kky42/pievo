@@ -96,8 +96,6 @@ export class PendingReportOutbox {
     return this.all().filter((row) => row.nextAttemptAt <= now);
   }
 
-  peek(): PersistedReport | undefined { return this.all()[0]; }
-
   applyAck(ack: ReportAck, now = Date.now()): void {
     const row = this.get(ack.reportId);
     if (!row) return;

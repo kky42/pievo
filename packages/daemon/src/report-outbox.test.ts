@@ -21,8 +21,8 @@ describe("PendingReportOutbox", () => {
     first.close();
 
     const reopened = new PendingReportOutbox(file);
-    expect(reopened.peek()).toMatchObject({ runId: "run-1", runToken: "rk_secret", payloadJson: stored.payloadJson, payloadDigest: stored.payloadDigest });
-    expect(JSON.parse(reopened.peek()!.payloadJson)).toEqual(report());
+    expect(reopened.all()[0]).toMatchObject({ runId: "run-1", runToken: "rk_secret", payloadJson: stored.payloadJson, payloadDigest: stored.payloadDigest });
+    expect(JSON.parse(reopened.all()[0]!.payloadJson)).toEqual(report());
     expect(fs.statSync(file).mode & 0o077).toBe(0);
     reopened.close();
   });
@@ -52,15 +52,15 @@ describe("PendingReportOutbox", () => {
       new Response(JSON.stringify({ ok: true, reportId: report().reportId }), { status: 200 }),
     ];
     for (let i = 0; i < responses.length; i++) {
-      const ack = await sendTerminalReport("https://example.test", box.peek()!, async () => responses[i]);
+      const ack = await sendTerminalReport("https://example.test", box.all()[0]!, async () => responses[i]);
       box.applyAck(ack);
-      expect(Boolean(box.peek())).toBe(i < 2);
+      expect(box.all().length > 0).toBe(i < 2);
     }
     box.put("rk_retired", report({ reportId: "22222222-2222-4222-8222-222222222222", runId: "run-2" }));
-    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ error: "execution authority retired", code: "RETIRED", reportId: "wrong" }), { status: 410 })));
-    expect(box.peek()).toBeDefined();
-    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ error: "execution authority retired", code: "RETIRED", reportId: "22222222-2222-4222-8222-222222222222" }), { status: 410 })));
-    expect(box.peek()).toBeUndefined();
+    box.applyAck(await sendTerminalReport("https://example.test", box.all()[0]!, async () => new Response(JSON.stringify({ error: "execution authority retired", code: "RETIRED", reportId: "wrong" }), { status: 410 })));
+    expect(box.all()).toHaveLength(1);
+    box.applyAck(await sendTerminalReport("https://example.test", box.all()[0]!, async () => new Response(JSON.stringify({ error: "execution authority retired", code: "RETIRED", reportId: "22222222-2222-4222-8222-222222222222" }), { status: 410 })));
+    expect(box.all()).toHaveLength(0);
     box.close();
   });
 
@@ -68,7 +68,7 @@ describe("PendingReportOutbox", () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-outbox-"));
     const box = new PendingReportOutbox(path.join(root, "pending.sqlite"));
     box.put("rk_secret", report());
-    const pending = box.peek()!;
+    const pending = box.all()[0]!;
     const response = (payloadDigest: string, disposition: string, extra = false) => new Response(JSON.stringify({
       ok: true, accepted: false, terminal: true, reportId: pending.reportId,
       code: "REPORT_INVALID", issues: ["usage.inputTokens must be an integer"],
@@ -76,13 +76,13 @@ describe("PendingReportOutbox", () => {
     }), { status: 200 });
 
     box.applyAck(await sendTerminalReport("https://example.test", pending, async () => response("wrong", "run-error")));
-    expect(box.peek()).toBeDefined();
+    expect(box.all()).toHaveLength(1);
     box.applyAck(await sendTerminalReport("https://example.test", pending, async () => response(pending.payloadDigest, "unknown")));
-    expect(box.peek()).toBeDefined();
+    expect(box.all()).toHaveLength(1);
     box.applyAck(await sendTerminalReport("https://example.test", pending, async () => response(pending.payloadDigest, "run-error", true)));
-    expect(box.peek()).toBeDefined();
+    expect(box.all()).toHaveLength(1);
     box.applyAck(await sendTerminalReport("https://example.test", pending, async () => response(pending.payloadDigest, "run-error")));
-    expect(box.peek()).toBeUndefined();
+    expect(box.all()).toHaveLength(0);
     box.close();
   });
 
@@ -91,19 +91,19 @@ describe("PendingReportOutbox", () => {
     const box = new PendingReportOutbox(path.join(root, "pending.sqlite"));
     box.put("rk_secret", report());
     const sent: string[] = [];
-    const first = await sendTerminalReport("https://example.test", box.peek()!, async (_url, init) => {
+    const first = await sendTerminalReport("https://example.test", box.all()[0]!, async (_url, init) => {
       sent.push(String(init.body));
       throw new Error("connection dropped after server commit");
     });
     box.applyAck(first, 0);
-    expect(box.peek()).toBeDefined();
-    const second = await sendTerminalReport("https://example.test", box.peek()!, async (_url, init) => {
+    expect(box.all()).toHaveLength(1);
+    const second = await sendTerminalReport("https://example.test", box.all()[0]!, async (_url, init) => {
       sent.push(String(init.body));
       return new Response(JSON.stringify({ ok: true, reportId: report().reportId }), { status: 200 });
     });
     box.applyAck(second);
     expect(sent[1]).toBe(sent[0]);
-    expect(box.peek()).toBeUndefined();
+    expect(box.all()).toHaveLength(0);
     box.close();
   });
 
@@ -114,7 +114,7 @@ describe("PendingReportOutbox", () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-outbox-"));
     const box = new PendingReportOutbox(path.join(root, "pending.sqlite"));
     box.put("rk_secret", report());
-    const ack = await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code, reportId: report().reportId }), { status }));
+    const ack = await sendTerminalReport("https://example.test", box.all()[0]!, async () => new Response(JSON.stringify({ code, reportId: report().reportId }), { status }));
     expect(ack).toMatchObject({ kind: "retry", error: expect.stringContaining(`${status} ${code}`) });
     box.applyAck(ack, 0);
     expect(box.diagnostics()).toMatchObject({ pendingRunIds: ["run-1"], lastError: expect.stringContaining(code) });

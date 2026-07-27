@@ -9,7 +9,6 @@ import {
   emptyList,
   errorBlock,
   helpBlock,
-  inlineArray,
   kvLine,
   listBlock,
   needsQuote,
@@ -111,15 +110,6 @@ test("listBlock with no rows still counts zero in the header", () => {
 
 test("emptyList + countLine(0) is the definitive empty state", () => {
   expect(doc(countLine(0), emptyList("loops"))).toBe("count: 0\nloops: []");
-});
-
-// ---- inline array ----
-
-test("inlineArray joins scalar items on one line with the given separator", () => {
-  expect(inlineArray("applied", ["name", "cron"])).toBe("applied[2]: name, cron");
-  expect(inlineArray("nextRuns", ["2026-07-13 06:00", "2026-07-20 06:00"], " · ")).toBe(
-    'nextRuns[2]: "2026-07-13 06:00" · "2026-07-20 06:00"',
-  );
 });
 
 // ---- help ----

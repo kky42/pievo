@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { postCli, resolveCredential } from "./cli-client.js";
 import { classify } from "./route.js";
 import { daemonVersion } from "./version.js";
@@ -64,6 +64,12 @@ describe("pievo CLI dispatch", () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("pievo daemon start");
   });
+
+  test("report outside a run fails locally with a run-only diagnostic", async () => {
+    const r = await runCli(["report", "--status", "keep", "--message", "done"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("`report` is available only inside a Pievo run");
+  });
 });
 
 describe("classify lifecycle routing", () => {
@@ -94,15 +100,22 @@ describe("classify lifecycle routing", () => {
     expect(classify(["stop", "loop-1"], {})).toEqual({ kind: "interactive", argv: ["stop", "loop-1"] });
   });
 
-  test("in-run routing still wins", () => {
+  test("in-run callback routing wins and preserves argv exactly", () => {
     expect(classify(["daemon", "stop"], { PIEVO_RUN_TOKEN: "rk_x" })).toEqual({ kind: "callback", argv: ["daemon", "stop"] });
+    expect(classify(["report", "--help"], { PIEVO_RUN_TOKEN: "rk_x" })).toEqual({ kind: "callback", argv: ["report", "--help"] });
+    expect(classify([], { PIEVO_RUN_TOKEN: "rk_x" })).toEqual({ kind: "callback", argv: [] });
+  });
+
+  test("out-of-run report has no forwarding route", () => {
+    expect(classify(["report", "--message", "done"], {})).toEqual({ kind: "runOnlyReport" });
+    expect(classify(["report", "--help"], {})).toEqual({ kind: "help", verb: "report" });
   });
 });
 
 /**
  * The shared CLI client (`postCli`) is what makes the one-grammar convergence work:
- * it selects the credential by env (run token wins, else device), inlines the file
- * flags, POSTs `{argv}` to /api/machine/cli, and falls back on a 404. These unit the
+ * it selects the credential by env (run token wins, else device) and POSTs `{argv}`
+ * to /api/machine/cli. These unit the
  * credential selection + endpoint choice directly (the subprocess dispatch above proves
  * the local fast-paths still exit without the daemon).
  */
@@ -157,5 +170,20 @@ describe("postCli credential selection", () => {
     const r = await postCli(["loops"], { env: {}, deviceToken: undefined, server: "", fetchImpl });
     expect(r).toEqual({ kind: "not-configured" });
     expect(called).toBe(false);
+  });
+
+  test("default transport uses a bounded fetch while retaining fetchImpl injection", async () => {
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+      return new Response(JSON.stringify({ text: "ok", exitCode: 0 }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await expect(postCli(["loops"], { env: {}, deviceToken: "dk_dev", server: "https://srv.test" }))
+        .resolves.toMatchObject({ kind: "ok", status: 200 });
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

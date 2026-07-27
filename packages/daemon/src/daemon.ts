@@ -13,6 +13,7 @@ import { writePidFile, clearPidFile, verifiedRunningPid } from "./pidfile.js";
 import { daemonVersion } from "./version.js";
 import { writeRuntimeDiagnostics } from "./runtime-diagnostics.js";
 import { parsePollResponse } from "./poll-protocol.js";
+import { DAEMON_PROTOCOL_VERSION } from "./protocol.js";
 
 const POLL_MS = Number(process.env.PIEVO_POLL_MS || 3000);
 const POLL_TIMEOUT_MS = 30_000;
@@ -20,6 +21,7 @@ const REPOLL_MS = 250;
 const SHUTDOWN_REASON = "pievo:daemon-shutdown";
 const PERSIST_RETRY_MS = [250, 1_000, 5_000, 30_000] as const;
 const PERSIST_LOG_INTERVAL_MS = 60_000;
+const REPORT_SEND_CONCURRENCY = 4;
 export type RunStage = "executing" | "reporting";
 export type CurrentRun = { runId: string; stage: RunStage };
 
@@ -156,13 +158,31 @@ export class ConcurrentRuntime {
     if (this.reportDrain) return this.reportDrain;
     const pending = force ? this.outbox.all() : this.outbox.ready();
     const drain = (async () => {
-      for (const report of pending) {
-        const ack = await this.sendReport(serverUrl, report, this.reportAbort.signal);
-        if (this.reportAbort.signal.aborted) break;
-        this.outbox.applyAck(ack);
-        if (!this.outbox.get(report.reportId)) this.active.delete(report.runId);
-        this.emitState();
-      }
+      const queue = [...pending];
+      let failure: { error: unknown } | undefined;
+      const worker = async () => {
+        while (!this.reportAbort.signal.aborted) {
+          const report = queue.shift();
+          if (!report) return;
+          try {
+            const ack = await this.sendReport(serverUrl, report, this.reportAbort.signal);
+            if (this.reportAbort.signal.aborted) return;
+            this.outbox.applyAck(ack);
+            if (!this.outbox.get(report.reportId)) this.active.delete(report.runId);
+            this.emitState();
+          } catch (error) {
+            // A broken injected/custom transport must not prevent independent rows
+            // from being attempted. Preserve the drain rejection after all workers stop.
+            failure ??= { error };
+          }
+        }
+      };
+      const workers = Array.from(
+        { length: Math.min(REPORT_SEND_CONCURRENCY, queue.length) },
+        () => worker(),
+      );
+      await Promise.all(workers);
+      if (failure) throw failure.error;
     })();
     this.reportDrain = drain;
     try {
@@ -183,7 +203,7 @@ export function buildPollBody(
   currentRuns: CurrentRun[],
   daemonInstanceId: string,
 ): Record<string, unknown> {
-  return { protocolVersion: 4, ...info, daemonInstanceId, recoveryComplete: true, currentRuns };
+  return { protocolVersion: DAEMON_PROTOCOL_VERSION, ...info, daemonInstanceId, recoveryComplete: true, currentRuns };
 }
 
 export function nextPollDelayMs(elapsedMs: number, pollMs = POLL_MS): number {
@@ -216,7 +236,7 @@ export async function runDaemon(args: string[] = []): Promise<number> {
   const persistRuntime = () => {
     try {
       writeRuntimeDiagnostics(runtimeStatusFile, {
-        protocolVersion: 4,
+        protocolVersion: DAEMON_PROTOCOL_VERSION,
         currentRuns: runtimeState.currentRuns,
         ...(runtimeState.cancelPendingRunIds.length ? { cancelPendingRunIds: runtimeState.cancelPendingRunIds } : {}),
         ...(runtimeState.persistenceError ? { persistenceError: runtimeState.persistenceError } : {}),
@@ -233,7 +253,7 @@ export async function runDaemon(args: string[] = []): Promise<number> {
   );
   const onShutdown = () => { stopping = true; pollAbort.abort(SHUTDOWN_REASON); runtime.shutdown(); };
   for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, onShutdown);
-  logger.info({ server, protocolVersion: 4 }, "polling for deliveries");
+  logger.info({ server, protocolVersion: DAEMON_PROTOCOL_VERSION }, "polling for deliveries");
   // Start replay immediately, but never let a slow report transport stall
   // heartbeats, cancellation, or delivery for unrelated loops.
   void runtime.sendPending(server, true).catch((err) => logger.error({ err }, "report replay failed"));
@@ -245,7 +265,7 @@ export async function runDaemon(args: string[] = []): Promise<number> {
         method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify(buildPollBody(info, runtime.currentRuns(), daemonInstanceId)),
       }, POLL_TIMEOUT_MS, pollAbort.signal);
-      if (res.status === 426) logger.error("daemon protocol rejected; run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart` (protocol 4 required)");
+      if (res.status === 426) logger.error(`daemon protocol rejected; run \`npm install -g @kky42/pievo@latest\`, then \`pievo daemon restart\` (protocol ${DAEMON_PROTOCOL_VERSION} required)`);
       else if (!res.ok) logger.warn({ status: res.status, statusText: res.statusText }, "poll non-ok");
       else {
         const decoded = parsePollResponse(await res.json());

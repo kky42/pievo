@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { DAEMON_PROTOCOL_VERSION } from "./protocol.js";
+
 export type RuntimeDiagnostics = {
-  protocolVersion: 4;
+  protocolVersion: typeof DAEMON_PROTOCOL_VERSION;
   currentRuns?: Array<{ runId: string; stage: "executing" | "reporting" }>;
   cancelPendingRunIds?: string[];
   persistenceError?: string;
@@ -37,7 +39,7 @@ export function writeRuntimeDiagnostics(file: string, value: RuntimeDiagnostics)
 export function readRuntimeDiagnostics(file: string): RuntimeDiagnostics | undefined {
   try {
     const value = JSON.parse(fs.readFileSync(file, "utf8")) as RuntimeDiagnostics;
-    if (value?.protocolVersion !== 4) return undefined;
+    if (value?.protocolVersion !== DAEMON_PROTOCOL_VERSION) return undefined;
     return value;
   } catch {
     return undefined;

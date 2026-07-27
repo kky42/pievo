@@ -47,25 +47,34 @@ describe("concurrent persistence boundary", () => {
     box.close();
   });
 
-  test("drains durable reports sequentially and releases only their matching runs", async () => {
+  test("a stalled first report does not block an independent ready report", async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-v4-"));
     const box = new PendingReportOutbox(path.join(root, "outbox.sqlite"));
     box.put("rk_1", { reportId: "11111111-1111-4111-8111-111111111111", runId: "run-1", result: "success", durationMs: 1, exitCode: 0 });
     box.put("rk_2", { reportId: "22222222-2222-4222-8222-222222222222", runId: "run-2", result: "success", durationMs: 1, exitCode: 0 });
-    let inFlight = 0;
-    let maxInFlight = 0;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let observeSecond!: () => void;
+    const secondSent = new Promise<void>((resolve) => { observeSecond = resolve; });
     const sent: string[] = [];
     const runtime = new ConcurrentRuntime(box, undefined, undefined, async (_server, report) => {
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
       sent.push(report.runId);
-      await Promise.resolve();
-      inFlight -= 1;
+      if (report.runId === "run-1") await firstGate;
+      else observeSecond();
       return { kind: "ack", reportId: report.reportId };
     });
-    await runtime.sendPending("https://example.test", true);
+
+    let drained = false;
+    const sending = runtime.sendPending("https://example.test", true).finally(() => { drained = true; });
+    await secondSent;
+    await new Promise((resolve) => setImmediate(resolve));
     expect(sent).toEqual(["run-1", "run-2"]);
-    expect(maxInFlight).toBe(1);
+    expect(drained).toBe(false);
+    expect(box.all().map((row) => row.runId)).toEqual(["run-1"]);
+    expect(runtime.currentRuns()).toEqual([{ runId: "run-1", stage: "reporting" }]);
+
+    releaseFirst();
+    await sending;
     expect(runtime.currentRuns()).toEqual([]);
     box.close();
   });
@@ -139,7 +148,7 @@ describe("concurrent persistence boundary", () => {
     expect(attempts).toBe(2);
     expect(states.some((state) => state.persistenceError === "database temporarily busy" && state.outboxPath.endsWith("outbox.sqlite"))).toBe(true);
     expect(states.at(-1)?.persistenceError).toBeUndefined();
-    expect(box.peek()?.reportId).toBe("66666666-6666-4666-8666-666666666666");
+    expect(box.all()[0]?.reportId).toBe("66666666-6666-4666-8666-666666666666");
     box.close();
   });
 
@@ -149,7 +158,7 @@ describe("concurrent persistence boundary", () => {
     const runtime = new ConcurrentRuntime(box, async () => ({ reportId: "44444444-4444-4444-8444-444444444444", runId: "run-1", result: "success", durationMs: 1, exitCode: 0 }));
     await runtime.accept(delivery(), "https://example.test", []);
     expect(runtime.cancel("run-1")).toBe(false);
-    expect(JSON.parse(box.peek()!.payloadJson).result).toBe("success");
+    expect(JSON.parse(box.all()[0]!.payloadJson).result).toBe("success");
     box.close();
   });
 });

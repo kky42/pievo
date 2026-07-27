@@ -7,6 +7,9 @@
  */
 
 import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
+import { boundedFetch } from "./http.js";
+
+const CLI_TIMEOUT_MS = 30_000;
 
 /** A server reply. A non-JSON body is represented as an empty object and rejected
  *  by the caller because canonical CLI responses require `text`. */
@@ -54,7 +57,7 @@ export async function postCli(argv: string[], deps: PostCliDeps = {}): Promise<P
   const cred = resolveCredential(deps);
   const server = "server" in deps ? (deps.server ?? "") : resolveServerUrl(deps.serverFlag);
   if (!cred || !server) return { kind: "not-configured" };
-  const fetchImpl = deps.fetchImpl ?? fetch;
+  const fetchImpl = deps.fetchImpl ?? ((url: string, init: RequestInit) => boundedFetch(url, init, CLI_TIMEOUT_MS));
 
   try {
     const res = await fetchImpl(`${server}/api/machine/cli`, {

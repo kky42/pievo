@@ -58,7 +58,14 @@ import {
 } from "./toon.js";
 import { canonicalLoopEnvelope, LOOP_EDIT_FIELDS, scheduleFromLoop, validateLoopCreate, validateLoopEdit } from "./loopConfig.js";
 import { DAEMON_PROTOCOL_VERSION, MIN_DAEMON_VERSION, daemonNeedsUpdate, daemonUpgradeCommand } from "./protocol.js";
-import { clipText, nowIso, POLL_INFO_TEXT_CAP, POLL_VERSION_CAP, stripNul, validOptionalPollString, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
+import { clipText, nowIso, POLL_VERSION_CAP, stripNul, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
+import {
+  POLL_V4_REQUEST_FIELDS,
+  validPollCurrentRun,
+  validPollInfo,
+  validPollWireId,
+  type PollV4Request,
+} from "./pollValidation.js";
 
 const log = logger.child({ mod: "gateway" });
 
@@ -546,43 +553,14 @@ export class MachineGateway {
   }
 
   /** Protocol-v4 poll: plural local state, one new delivery per poll. */
-  async pollV4(deviceToken: string, request: {
-    protocolVersion?: number;
-    currentRuns?: Array<{ runId: string; stage: "executing" | "reporting" }>;
-    daemonInstanceId?: string;
-    recoveryComplete?: boolean;
-    info?: { host?: string; platform?: string; arch?: string; version?: string };
-  }): Promise<HttpResult> {
-    const validWireId = (value: unknown): value is string =>
-      typeof value === "string"
-      && value.length <= 200
-      && value.trim().length > 0
-      && !value.includes("\0");
-    const validCurrent = (value: unknown): value is { runId: string; stage: "executing" | "reporting" } =>
-      value !== null && typeof value === "object" && !Array.isArray(value)
-      && Object.keys(value).length === 2
-      && Object.prototype.hasOwnProperty.call(value, "runId")
-      && Object.prototype.hasOwnProperty.call(value, "stage")
-      && validWireId((value as { runId?: unknown }).runId)
-      && ((value as { stage?: unknown }).stage === "executing" || (value as { stage?: unknown }).stage === "reporting");
-    const requestFields = new Set(["protocolVersion", "currentRuns", "daemonInstanceId", "recoveryComplete", "info"]);
-    const infoFields = new Set(["host", "platform", "arch", "version"]);
+  async pollV4(deviceToken: string, request: PollV4Request): Promise<HttpResult> {
     const rawRequest = request as unknown as Record<string, unknown>;
-    const rawInfo = rawRequest?.info;
-    const infoValid = rawInfo === undefined || (
-      rawInfo !== null && typeof rawInfo === "object" && !Array.isArray(rawInfo)
-      && Object.keys(rawInfo).every((key) => infoFields.has(key))
-      && validOptionalPollString((rawInfo as Record<string, unknown>).host, POLL_INFO_TEXT_CAP)
-      && validOptionalPollString((rawInfo as Record<string, unknown>).platform, POLL_INFO_TEXT_CAP)
-      && validOptionalPollString((rawInfo as Record<string, unknown>).arch, POLL_INFO_TEXT_CAP)
-      && validOptionalPollString((rawInfo as Record<string, unknown>).version, POLL_VERSION_CAP)
-    );
     if (request === null || typeof request !== "object" || Array.isArray(request)
-      || Object.keys(rawRequest).some((key) => !requestFields.has(key))
-      || !infoValid
+      || Object.keys(rawRequest).some((key) => !POLL_V4_REQUEST_FIELDS.has(key))
+      || !validPollInfo(rawRequest?.info)
       || (rawRequest.protocolVersion !== undefined && (typeof rawRequest.protocolVersion !== "number" || !Number.isInteger(rawRequest.protocolVersion)))
-      || (rawRequest.currentRuns !== undefined && (!Array.isArray(rawRequest.currentRuns) || rawRequest.currentRuns.some((run) => !validCurrent(run))))
-      || (rawRequest.daemonInstanceId !== undefined && !validWireId(rawRequest.daemonInstanceId))
+      || (rawRequest.currentRuns !== undefined && (!Array.isArray(rawRequest.currentRuns) || rawRequest.currentRuns.some((run) => !validPollCurrentRun(run))))
+      || (rawRequest.daemonInstanceId !== undefined && !validPollWireId(rawRequest.daemonInstanceId))
       || (rawRequest.recoveryComplete !== undefined && typeof rawRequest.recoveryComplete !== "boolean")) {
       return { status: 400, body: { error: "invalid poll request", code: "VALIDATION_ERROR" } };
     }
@@ -597,13 +575,13 @@ export class MachineGateway {
       }
       return { status: 426, body: { error: "daemon upgrade required; run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`", code: "UPGRADE_REQUIRED", requiredProtocol: DAEMON_PROTOCOL_VERSION } };
     }
-    if (!Array.isArray(request.currentRuns) || request.currentRuns.some((run) => !validCurrent(run))) {
+    if (!Array.isArray(request.currentRuns) || request.currentRuns.some((run) => !validPollCurrentRun(run))) {
       return { status: 400, body: { error: "invalid currentRuns", code: "VALIDATION_ERROR" } };
     }
     if (request.recoveryComplete !== true) {
       return { status: 400, body: { error: "recoveryComplete must be true", code: "VALIDATION_ERROR" } };
     }
-    if (!validWireId(request.daemonInstanceId)) {
+    if (!validPollWireId(request.daemonInstanceId)) {
       return { status: 400, body: { error: "a valid daemonInstanceId is required", code: "VALIDATION_ERROR" } };
     }
     const currentIds = [...new Set(request.currentRuns.map((run) => run.runId))];

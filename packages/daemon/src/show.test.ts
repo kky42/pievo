@@ -98,4 +98,12 @@ describe("runShow", () => {
     expect(cap.stderr()).toContain("unknown flag --bogus");
     expect(calls).toHaveLength(0); // rejected before any fetch
   });
+
+  test("a value-bearing boolean stays unknown even if a later bare flag repeats it", async () => {
+    const { fetchFn, calls } = stub([], () => ({ ok: true, body: {} }));
+    const cap = capture({ fetchFn });
+    expect(await runShow(["loop-x", "--json=false", "--json"], cap.deps)).toBe(2);
+    expect(cap.stderr()).toContain("unknown flag --json");
+    expect(calls).toHaveLength(0);
+  });
 });

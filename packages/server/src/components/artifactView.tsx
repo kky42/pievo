@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ArtifactContent, ArtifactSummary } from '../types'
 import { artifactKind, type ArtifactKind } from '../lib/artifactKind'
 import { getArtifact } from '../server/loopApi'
-import { downloadHref, inlineHref } from './ArtifactFileRow'
+import { downloadHref, inlineHref } from './artifactUrls'
 import { MarkdownView } from './MarkdownView'
 
 /**
@@ -23,8 +23,6 @@ import { MarkdownView } from './MarkdownView'
  * Everything keeps a Download fallback; an oversize (metadata-only) artifact has
  * no synced bytes to render, so it says so rather than showing an empty pane.
  */
-
-export const isMarkdown = (path: string): boolean => artifactKind(path) === 'markdown'
 
 /** A small monospace caption strip above a file's content (path · meta [· action]). */
 export function ViewerHead({

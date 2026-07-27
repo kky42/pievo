@@ -47,7 +47,6 @@ function setCookie(teamId: string | null) {
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pievo-auth-'))
   process.env.PIEVO_DATA_DIR = tmp
-  process.env.PIEVO_DB_PATH = path.join(tmp, 'test.db')
   process.env.PIEVO_LOG_LEVEL = 'silent'
   // Turn the gate ON (enforce), read at module load.
   process.env.GITHUB_CLIENT_ID = 'gh-id'

@@ -34,9 +34,6 @@ const btnBase = `inline-flex cursor-pointer items-center gap-1.5 rounded-control
 export const btn = `${btnBase} border border-wire bg-surface text-primary hover:bg-raised`
 export const btnPrimary = `${btnBase} border border-display bg-display text-paper hover:opacity-85`
 export const btnDanger = `${btnBase} border border-transparent bg-rubik-red text-white hover:opacity-85`
-// Emphasized secondary action: stronger than the wire-bordered default while
-// remaining visually below the screen's filled primary action.
-export const btnCost = `${btnBase} border border-display bg-transparent text-display hover:bg-[color:var(--color-display)]/8`
 // Compact control - its own padding/size base (NOT btnBase) so it can't lose
 // the px/text tug-of-war on CSS source-order. For inline affordances like Copy
 // that sit next to dense content rather than anchoring a dialog.

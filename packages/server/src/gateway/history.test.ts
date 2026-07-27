@@ -13,7 +13,6 @@ let history: typeof import("./history.js");
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-history-"));
   process.env.PIEVO_DATA_DIR = tmp;
-  process.env.PIEVO_DB_PATH = path.join(tmp, "test.db");
   process.env.PIEVO_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();

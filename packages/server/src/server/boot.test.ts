@@ -15,7 +15,6 @@ let store: typeof import("../db/store.js");
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-boot-"));
   process.env.PIEVO_DATA_DIR = tmp;
-  process.env.PIEVO_DB_PATH = path.join(tmp, "boot.db");
   process.env.PIEVO_LOG_LEVEL = "silent";
   boot = await import("./boot.js");
   store = await import("../db/store.js");

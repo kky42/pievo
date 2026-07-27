@@ -95,10 +95,6 @@ export class Scheduler {
     return advanced;
   }
 
-  async runningIds(): Promise<string[]> {
-    return [...new Set((await store.openRuns()).filter((r) => r.phase === "running").map((r) => r.loopId))];
-  }
-
   private async enqueue(id: string, request: EnqueueRunRequest): Promise<QueueResult> {
     const result = await store.enqueueRun(id, request);
     if ("run" in result) {

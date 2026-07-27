@@ -73,6 +73,20 @@ describe("runCallback — unified dispatch", () => {
     expect(calls).toHaveLength(0);
   });
 
+  test("empty callback argv is rejected locally without a stale command rewrite", async () => {
+    const calls = stubFetch(() => ({ status: 200, body: { text: "should not run", exitCode: 0 } }));
+    expect(await runCallback([])).toBe(2);
+    expect(stderr()).toContain("only `report` is available");
+    expect(calls).toHaveLength(0);
+  });
+
+  test("report help remains local inside a run", async () => {
+    const calls = stubFetch(() => ({ status: 200, body: { text: "should not run", exitCode: 0 } }));
+    expect(await runCallback(["report", "--help"])).toBe(0);
+    expect(stdout()).toContain("pievo report --status");
+    expect(calls).toHaveLength(0);
+  });
+
   test("a response without rendered text fails loudly", async () => {
     stubFetch(() => ({ status: 200, body: { ok: true } }));
     expect(await runCallback(["report"])).toBe(1);
