@@ -1,11 +1,11 @@
 /**
- * Bare `pievo` OUT of a run — the content-first HOME view (P8/§5.1). The daemon is
+ * Bare `pievo` outside a run renders the machine home. The daemon is
  * a text sink: it collects the local facts only IT knows (cwd + home dir for the
  * directory scoping, the PATH shim path, the daemon pid, the server URL) and posts
  * them as `home` context flags to the unified `/api/machine/cli`; the SERVER owns the
  * whole TOON render (`renderHomeText`). The daemon just prints `body.text`.
  *
- * Never empty (P5/P8): when this machine has no stored credential/server the post
+ * When this machine has no stored credential/server the post
  * short-circuits to a definitive local "not connected — run `pievo daemon start`"
  * view. The in-run bare `pievo`
  * is handled separately (cli.ts routes it to the callback as `home` on the run cred).
@@ -53,9 +53,8 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
   const cwd = (injected.cwd ?? (() => process.cwd()))();
   const homedir = (injected.homedir ?? os.homedir)();
   const pid = (injected.localPid ?? (() => verifiedRunningPid()))();
-  // The durable `pievo` path (our shim OR a real global on PATH) for the home's
-  // `bin:` line (P8). Null ⇒ npx-without-global; the SERVER then renders the honest
-  // "not on PATH — npm i -g" fallback so the line ALWAYS leads the home (F7).
+  // The durable `pievo` path (our shim or a real global on PATH). Null lets the
+  // server render the explicit global-install fallback.
   const bin = (injected.binPath ?? (() => resolveDurableBinPath()))();
   const serverDisplay = (injected.serverDisplay ?? (() => resolveServerUrl(undefined)))();
 
@@ -89,7 +88,7 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
   return printCliResponse(r.body, r.status, out);
 }
 
-/** The `bin:` line that leads EVERY home view (P8): the real durable path when known,
+/** The `bin:` line that leads every home view: the durable path when known,
  *  else the honest "not on PATH" fallback with the fix. Mirrors the server's
  *  `renderHomeText` so the local and server-rendered homes agree. */
 export function binLine(bin: string | null): string {

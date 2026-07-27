@@ -1,42 +1,17 @@
-/**
- * gateway/toon.ts — a pure, dependency-free TOON serializer. Every
- * `/api/machine/cli` verb renders through these helpers into the response `text`
- * field the daemon prints. `finalizeCli` retains only `{text, exitCode, loops, runs}`.
- *
- * TOON (token-oriented object notation, https://axi.md/) is the axi default output:
- * braces/commas/quotes omitted where unambiguous. The shapes this module produces
- * mirror the gh-axi reference tool observed live:
- *
- *   detail block   →  topKey:\n  key: value            (`gh-axi pr view`)
- *   typed list     →  name[N]{f1,f2}:\n  v1,v2          (`gh-axi pr list`)
- *   count aggregate → count: N [(showing first M)]      (P4)
- *   empty state    →  count: 0\n  name: []              (P5)
- *   help[]         →  help[N]:\n  Run `…`               (P9)
- *   structured err →  error: "…"\n  code: SLUG          (P6, to stdout)
- *   truncation     →  … (truncated, N chars total — use --full to see complete body)
- *
- * Every function is pure (no I/O, no clock) so the whole surface is unit-testable in
- * isolation (`toon.test.ts`).
- */
+/** Pure TOON rendering for `/api/machine/cli` response text. Braces, commas,
+ * and quotes are omitted where unambiguous; every helper is deterministic. */
 
 export type Scalar = string | number | boolean | null | undefined;
 
-/** The axi placeholder for an absent value — a bare em-dash, mirroring gh-axi. */
+/** Placeholder for an absent value. */
 export const ABSENT = "—";
 
-/** A double-quoted string is needed when the bare token would be ambiguous inside a
- *  `key: value` line or a comma-delimited row: an empty string, or one carrying
- *  whitespace, a comma, a colon, or a double-quote. This matches gh-axi's observable
- *  behavior (every value it leaves bare is a single delimiter-free token; anything
- *  with a space/comma/colon it quotes). */
+/** Whether a token needs quoting inside a key/value line or comma-delimited row. */
 export function needsQuote(s: string): boolean {
   return s === "" || /[\s,:"]/.test(s);
 }
 
-/** Always wrap a string in double quotes, escaping backslashes, quotes, and newlines
- *  so the value survives on a single line (`\n` rendered as two chars, like gh-axi's
- *  body field). Used for error messages (always quoted, per gh-axi) and by `scalar`
- *  when quoting is required. */
+/** Quote and escape a string so it remains on one line. */
 export function quote(s: string): string {
   return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, "\\n")}"`;
 }
@@ -73,8 +48,7 @@ export function detailBlock(topKey: string, rows: Array<[string, Scalar | { raw:
   return lines.join("\n");
 }
 
-/** The `count:` aggregate line (P4). `total` → `count: N of TOTAL total` (a windowed
- *  survey); `showing` → `count: N (showing first SHOWING)`; else `count: N`. */
+/** Render a count, optionally with total or displayed-window context. */
 export function countLine(count: number, opts: { total?: number; showing?: number } = {}): string {
   if (opts.total !== undefined) return `count: ${count} of ${opts.total} total`;
   if (opts.showing !== undefined) return `count: ${count} (showing first ${opts.showing})`;
@@ -96,24 +70,18 @@ export function listBlock(name: string, fields: string[], rows: Scalar[][]): str
   return lines.join("\n");
 }
 
-/** A definitive empty collection (P5): the bare `name: []` line. Pair with
- *  `countLine(0)` for the full `count: 0` + `name: []` empty state. */
+/** Render an empty named collection. */
 export function emptyList(name: string): string {
   return `${name}: []`;
 }
 
-/**
- * A contextual-disclosure help block (P9): `help[N]:` then each command template
- * indented two spaces, verbatim (they carry backticks + `<placeholders>`).
- */
+/** Render command templates as an indented help block. */
 export function helpBlock(lines: string[]): string {
   return [`help[${lines.length}]:`, ...lines.map((l) => `  ${l}`)].join("\n");
 }
 
 /**
- * A structured error (P6): the message (always quoted) plus a bare machine-readable
- * slug, both to stdout. Slugs: VALIDATION_ERROR, FORBIDDEN, NOT_FOUND, CONFLICT,
- * UNAUTHORIZED, RATE_LIMITED, ERROR.
+ * Render a quoted error plus a machine-readable code.
  *
  *   error: "status must be keep|no-change|block (got \"wibble\")"
  *   code: VALIDATION_ERROR
@@ -122,7 +90,7 @@ export function errorBlock(message: string, code: string): string {
   return `error: ${quote(message)}\ncode: ${code}`;
 }
 
-/** The axi error-code slug for an HTTP status (P6). */
+/** Map an HTTP status to its CLI error code. */
 export function codeForStatus(status: number): string {
   switch (status) {
     case 400:
@@ -142,13 +110,7 @@ export function codeForStatus(status: number): string {
   }
 }
 
-/**
- * Content truncation with a size hint (P3). A string within `cap` passes through
- * unchanged; a longer one is clipped to `cap` chars and gets the hint appended INSIDE
- * the value (so a caller can quote the whole thing as one field, like gh-axi's body).
- * `tail` is the escape-hatch phrasing — the full `use --full to see complete body`
- * for a detail body, or a terse `use --full` for a dense list cell.
- */
+/** Clip content at `cap` and append its original size plus recovery hint. */
 export function truncate(
   text: string,
   cap: number,

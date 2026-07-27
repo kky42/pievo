@@ -93,8 +93,8 @@ describe("runInteractive — text sink (new server renders TOON in `text`)", () 
   });
 });
 
-describe("runInteractive — loops forwards its flags (F1–F4: the old bug hardcoded ['loops'])", () => {
-  test("--fields is forwarded verbatim so the server can honor it (F1)", async () => {
+describe("runInteractive — loops flag forwarding", () => {
+  test("--fields is forwarded verbatim", async () => {
     const toon = "count: 1\nloops[1]{id,name,cron,enabled,nextFire,model,reasoningEffort}:\n  loop-1,Cookie,\"0 8 * * *\",on,—,default,default";
     const { fetchFn, calls } = stub(({ url, argv }) =>
       url.includes("/api/machine/cli") && argv[0] === "loops" ? { ok: true, body: { ok: true, loops: [{ id: "loop-1" }], text: toon, exitCode: 0 } } : { ok: false, status: 404, body: {} },
@@ -113,7 +113,7 @@ describe("runInteractive — loops forwards its flags (F1–F4: the old bug hard
     expect(calls[0]!.argv).toEqual(["loops", "--fields", "model,reasoningEffort"]);
   });
 
-  test("--json is forwarded and its (JSON) text printed verbatim (F4)", async () => {
+  test("--json is forwarded and its JSON text printed verbatim", async () => {
     const json = JSON.stringify([{ id: "loop-1", name: "Cookie" }], null, 2);
     const { fetchFn, calls } = stub(({ url, argv }) =>
       url.includes("/api/machine/cli") && argv.includes("--json") ? { ok: true, body: { ok: true, loops: [{ id: "loop-1" }], text: json, exitCode: 0 } } : { ok: false, status: 404, body: {} },
@@ -132,7 +132,7 @@ describe("runInteractive — loops forwards its flags (F1–F4: the old bug hard
     expect(calls).toHaveLength(0);
   });
 
-  test("an unknown flag on loops → exit 2, no fetch (F3)", async () => {
+  test("an unknown flag on loops exits before fetch", async () => {
     const { fetchFn, calls } = stub(() => ({ ok: true, body: {} }));
     const cap = capture({ fetchImpl: fetchFn });
     expect(await runInteractive(["loops", "--bogusflag"], cap)).toBe(2);
@@ -143,7 +143,7 @@ describe("runInteractive — loops forwards its flags (F1–F4: the old bug hard
 
 });
 
-describe("runInteractive — edit no-op (F8) + input-required guard", () => {
+describe("runInteractive — edit no-op and input guard", () => {
   test("edit --json '{}' is forwarded (NOT short-circuited to usage), server reports the no-op", async () => {
     const toon = "nothing to change: Cookie (loop-1)\neditable[13]: name, cron, timezone";
     const { fetchFn, calls } = stub(({ url, argv }) =>

@@ -1453,8 +1453,7 @@ export async function listMachines(teamId?: string): Promise<Machine[]> {
 /**
  * Machines usable/visible in a team, MEMBERSHIP-scoped: every machine whose owner
  * belongs to the team (join `machines.userId` → a `team_members` row for this
- * team). One machine therefore appears in every team its owner is a member of —
- * the decoupling that lets a single daemon serve multiple teams (report §2.3).
+ * team). One machine therefore appears in every team its owner belongs to.
  * A user has at most one membership row per team, so no machine is duplicated.
  */
 export async function listMachinesForTeam(teamId: string): Promise<Machine[]> {
@@ -1500,9 +1499,7 @@ export function teamIdForUser(userId: string | null | undefined): string {
 const ensuredTeams = new Set<string>();
 
 /** Idempotently create a team (+ owner membership) if absent. The email-derived
- *  `name` is INSERT-ONLY — it seeds a brand-new personal team but is NEVER synced
- *  onto an existing row, so an owner's `renameTeam` on their personal team sticks
- *  (design decision 5 / §6: the old force-rename silently reverted manual renames).
+ *  `name` seeds only a new personal team, so later owner renames persist.
  *  Memoized ⇒ at most one reconcile per team per process. The team insert +
  *  membership insert are one atomic transaction. */
 export async function ensureTeam(id: string, name: string, ownerUserId: string | null): Promise<void> {
@@ -1526,8 +1523,7 @@ export function newTeamId(): string {
   return `team-${randomUUID().slice(0, 12)}`;
 }
 
-/** Is this the user's undeletable personal team (`team-<ownerUserId>`)? The
- *  requestScope fallback, so it can be renamed (decision 5) but never deleted/left. */
+/** Whether this is the user's renamable but undeletable personal team. */
 export function isPersonalTeam(team: Team): boolean {
   return !!team.ownerUserId && team.id === teamIdForUser(team.ownerUserId);
 }
@@ -1599,8 +1595,7 @@ export async function listTeamMembers(teamId: string): Promise<TeamMemberWithUse
     .sort((a, b) => (a.role === b.role ? (a.createdAt < b.createdAt ? -1 : 1) : a.role === "owner" ? -1 : 1));
 }
 
-/** Resolve a user by email (case-insensitive) — the direct-add-by-email fast path
- *  (design §4 option A). Undefined ⇒ no account yet (invite-link path instead). */
+/** Resolve a user by email for direct membership; undefined means no account yet. */
 export async function userByEmail(email: string): Promise<{ id: string; email: string } | undefined> {
   const r = (
     await db
@@ -1691,9 +1686,8 @@ export async function setTeamMemberRoleGuarded(
 
 /**
  * Delete a team and its dependents, transactionally. The CALLER enforces the
- * policy guards first (personal-team undeletable; blocked while the team still
- * owns loops — design decision 1, no cascade of loop history). We RE-CHECK the
- * loop count INSIDE the transaction and abort (`has-loops`) if any loop exists,
+ * policy guards first (personal-team undeletable; blocked while the team owns loops).
+ * The transaction rechecks the loop count and aborts (`has-loops`) if one exists,
  * closing the check-then-cascade gap where a loop created between the caller's
  * guard and here would be orphaned at a now-deleted team. On success we cascade
  * the team's own resources: pending invites, memberships, and reassign

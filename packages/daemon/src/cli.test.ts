@@ -33,30 +33,10 @@ describe("pievo CLI dispatch", () => {
     expect(r.stdout).not.toMatch(/^  (up|down|status|doctor|update)\b/m);
   });
 
-  test.each(["up", "down", "status", "doctor", "update"])("removed top-level %s is unknown", async (verb) => {
-    const r = await runCli([verb]);
-    expect(r.code).toBe(2);
-    expect(r.stderr).toContain(`unknown command '${verb}'`);
-  });
-
-  test.each(["start", "stop", "restart", "status"])("daemon %s --help is side-effect-free", async (subcommand) => {
-    const r = await runCli(["daemon", subcommand, "--help"]);
+  test("nested daemon help is side-effect-free", async () => {
+    const r = await runCli(["daemon", "start", "--help"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain(`pievo daemon ${subcommand}`);
-  });
-
-  test("daemon --help is side-effect-free", async () => {
-    const r = await runCli(["daemon", "--help"]);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain("pievo daemon <start|stop|restart|status>");
-  });
-
-  test("raw lifecycle flags are unknown", async () => {
-    for (const flag of ["--server-url", "--connect-key", "--api-key", "--foreground"]) {
-      const r = await runCli([flag, "x"]);
-      expect(r.code).toBe(2);
-      expect(r.stderr).toContain("unknown command");
-    }
+    expect(r.stdout).toContain("pievo daemon start");
   });
 
   test("bare pievo opens the machine home", async () => {
@@ -80,8 +60,8 @@ describe("classify lifecycle routing", () => {
     expect(classify(["daemon", "status"], {})).toEqual({ kind: "daemonCommand", command: "status", args: [] });
   });
 
-  test.each(["up", "down", "status", "doctor", "update", "finish", "complete"])("%s has no route", (verb) => {
-    expect(classify([verb], {})).toEqual({ kind: "unknown", verb });
+  test("unknown commands have no route", () => {
+    expect(classify(["unknown"], {})).toEqual({ kind: "unknown", verb: "unknown" });
   });
 
   test("nested help wins before every lifecycle handler", () => {

@@ -19,7 +19,7 @@ const okResponse = (body: unknown) => ({ ok: true, status: 200, json: async () =
 const errResponse = (status: number, body: unknown) =>
   ({ ok: false, status, json: async () => body }) as unknown as Response;
 
-/** The inline `--json '<config>'` string (batch 2 replaced the `--config <file>` ritual). */
+/** Serialize the canonical inline config argument. */
 function cfgJson(cfg: object): string {
   return JSON.stringify(cfg);
 }
@@ -71,7 +71,7 @@ describe("coerceAgent", () => {
   });
 });
 
-describe("idempotencyKey / canonicalJson (F8 — `new` retry-safety, design §8.1)", () => {
+describe("idempotencyKey / canonicalJson", () => {
   test("canonicalJson sorts object keys recursively, preserves array order", () => {
     expect(canonicalJson({ b: 1, a: 2 })).toBe(canonicalJson({ a: 2, b: 1 }));
     expect(canonicalJson({ a: 2, b: 1 })).toBe('{"a":2,"b":1}');

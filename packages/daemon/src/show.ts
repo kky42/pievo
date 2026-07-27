@@ -1,6 +1,6 @@
 /**
  * `pievo show [<loop>] [--json] [--full]` OUT of a run — the owner reads a loop's
- * full editable config (F1). Like `pievo log`, it resolves the target loop
+ * full editable config. Like `pievo log`, it resolves the target loop
  * CLIENT-side (an explicit id/name wins; else the loop whose folder contains the cwd),
  * because the server's `show` dispatch needs an explicit loop id. Then it forwards
  * `show <id> [--json] [--full]` to the unified `/api/machine/cli` on the device

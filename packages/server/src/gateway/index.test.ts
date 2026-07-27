@@ -529,13 +529,31 @@ test("pollV4 with the supported daemon version can claim pending work", async ()
 
 
 
-// ---- per-team connect-key: createLoop resolves the team from the claim intent ----
+// ---- per-team connect-key ------------------------------------------------------
 
+test("createLoop uses the claim intent team instead of the machine home team", async () => {
+  await makeTeam("team-home", ["u1"]);
+  await makeTeam("team-target", ["u1"]);
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", teamId: "team-home", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const claim = tokens.mintDeviceToken();
+  await tokens.rememberConnectKey(claim, { userId: "u1", teamId: "team-target" });
 
+  const result = await gateway().createLoop(token, {
+    name: "Targeted",
+    schedule: { mode: "continuous", delayMinutes: 5 },
+    workdir: "/work/project",
+    agent: "claude-code",
+    prompt: "Inspect the project.",
+    statusDefinitions: { keep: "keep", noChange: "none", block: "blocked" },
+    claim,
+    idempotencyKey: "d".repeat(64),
+  });
 
-
-
-
+  expect(result.status).toBe(200);
+  expect(await store.getLoop((result.body as { id: string }).id)).toMatchObject({ teamId: "team-target", machineId });
+});
 
 test("listMachinesForTeam is membership-scoped — a machine shows in its owner's team regardless of its home team", async () => {
   (await makeTeam("team-lm", ["u1"])); // only u1 is a member
@@ -919,7 +937,7 @@ test("poll persists the daemon version, updating only when it changes", async ()
   expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.9.0");
 });
 
-// ---- /api/machine/cli — unified dispatch, verb × credential matrix (§4.1) ----
+// ---- /api/machine/cli — verb × credential matrix -----------------------------
 
 /** A machine seeded from a REAL device token, an OPEN loop bound to it, and an exec
  *  run RUNNING with a fresh run token — so one setup drives both the device-credential

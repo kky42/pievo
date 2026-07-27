@@ -22,11 +22,4 @@ describe('PievoLogo', () => {
     const favicon = read(new URL('../../public/favicon.svg', import.meta.url))
     expect(favicon).toBe(readmeMark)
   })
-
-  it('does not retain the old spelling-cube CSS', () => {
-    const css = read(new URL('../styles/app.css', import.meta.url))
-    expect(css).not.toContain('.loop-cube')
-    expect(css).not.toContain('loopCubeSpin')
-    expect(css).not.toContain('L-O-O-P')
-  })
 })

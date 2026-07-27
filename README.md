@@ -92,16 +92,16 @@ pievo-server status
 
 ### 2. Connect the execution machine and create a loop
 
-1. Open <http://127.0.0.1:3000>.
-2. Select **New Loop**, then copy the generated prompt.
-3. Paste it into Claude Code or Codex in the project you want to schedule.
+1. Open <http://127.0.0.1:3000> and select **New Loop**.
+2. Paste the connect command shown in the modal into a foreground Claude Code or
+   Codex session in the project you want to schedule.
+3. In that same session, tell the agent: **“Create a Pievo loop.”**
 
-The pasted flow installs `@kky42/pievo`, connects the local daemon with the one-time
-key, asks you to confirm the prompt, schedule, status meanings, and optional artifact
-paths, validates the configuration, and creates the loop. First success is visible as
-`daemon online` in the local session and the new loop in the web UI. A continuous loop
-is immediately eligible; a cron loop shows its next occurrence. Use **Run once** to
-exercise either schedule immediately.
+The agent uses Pievo's installed owner skill to gather and confirm the prompt,
+schedule, status meanings, and optional artifact paths, then validates and creates the
+loop. Close the modal and the dashboard's normal refresh will show it. A continuous
+loop is immediately eligible; a cron loop shows its next occurrence. Use **Run once** to exercise either
+schedule immediately.
 
 Useful commands:
 

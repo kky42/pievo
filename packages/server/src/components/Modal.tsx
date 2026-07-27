@@ -2,9 +2,7 @@ import { Dialog } from '@base-ui/react/dialog'
 import type { ReactNode } from 'react'
 import { sectionHeadCls } from './ui'
 
-/** Shared modal shell — Base UI Dialog handles focus trap, Esc, scroll lock.
- *  Content-height, optically centered — sized for the small form/compose dialogs
- *  (the old `detail`/`wide` variants died with the modal-era loop/run views). */
+/** Shared modal shell — Base UI Dialog handles focus trap, Esc, and scroll lock. */
 export function Modal({
   open,
   onClose,

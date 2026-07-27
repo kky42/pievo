@@ -32,7 +32,7 @@ test("scalar renders numbers/booleans bare and null/undefined as the em-dash", (
 });
 
 test("scalar leaves a bare token unquoted, quotes anything with whitespace/comma/colon/quote or empty", () => {
-  // Bare single tokens (matches gh-axi's `state: open`, `author: stonexer`).
+  // Bare single tokens remain unquoted.
   expect(scalar("open")).toBe("open");
   expect(scalar("ok/no-change")).toBe("ok/no-change");
   expect(scalar("$0.08")).toBe("$0.08");

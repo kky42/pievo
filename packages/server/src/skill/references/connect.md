@@ -1,8 +1,8 @@
 # Connect a machine
 
 Use the **pievo-cli** command prefix supplied by the user; otherwise use `pievo`.
-A first-capture snippet supplies a **server-url** and one-time **connect-key**. Use
-both verbatim.
+A dashboard connection command supplies a **server-url** and one-time
+**connect-key**. Use both verbatim.
 
 If no custom command prefix was supplied, install the current CLI:
 

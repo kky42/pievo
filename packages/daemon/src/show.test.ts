@@ -1,5 +1,5 @@
 /**
- * `pievo show` OUT of a run (F1) — resolves the loop client-side (like `log`), then
+ * `pievo show` resolves the loop client-side, then
  * forwards `show <id>` to the unified dispatch on the device credential and prints the
  * server's rendered envelope `text`. Every touch is injected.
  */
@@ -73,7 +73,7 @@ describe("runShow", () => {
     expect(cap.stderr()).toContain("isn't connected");
   });
 
-  test("F5: an explicit nonexistent loop id → structured NOT_FOUND to STDOUT, exit 1", async () => {
+  test("an explicit nonexistent loop id returns structured NOT_FOUND", async () => {
     const { fetchFn } = stub([{ id: "loop-real", name: "Real", workdir: "/elsewhere" }], () => ({ ok: true, body: {} }));
     const cap = capture({ fetchFn });
     const code = await runShow(["loop-zzzz-00000000"], cap.deps);

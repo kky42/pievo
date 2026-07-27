@@ -7,7 +7,6 @@ import { DashboardView, type DashboardData } from './DashboardView'
 
 const h = vi.hoisted(() => ({
   listLoops: vi.fn(async () => [] as LoopSummary[]),
-  onCreated: null as null | (() => void),
 }))
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => () => {} }))
@@ -23,12 +22,7 @@ vi.mock('./LoopCard', () => ({
 vi.mock('./TeamSwitcher', () => ({ TeamSwitcher: () => null }))
 vi.mock('./MachinesModal', () => ({ MachinesModal: () => null }))
 vi.mock('./TeamsModal', () => ({ TeamsModal: () => null }))
-vi.mock('./ComposeModal', () => ({
-  ComposeModal: ({ onCreated }: { onCreated: () => void }) => {
-    h.onCreated = onCreated
-    return null
-  },
-}))
+vi.mock('./ComposeModal', () => ({ ComposeModal: () => null }))
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -79,7 +73,6 @@ function findLoop(id: string) {
 afterEach(async () => {
   h.listLoops.mockReset()
   h.listLoops.mockResolvedValue([])
-  h.onCreated = null
   if (root) await act(async () => root!.unmount())
   host?.remove()
   host = null
@@ -93,23 +86,6 @@ describe('DashboardView loader and live data ordering', () => {
 
     await render(initial([]))
 
-    expect(findLoop('deleted')).toBeNull()
-  })
-
-  it('does not let an older loader result overwrite a successful live refresh', async () => {
-    await render(initial([]))
-    h.listLoops.mockResolvedValue([loopSummary('live', 'Live loop')])
-
-    await act(async () => {
-      h.onCreated!()
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-    expect(findLoop('live')).not.toBeNull()
-
-    await render(initial([loopSummary('deleted', 'Deleted loop')]))
-
-    expect(findLoop('live')).not.toBeNull()
     expect(findLoop('deleted')).toBeNull()
   })
 })

@@ -7,9 +7,8 @@
  * (postgres-js on Supabase; embedded pglite for local/self-host + tests) — the
  * query-builder API is identical, only `db/index.ts` branches the driver.
  *
- * Timestamps are ISO strings (`text`) for portability (no db-side defaults).
- * JSON columns use `jsonb().$type<>()` for typed
- * (de)serialization. Booleans use native `boolean()`.
+ * Timestamp values are represented as ISO strings across both drivers. JSON
+ * columns use `jsonb().$type<>()`; booleans use native `boolean()`.
  */
 import { sql } from "drizzle-orm";
 import { pgTable, text, integer, boolean, jsonb, index, uniqueIndex, timestamp, check } from "drizzle-orm/pg-core";
@@ -32,7 +31,6 @@ export interface RunUsage {
   cacheCreationTokens?: number;
 }
 
-export type ScheduleMode = "cron" | "continuous";
 export type CronOverlap = "skip" | "queue-one";
 export type LoopSchedule =
   | { mode: "cron"; cron: string; timezone: string; overlap: CronOverlap }
@@ -338,15 +336,13 @@ export const teamMembers = pgTable(
 
 // ---- team_invites: a short-lived, single-use link a signed-in recipient redeems ----
 //
-// The owner-initiated invite mechanism (design §4, decision 2, "invite-link"): an
-// owner mints a token, shares the `/invite/<token>` link over their own channel,
-// and a signed-in recipient redeems it into membership. Single-use (`redeemedAt`
+// An owner shares `/invite/<token>` and a signed-in recipient redeems membership.
+// Single-use (`redeemedAt`
 // stamps it spent), short TTL (`expiresAt`), and the granted `role` is baked in
 // (capped at the inviter's role at mint time). The token is stored plaintext as
 // the primary key — same trust model as `machines.token`/`connect_keys` (a
 // self-hosted small-team tool whose DB is already the trust root); the link only
-// grants membership WITHIN the app and never bypasses the login allowlist
-// (decision 3 — the redeemer must already have signed in through the gate).
+// grants membership within the app and never bypasses the login allowlist.
 export const teamInvites = pgTable(
   "team_invites",
   {
@@ -461,24 +457,8 @@ export type NewLoop = typeof loops.$inferInsert;
 export type Run = typeof runs.$inferSelect;
 export type NewRun = typeof runs.$inferInsert;
 export type Team = typeof teams.$inferSelect;
-export type NewTeam = typeof teams.$inferInsert;
 export type TeamMember = typeof teamMembers.$inferSelect;
-export type NewTeamMember = typeof teamMembers.$inferInsert;
 export type TeamInvite = typeof teamInvites.$inferSelect;
-export type NewTeamInvite = typeof teamInvites.$inferInsert;
 export type Blob = typeof blobs.$inferSelect;
-export type NewBlob = typeof blobs.$inferInsert;
 export type ArtifactFile = typeof artifactFiles.$inferSelect;
-export type NewArtifactFile = typeof artifactFiles.$inferInsert;
 export type RunSnapshot = typeof runSnapshots.$inferSelect;
-export type NewRunSnapshot = typeof runSnapshots.$inferInsert;
-export type RunLeaseRow = typeof runLeases.$inferSelect;
-export type ConnectKeyRow = typeof connectKeys.$inferSelect;
-export type RunReportReceipt = typeof runReportReceipts.$inferSelect;
-export type TerminalReportIncidentReceipt = typeof terminalReportIncidents.$inferSelect;
-
-/** Drizzle table bag (also used by the Better Auth drizzle adapter once auth lands). */
-export const businessSchema = { machines, loops, runs, teams, teamMembers, teamInvites, blobs, artifactFiles, runSnapshots, runLeases, runReportReceipts, terminalReportIncidents, connectKeys };
-
-// Keep a default no-op SQL reference so `sql` import isn't flagged before use.
-export const _schemaVersion = sql`1`;

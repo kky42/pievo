@@ -117,10 +117,7 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     err("pievo: this machine isn't connected yet — run `pievo daemon start --server-url … --connect-key …` first\n");
 
   if (verb === "loops") {
-    // Forward the user's flags so the server can honor `--fields`/`--json` and reject
-    // unknown fields — the old bug HARDCODED `["loops"]`, silently dropping every flag
-    // (help promised `--fields` that never shipped; `--json` returned TOON). An unknown
-    // FLAG is a usage error (exit 2), mirroring how an unknown VERB exits 2 client-side.
+    // Forward supported flags and reject unknown ones locally as usage errors.
     const unknown = Object.keys(flags).filter((k) => !LOOPS_FLAGS.has(k));
     if (unknown.length) return err(`pievo: unknown flag --${unknown[0]} — try \`pievo loops --help\`\n`), 2;
     if (positional.length !== 0
@@ -178,7 +175,7 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     }
     // Bare `pievo edit <id>` with no edit inputs is a usage error. But `--json '{}'`
     // (or any explicit input flag that resolves to an empty patch) is a VALID no-op:
-    // forward it so the server reports "nothing to change" + the allowed-key list (F8),
+    // forward it so the server reports "nothing to change" + the allowed-key list,
     // instead of short-circuiting to the usage screen client-side.
     const gaveInput = flags["json"] !== undefined;
     if (!gaveInput) return err(USAGE), 2;

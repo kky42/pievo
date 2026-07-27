@@ -88,7 +88,6 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
     return () => clearInterval(t)
   }, [refetch, anyRunning])
 
-  const refresh = () => void refetch()
   const activeOn = loops.filter((j) => j.enabled).length
 
   const cardProps = () => ({
@@ -164,7 +163,6 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
         open={composeOpen}
         teamId={teamId}
         onClose={() => setComposeOpen(false)}
-        onCreated={refresh}
       />
 
       <MachinesModal open={machinesOpen} onClose={() => setMachinesOpen(false)} teamId={teamId} />

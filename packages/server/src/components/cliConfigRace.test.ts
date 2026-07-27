@@ -21,7 +21,6 @@ const h = vi.hoisted(() => ({
 vi.mock('../server/loopApi', () => ({
   getConfig: vi.fn(() => h.config!.promise),
   mintClaim: vi.fn(async () => ({ token: 'dk_claim' })),
-  claimStatus: vi.fn(async () => ({ done: false })),
 }))
 vi.mock('../server/machineFns', () => ({
   listMachines: vi.fn(async () => []),
@@ -54,22 +53,24 @@ async function settle() {
 }
 
 describe('custom PIEVO_CLI config ordering', () => {
-  it('ComposeModal never exposes a default prompt when the claim resolves before config', async () => {
+  it('ComposeModal waits for config before exposing the connection command', async () => {
     await act(async () => root.render(createElement(ComposeModal, {
       open: true,
       onClose: () => {},
-      onCreated: () => {},
     })))
     await settle()
 
     expect(bodyText()).toContain('Loading CLI configuration…')
-    expect(bodyText()).not.toContain('pievo-cli:')
+    expect(bodyText()).toContain('Create a Pievo loop.')
     expect(bodyText()).not.toContain('npm install -g')
-    const copy = [...document.body.querySelectorAll('button')].find((b) => b.textContent?.includes('Copy prompt')) as HTMLButtonElement
+    const copy = [...document.body.querySelectorAll('button')].find((b) => b.textContent === 'Copy') as HTMLButtonElement
     expect(copy.disabled).toBe(true)
 
-    await act(async () => h.config!.resolve({ pievoCli: 'tsx /repo/packages/daemon/src/cli.ts', customCli: true }))
-    expect(bodyText()).toContain('pievo-cli: tsx /repo/packages/daemon/src/cli.ts')
+    const custom = 'tsx /repo/packages/daemon/src/cli.ts'
+    await act(async () => h.config!.resolve({ pievoCli: custom, customCli: true }))
+    expect(bodyText()).toContain(`${custom} daemon start`)
+    expect(bodyText()).toContain('--connect-key dk_claim')
+    expect(bodyText()).toContain('same session')
     expect(bodyText()).not.toContain('npm install -g')
     expect(copy.disabled).toBe(false)
   })
@@ -94,15 +95,13 @@ describe('custom PIEVO_CLI config ordering', () => {
     await act(async () => root.render(createElement(ComposeModal, {
       open: true,
       onClose: () => {},
-      onCreated: () => {},
     })))
     await settle()
     await act(async () => h.config!.reject(new Error('config unavailable')))
 
-    expect(bodyText()).toContain('Could not load the CLI configuration')
+    expect(bodyText()).toContain('Could not load the connection command')
     expect(bodyText()).not.toContain('npm install -g')
-    expect(bodyText()).not.toContain('pievo-cli:')
-    const copy = [...document.body.querySelectorAll('button')].find((b) => b.textContent?.includes('Copy prompt')) as HTMLButtonElement
+    const copy = [...document.body.querySelectorAll('button')].find((b) => b.textContent === 'Copy') as HTMLButtonElement
     expect(copy.disabled).toBe(true)
   })
 })

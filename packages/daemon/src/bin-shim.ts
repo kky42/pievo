@@ -10,7 +10,7 @@
  * source launcher and never fails daemon start.
  *
  * Because a durable on-PATH shim outlives the process that wrote it, it is hardened
- * two ways so it can never be fragile or destructive (feedback #4 follow-up):
+ * against fragile targets and destructive replacement:
  *   1. It ONLY lands from a DURABLE install — when the re-exec entry lives inside an
  *      npx / npm cache (`/_npx/`, `/_cacache/`), the shim would re-exec a prunable
  *      path, so we SKIP it and print one line of guidance (`npm install -g @kky42/pievo@latest`).
@@ -199,7 +199,7 @@ function pievoPathBin(pathVar: string | undefined, exists: (p: string) => boolea
  * The absolute path of a DURABLE `pievo` executable: our installed shim
  * (`existingBinShim`) else the first non-ephemeral PATH directory that holds a
  * `pievo`. Null when only a BARE, non-PATH (or ephemeral npx) `pievo` would result.
- * Drives the home view's `bin:` line (P8) — a real path when known.
+ * Supplies the home view's durable `bin:` path when known.
  */
 export function resolveDurableBinPath(injected: { env?: NodeJS.ProcessEnv; homedir?: () => string; exists?: (p: string) => boolean } = {}): string | null {
   const shim = existingBinShim(injected);

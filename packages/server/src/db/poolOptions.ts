@@ -32,9 +32,8 @@ export function isTransactionPooler(url: string): boolean {
  * The full postgres-js option set we pass to `postgres(url, …)`. Deliberately a
  * closed interface — every field is typed, and there is NO `max_pipeline` field:
  * setting `max_pipeline` short-circuits postgres-js's `onexecute` callback,
- * which `sql.begin()` relies on to pin a connection, poisoning connections with
- * `25P02`/`25001` errors (the reverted #133 incident). The wedge fix is moving
- * `DATABASE_URL` to the SESSION pooler, never pipelining tuning. Do not add it.
+ * which `sql.begin()` relies on to pin a connection and can poison transactions.
+ * Use a session pooler rather than pipeline tuning. Do not add this option.
  */
 export interface PoolOptions {
   prepare: boolean;

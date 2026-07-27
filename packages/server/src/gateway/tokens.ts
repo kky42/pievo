@@ -1,6 +1,6 @@
 /**
  * Machine + run credential helpers. Device tokens (`dk_…`) identify a machine
- * (its id is derived from the token: `m-sha256(token)[:16]`, BYOA §2). A RUN
+ * (its id is derived from the token: `m-sha256(token)[:16]`). A run
  * LEASE (`rk_…`) is minted per delivery, bound to one run, and carries the
  * run's least-privilege caps — the CLI dispatch authorizes the `pievo` shim
  * against it. Its lifecycle is a small state machine (`active` →
@@ -9,17 +9,16 @@
  *
  * Leases and connect-key bindings are DURABLE (run_leases / connect_keys
  * tables): they must survive a deploy, or every restart 401s the in-flight
- * runs' callbacks/finalize and silently mis-files a post-restart paste into the
- * machine's home team. The short-lived UI correlations (`claimResults`) and the
- * 15-min `new` idempotency window stay in-process (accepted restart gaps —
- * losing one only degrades a dialog wait / a retry dedupe, never data).
+ * runs' callbacks/finalize and silently mis-files a post-restart create into the
+ * machine's home team. The 15-minute `new` idempotency window stays in-process;
+ * losing it only degrades retry deduplication, never persisted data.
  */
 import { createHash, randomBytes } from "node:crypto";
 
 import { and, eq, inArray, isNotNull, lt } from "drizzle-orm";
 
 import { db } from "../db/index.js";
-import { connectKeys, runLeases, type CodingAgent } from "../db/schema.js";
+import { connectKeys, runLeases } from "../db/schema.js";
 
 export function sha256(s: string): string {
   return createHash("sha256").update(s).digest("hex");
@@ -50,7 +49,7 @@ export function isDeviceTokenShape(token: string): boolean {
 // poll self-registers the machine under the minting user, and (b) `createLoop`
 // lands the loop in that team — this is what lets ONE machine/daemon serve MANY
 // teams. The teamId is captured server-side from the authenticated session (never
-// from client input); the gateway re-validates membership at create time (§4).
+// from client input); the gateway re-validates membership at create time.
 //
 // Bindings are keyed by the derived machine id, so the key itself is never stored.
 // They are not single-read: one paste may create several loops, and enrollment
@@ -133,9 +132,7 @@ export interface RunLease {
 }
 
 /** How long a terminal-grace lease stays alive to accept one late wake-report.
- *  Generous on purpose: a laptop can sleep overnight or across a weekend before the
- *  daemon resumes and delivers the run's real result. (Subsumes the former
- *  `RECLAIM_GRACE_MS`.) */
+ *  A laptop can sleep overnight or across a weekend before the daemon resumes. */
 export const TERMINAL_GRACE_MS = 24 * 60 * 60 * 1000;
 
 /** Leases live in the `run_leases` table, keyed by sha256(full `rk_…` wire
@@ -219,15 +216,10 @@ export async function pruneExpiredLeases(now: number = Date.now()): Promise<void
 }
 
 // ---- `new` idempotency (content-hash → the loop it created) ----
-// `new` is the LONE non-idempotent mutation: every other write overwrites-to-value,
-// but a create with no dedupe makes a fresh loop every call, so a timed-out
-// `pievo new` retry silently makes a twin (F8). The daemon derives a stable
-// content key (sha256 over the machine id + the canonical config) and sends it; we
-// remember which loop that key created for a short window, so a retry with the SAME
-// key returns the existing loop instead of a second one. In-memory + TTL-pruned,
-// matching the claim-intent/lease posture (a server restart inside the window is an
-// accepted gap — the same tradeoff the lease/claim maps already accept). An absent
-// key ⇒ no dedupe.
+// A create with no dedupe makes a fresh loop every call. The daemon sends a stable
+// content key over the machine id and canonical config; this bounded in-memory map
+// returns the existing loop for retries within the window. A server restart loses
+// this best-effort dedupe, never persisted loop data.
 
 export interface NewIdempotencyRecord {
   loopId: string;
@@ -239,8 +231,7 @@ export interface NewIdempotencyRecord {
 }
 
 const newIdempotency = new Map<string, NewIdempotencyRecord>();
-/** Long enough to swallow a timed-out retry (§8.1 owner decision OQ3), short enough
- *  that two genuinely-different creates of the same config later don't collapse. */
+/** Long enough to swallow a timed-out retry without collapsing later creates. */
 export const NEW_IDEMPOTENCY_TTL_MS = 15 * 60 * 1000;
 
 function pruneNewIdempotency(now: number): void {
@@ -267,33 +258,4 @@ export function readNewIdempotency(key: string, machineId: string, now: number =
   }
   if (rec.machineId !== machineId) return undefined;
   return rec.loopId;
-}
-
-// ---- claim tokens (New-loop correlation) ----
-// The web mints a claim token and waits on it; Claude Code passes it as `claim`
-// when it POSTs the loop, so the web learns which loop was created without
-// knowing (or picking) the machine. In-memory: a server restart mid-wait just
-// times the dialog out (the loop is still created + visible on the dashboard).
-
-export interface ClaimResult {
-  loopId: string;
-  name: string;
-  machineId: string;
-  // The coding agent selected in the canonical loop config, surfaced in the
-  // New-loop confirmation.
-  agent: CodingAgent;
-}
-
-const claimResults = new Map<string, ClaimResult>();
-
-export function fulfillClaim(token: string, result: ClaimResult): void {
-  claimResults.set(token, result);
-}
-
-/** Read-and-consume: the dialog polls until it sees the result once, then closes —
- *  so we evict on first read to keep the map from growing one dead entry per loop. */
-export function readClaim(token: string): ClaimResult | undefined {
-  const r = claimResults.get(token);
-  if (r) claimResults.delete(token);
-  return r;
 }

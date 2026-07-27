@@ -1,8 +1,6 @@
 /**
- * Sleep/wake reclaim reconciliation (P0 correctness bug). Seeds the store the way
- * a laptop sleep would leave it — backdated `lastSeen` / `run.ts` / `heartbeatAt` —
- * then drives the REAL `gateway.sweep()` and `gateway.report()`. Models the
- * investigation's repro (report §3):
+ * Sleep/wake reclaim reconciliation. Seeds backdated liveness state and drives the
+ * real gateway sweep and report paths:
  *   (a) a running run reclaimed as timed-out, then a late SUCCESS wake-report →
  *       the run ends `done` with its message preserved and the false failure gone;
  *   (b) a pending run on an unreachable machine is DEFERRED (held claimable for

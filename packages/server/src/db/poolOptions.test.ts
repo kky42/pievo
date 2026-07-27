@@ -51,7 +51,7 @@ describe("poolOptionsFor", () => {
     expect(poolOptionsFor(TXN_URL, false).prepare).toBe(true);
   });
 
-  it("NEVER carries max_pipeline for any URL (the reverted #133 regression guard)", () => {
+  it("never carries max_pipeline for any URL", () => {
     for (const url of ALL_URLS) {
       expect("max_pipeline" in poolOptionsFor(url)).toBe(false);
       expect("max_pipeline" in poolOptionsFor(url, true)).toBe(false);

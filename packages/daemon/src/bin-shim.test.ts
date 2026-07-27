@@ -1,7 +1,4 @@
-/**
- * The `pievo` PATH shim (feedback #4). All filesystem/env touches are injected, so
- * NO test writes into the real home dir or a real bin.
- */
+/** All filesystem/env touches are injected, so tests never write into a real home or bin. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

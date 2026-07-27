@@ -13,7 +13,7 @@ const h = vi.hoisted(() => ({
 }))
 vi.mock('../server/loopApi', () => ({
   getLoopDetail: vi.fn(async () => h.detail), loadOlderRuns: vi.fn(async () => []),
-  deleteLoop: h.del, forceDeleteLoop: vi.fn(async () => ({ ok: true, deleted: true })),
+  deleteLoop: h.del,
   pauseLoop: h.pause, startLoop: vi.fn(async () => ({ ok: true })), stopLoop: vi.fn(async () => ({ ok: true, waiting: true })),
   patchLoop: vi.fn(async () => ({})), runLoop: vi.fn(async () => ({})),
   getRunDiff: vi.fn(async () => null), stopRun: vi.fn(async () => ({ ok: true, waiting: true })),

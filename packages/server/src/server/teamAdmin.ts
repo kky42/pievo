@@ -1,29 +1,13 @@
-/**
- * Team lifecycle + membership logic (design report §2/§4/§5, all six §7 decisions
- * approved as recommended). This module is the ONE authorization + rules
- * chokepoint; the `teamFns` server fns are thin wrappers that resolve the caller's
- * user id and delegate here. Keeping the logic framework-free (plain async
- * functions over the store, `(actorUserId, ...)` in) makes every rule directly
- * testable against a real pglite store without mocking the Start runtime.
- *
- * The non-negotiable invariants, enforced here + transactionally in the store:
- *  - every fn takes an EXPLICIT teamId and authorizes by MEMBERSHIP + ROLE, never
- *    the active-team cookie (the URL report's hard lesson — managing team B while
- *    browsing team A must work);
- *  - team MANAGEMENT (rename/delete/members/invites) is owner-only; any member may
- *    still create loops (decision 4, unchanged elsewhere);
- *  - the personal team is undeletable + un-leavable but renamable (decision 5);
- *  - a team always keeps ≥1 owner (decision 6, the last-owner guard);
- *  - deleting a team that still owns loops is BLOCKED, never cascaded (decision 1);
- *  - an invite grants membership within the app but never bypasses the login
- *    allowlist (decision 3 — the redeemer already signed in through the gate).
- */
+/** Framework-free team authorization and membership rules. Every operation uses an
+ * explicit team id; management is owner-only, personal teams cannot be left or
+ * deleted, each team retains an owner, loops block deletion, and invites never
+ * bypass the login gate. */
 import { randomUUID } from "node:crypto";
 
 import * as store from "../db/store.js";
 import type { TeamInvite } from "../db/schema.js";
 
-/** Invite link lifetime (design §4 "short TTL, e.g. 7 days"). */
+/** Invite link lifetime. */
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const NAME_MAX = 80;
@@ -96,7 +80,7 @@ export interface TeamAdminDetail {
   name: string;
   role: Role;
   personal: boolean;
-  /** Loops the team owns — non-zero blocks deletion (decision 1). */
+  /** Loops the team owns; non-zero blocks deletion. */
   loopCount: number;
   members: TeamMemberView[];
   /** Pending invite links — owner-only (empty for a plain member). */
@@ -176,10 +160,8 @@ export async function deleteTeam(userId: string, teamId: string): Promise<Result
   const team = await store.getTeam(teamId);
   if (!team) return { ok: false, error: "This team no longer exists." };
   if (store.isPersonalTeam(team)) return { ok: false, error: "Your personal team can't be deleted." };
-  // Decision 1: block while the team still owns loops — never silently cascade
-  // a loop's run/artifact history away. Checked here for the accurate count in
-  // the message AND re-checked inside deleteTeamCascade's transaction, so a loop
-  // created in the check-then-cascade gap can't be orphaned at a deleted team.
+  // Never cascade loop history. Count here for the message, then recheck inside
+  // deleteTeamCascade's transaction to close the create-versus-delete race.
   const loopCount = await store.countLoopsForTeam(teamId);
   if (loopCount > 0) return blockedByLoops(loopCount);
   if ((await store.deleteTeamCascade(teamId)) === "has-loops") {
@@ -190,8 +172,7 @@ export async function deleteTeam(userId: string, teamId: string): Promise<Result
 
 // ---- members ----
 
-/** Direct-add-by-email fast path (design §4 option A): add an EXISTING account to
- *  the team immediately. No account yet ⇒ direct the owner to an invite link. */
+/** Add an existing account directly; otherwise direct the owner to an invite. */
 export async function addMemberByEmail(
   userId: string,
   teamId: string,
@@ -265,8 +246,7 @@ export async function leaveTeam(userId: string, teamId: string): Promise<Result>
 
 // ---- invites (invite-link mint / redeem / revoke) ----
 
-/** Mint a single-use, short-lived invite link (owner-only). `role` is capped at
- *  the inviter's role — an owner may mint member or owner links (decision 6). */
+/** Mint a single-use, short-lived, owner-authorized invite link. */
 export async function createInvite(
   userId: string,
   teamId: string,
@@ -293,8 +273,8 @@ export async function revokeInvite(userId: string, teamId: string, token: string
 
 /**
  * Redeem an invite as the signed-in actor. Any signed-in user may redeem (the
- * link is the authority, not team membership); the login allowlist already gated
- * their sign-in, so this never widens who can sign in (decision 3). Outcomes:
+ * link is the authority, not team membership); normal sign-in already applied the
+ * login allowlist. Outcomes:
  *  - invalid token / wrong shape → error;
  *  - already redeemed (single-use) → error;
  *  - expired → error;

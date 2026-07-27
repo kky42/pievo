@@ -1,8 +1,4 @@
-/**
- * Display helpers + the run-status palette, ported 1:1 from the original
- * self-contained UI page (src/scheduler/ui.ts). The six status colors encode
- * meaning and are reused by the timeline, chart, and A/B panel.
- */
+/** Display helpers and the semantic run-status palette. */
 import type { LoopSummary, RunSummary } from '../types'
 
 export const fmt = (t: string | null | undefined): string =>
@@ -56,11 +52,6 @@ export const until = (t: string | null | undefined): string => {
   const h = Math.round(m / 60)
   if (h < 24) return `in ${h}h`
   return `in ${Math.round(h / 24)}d`
-}
-
-export const md = (t: string | number): string => {
-  const d = new Date(t)
-  return `${d.getMonth() + 1}/${d.getDate()}`
 }
 
 /** Compact run-log timestamp: "MM/DD HH:mm" (24h, zero-padded, local). */

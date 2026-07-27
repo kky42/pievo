@@ -1,5 +1,5 @@
 /**
- * Bare `pievo` OUT of a run — the content-first home (P8). The daemon is a text
+ * Bare `pievo` outside a run renders the machine home. The daemon is a text
  * sink: it posts local context to the server `home` verb and prints `body.text`. All
  * network/process touches are injected; nothing hits ~/.pievo or the network.
  */
@@ -46,14 +46,14 @@ describe("runHome", () => {
     expect(cap.stdout()).toContain("description:");
   });
 
-  test("F7: the local not-connected home LEADS with `bin:` — the durable path when known", async () => {
+  test("the local not-connected home leads with the durable bin path", async () => {
     const { fetchFn } = stub(() => ({ ok: true, body: {} }));
     const cap = capture({ fetchImpl: fetchFn, server: "", token: undefined, binPath: () => "/home/u/.local/bin/pievo" });
     await runHome(cap.deps);
     expect(cap.stdout().split("\n")[0]).toBe("bin: /home/u/.local/bin/pievo");
   });
 
-  test("F7: the local not-connected home LEADS with the honest bin fallback when non-durable (npx-without-global)", async () => {
+  test("the local not-connected home leads with the install fallback when needed", async () => {
     const { fetchFn } = stub(() => ({ ok: true, body: {} }));
     const cap = capture({ fetchImpl: fetchFn, server: "", token: undefined, binPath: () => null });
     await runHome(cap.deps);

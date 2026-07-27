@@ -26,7 +26,6 @@ vi.mock('../server/loopApi', () => ({
   getLoopDetail: vi.fn(async () => h.detail),
   loadOlderRuns: vi.fn(async () => []),
   deleteLoop: vi.fn(async () => ({})),
-  forceDeleteLoop: vi.fn(async () => ({})),
   pauseLoop: vi.fn(async () => ({})),
   startLoop: vi.fn(async () => ({})),
   stopLoop: vi.fn(async () => ({})),

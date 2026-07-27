@@ -13,7 +13,6 @@ import { createServerFn } from '@tanstack/react-start'
 import type {
   ArtifactContent,
   ArtifactSummary,
-  CodingAgent,
   LoopDetail,
   LoopPayload,
   LoopSummary,
@@ -305,36 +304,6 @@ export const deleteLoop = createServerFn({ method: 'POST' })
     return { ok: true, deleted, waiting: !deleted }
   })
 
-const FORCE_DELETE_CONFIRMATION = 'delete-server-data-anyway'
-
-/** Destructive uncertainty escape hatch. Team owners only; the explicit marker
- * is the server-side half of the Dashboard's second confirmation. */
-export const forceDeleteLoop = createServerFn({ method: 'POST' })
-  .validator((d: { id: string; confirmation: string }) => d)
-  .handler(async ({ data }): Promise<MutationResult> => {
-    const { scheduler } = await backend()
-    const owned = await ownedLoop(data.id)
-    if (!owned) return { error: 'not found' }
-    if (!owned.loop.deleteRequestedAt) return { error: 'delete must be requested first' }
-    if (data.confirmation !== FORCE_DELETE_CONFIRMATION) return { error: 'force delete confirmation required' }
-    if (owned.enforce) {
-      if (!owned.loop.teamId) return { error: 'only a team owner can force delete this loop' }
-      const actor = (await requestScope()).userId
-      if (!actor || (await store.getTeamMember(owned.loop.teamId, actor))?.role !== 'owner') {
-        return { error: 'only a team owner can force delete this loop' }
-      }
-    }
-    scheduler.removeLoop(data.id)
-    const deleted = await store.forceDeleteLoop(data.id)
-    if (!deleted) return { error: 'force delete failed; server data was not deleted' }
-    const { logger } = await import('../logger.js')
-    logger.child({ mod: 'loop-lifecycle' }).warn(
-      { action: 'force-delete', loopId: data.id, actorUserId: (await requestScope()).userId, machineId: owned.loop.machineId },
-      'force-delete: destructive server authority removal',
-    )
-    return { ok: true, deleted: true }
-  })
-
 export const runLoop = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<MutationResult> => {
@@ -361,14 +330,10 @@ export const stopRun = createServerFn({ method: 'POST' })
     return result ? { ok: true, waiting: result.phase === 'running' } : { error: 'run not found' }
   })
 
-// ---- New-loop claim (capture-from-Claude-Code, no machine picker) ----
+// ---- New-loop connection key (no machine picker) ----
 
-/**
- * Mint a fresh claim token for a New-loop dialog. It's shown in the paste
- * snippet and used by Claude Code as (a) this machine's device token if the
- * machine is new, and (b) the loop's `claim` so the dialog can correlate the
- * created loop. No machine row is created here — the daemon self-registers.
- */
+/** Mint the key shown in the New-loop daemon connection command. It may enroll
+ * a new machine and remains valid as an optional team-bound create claim. */
 export const mintClaim = createServerFn({ method: 'POST' })
   .validator((teamId?: string) => teamId)
   .handler(async ({ data: teamId }): Promise<{ token: string } | { error: string }> => {
@@ -387,14 +352,4 @@ export const mintClaim = createServerFn({ method: 'POST' })
     // deploy between mint and paste no longer mis-files the loop.
     await rememberConnectKey(token, { userId: owner, teamId: active })
     return { token }
-  })
-
-/** Poll a claim while the New-loop dialog waits for Claude Code to create the loop. */
-export const claimStatus = createServerFn({ method: 'GET' })
-  .validator((token: string) => token)
-  .handler(async ({ data: token }): Promise<{ done: boolean; id?: string; name?: string; agent?: CodingAgent }> => {
-    const r = (await backend()).gateway.claimStatus(token)
-    return r
-      ? { done: true as const, id: r.loopId, name: r.name, agent: r.agent }
-      : { done: false as const }
   })

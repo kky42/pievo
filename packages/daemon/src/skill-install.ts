@@ -6,9 +6,8 @@
  * per-workdir copies scattering. It's fired at `pievo daemon start` (refreshing the install
  * to whatever daemon version just launched) and again after a successful
  * `pievo new`, and it NEVER blocks: any failure (no network, no npx, no write
- * permission, bundled skill absent) degrades silently to the server's
- * `/api/bootstrap` and served-reference path. It just prints one status line. `pievo skill install`
- * is the manual refresh command.
+ * permission, bundled skill absent) prints one diagnostic line and leaves
+ * `pievo skill install` as the manual retry path.
  *
  * MULTI-AGENT: the skill is installed for every coding agent pievo knows about
  * (`SKILL_TARGET_AGENTS` — currently Claude Code and Codex, the two `CodingAgent`
@@ -160,7 +159,7 @@ export async function installSkill(opts: InstallOpts = {}): Promise<InstallOutco
   if (!bundledSkillAvailable(dir)) {
     return {
       ok: false,
-      line: "pievo skill: skipped (bundled skill not found — use the server bootstrap flow)",
+      line: "pievo skill: skipped (bundled skill not found — run `pievo skill install` after reinstalling Pievo)",
     };
   }
   const runner = opts.runner ?? defaultRunner;
@@ -175,7 +174,7 @@ export async function installSkill(opts: InstallOpts = {}): Promise<InstallOutco
     return { ok: true, line: `pievo skill: installed → ${where}` };
   }
   const why = firstLine(res.stderr) || firstLine(res.stdout) || `exit ${res.code}`;
-  return { ok: false, line: `pievo skill: skipped (${why}) — use the server bootstrap flow` };
+  return { ok: false, line: `pievo skill: skipped (${why}) — retry with \`pievo skill install\`` };
 }
 
 function firstLine(s: string): string {

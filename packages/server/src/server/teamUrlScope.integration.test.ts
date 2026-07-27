@@ -120,10 +120,6 @@ describe('two tabs on /t/A and /t/B render different teams at once (explicit tea
     const namesA = await listLoopsFor(TEAM_A)
     const namesB = await listLoopsFor(TEAM_B)
 
-    console.log('\n=== /t/<team> dashboard payloads (one signed-in member, two tabs) ===')
-    console.log('  cookie last-used = team A')
-    console.log(`  GET listLoops(teamId="${TEAM_A}")  ->`, namesA)
-    console.log(`  GET listLoops(teamId="${TEAM_B}")  ->`, namesB)
 
     expect(namesA).toEqual(['Alpha loop (team A)'])
     expect(namesB).toEqual(['Bravo loop (team B)']) // cookie=A did NOT leak into the /t/B tab
@@ -135,10 +131,6 @@ describe('two tabs on /t/A and /t/B render different teams at once (explicit tea
     const okB = await canViewTeam(TEAM_B)
     const okC = await canViewTeam(TEAM_C) // never joined
 
-    console.log('\n=== canViewTeam (the /t/<id> membership gate) ===')
-    console.log(`  canViewTeam("${TEAM_A}") ->`, okA)
-    console.log(`  canViewTeam("${TEAM_B}") ->`, okB)
-    console.log(`  canViewTeam("${TEAM_C}") ->`, okC, '(non-member => generic not-found)')
 
     expect(okA).toBe(true)
     expect(okB).toBe(true)
@@ -149,8 +141,6 @@ describe('two tabs on /t/A and /t/B render different teams at once (explicit tea
     signInAs(MEMBER, 'member@example.com')
     setCookie(TEAM_B) // last used team B
     const target = await getDefaultTeam()
-    console.log('\n=== bare "/" redirect target (getDefaultTeam) ===')
-    console.log(`  cookie pievo.team=${TEAM_B} -> redirect /t/${target}`)
     expect(target).toBe(TEAM_B)
   })
 })

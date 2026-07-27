@@ -97,18 +97,15 @@ export class CliGateway {
     if (!auth.ok) return auth.response;
     const { machineId, machine } = auth;
     const verb = argv[0] ?? "";
-    // The content-first home (P8): bare `pievo` posts `["home"]`. It renders a
-    // DEFINITIVE state for an unregistered machine ("not connected — run `pievo
-    // daemon start`") rather than a 401, so the ambient dashboard is never an error/empty —
+    // Bare `pievo` renders a useful not-connected state rather than a 401.
     // handled BEFORE the unknown-machine guard the other verbs sit behind.
     if (verb === "home") return { status: 200, body: { ok: true, text: await this.homeDevice(machineId, parseFlags(argv.slice(1))) } };
     if (!machine) return { status: 401, body: { error: "unknown machine (token not registered)" } };
     const flags = parseFlags(argv.slice(1));
     const loopArg = typeof flags["loop"] === "string" ? (flags["loop"] as string) : typeof flags["_"] === "string" ? (flags["_"] as string) : "";
 
-    // Per-verb `--help` (P10): full owner-facing help for a device verb (no lease ⇒
-    // no availability caveats). An unknown verb has no help spec → falls through to
-    // the switch's default (unknown-command 400), matching today's behavior.
+    // Device credentials receive owner-facing per-verb help. Unknown verbs fall
+    // through to the switch's normal unknown-command response.
     if (flags["help"] === true) {
       const h = verbHelpText(verb);
       if (h) return { status: 200, body: { ok: true, text: h } };
@@ -154,8 +151,7 @@ export class CliGateway {
         // check mirrors loopLog/editLoop (flat 404, existence never leaks).
         const loop = loopArg ? await store.getLoop(loopArg) : undefined;
         if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };
-        // `--json`: emit the full editable envelope with complete bodies (the exact
-        // `edit --json` shape; the roundtrip transport, §4.1). Otherwise the TOON
+        // `--json` emits the exact editable envelope; otherwise render TOON
         // detail view (size hints by default, full bodies under `--full`).
         if (flags["json"] === true) {
           const env = loopEnvelope(loop);
@@ -358,7 +354,7 @@ export class CliGateway {
   }
 
   /**
-   * `pievo` (bare) — the content-first home for a DEVICE credential (P8/§5.1). The
+   * Bare `pievo` renders the home for a device credential. The
    * daemon passes the local facts it alone knows as context flags (`--cwd`/`--home`
    * for directory scoping, `--bin`/`--pid`/`--server` for the header); the server owns
    * the whole TOON render (text-sink). An unregistered machine renders a DEFINITIVE
@@ -407,9 +403,7 @@ type Flags = Record<string, string | boolean>;
 const TERMINAL_GRACE_MSG =
   "this run is terminal and no longer accepts commands; its final result is delivered via the terminal report";
 
-/** Verbs that require OWNER (device) authority — a run credential is 403'd on these
- *  in the unified `cli` dispatch (§4.1). `report` is the mirror image
- *  (run-only, 403 for a device credential) and are handled inline in `deviceCli`. */
+/** Verbs that require device authority. `report` is run-only and rejected there. */
 const DEVICE_ONLY_VERBS = new Set(["new", "edit", "loops", "start", "stop", "delete", "run"]);
 
 const PAUSED_FINISHING = "loop paused; current run is finishing";
@@ -444,7 +438,7 @@ function stringifyFlags(flags: Flags): Record<string, string> {
   return out;
 }
 
-/** A structured error result to STDOUT (P6): `error:`/`code:` TOON as the verb `text`.
+/** A structured `error:`/`code:` TOON result for stdout.
  *  Mirrors the `{code, text}` shape `dispatch` returns; the slug defaults from the
  *  HTTP status but a caller may pin it (e.g. CONFLICT). */
 function derr(code: number, message: string, slug?: string): { code: number; text: string } {
@@ -455,7 +449,7 @@ function derr(code: number, message: string, slug?: string): { code: number; tex
  * `text` and exits with `exitCode`; two structured channels remain because the
  * current daemon reads them as data:
  *   - `loops`: the daemon resolves cwd→loop CLIENT-side (`log`/`show`/`home`) from this
- *     list — the server's `log`/`show` dispatch needs an explicit id (design §3).
+ *     list; the server's `log`/`show` dispatch needs an explicit id.
  *   - `runs`: the `log --json` normalized-data escape hatch. */
 const CLI_RETAINED_KEYS = new Set(["text", "exitCode", "loops", "runs"]);
 
@@ -481,7 +475,7 @@ function finalizeCli(res: HttpResult): HttpResult {
   return res;
 }
 
-/** `pievo report` — the compact run-status confirmation (§4.6). */
+/** Render the compact run-status confirmation. */
 function renderReportedText(status: string | undefined, hasMessage: boolean): string {
   const parts: string[] = [];
   if (status) parts.push(`status=${status}`);
@@ -489,7 +483,7 @@ function renderReportedText(status: string | undefined, hasMessage: boolean): st
   return `reported: ${parts.length ? parts.join(" · ") : "recorded"}`;
 }
 
-// ---- per-verb `--help` (P10) --------------------------------------------------
+// ---- per-verb `--help` --------------------------------------------------------
 // `<verb> --help` prints syntax, a summary, and concrete examples. Run credentials
 // expose report help only; device credentials receive the owner command surface. A
 // verb absent from the relevant map falls through to unknown-command handling.
@@ -575,7 +569,7 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
   },
 };
 
-/** Render a verb's `--help` (P10). A run lease selects the report-only help;
+/** Render per-verb help. A run lease selects the report-only help;
  *  no lease means the device (owner) surface. Returns undefined for a verb
  *  with no help spec, so the caller falls back to its unknown-command handling. */
 function verbHelpText(verb: string, lease?: RunLease): string | undefined {
@@ -611,11 +605,7 @@ function nextFireDisplay(loop: Loop): string {
   return fmtTimeZoned(iso, schedule.timezone, { seconds: true });
 }
 
-/**
- * `pievo show` — the full editable envelope TOON (F1/F6, feedback #1/#2, §4.1).
- * The `loop:` block keys are EXACTLY `edit --json`'s keys (read/write identity),
- * then the read-only derived aggregates (`nextFire`/`lifecycle`/`runs`).
- */
+/** `pievo show` renders the editable envelope followed by derived read-only state. */
 function renderShowText(
   loop: Loop,
   env: Record<string, unknown>,
@@ -664,7 +654,7 @@ function renderShowText(
   );
 }
 
-// ---- content-first home (P8/§5.1) --------------------------------------------
+// ---- content-first home -------------------------------------------------------
 // Bare `pievo` renders a live machine dashboard for a device credential. The
 // server owns the TOON render; the daemon passes local facts it alone knows
 // (`--bin`/`--pid`/`--server`/`--cwd`/`--home`) as context flags. Everything
@@ -689,8 +679,7 @@ interface HomeLoop {
   lastResult: string | null;
 }
 
-/** The static one-line description in the home header (mirrors the reference axi
- *  tools' `description:` line — what this bin is for). */
+/** The static one-line description in the home header. */
 const HOME_DESCRIPTION = "Run your scheduled Pievo agent loops on this machine with your own coding agent.";
 
 /** Expand a leading `~/` against the daemon-supplied home dir (the SERVER's own home
@@ -706,7 +695,7 @@ function scopeLoopDir(workdir: string, home: string | null): string {
 
 /**
  * Partition a machine's loops into the ones rooted at (or under) `cwd` — the
- * directory-scoped ambient context P8 wants — and a count of the rest. With no cwd
+ * directory-scoped ambient context and a count of the rest. With no cwd
  * (or none matching), ALL loops are "here" (elsewhere 0): a home run from an
  * unrelated directory still shows the whole machine rather than nothing.
  */
@@ -738,7 +727,7 @@ async function recentMachineRuns(loops: Loop[], n: number): Promise<Array<{ ts: 
   return rows.slice(0, n);
 }
 
-/** The device home (P8/§5.1): `bin:`/`description:`/`machine:` header, the cwd-scoped
+/** The device home: `bin:`/`description:`/`machine:` header, the cwd-scoped
  *  loop list, recent runs, and a `help[]`. `presence` null ⇒ the machine is not
  *  registered → a DEFINITIVE "not connected" state (never empty, never an error). */
 function renderHomeText(
@@ -752,12 +741,10 @@ function renderHomeText(
     presence === null
       ? "machine: not connected — run `pievo daemon start`"
       : `machine: ${[presence, ctx.pid ? `daemon pid ${ctx.pid}` : null, ctx.server].filter(Boolean).join(" · ")}`;
-  // P8 requires the home to LEAD with `bin:` (every reference axi tool does). The daemon
-  // sends the durable path via `--bin` when it has one; absent (npx-without-global), we
-  // render the honest fallback so the line is NEVER missing (F7).
+  // Lead with the durable bin path or an explicit global-install fallback.
   const binLineText = ctx.bin ? kvLine("bin", ctx.bin) : "bin: (not on PATH — run `npm install -g @kky42/pievo@latest`)";
   // Not connected: the header + the definitive state + how to connect. No loop/run
-  // blocks (there's nothing to show), but never empty output (P5/P8).
+  // blocks (there's nothing to show), but never empty output.
   if (presence === null) {
     return doc(
       binLineText,
@@ -769,8 +756,7 @@ function renderHomeText(
       ]),
     );
   }
-  // Header wording (F11, §5.1): when the list is cwd-SCOPED (some loops live elsewhere)
-  // the block is `loops here[N]` — the "here" only makes sense against an "elsewhere".
+  // When some loops live elsewhere, label the scoped block `loops here[N]`.
   // An unscoped full-machine view stays the plain `loops[N]`.
   const loopsName = elsewhere > 0 ? "loops here" : "loops";
   const loopsBlock = here.length

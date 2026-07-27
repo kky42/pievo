@@ -95,7 +95,9 @@ Fix every rejection. Then create it:
 <pievo-cli> new --json '<config>'
 ```
 
-On a first-capture flow, include the pasted claim so the web dialog resolves:
+When the dashboard connection command is present in this session, reuse the same
+executable prefix it used for `daemon start` (`pievo` or the custom command) as
+**pievo-cli**, and include its connect key so the loop lands in the selected team:
 
 ```bash
 <pievo-cli> new --json '<config>' --connect-key <connect-key>

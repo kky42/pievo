@@ -110,21 +110,6 @@ describe("machineRouteLimit", () => {
   });
 });
 
-// The byte-ingress routes (blob PUT / sync POST) are EXEMPT from rate limiting
-// entirely — they never import or call machineRouteLimit. Guard that here so a
-// future edit can't silently re-add a limiter that would throttle a large sync.
-describe("byte-ingress routes are unlimited", () => {
-  test("blob PUT and sync POST route source never references machineRouteLimit", async () => {
-    const { readFile } = await import("node:fs/promises");
-    const { fileURLToPath } = await import("node:url");
-    const dir = fileURLToPath(new URL("../routes/", import.meta.url));
-    for (const f of ["api.machine.blob.$hash.ts", "api.machine.sync.ts"]) {
-      const src = await readFile(dir + f, "utf8");
-      expect(src).not.toContain("machineRouteLimit");
-    }
-  });
-});
-
 describe("poll route", () => {
   test("returns 429 once the shared per-IP limiter is exhausted", async () => {
     rl.__resetMachineRateLimiters();

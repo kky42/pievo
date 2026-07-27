@@ -5,9 +5,8 @@
  * drift from the single source of truth at packages/server/src/skill/.
  *
  * SELECTIVE COPY — only the PUBLIC owner skill ships: SKILL.md plus the three
- * connection/create/update references. bootstrap.md is server-only first-contact
- * guidance and does not belong in the installable skill. An exact whitelist prevents
- * accidental publication of any other server-only skill sources.
+ * connection/create/update references. An exact whitelist prevents accidental
+ * publication of unrelated server files.
  *
  * The daemon installs this bundled dir locally via `npx skills` during `pievo new`
  * (see src/skill-install.ts) — a LOCAL path source, so end users never need the
@@ -28,7 +27,7 @@ if (!fs.existsSync(path.join(src, "SKILL.md"))) {
   process.exit(0);
 }
 
-// The exact installable owner surface; bootstrap and other server-only files stay out.
+// The exact installable owner surface; every other server file stays out.
 const PUBLIC = ["SKILL.md", path.join("references", "connect.md"), path.join("references", "create.md"), path.join("references", "update.md")];
 
 fs.rmSync(dst, { recursive: true, force: true });

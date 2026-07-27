@@ -40,15 +40,15 @@ export function canonicalJson(v: unknown): string {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(",")}}`;
 }
 
-/** The machine id the server derives from a device token (BYOA §2: `m-sha256(tok)[:16]`).
- *  Replicated here — a FROZEN wire contract — so the idempotency key binds this
+/** The machine id the server derives from a device token (`m-sha256(tok)[:16]`).
+ *  Replicated here as a frozen wire contract so the idempotency key binds this
  *  machine exactly the way the server's `machineIdFromToken` does. */
 function machineIdFromToken(token: string): string {
   return `m-${createHash("sha256").update(token).digest("hex").slice(0, 16)}`;
 }
 
 /**
- * The `new` idempotency key (F8, design §8.1): `sha256(machineId + canonicalJSON(body))`
+ * The `new` idempotency key is `sha256(machineId + canonicalJSON(body))`
  * over the EXACT outgoing request body, minus the `idempotencyKey` nonce itself.
  * A timed-out retry of the SAME `pievo new` resolves to an identical body (same argv +
  * env ⇒ same config and connect-key/claim), so it sends the SAME key and

@@ -10,16 +10,8 @@ import { setActiveTeamCookie } from '../lib/teamCookie'
 import { btnPrimary } from '../components/ui'
 import { PievoLogo } from '../components/PievoLogo'
 
-/**
- * Invite-link redeem (`/invite/<token>`, design §4 option B). The recipient opens
- * the link the owner shared; if signed out (under the gate) they hit the normal
- * gated GitHub sign-in and return here — the invite NEVER bypasses the login
- * allowlist (decision 3), it only grants membership once they already have an
- * account. On redeem we navigate to the team's dashboard.
- *
- * Open mode has no identities, so an invite is meaningless there — it renders a
- * calm explanation rather than a broken redeem.
- */
+/** Redeem a team invite after normal gated sign-in. Invites grant membership but
+ * never bypass the login allowlist; open mode has no invite identity to redeem. */
 export const Route = createFileRoute('/invite/$token')({
   ssr: false,
   loader: async ({ params }): Promise<{ auth: { enabled: boolean }; token: string; signedIn: boolean }> => {

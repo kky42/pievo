@@ -5,17 +5,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 import { testStore, type TestStore } from '../../test/store.js'
 
-/**
- * End-to-end proof of the Team CRUD lifecycle at the data boundary, over a REAL
- * pglite store. Drives `teamAdmin` directly (the ONE authorization + rules
- * chokepoint the thin `teamFns` server fns delegate to), with real `user` rows
- * seeded for the direct-add-by-email + membership joins. Covers every §7 decision
- * and every scope-item-3/4 scenario: create/rename/delete lifecycle, the
- * block-delete-with-loops guard, the personal-team rules, the last-owner guard,
- * multi-owner, role authorization (a member can't manage), the invite redeem
- * paths (valid / expired / already-member / single-use / revoke), and explicit-
- * teamId cross-team management (managing team B is unaffected by any other team).
- */
+/** Team CRUD integration coverage over PGlite: lifecycle, loop deletion guards,
+ * personal-team rules, owner invariants, authorization, invites, and explicit
+ * cross-team management. */
 
 let tmp: string
 let db: typeof import('../db/index.js')
@@ -80,8 +72,6 @@ describe('create / rename / delete lifecycle', () => {
     const mine = await team.listManagedTeams(ALICE)
     const row = mine.find((t) => t.id === id)
     expect(row).toMatchObject({ role: 'owner', memberCount: 1, personal: false })
-    console.log('\n=== createTeam ===')
-    console.log(`  ${ALICE} created "${row?.name}" (${id}) as ${row?.role}, ${row?.memberCount} member`)
   })
 
   it('an owner renames; a member cannot', async () => {
@@ -102,9 +92,6 @@ describe('create / rename / delete lifecycle', () => {
     const blocked = await team.deleteTeam(ALICE, id)
     expect(blocked.ok).toBe(false)
     expect((blocked as { error: string }).error).toMatch(/still owns 1 loop/)
-    console.log('\n=== delete blocked-by-loops (decision 1) ===')
-    console.log(`  deleteTeam -> ${(blocked as { error: string }).error}`)
-
     // Move/delete the loop, then delete succeeds.
     const loops = await store.listLoops(id)
     await store.deleteLoop(loops[0]!.id)
@@ -126,7 +113,7 @@ describe('create / rename / delete lifecycle', () => {
   })
 })
 
-describe('personal-team rules (decision 5)', () => {
+describe('personal-team rules', () => {
   it('the personal team is renamable but not deletable and not leavable', async () => {
     const personal = store.teamIdForUser(ALICE)
     const renamed = await team.renameTeam(ALICE, personal, 'My Space')
@@ -149,7 +136,7 @@ describe('personal-team rules (decision 5)', () => {
   })
 })
 
-describe('last-owner guard + multi-owner (decision 6)', () => {
+describe('last-owner guard + multi-owner', () => {
   it('the sole owner cannot be demoted, removed, or leave — until a second owner exists', async () => {
     const id = await freshTeam('Owners')
     await store.addTeamMember(id, BOB, 'member')
@@ -175,7 +162,7 @@ describe('last-owner guard + multi-owner (decision 6)', () => {
   })
 })
 
-describe('member management authorization (decision 4 — owner-only)', () => {
+describe('member management authorization', () => {
   it('a plain member cannot add, set roles, remove, invite, or delete', async () => {
     const id = await freshTeam('Locked')
     await store.addTeamMember(id, BOB, 'member')
@@ -190,7 +177,7 @@ describe('member management authorization (decision 4 — owner-only)', () => {
   })
 })
 
-describe('add-by-email fast path (decision 2 option A)', () => {
+describe('add-by-email fast path', () => {
   it('adds an existing account; rejects unknown email and double-add', async () => {
     const id = await freshTeam('Emails')
     const ok = await team.addMemberByEmail(ALICE, id, 'BOB@example.com', 'member') // case-insensitive
@@ -207,15 +194,12 @@ describe('add-by-email fast path (decision 2 option A)', () => {
   })
 })
 
-describe('invite links (decision 2 option B)', () => {
+describe('invite links', () => {
   it('valid redeem grants membership at the invite role; single-use burns the link', async () => {
     const id = await freshTeam('Invite')
     const minted = await team.createInvite(ALICE, id, 'owner', Date.now())
     expect(minted.ok).toBe(true)
     const token = (minted as { ok: true; token: string }).token
-    console.log('\n=== invite link redeem ===')
-    console.log(`  minted owner-invite ${token.slice(0, 16)}… for ${id}`)
-
     const redeemed = await team.redeemInvite(CAROL, token, Date.now())
     expect(redeemed).toMatchObject({ ok: true, teamId: id, alreadyMember: false })
     expect((await store.getTeamMember(id, CAROL))?.role).toBe('owner')

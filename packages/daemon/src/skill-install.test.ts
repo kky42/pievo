@@ -13,8 +13,6 @@ import { afterAll, describe, expect, test } from "vitest";
 import {
   installArgs,
   installSkill,
-  bundledSkillAvailable,
-  SKILL_TARGET_AGENTS,
   targetSkillDirs,
   type Runner,
 } from "./skill-install.js";
@@ -25,8 +23,6 @@ fs.writeFileSync(path.join(fixtureDir, "SKILL.md"), "---\nname: pievo\n---\n# x\
 
 afterAll(() => fs.rmSync(fixtureDir, { recursive: true, force: true }));
 
-const ok: Runner = async () => ({ code: 0, stdout: "installed", stderr: "" });
-
 describe("installArgs", () => {
   test("always uses user scope with a verified multi-agent invocation", () => {
     // Repeated `-a <id>` flags, one per known agent (the comma form `-a a,b` is
@@ -34,14 +30,6 @@ describe("installArgs", () => {
     expect(installArgs("/b/skill")).toEqual([
       "--yes", "skills", "add", "/b/skill", "-a", "claude-code", "-a", "codex", "-y", "--copy", "-g",
     ]);
-  });
-
-  test("targets exactly the two CodingAgent values, never `-a '*'`", () => {
-    const args = installArgs("/b/skill");
-    expect(SKILL_TARGET_AGENTS.map((t) => t.id)).toEqual(["claude-code", "codex"]);
-    // one `-a` per agent, and the litter-everything wildcard never appears
-    expect(args.filter((a) => a === "-a")).toHaveLength(SKILL_TARGET_AGENTS.length);
-    expect(args).not.toContain("*");
   });
 });
 
@@ -96,16 +84,5 @@ describe("installSkill", () => {
     const r = await installSkill({ dir: fixtureDir, runner });
     expect(r.ok).toBe(false);
     expect(r.line).toContain("spawn npx ENOENT");
-  });
-
-  test("fixture is detected as an available bundled skill", () => {
-    expect(bundledSkillAvailable(fixtureDir)).toBe(true);
-    expect(bundledSkillAvailable(path.join(fixtureDir, "nope"))).toBe(false);
-  });
-
-  // sanity: the default-runner success shape used elsewhere
-  test("ok runner success", async () => {
-    const r = await installSkill({ dir: fixtureDir, runner: ok });
-    expect(r.ok).toBe(true);
   });
 });

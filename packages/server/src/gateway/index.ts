@@ -36,13 +36,10 @@ import {
   resolveLease,
   retireLease,
   pruneExpiredLeases,
-  fulfillClaim,
-  readClaim,
   readNewIdempotency,
   recordNewIdempotency,
   isDeviceTokenShape,
   sha256,
-  type ClaimResult,
   type RunLease,
 } from "./tokens.js";
 import { authenticateDeviceToken } from "./deviceAuth.js";
@@ -662,12 +659,8 @@ export class MachineGateway {
 
   // ---- owner loop creation ----
 
-  /**
-   * Create a loop from Claude Code (Bearer device token). The user perfected the
-   * task in their own Claude Code session, then — per SKILL.md — claude authors
-   * the loop config and POSTs it here. Binds the loop to the token's machine and
-   * schedules it immediately. The web's New-loop dialog is just waiting on this.
-   */
+  /** Create a validated loop through device authority, bind it to that machine,
+   * and schedule it immediately. */
   async createLoop(
     deviceToken: string,
     body: {
@@ -681,7 +674,7 @@ export class MachineGateway {
       reasoningEffort?: unknown;
       workdir?: unknown;
       agent?: unknown;
-      /** Web's New-loop claim token — correlates this loop back to the dialog. */
+      /** Optional connect key that selects its authenticated team intent. */
       claim?: unknown;
       /** Validate-only (`pievo new --dry-run`): run every check, persist NOTHING,
        *  and return the normalized config + fire preview. Zero-exec preserved. */
@@ -741,7 +734,6 @@ export class MachineGateway {
         ...row,
       });
       this.scheduler.addLoop(loop);
-      if (typeof claim === "string") fulfillClaim(claim, { loopId: loop.id, name: loop.name, machineId, agent: loop.agent });
       recordNewIdempotency(idempotencyKey, machineId, loop.id);
       log.info({ machineId, loopId: loop.id, agent: loop.agent }, "createLoop: canonical prompt runner created");
       return { status: 200, body: { ok: true, id: loop.id, name: loop.name, text: `loop: ${loop.name}\nid: ${loop.id}` } };
@@ -751,18 +743,15 @@ export class MachineGateway {
 
   // ---- owner loop reads and edits ----
 
-  /** List the loops bound to this machine, for `pievo loops`. The default columns
-   *  are the minimal `{id,name,cron,enabled,nextFire}` (P2); `--fields` extends them
-   *  from the optional set, and an unknown field fails loud (P6, VALIDATION_ERROR).
-   *  `--json` (OQ4) is the escape hatch: the full structured records as real JSON
+  /** List loops bound to this machine. `--fields` extends the minimal default
+   *  columns and rejects unknown names. `--json` returns full structured records
    *  (first byte `[`), mirroring `show --json` — the daemon prints `text` either way. */
   async listLoops(deviceToken: string, fieldsFlag?: string, json?: boolean): Promise<HttpResult> {
     const auth = await authenticateDeviceToken(deviceToken);
     if (!auth.ok) return auth.response;
     const { machineId } = auth;
 
-    // --fields extends the default columns with any of the optional set; an unknown
-    // field fails loud (exit 1) listing what IS available (matches gh-axi's shape).
+    // Extend defaults with known optional fields and reject unknown names.
     const extras: string[] = [];
     if (fieldsFlag !== undefined) {
       const requested = String(fieldsFlag).split(",").map((s) => s.trim()).filter(Boolean);
@@ -783,8 +772,8 @@ export class MachineGateway {
     const loops: LoopListRecord[] = await Promise.all(
       loopRows.map(async (l) => {
         const schedule = scheduleFromLoop(l);
-        // Derived cadence fire (P4): the NEXT time the cron fires in the loop's tz. A
-        // paused loop shows no next fire (— in the cell), matching §4.2.
+        // Derive the next cron fire in the loop's timezone.
+        // A paused loop has no next fire.
         const nextFire = l.enabled && schedule.mode === "cron" ? (nextFires(schedule.cron, schedule.timezone, 1)[0] ?? null) : null;
         // The last-result cell tracks the newest ordinary run, aligning with `show`.
         const last = wantLastResult ? await store.lastRun(l.id) : undefined;
@@ -857,11 +846,6 @@ export class MachineGateway {
       return { status: 200, body: { ok: true, id: updated.id, name: updated.name, applied, text: `loop: ${updated.name}\nid: ${updated.id}\napplied: ${applied.join(",")}` } };
     }
 
-  }
-
-  /** Read a New-loop claim's result (the web dialog polls this while waiting). */
-  claimStatus(token: string): ClaimResult | undefined {
-    return readClaim(token);
   }
 
   // ---- POST /machine/report ----
@@ -1240,7 +1224,7 @@ export interface Applied {
   status?: number;
 }
 
-// ---- TOON render helpers (batch 1: the axi-conformance spine) ----------------
+// ---- TOON render helpers ------------------------------------------------------
 // Each builds the `text` a CLI verb carries; the CLI-only renders live with their
 // verbs in `cli.ts` (whose `finalizeCli` strips non-transport fields at the
 // `/api/machine/cli` boundary). Pure — no I/O,
@@ -1279,11 +1263,10 @@ export function fmtTimeZoned(iso: string, timezone: string, opts: { seconds?: bo
   }
 }
 
-/** `pievo loops` default columns (P2 — minimal): identity + the two things an
- *  agent scans for (schedule + when it next fires). */
+/** Minimal default columns for `pievo loops`. */
 const LIST_DEFAULT_FIELDS: string[] = ["id", "name", "cron", "enabled", "nextFire"];
 /** The optional columns `--fields` may add (the "available" set an unknown field is
- *  measured against, §4.2). `runs`/`lastResult` are derived per loop. */
+ *  measured against). `runs`/`lastResult` are derived per loop. */
 const LIST_OPTIONAL_FIELDS: string[] = ["timezone", "model", "reasoningEffort", "runs", "lastResult"];
 
 /** A loop's row for `pievo loops`: every renderable cell precomputed once (so the
@@ -1323,7 +1306,7 @@ function loopCell(rec: LoopListRecord, field: string): Scalar {
   }
 }
 
-/** `pievo loops` — the typed loop list (P2/P4/P5/P9). Columns = the default set
+/** Render the typed loop list. Columns are the default set
  *  plus any `--fields` extras (validated + resolved by `listLoops`). */
 function renderLoopsText(loops: LoopListRecord[], fields: string[]): string {
   if (!loops.length) {

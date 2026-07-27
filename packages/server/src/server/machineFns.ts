@@ -85,8 +85,7 @@ export const listMachines = createServerFn({ method: 'GET' })
     const scope = await requestScope(teamId)
     const { enforce, userId, teamId: active } = scope
     if (enforce && !userId) return []
-    // Membership-scoped: a machine shows in every team its owner belongs to (one
-    // machine serves many teams, report §2.3). Open mode lists everything.
+    // A machine is visible in every team its owner belongs to. Open mode lists all.
     const list = enforce ? await store.listMachinesForTeam(active) : await store.listMachines()
     return Promise.all(list.filter((m) => m.name.trim()).map((m) => toSummary(m, scope)))
   })
