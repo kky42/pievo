@@ -1,24 +1,17 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-// The pievo skill's reference files, inlined at build time (Vite ?raw) so they
-// ship in the nitro bundle — same source of truth as /api/skill (packages/server/
-// src/skill/). Served as the BOOTSTRAP FALLBACK: normally the agent reads these
-// from the user install (`pievo daemon start` installs via `npx skills` into
-// ~/.claude/skills/pievo/references/ and ~/.agents/skills/pievo/references/), but when that install was skipped (no
-// network/npx) the bootstrap doc (skill/bootstrap.md, served at /api/skill) tells
-// the agent to fetch them here instead.
+// The Pievo skill references are inlined at build time so they ship in the Nitro
+// bundle. Normally an owner agent reads the user-scope installation; when that
+// install is unavailable, `skill/bootstrap.md` (served at `/api/bootstrap`) links
+// to these exact fallback documents.
+import connect from '../skill/references/connect.md?raw'
 import create from '../skill/references/create.md?raw'
 import update from '../skill/references/update.md?raw'
-import evolve from '../skill/references/evolve.md?raw'
-import dashboard from '../skill/references/dashboard.md?raw'
-import run from '../skill/references/run.md?raw'
 
 const REFERENCES: Record<string, string> = {
+  'connect.md': connect,
   'create.md': create,
   'update.md': update,
-  'evolve.md': evolve,
-  'dashboard.md': dashboard,
-  'run.md': run,
 }
 
 const PREFIX = '/api/skill/references/'

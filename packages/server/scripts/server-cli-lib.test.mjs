@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   acquireStartLock,
+  applyProcessEnv,
   buildEnvPlan,
   buildRestartPlan,
   parseArgs,
@@ -75,6 +76,24 @@ describe("launcher environment plan", () => {
       .toMatchObject({ host: "localhost", port: 3333 });
     expect(() => buildEnvPlan({ command: "start", port: "0" }, {})).toThrow(/invalid port/);
   });
+
+  test("foreground application uses the complete launch environment", () => {
+    const current = { REMOVE_ME: "yes", PORT: "1" };
+    const plan = buildEnvPlan({ command: "start", dataDir: "/tmp/pievo-fg", port: "4567" }, { KEEP_ME: "yes" });
+    applyProcessEnv(plan.env, current);
+    expect(current).toEqual(plan.env);
+    expect(current).toMatchObject({
+      KEEP_ME: "yes",
+      NODE_ENV: "production",
+      PIEVO_DATA_DIR: "/tmp/pievo-fg",
+      PIEVO_DB: "pglite",
+      NITRO_HOST: "127.0.0.1",
+      HOST: "127.0.0.1",
+      NITRO_PORT: "4567",
+      PORT: "4567",
+    });
+    expect(current).not.toHaveProperty("REMOVE_ME");
+  });
 });
 
 describe("nonce-bound readiness", () => {
@@ -126,10 +145,14 @@ describe("safe pid identity", () => {
     expect(clearReused).toHaveBeenCalledOnce();
   });
 
-  test("retains malformed records and unverifiable live identities", () => {
+  test("retains malformed, non-v2, and unverifiable live records", () => {
     const dir = tempDir();
     const pidFile = path.join(dir, "server.pid");
     fs.writeFileSync(pidFile, "not json");
+    expect(pidStatus(pidFile)).toMatchObject({ state: "unsafe", error: expect.stringMatching(/malformed/) });
+    expect(fs.existsSync(pidFile)).toBe(true);
+
+    fs.writeFileSync(pidFile, JSON.stringify({ ...record, version: 1 }));
     expect(pidStatus(pidFile)).toMatchObject({ state: "unsafe", error: expect.stringMatching(/malformed/) });
     expect(fs.existsSync(pidFile)).toBe(true);
 

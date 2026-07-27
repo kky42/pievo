@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import type { JobDetail, RunDiffResult, RunSummary } from '../types'
+import type { LoopDetail, RunDiffResult, RunSummary } from '../types'
 import { dur, fmt, fnum, until } from '../lib/format'
 import { DAEMON_UPGRADE_REQUIRED, DASHBOARD_PROTOCOL } from '../lib/lifecycleUi'
-import { getJobDetail, getRunDiff, loadOlderRuns, stopRun } from '../server/loopApi'
+import { getLoopDetail, getRunDiff, loadOlderRuns, stopRun } from '../server/loopApi'
 import { DiffView } from './DiffView'
 import { btn, btnDanger, Loading, Pill, runPulseStyle, sectionHeadCls, StatusPill } from './ui'
 import { LoadErrorCard } from './actionUi'
@@ -38,12 +38,12 @@ function visibleTokenUsage(usage: RunSummary['usage']): number | null {
   return (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)
 }
 
-/** Per-run artifact diff vs the previous run (Phase 3), rendered as a colored diff
+/** Per-run artifact diff vs the previous run, rendered as a colored diff
  *  view. Lazy by runId; degrades to a calm fallback for runs with no snapshot. */
 function Changes({ run }: { run: RunSummary }) {
   const [data, setData] = useState<RunDiffResult | null>(null)
   useEffect(() => {
-    if (run.queued || run.running) return // snapshot is captured at finalize — nothing to diff yet
+    if (run.phase === 'pending' || run.phase === 'running') return // snapshot is captured at finalize — nothing to diff yet
     let alive = true
     getRunDiff({ data: { runId: run.id } })
       .then((d) => alive && setData(d))
@@ -51,9 +51,9 @@ function Changes({ run }: { run: RunSummary }) {
     return () => {
       alive = false
     }
-  }, [run.id, run.queued, run.running])
+  }, [run.id, run.phase])
 
-  if (run.queued || run.running)
+  if (run.phase === 'pending' || run.phase === 'running')
     return (
       <Card label="Changes">
         <div className="text-body text-disabled">File changes appear once the run finishes.</div>
@@ -123,7 +123,7 @@ const MAX_OLDER_PAGES = 64
 
 /**
  * Run detail PAGE body — its own route (`/loops/$loopId/runs/$runId`). Resolves
- * the run by id from the loop's detail payload (reusing getJobDetail, no new
+ * the run by id from the loop's detail payload (reusing getLoopDetail, no new
  * backend); a run older than that latest window is located by paging backward
  * with the existing `loadOlderRuns` cursor fn. Self-polls while it's in flight.
  *
@@ -134,7 +134,7 @@ const MAX_OLDER_PAGES = 64
  * content keep the page free of horizontal scroll at any width.
  */
 export function RunDetailView({ loopId, runId }: { loopId: string; runId: string }) {
-  const [detail, setDetail] = useState<JobDetail | null>(null)
+  const [detail, setDetail] = useState<LoopDetail | null>(null)
   const [olderRun, setOlderRun] = useState<RunSummary | null>(null) // located via backward paging
   const [searchDone, setSearchDone] = useState(false) // backward search settled (found or exhausted)
   const [err, setErr] = useState<string | null>(null)
@@ -142,7 +142,7 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
   // Initial load — surfaces a fatal error if the loop itself can't be read.
   const load = useCallback(async () => {
     try {
-      setDetail(await getJobDetail({ data: loopId }))
+      setDetail(await getLoopDetail({ data: loopId }))
       setErr(null) // clear a prior transient error on success
     } catch (e) {
       setErr(String(e))
@@ -153,7 +153,7 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
   // stale data on screen rather than bricking the page on the `if (err)` guard.
   const poll = useCallback(async () => {
     try {
-      setDetail(await getJobDetail({ data: loopId }))
+      setDetail(await getLoopDetail({ data: loopId }))
     } catch {
       /* keep what we have; the next tick retries */
     }
@@ -199,7 +199,7 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
   }, [detail, run, searchDone, loopId, runId])
 
   // Keep a live run fresh until its terminal fields and file snapshot settle.
-  const running = !!(run?.queued || run?.running || run?.reconciliation)
+  const running = !!run && (run.phase === 'pending' || run.phase === 'running' || !!run.reconciliation)
   useEffect(() => {
     if (!running) return
     const t = setInterval(() => void poll(), 3_000)
@@ -235,8 +235,7 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
       </div>
     )
 
-  const jobName = detail.summary.name
-  const roleChip = run.role || null
+  const loopName = detail.summary.name
   return (
     <>
       {/* header card - mirrors the loop detail page */}
@@ -244,13 +243,12 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
         <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-[26px] font-medium leading-tight tracking-tight text-display">Run · {jobName}</h1>
+              <h1 className="text-[26px] font-medium leading-tight tracking-tight text-display">Run · {loopName}</h1>
               <StatusPill run={run} colorText />
             </div>
             <div className="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-meta text-secondary">
               <span className="text-primary">{fmt(run.ts)}</span>
               <span className="text-wire">·</span>
-              {roleChip && <Pill>{roleChip}</Pill>}
               {run.durationMs != null && <Pill tone="ink">{dur(run.durationMs)}</Pill>}
               <code className="font-mono text-disabled">{run.id}</code>
             </div>
@@ -261,13 +259,13 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
           <Link to="/loops/$loopId" params={{ loopId }} className={btn}>
             View the whole loop →
           </Link>
-          {(run.queued || run.running) && (
+          {(run.phase === 'pending' || run.phase === 'running') && (
             <button
               type="button"
               onClick={onStop}
               className={btnDanger}
-              disabled={!!run.running && detail.machine.daemonProtocol !== DASHBOARD_PROTOCOL}
-              title={run.running && detail.machine.daemonProtocol !== DASHBOARD_PROTOCOL ? DAEMON_UPGRADE_REQUIRED : undefined}
+              disabled={run.phase === 'running' && detail.machine.daemonProtocol !== DASHBOARD_PROTOCOL}
+              title={run.phase === 'running' && detail.machine.daemonProtocol !== DASHBOARD_PROTOCOL ? DAEMON_UPGRADE_REQUIRED : undefined}
             >
               Stop run
             </button>
@@ -278,13 +276,13 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
       {/* two-column main: meaty content wide, metadata in a capped rail */}
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
         <div className="flex min-w-0 flex-col gap-6">
-          {run.queued ? (
+          {run.phase === 'pending' ? (
             <Card label="Activity">
               <div className="text-body text-secondary">
                 Queued; it starts when this loop is free and the machine polls.
               </div>
             </Card>
-          ) : run.running ? <RunningState run={run} /> : run.reconciliation ? (
+          ) : run.phase === 'running' ? <RunningState run={run} /> : run.reconciliation ? (
             <Card label="Recovery">
               <div className="text-body text-secondary">
                 {run.reconciliation === 'blocking'
@@ -320,22 +318,6 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
 
           <Changes run={run} />
 
-          {run.control && run.control.length > 0 && (
-            <Card label="Control actions" count={run.control.length}>
-              <ul className="space-y-1.5">
-                {run.control.map((c, i) => (
-                  <li key={i} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-label">
-                    <span className="text-display">{c.command}</span>
-                    <span className="min-w-0 break-all text-secondary">{JSON.stringify(c.args)}</span>
-                    <span aria-hidden className="text-wire">→</span>
-                    <span className="text-primary">{c.result}</span>
-                    {c.detail && <span className="text-disabled">({c.detail})</span>}
-                  </li>
-                ))}
-              </ul>
-            </Card>
-          )}
-
           {run.finalText && (
             <Card label="Final output">
               <div className="whitespace-pre-wrap break-words text-body text-primary">{run.finalText}</div>
@@ -353,11 +335,6 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
               {tokenUsage != null && (
                 <Field k="Token usage">
                   <span className="text-disabled">{fnum(tokenUsage)} tokens</span>
-                </Field>
-              )}
-              {run.metrics != null && (
-                <Field k="Run metrics">
-                  <code className="block break-all font-mono text-label text-secondary">{JSON.stringify(run.metrics)}</code>
                 </Field>
               )}
               {run.error && (

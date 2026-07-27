@@ -7,8 +7,7 @@ import path from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { PIEVO_DIR } from "./config.js";
-import { effectiveRoots, isScratchDir, isWithinRoots } from "./roots.js";
+import { effectiveRoots, isWithinRoots } from "./roots.js";
 
 describe("isWithinRoots", () => {
   test("at/under a root matches; siblings and name-prefixes don't", () => {
@@ -53,19 +52,5 @@ describe("effectiveRoots — the local jail always applies", () => {
 
   test("never returns empty when a jail is intended (empty means 'no jail' downstream)", () => {
     expect(effectiveRoots(["/a"], ["/b"]).length).toBeGreaterThan(0);
-  });
-});
-
-describe("isScratchDir", () => {
-  test("the daemon-owned scratch parent is recognized; anything else isn't", () => {
-    expect(isScratchDir(path.join(PIEVO_DIR, "work", "loop-1"))).toBe(true);
-    expect(isScratchDir(path.join(PIEVO_DIR, "work"))).toBe(true);
-    expect(isScratchDir("/tmp/elsewhere")).toBe(false);
-  });
-
-  test("unresolved `..` under the scratch prefix does not count as scratch", () => {
-    // Raw string (path.join would normalize it away) — lexically prefixed by
-    // the scratch dir but resolving elsewhere.
-    expect(isScratchDir(`${PIEVO_DIR}/work/../../../etc`)).toBe(false);
   });
 });

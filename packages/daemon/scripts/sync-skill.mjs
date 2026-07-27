@@ -4,16 +4,10 @@
  * `skill`). Run on `build` and `prepublishOnly` so the bundled copy can never
  * drift from the single source of truth at packages/server/src/skill/.
  *
- * SELECTIVE COPY — only the PUBLIC skill surface ships: SKILL.md (installable skill
- * root) + the five public references (create/update/evolve/dashboard authoring
- * + run runtime protocol). The INTERNAL run prompts under skill/run/ are
- * server-side run-dispatch ONLY,
- * bootstrap.md is the SERVER-ONLY first-capture onboarding doc served at /api/skill
- * (not an installable skill file), and skill/templates/ is the template-market
- * metadata (public-served via listTemplates, not an installable skill file) — none of
- * these may reach the public npm tarball or a user's installed
- * ~/.claude/skills/pievo/. A naive `cpSync(src, dst, {recursive})` would copy run/,
- * bootstrap.md AND templates/ too — so we whitelist instead.
+ * SELECTIVE COPY — only the PUBLIC owner skill ships: SKILL.md plus the three
+ * connection/create/update references. bootstrap.md is server-only first-contact
+ * guidance and does not belong in the installable skill. An exact whitelist prevents
+ * accidental publication of any other server-only skill sources.
  *
  * The daemon installs this bundled dir locally via `npx skills` during `pievo new`
  * (see src/skill-install.ts) — a LOCAL path source, so end users never need the
@@ -34,8 +28,8 @@ if (!fs.existsSync(path.join(src, "SKILL.md"))) {
   process.exit(0);
 }
 
-// The exact public surface — nothing else (notably NOT skill/run/ or bootstrap.md) is bundled.
-const PUBLIC = ["SKILL.md", path.join("references", "create.md"), path.join("references", "update.md"), path.join("references", "evolve.md"), path.join("references", "dashboard.md"), path.join("references", "run.md")];
+// The exact installable owner surface; bootstrap and other server-only files stay out.
+const PUBLIC = ["SKILL.md", path.join("references", "connect.md"), path.join("references", "create.md"), path.join("references", "update.md")];
 
 fs.rmSync(dst, { recursive: true, force: true });
 for (const rel of PUBLIC) {

@@ -3,11 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 
-import type { Loop, Run, RunRole } from "../db/schema.js";
+import type { Loop, Run } from "../db/schema.js";
+import { testStore, type TestStore } from "../../test/store.js";
 
 let tmp: string;
 let db: typeof import("../db/index.js");
-let store: typeof import("../db/store.js");
+let store: TestStore;
 let sched: typeof import("./index.js");
 let tokens: typeof import("../gateway/tokens.js");
 
@@ -18,7 +19,7 @@ beforeAll(async () => {
   process.env.PIEVO_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();
-  store = await import("../db/store.js");
+  store = testStore(await import("../db/store.js"));
   sched = await import("./index.js");
   tokens = await import("../gateway/tokens.js");
 });
@@ -35,7 +36,6 @@ async function makeLoop(
   suffix: string,
   patch: Partial<{
     enabled: boolean;
-    goal: string | null;
     scheduleMode: "cron" | "continuous";
     continuousDelayMinutes: number;
   }> = {},
@@ -47,13 +47,12 @@ async function makeLoop(
     tokenHash: `h-${suffix}`,
     online: true,
   });
-  return store.createLoop({
+  return store.createLoop({ workdir: "/work",
     userId: "u1",
     machineId: machine.id,
     name: suffix,
     cron: "*/5 * * * *",
     enabled: true,
-    notify: "auto",
     ...patch,
   });
 }
@@ -62,8 +61,8 @@ function scheduler() {
   return new sched.Scheduler({ dispatch(): void {} });
 }
 
-async function pending(loopId: string, role?: RunRole): Promise<Run[]> {
-  return (await store.openRunsForLoop(loopId)).filter((r) => r.phase === "pending" && (!role || r.role === role));
+async function pending(loopId: string): Promise<Run[]> {
+  return (await store.openRunsForLoop(loopId)).filter((r) => r.phase === "pending");
 }
 
 async function claim(loop: Loop) {
@@ -72,57 +71,56 @@ async function claim(loop: Loop) {
   return claimed;
 }
 
-test("queue authority only promotes and latest owner steer wins", async () => {
-  const loop = await makeLoop("authority");
-  const system = await store.enqueueRun(loop.id, { role: "steer", requestedBy: "system", requestText: "system" });
-  const owner = await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "owner A" });
-  const weaker = await store.enqueueRun(loop.id, { role: "steer", requestedBy: "system", requestText: "ignored" });
-  const latest = await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "owner B" });
+test("cron overlap skip consumes an occurrence without queueing behind an open run", async () => {
+  const loop = await makeLoop("overlap-skip");
+  await store.updateLoop(loop.id, { cronOverlap: "skip" });
+  await store.addRun({
+    loopId: loop.id, machineId: loop.machineId,
+    phase: "running", requestedBy: "system", ts: new Date().toISOString(),
+  });
+  const due = new Date(Date.now() - 1_000).toISOString();
+  await store.updateLoop(loop.id, { nextCadenceAt: due });
 
-  expect("run" in system && "run" in owner && owner.run.id).toBe("run" in system ? system.run.id : "");
-  expect("run" in weaker && weaker.run).toMatchObject({ requestedBy: "owner", requestText: "owner A" });
-  expect("run" in latest && latest.run).toMatchObject({ requestedBy: "owner", requestText: "owner B" });
-  expect(await pending(loop.id, "steer")).toHaveLength(1);
+  const [advanced] = await store.advanceDueSchedules();
+  expect(advanced).toMatchObject({ state: "skipped" });
+  expect(await pending(loop.id)).toHaveLength(0);
+  expect(Date.parse((await store.getLoop(loop.id))!.nextCadenceAt!)).toBeGreaterThan(Date.now());
 });
 
-test("a running role may retain one coalesced follow-up", async () => {
-  const loop = await makeLoop("follow-up");
-  await scheduler().requestSteer(loop.id, "A");
-  const first = await claim(loop);
-  expect(first.run.requestText).toBe("A");
+test("cron overlap queue-one retains one coalesced follow-up", async () => {
+  const loop = await makeLoop("overlap-queue");
+  await store.updateLoop(loop.id, { cronOverlap: "queue-one" });
+  await store.addRun({
+    loopId: loop.id, machineId: loop.machineId,
+    phase: "running", requestedBy: "system", ts: new Date().toISOString(),
+  });
+  await store.updateLoop(loop.id, { nextCadenceAt: new Date(Date.now() - 1_000).toISOString() });
+  expect((await store.advanceDueSchedules())[0]).toMatchObject({ state: "queued" });
+  expect(await pending(loop.id)).toHaveLength(1);
 
-  const b = await scheduler().requestSteer(loop.id, "B");
-  const c = await scheduler().requestSteer(loop.id, "C");
-  expect("run" in b && "run" in c && c.run.id).toBe("run" in b ? b.run.id : "");
-  expect((await pending(loop.id, "steer"))[0]).toMatchObject({ requestedBy: "owner", requestText: "C" });
+  await store.updateLoop(loop.id, { nextCadenceAt: new Date(Date.now() - 1_000).toISOString() });
+  expect((await store.advanceDueSchedules())[0]).toMatchObject({ state: "coalesced" });
+  expect(await pending(loop.id)).toHaveLength(1);
 });
 
-test("cross-role claims are steer > evolve > exec and claim inserts the lease atomically", async () => {
-  const loop = await makeLoop("priority");
-  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });
-  await store.enqueueRun(loop.id, { role: "evolve", requestedBy: "owner" });
-  await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "fix" });
-
-  const roles: RunRole[] = [];
-  for (let i = 0; i < 3; i++) {
-    const item = await claim(loop);
-    roles.push(item.run.role);
-    expect((await tokens.resolveLease(item.runToken))?.runId).toBe(item.run.id);
-    expect(await store.claimReadyRunForMachine(loop.machineId)).toBeUndefined();
-    await store.updateRun(item.run.id, { phase: "canceled" });
-    await tokens.retireLease(item.runToken);
-  }
-  expect(roles).toEqual(["steer", "evolve", "exec"]);
+test("an ordinary terminal does not enqueue hidden follow-up work", async () => {
+  const loop = await makeLoop("ordinary-only");
+  const running = await store.addRun({
+    loopId: loop.id, machineId: loop.machineId,
+    phase: "running", requestedBy: "system", ts: new Date().toISOString(),
+  });
+  await store.finalizeRunningRun(loop.id, running.id, { phase: "done", status: "keep", ts: new Date().toISOString() });
+  expect(await pending(loop.id)).toHaveLength(0);
 });
 
 test("claim and cancel race cannot leave a canceled run with a live lease", async () => {
   const loop = await makeLoop("claim-cancel");
-  const queued = await store.enqueueRun(loop.id, { role: "exec", requestedBy: "owner" });
+  const queued = await store.enqueueRun(loop.id, { requestedBy: "owner" });
   if (!("run" in queued)) throw new Error("expected run");
 
   const [claimed, canceled] = await Promise.all([
     store.claimReadyRunForMachine(loop.machineId),
-    store.cancelRun(loop.id, queued.run.id),
+    store.requestRunCancel(loop.id, queued.run.id),
   ]);
   const final = (await store.getRun(queued.run.id))!;
   expect(["running", "canceled"]).toContain(final.phase);
@@ -142,7 +140,7 @@ test("due cadence and one-shot facts coalesce into one exec and are consumed tog
 
   const [advanced] = await store.advanceDueSchedules();
   expect(advanced).toBeTruthy();
-  expect(await pending(loop.id, "exec")).toHaveLength(1);
+  expect(await pending(loop.id)).toHaveLength(1);
   const fresh = (await store.getLoop(loop.id))!;
   expect(fresh.nextRunAt).toBeNull();
   expect(Date.parse(fresh.nextCadenceAt!)).toBeGreaterThan(Date.now());
@@ -155,7 +153,7 @@ test("a due fact coalesces with owner exec without downgrading it", async () => 
   await store.updateLoop(loop.id, { nextCadenceAt: new Date(Date.now() - 1_000).toISOString() });
 
   await store.advanceDueSchedules();
-  const [run] = await pending(loop.id, "exec");
+  const [run] = await pending(loop.id);
   expect(run).toMatchObject({ id: owner.run.id, requestedBy: "owner" });
 });
 
@@ -178,55 +176,30 @@ test("continuous activation, claim, terminal, and due transitions use nextCadenc
 
   await store.advanceDueSchedules(new Date(Date.parse(terminalAt) + 3 * 60_000).toISOString());
   expect((await store.getLoop(loop.id))!.nextCadenceAt).toBeNull();
-  expect(await pending(loop.id, "exec")).toHaveLength(1);
-});
-
-test("steer/evolve claims and terminals never move continuous exec cadence", async () => {
-  for (const role of ["steer", "evolve"] as const) {
-    const loop = await makeLoop(`structural-${role}`, { scheduleMode: "continuous", continuousDelayMinutes: 7 });
-    const cadence = (await store.getLoop(loop.id))!.nextCadenceAt;
-    await store.enqueueRun(loop.id, {
-      role,
-      requestedBy: "owner",
-      ...(role === "steer" ? { requestText: "keep cadence" } : {}),
-    });
-    const item = await claim(loop);
-    expect(item.run.role).toBe(role);
-    expect((await store.getLoop(loop.id))!.nextCadenceAt).toBe(cadence);
-    const terminal = await store.finalizeRunningRun(
-      loop.id,
-      item.run.id,
-      { phase: "done", ts: new Date().toISOString() },
-      {},
-      tokens.sha256(item.runToken),
-    );
-    expect(terminal?.loop.nextCadenceAt).toBe(cadence);
-  }
+  expect(await pending(loop.id)).toHaveLength(1);
 });
 
 test("canceled exec does not restart continuous cadence", async () => {
   const loop = await makeLoop("cancel-chain", { scheduleMode: "continuous" });
-  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "owner" });
+  await store.enqueueRun(loop.id, { requestedBy: "owner" });
   const item = await claim(loop);
   expect((await store.getLoop(loop.id))!.nextCadenceAt).toBeNull();
-  await store.cancelRun(loop.id, item.run.id);
+  await store.requestRunCancel(loop.id, item.run.id);
   expect((await store.getLoop(loop.id))!.nextCadenceAt).toBeNull();
 });
 
-test("mode switches change only cadence facts and never cancel pending rows", async () => {
+test("mode switches preserve the single ordinary pending row", async () => {
   const loop = await makeLoop("switch");
-  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });
-  await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "keep" });
+  await store.enqueueRun(loop.id, { requestedBy: "system" });
 
   const continuous = await store.updateLoop(loop.id, { scheduleMode: "continuous" });
-  expect(continuous!.nextCadenceAt).toBeNull(); // open exec exists
-  expect(await pending(loop.id)).toHaveLength(2);
+  expect(continuous!.nextCadenceAt).toBeNull();
+  expect(await pending(loop.id)).toHaveLength(1);
   const cron = await store.updateLoop(loop.id, { scheduleMode: "cron" });
   expect(Date.parse(cron!.nextCadenceAt!)).toBeGreaterThan(Date.now());
-  expect(await pending(loop.id)).toHaveLength(2);
+  expect(await pending(loop.id)).toHaveLength(1);
 });
-
-test("continuous delay steers retime the durable fact without run-history inference", async () => {
+test("continuous delay edits retime the durable fact without run-history inference", async () => {
   const loop = await makeLoop("retime", { scheduleMode: "continuous", continuousDelayMinutes: 2 });
   const terminalAt = new Date(Date.now() - 30_000).toISOString();
   const oldTarget = new Date(Date.parse(terminalAt) + 2 * 60_000).toISOString();
@@ -236,26 +209,21 @@ test("continuous delay steers retime the durable fact without run-history infere
 
   const alreadyDue = new Date(Date.now() - 1_000).toISOString();
   await store.updateLoop(loop.id, { nextCadenceAt: alreadyDue });
-  const dueSteer = await store.updateLoop(loop.id, { continuousDelayMinutes: 20 });
-  expect(dueSteer!.nextCadenceAt).toBe(alreadyDue);
+  const dueEdit = await store.updateLoop(loop.id, { continuousDelayMinutes: 20 });
+  expect(dueEdit!.nextCadenceAt).toBe(alreadyDue);
 });
 
-test("pause clears both facts, cancels system rows, and preserves owner rows", async () => {
+test("pause clears facts, cancels system work, and preserves owner Run-once work", async () => {
   const loop = await makeLoop("pause");
-  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });
-  await store.enqueueRun(loop.id, { role: "evolve", requestedBy: "owner" });
-  await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "keep" });
+  await store.enqueueRun(loop.id, { requestedBy: "system" });
+  await store.enqueueRun(loop.id, { requestedBy: "owner" });
   await store.updateLoop(loop.id, { nextRunAt: new Date(Date.now() + 60_000).toISOString() });
 
   const paused = await store.updateLoop(loop.id, { enabled: false });
   expect(paused).toMatchObject({ nextCadenceAt: null, nextRunAt: null });
-  expect((await store.updateLoop(loop.id, { nextRunAt: new Date(Date.now() + 60_000).toISOString() }))!.nextRunAt).toBeNull();
-  expect((await pending(loop.id)).map((r) => [r.role, r.requestedBy]).sort()).toEqual([
-    ["evolve", "owner"],
-    ["steer", "owner"],
-  ]);
+  expect(await pending(loop.id)).toHaveLength(1);
+  expect((await pending(loop.id))[0]).toMatchObject({ requestedBy: "owner" });
 });
-
 test("boot initializes missing cron facts to the future, idempotently and without catch-up", async () => {
   const loop = await makeLoop("boot-init");
   await store.updateLoop(loop.id, { nextCadenceAt: null });
@@ -267,35 +235,20 @@ test("boot initializes missing cron facts to the future, idempotently and withou
   expect(first.map((l) => l.id)).toContain(loop.id);
   expect(Date.parse(target!)).toBeGreaterThan(Date.parse(at));
   expect(second).toHaveLength(0);
-  expect(await pending(loop.id, "exec")).toHaveLength(0);
+  expect(await pending(loop.id)).toHaveLength(0);
 });
 
 test("coalescing mutates updatedAt but never the pending row's immutable createdAt", async () => {
   const loop = await makeLoop("age-anchor");
-  const first = await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });
+  const first = await store.enqueueRun(loop.id, { requestedBy: "system" });
   if (!("run" in first)) throw new Error("expected run");
   const createdAt = first.run.createdAt;
   await new Promise((resolve) => setTimeout(resolve, 5));
-  const second = await store.enqueueRun(loop.id, { role: "exec", requestedBy: "owner" });
+  const second = await store.enqueueRun(loop.id, { requestedBy: "owner" });
   if (!("run" in second)) throw new Error("expected run");
 
   expect(second.run.createdAt).toBe(createdAt);
   expect(Date.parse(second.run.updatedAt)).toBeGreaterThan(Date.parse(createdAt));
-});
-
-test("exec terminal lifecycle requests auto-evolve as system work", async () => {
-  const loop = await makeLoop("auto-evolve");
-  const running = await store.addRun({
-    loopId: loop.id,
-    userId: loop.userId,
-    machineId: loop.machineId,
-    phase: "running",
-    role: "exec",
-    requestedBy: "system",
-    ts: new Date().toISOString(),
-  });
-  await store.finalizeRunningRun(loop.id, running.id, { phase: "done", ts: new Date().toISOString() });
-  expect((await pending(loop.id, "evolve"))[0]).toMatchObject({ requestedBy: "system" });
 });
 
 test("terminal failure auto-pauses and cancels system work in the terminal transaction", async () => {
@@ -303,17 +256,17 @@ test("terminal failure auto-pauses and cancels system work in the terminal trans
   const base = Date.now() - 10_000;
   for (let i = 0; i < 2; i++) {
     await store.addRun({
-      loopId: loop.id, userId: loop.userId, machineId: loop.machineId,
-      phase: "error", role: "exec", requestedBy: "system",
+      loopId: loop.id, machineId: loop.machineId,
+      phase: "error", requestedBy: "system",
       ts: new Date(base + i).toISOString(),
     });
   }
   const running = await store.addRun({
-    loopId: loop.id, userId: loop.userId, machineId: loop.machineId,
-    phase: "running", role: "exec", requestedBy: "system", ts: new Date().toISOString(),
+    loopId: loop.id, machineId: loop.machineId,
+    phase: "running", requestedBy: "system", ts: new Date().toISOString(),
   });
-  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });
-  await store.enqueueRun(loop.id, { role: "evolve", requestedBy: "system" });
+  await store.enqueueRun(loop.id, { requestedBy: "system" });
+  await store.enqueueRun(loop.id, { requestedBy: "system" });
 
   const terminal = await store.finalizeRunningRun(
     loop.id,
@@ -329,18 +282,42 @@ test("terminal failure auto-pauses and cancels system work in the terminal trans
   expect(await store.claimReadyRunForMachine(loop.machineId)).toBeUndefined();
 });
 
+test("failure streak ordering uses runIndex rather than timestamps", async () => {
+  const loop = await makeLoop("indexed-breaker", { scheduleMode: "continuous", continuousDelayMinutes: 5 });
+  await store.addRun({
+    loopId: loop.id, machineId: loop.machineId,
+    phase: "error", requestedBy: "system", ts: "2030-01-01T00:00:00Z",
+  });
+  await store.addRun({
+    loopId: loop.id, machineId: loop.machineId,
+    phase: "done", requestedBy: "system", ts: "2020-01-01T00:00:00Z",
+  });
+  const running = await store.addRun({
+    loopId: loop.id, machineId: loop.machineId,
+    phase: "running", requestedBy: "system", ts: "2010-01-01T00:00:00Z",
+  });
+  const terminal = await store.finalizeRunningRun(
+    loop.id,
+    running.id,
+    { phase: "error", error: "new failure", ts: "2000-01-01T00:00:00Z" },
+    {},
+    undefined,
+    2,
+  );
+  expect(terminal).toMatchObject({ failureStreak: 1, autoPaused: false });
+  expect(terminal?.loop.enabled).toBe(true);
+});
+
 test("terminal-grace fences due cadence until one late reconcile retimes it", async () => {
   const loop = await makeLoop("late", { scheduleMode: "continuous", continuousDelayMinutes: 5 });
   const running = await store.addRun({
     loopId: loop.id,
-    userId: loop.userId,
     machineId: loop.machineId,
     phase: "running",
-    role: "exec",
     requestedBy: "system",
     ts: new Date(Date.now() - 30 * 60_000).toISOString(),
   });
-  const token = await tokens.registerRunLease({ runId: running.id, loopId: loop.id, machineId: loop.machineId, role: "exec", allowControl: true });
+  const token = await tokens.registerRunLease({ runId: running.id, loopId: loop.id, machineId: loop.machineId });
   const reclaimedAt = new Date(Date.now() - 10 * 60_000).toISOString();
   await store.reclaimRun(running.id, "running", "timeout", reclaimedAt);
   expect((await store.getLoop(loop.id))!.nextCadenceAt).toBe(new Date(Date.parse(reclaimedAt) + 5 * 60_000).toISOString());
@@ -355,18 +332,18 @@ test("terminal-grace fences due cadence until one late reconcile retimes it", as
   );
   expect(reconciled?.loop.nextCadenceAt).toBe(new Date(Date.parse(actualAt) + 5 * 60_000).toISOString());
   expect(await tokens.resolveLease(token)).toBeUndefined();
-  expect(await pending(loop.id, "exec")).toHaveLength(0);
+  expect(await pending(loop.id)).toHaveLength(0);
 });
 
 test("expired terminal-grace cannot reconcile after a successor claim", async () => {
   const loop = await makeLoop("expired-late", { scheduleMode: "continuous" });
   const old = await store.addRun({
-    loopId: loop.id, userId: loop.userId, machineId: loop.machineId,
-    phase: "running", role: "exec", requestedBy: "system", ts: new Date(Date.now() - 60_000).toISOString(),
+    loopId: loop.id, machineId: loop.machineId,
+    phase: "running", requestedBy: "system", ts: new Date(Date.now() - 60_000).toISOString(),
   });
-  const token = await tokens.registerRunLease({ runId: old.id, loopId: loop.id, machineId: loop.machineId, role: "exec", allowControl: true });
+  const token = await tokens.registerRunLease({ runId: old.id, loopId: loop.id, machineId: loop.machineId });
   await store.reclaimRun(old.id, "running", "timeout", new Date(Date.now() - 2_000).toISOString(), 1);
-  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "owner" });
+  await store.enqueueRun(loop.id, { requestedBy: "owner" });
   const successor = await store.claimReadyRunForMachine(loop.machineId);
   expect(successor?.run.id).not.toBe(old.id);
 
@@ -379,70 +356,4 @@ test("expired terminal-grace cannot reconcile after a successor claim", async ()
   expect(reconciled).toBeUndefined();
   expect((await store.getRun(old.id))?.phase).toBe("error");
   expect((await store.getRun(successor!.run.id))?.phase).toBe("running");
-});
-
-test("run schedule constraints validate effective current cadence under the mutation lock", async () => {
-  const loop = await makeLoop("floor-lock", { scheduleMode: "continuous", continuousDelayMinutes: 2 });
-  const running = await store.addRun({
-    loopId: loop.id, userId: loop.userId, machineId: loop.machineId,
-    phase: "running", role: "steer", requestedBy: "owner", ts: new Date().toISOString(),
-  });
-  const token = await tokens.registerRunLease({
-    runId: running.id, loopId: loop.id, machineId: loop.machineId, role: "steer", allowControl: true,
-  });
-  const result = await store.mutateForActiveRun({
-    loopId: loop.id,
-    runId: running.id,
-    leaseTokenHash: tokens.sha256(token),
-    capability: "control",
-    loopPatch: { scheduleMode: "continuous" },
-    constraints: { minCadenceMinutes: 5 },
-  });
-  expect(result).toMatchObject({ state: "constraint-failed" });
-  expect((await store.getLoop(loop.id))?.continuousDelayMinutes).toBe(2);
-
-  const retainedCron = await store.mutateForActiveRun({
-    loopId: loop.id,
-    runId: running.id,
-    leaseTokenHash: tokens.sha256(token),
-    capability: "control",
-    loopPatch: { cron: "*/2 * * * *" },
-    constraints: { minCronMinutes: 5 },
-  });
-  expect(retainedCron).toMatchObject({ state: "constraint-failed" });
-
-  // Simulate owner state changing after a run-side precheck: the locked effective
-  // cron is authoritative, not whatever the gateway observed earlier.
-  await store.updateLoop(loop.id, { scheduleMode: "cron", cron: "*/2 * * * *" });
-  const staleCronCheck = await store.mutateForActiveRun({
-    loopId: loop.id,
-    runId: running.id,
-    leaseTokenHash: tokens.sha256(token),
-    capability: "control",
-    loopPatch: { scheduleMode: "cron" },
-    constraints: { minCadenceMinutes: 5 },
-  });
-  expect(staleCronCheck).toMatchObject({ state: "constraint-failed" });
-});
-
-test("run-authorized mutation rechecks active lease and running phase inside its transaction", async () => {
-  const loop = await makeLoop("mutation-fence");
-  const running = await store.addRun({
-    loopId: loop.id, userId: loop.userId, machineId: loop.machineId,
-    phase: "running", role: "steer", requestedBy: "owner", ts: new Date().toISOString(),
-  });
-  const token = await tokens.registerRunLease({
-    runId: running.id, loopId: loop.id, machineId: loop.machineId, role: "steer",
-    allowControl: true, canSetUi: true,
-  });
-  await store.reclaimRun(running.id, "running", "timeout");
-  const stale = await store.mutateForActiveRun({
-    loopId: loop.id,
-    runId: running.id,
-    leaseTokenHash: tokens.sha256(token),
-    capability: "set-ui",
-    loopPatch: { ui: "<p>stale</p>" },
-  });
-  expect(stale.state).toBe("invalid-lease");
-  expect((await store.getLoop(loop.id))?.ui).toBeNull();
 });

@@ -1,86 +1,45 @@
-# Pievo — first capture: connect this machine, then build a loop
+# Pievo — connect this machine and create a scheduled prompt
 
 You're reading this because the user pasted a Pievo capture snippet (`Fetch
-<server-url>/api/bootstrap and help me build a loop.`) into your session. Pievo
-turns a task into a **scheduled agent loop** that runs automatically on this machine.
-Their Pievo web tab is open and waiting for the loop to appear, so work end to end
-and keep questions to quick check-ins — don't run a full interview.
+<server-url>/api/bootstrap and help me build a loop.`). Their Pievo web tab is waiting
+for the machine and new loop. Work end to end, with short confirmations rather than a
+long interview.
 
-This bootstrap doc is served over HTTP on first contact, before the pievo skill is
-installed on disk. Do the two steps below, then hand off to the create reference,
-which owns everything from "what should this loop be?" onward. (`pievo daemon start`
-installs the skill at USER scope for each coding agent pievo knows about (Claude
-Code `~/.claude/skills/pievo/`, Codex `~/.agents/skills/pievo/`) and `pievo new`
-refreshes it, so a later session in ANY folder on this machine auto-triggers the
-installed skill and reads the same references from disk.)
+## Pasted values
 
-## The pasted values
+Use these values exactly as supplied:
 
-The user pasted these along with the capture link — use them verbatim:
+- **server-url** — the Pievo server base URL.
+- **connect-key** — the one-time machine connection and web-dialog claim.
+- **pievo-cli** *(optional)* — the command prefix for every Pievo invocation. If it is
+  absent, use `pievo` after installing the current package.
+- An optional task description below the values — the requested scheduled prompt.
 
-- **server-url** — the Pievo server base URL (e.g. `http://localhost:3000`).
-- **connect-key** — a one-time token (starts with `dk_`). It both authorizes a NEW
-  machine and tags the loop back to the web dialog (its `claim`).
-- **pievo-cli** *(optional)* — the command prefix for every `pievo` invocation.
-  If it is pasted, use it verbatim (a dev server may provide a local command).
-  Otherwise install once with `npm install -g @kky42/pievo@latest` and use `pievo`.
+## 1 · Connect
 
-The paste may also carry a short **task description** below those values — the user
-started from a template card on the dashboard. That description is the loop to build;
-the create reference (step 2) treats it as the intent.
+Fetch and follow the connection reference:
 
-## 1 · Connect this machine
-
-If no custom **pievo-cli** was pasted, install the CLI globally first:
-
-```bash
-npm install -g @kky42/pievo@latest
+```text
+<server-url>/api/skill/references/connect.md
 ```
 
-Then run the idempotent start command (substitute **pievo-cli**, default `pievo`):
+Pass the pasted `server-url` and `connect-key` to its daemon start command. Do not
+replace a supplied custom `pievo-cli` prefix.
 
-```bash
-<pievo-cli> daemon start --server-url <server-url> --connect-key <connect-key>
-```
+## 2 · Create
 
-`pievo daemon start` resolves this machine's stable identity (reuses the stored device
-token, else adopts the connect-key), starts a single detached daemon if none is live
-— it survives this session and never doubles up — and waits until the server reports
-the machine online. Once connected it also best-effort refreshes the pievo skill
-at USER scope for each coding agent pievo knows about (Claude Code
-`~/.claude/skills/pievo/`, Codex `~/.agents/skills/pievo/`), announced in one
-line, never blocking.
+After the daemon reports the machine online, fetch and follow:
 
-It exits `0` once connected (printing `daemon online …` or `daemon already running
-…`); then continue. If it can't come online, it says where the log is.
-
-## 2 · Build the loop
-
-With the machine connected, fetch and follow the **create** reference end to end.
-The skill isn't on disk yet, so fetch it over HTTP from the **server-url**:
-
-```
+```text
 <server-url>/api/skill/references/create.md
 ```
 
-Follow it from its §1: it decides *what* loop to build (the task already in this
-session, or — if the session is empty — brainstorming loops for this project and
-letting the user pick), settles the cadence and per-run output, authors the loop's
-task file and config, and runs `pievo new`. Pass the **connect-key** as
-`--connect-key` so the created loop resolves back to the web dialog, and declare
-which coding agent you are with `--agent claude-code` (or `--agent codex`).
-create.md carries the flow through to telling the user it's live — you don't need
-to add anything here. If it calls for a day-one dashboard, also fetch
-`<server-url>/api/skill/references/dashboard.md` for the exact UI grammar.
+The create reference owns the remaining flow: identify the concrete prompt, confirm
+its exclusive cron or continuous schedule and three status definitions, choose the
+working directory and coding agent, optionally select exact artifact files, preview the
+canonical JSON, and run `pievo new`. On this first-capture path, pass the same
+`connect-key` to `pievo new` so the created loop appears in the waiting web dialog.
 
-## Editing and evolving, later
-
-Those flows normally run from the installed skill, but you can fetch them over HTTP
-the same way if needed:
-
-- **Editing an existing loop** (reschedule, rename, pause, set/clear a goal, or
-  change what it does): `<server-url>/api/skill/references/update.md`.
-- **How a loop refines itself over time** — the evolution pass that improves the
-  loop from its own run history: `<server-url>/api/skill/references/evolve.md`.
-- **Dashboard UI** — charts and artifact views:
-  `<server-url>/api/skill/references/dashboard.md`.
+Pievo is a scheduled prompt runner. Configure only the fields listed in the create
+reference. The stored user prompt is delivered unchanged, followed only by Pievo's
+complete status/report contract.

@@ -1,5 +1,5 @@
 /**
- * Data-access layer over Drizzle — replaces c0's file-per-job store. The API is
+ * Data-access layer over Drizzle — replaces c0's file-per-loop store. The API is
  * function-style; persistence is relational (loops and runs are separate tables,
  * and `owner: PeerRef` is gone → `userId` + `machineId`).
  *
@@ -20,7 +20,6 @@ import {
   teams,
   teamMembers,
   teamInvites,
-  notificationChannels,
   blobs,
   artifactFiles,
   runSnapshots,
@@ -28,79 +27,20 @@ import {
   runReportReceipts,
   terminalReportIncidents,
   type ArtifactFile,
-  type ArtifactMeta,
-  type ControlAction,
   type Loop,
   type Machine,
   type NewLoop,
   type NewMachine,
   type NewRun,
-  type NotificationChannel,
-  type NewNotificationChannel,
   type Run,
-  type RunRole,
   type RunRequester,
   type RunSnapshot,
   type SnapshotManifest,
-  type MetricField,
   type Team,
   type TeamMember,
   type TeamInvite,
 } from "./schema.js";
-import type { ChartRun, ReportIncident, ReportIncidentDisposition } from "../types.js";
-
-// ---- coercion helpers (carried from c0 store.ts) ----
-
-export type MetricSchemaParseResult =
-  | { ok: true; value: MetricField[] }
-  | { ok: false; detail: string };
-
-/** Parse an untrusted metric schema and enforce its standing key invariant. */
-export function parseMetricSchema(raw: unknown): MetricSchemaParseResult {
-  if (!Array.isArray(raw) || raw.length === 0) {
-    return { ok: false, detail: "schema must be a non-empty array of {key, label?, unit?}" };
-  }
-  const out: MetricField[] = [];
-  const keys = new Set<string>();
-  for (const f of raw) {
-    if (!f || typeof f !== "object" || typeof (f as { key?: unknown }).key !== "string") {
-      return { ok: false, detail: "schema must be a non-empty array of {key, label?, unit?}" };
-    }
-    const field = f as { key: string; label?: unknown; unit?: unknown };
-    const key = field.key.trim();
-    if (!key) return { ok: false, detail: "metric keys must not be blank" };
-    if (keys.has(key)) return { ok: false, detail: `duplicate metric key: ${key}` };
-    keys.add(key);
-    out.push({
-      key,
-      ...(typeof field.label === "string" && field.label.trim() ? { label: field.label.trim() } : {}),
-      ...(typeof field.unit === "string" && field.unit.trim() ? { unit: field.unit.trim() } : {}),
-    });
-  }
-  return { ok: true, value: out };
-}
-
-/** Best-effort wrapper for trusted/internal config loaders. Wire writes use parseMetricSchema. */
-export function coerceMetricSchema(raw: unknown): MetricField[] | undefined {
-  const parsed = parseMetricSchema(raw);
-  return parsed.ok ? parsed.value : undefined;
-}
-
-export const UI_MAX_LEN = 20_000;
-
-/** Trim + length-bound a `ui` template (storage guard; render-time sanitizes XSS). */
-export function coerceUi(raw: unknown): string | undefined {
-  if (typeof raw !== "string") return undefined;
-  const s = raw.trim().slice(0, UI_MAX_LEN);
-  return s ? s : undefined;
-}
-
-/** Any loop can evolve: the evolve pass sharpens the task, schema, and UI from
- *  run data. The terminal lifecycle applies the run-count/time throttle;
- *  owner-requested evolve remains unrestricted. */
-export function canEvolve(_loop: Loop): boolean {
-  return true;
-}
+import type { ReportIncident, ReportIncidentDisposition } from "../types.js";
 
 export function newLoopId(): string {
   return `loop-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
@@ -110,12 +50,10 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-const EVOLVE_EVERY = Number(process.env.PIEVO_EVOLVE_EVERY || 3);
-const EVOLVE_MIN_INTERVAL_MS = Number(process.env.PIEVO_EVOLVE_MIN_INTERVAL_MS || 24 * 3_600_000);
-
 /** First cron occurrence strictly after `after`, interpreted in the loop's zone. */
 export function nextCronAt(cron: string, timezone: string | null, after: string): string {
-  const probe = new Cron(cron, { paused: true, ...(timezone ? { timezone } : {}) });
+  if (!timezone) throw new Error("invariant: cron schedule has no timezone");
+  const probe = new Cron(cron, { paused: true, timezone });
   try {
     const next = probe.nextRun(new Date(after));
     if (!next) throw new Error(`cron expression never fires again: ${cron}`);
@@ -152,15 +90,32 @@ export async function loopsForMachine(machineId: string): Promise<Loop[]> {
   return db.select().from(loops).where(eq(loops.machineId, machineId));
 }
 
-export async function createLoop(input: Omit<NewLoop, "id" | "createdAt" | "updatedAt" | "nextCadenceAt"> & { id?: string }): Promise<Loop> {
+type InternalScheduleColumns = Pick<
+  NewLoop,
+  "cron" | "scheduleMode" | "cronOverlap" | "continuousDelayMinutes" | "timezone"
+>;
+
+/** Persistence accepts only a fully materialized internal schedule. Owner-facing
+ * callers must pass through loopConfig.ts; a lone raw cron is not a write API. */
+export type CreateLoopInput = Omit<
+  NewLoop,
+  "id" | "createdAt" | "updatedAt" | "nextCadenceAt" | keyof InternalScheduleColumns
+> & Required<InternalScheduleColumns> & { id?: string };
+
+export async function createLoop(input: CreateLoopInput): Promise<Loop> {
   const ts = nowIso();
   const enabled = input.enabled ?? true;
-  const scheduleMode = input.scheduleMode ?? "cron";
+  if (input.scheduleMode === "cron" && !input.timezone) {
+    throw new Error("invariant: cron loop creation requires a timezone");
+  }
+  if (input.scheduleMode === "continuous" && input.timezone !== null) {
+    throw new Error("invariant: continuous loop creation requires a null timezone");
+  }
   const nextCadenceAt = !enabled
     ? null
-    : scheduleMode === "continuous"
+    : input.scheduleMode === "continuous"
       ? ts
-      : nextCronAt(input.cron, input.timezone ?? null, ts);
+      : nextCronAt(input.cron, input.timezone, ts);
   const row: NewLoop = {
     ...input,
     enabled,
@@ -236,7 +191,7 @@ async function updateLoopTx(tx: StoreTx, current: Loop, patch: Partial<NewLoop>,
         await tx
           .select({ id: runs.id })
           .from(runs)
-          .where(and(eq(runs.loopId, current.id), eq(runs.role, "exec"), inArray(runs.phase, ["pending", "running"])))
+          .where(and(eq(runs.loopId, current.id), inArray(runs.phase, ["pending", "running"])))
           .limit(1)
       )[0];
       extra.nextCadenceAt = openExec ? null : at;
@@ -272,6 +227,17 @@ async function updateLoopTx(tx: StoreTx, current: Loop, patch: Partial<NewLoop>,
       "canceled - loop paused before this system run was claimed",
       at,
     );
+  }
+  if (patch.artifacts !== undefined) {
+    const allowed = new Set(patch.artifacts ?? []);
+    const live = await tx.select({ id: artifactFiles.id, path: artifactFiles.path }).from(artifactFiles)
+      .where(and(eq(artifactFiles.loopId, current.id), eq(artifactFiles.deleted, false)));
+    const removed = live.filter((file) => !allowed.has(file.path)).map((file) => file.id);
+    if (removed.length) {
+      await tx.update(artifactFiles)
+        .set({ hash: null, deleted: true, updatedAt: at })
+        .where(inArray(artifactFiles.id, removed));
+    }
   }
   return loop;
 }
@@ -316,7 +282,7 @@ export async function pauseLoopState(id: string): Promise<PauseLoopResult | unde
   });
 }
 
-/** Stable Pause compatibility seam for existing non-rendering callers. */
+/** Pause a loop and return its updated row. */
 export async function pauseLoop(id: string): Promise<Loop | undefined> {
   return (await pauseLoopState(id))?.loop;
 }
@@ -426,7 +392,7 @@ async function enqueueRunTx(
     await tx
       .select()
       .from(runs)
-      .where(and(eq(runs.loopId, loop.id), eq(runs.role, request.role), eq(runs.phase, "pending")))
+      .where(and(eq(runs.loopId, loop.id), eq(runs.phase, "pending")))
       .limit(1)
       .for("update")
   )[0];
@@ -439,9 +405,6 @@ async function enqueueRunTx(
           requestedBy,
           ts: at,
           updatedAt: at,
-          ...(request.requestedBy === "owner" && request.role === "steer"
-            ? { requestText: request.requestText ?? null }
-            : {}),
         })
         .where(and(eq(runs.id, pending.id), eq(runs.phase, "pending")))
         .returning()
@@ -454,28 +417,29 @@ async function enqueueRunTx(
   const row: NewRun = {
     id: randomUUID(),
     loopId: loop.id,
-    userId: loop.userId,
     machineId: loop.machineId,
     phase: "pending",
-    role: request.role,
     requestedBy: request.requestedBy,
-    requestText: request.role === "steer" ? request.requestText ?? null : null,
     ...runTimes(at),
   };
   return { state: "queued", run: (await tx.insert(runs).values(row).returning())[0]! };
 }
 
-async function execFailureStreakTx(tx: StoreTx, loopId: string): Promise<number> {
+async function failureStreakTx(tx: StoreTx, loopId: string): Promise<number> {
   const lastOk = (
     await tx
-      .select({ ts: runs.ts })
+      .select({ runIndex: runs.runIndex })
       .from(runs)
-      .where(and(eq(runs.loopId, loopId), eq(runs.role, "exec"), eq(runs.phase, "done")))
-      .orderBy(desc(runs.ts))
+      .where(and(eq(runs.loopId, loopId), eq(runs.phase, "done"), isNotNull(runs.runIndex)))
+      .orderBy(desc(runs.runIndex))
       .limit(1)
   )[0];
-  const conds = [eq(runs.loopId, loopId), eq(runs.role, "exec"), eq(runs.phase, "error")];
-  if (lastOk) conds.push(gt(runs.ts, lastOk.ts));
+  const conds = [
+    eq(runs.loopId, loopId),
+    eq(runs.phase, "error"),
+    isNotNull(runs.runIndex),
+  ];
+  if (lastOk?.runIndex != null) conds.push(gt(runs.runIndex, lastOk.runIndex));
   const row = (await tx.select({ n: sql<number>`count(*)` }).from(runs).where(and(...conds)))[0];
   return Number(row?.n ?? 0);
 }
@@ -492,33 +456,22 @@ async function terminalLifecycleTx(
   run: Run,
   terminalAt: string,
   loopPatch: Partial<NewLoop> = {},
-  autoEvolve = true,
   failureAutopauseStreak = 0,
 ): Promise<TerminalLifecycleResult> {
   const effective = { ...currentLoop, ...loopPatch } as Loop;
   const update: Partial<NewLoop> = { ...loopPatch };
 
-  if (run.role === "exec" && effective.scheduleMode === "continuous") {
+  if ((run.phase === "done" || run.phase === "error") && effective.scheduleMode === "continuous") {
     const openExec = (
       await tx
         .select({ id: runs.id })
         .from(runs)
-        .where(and(eq(runs.loopId, currentLoop.id), eq(runs.role, "exec"), inArray(runs.phase, ["pending", "running"])))
+        .where(and(eq(runs.loopId, currentLoop.id), inArray(runs.phase, ["pending", "running"])))
         .limit(1)
     )[0];
     update.nextCadenceAt = effective.enabled && !openExec
       ? new Date(Date.parse(terminalAt) + Math.max(1, effective.continuousDelayMinutes) * 60_000).toISOString()
       : null;
-  }
-
-  if (run.role === "evolve") {
-    const counted = (
-      await tx
-        .select({ n: sql<number>`count(*)` })
-        .from(runs)
-        .where(and(eq(runs.loopId, currentLoop.id), eq(runs.role, "exec"), inArray(runs.phase, ["done", "error"])))
-    )[0];
-    update.evolvedRunCount = Number(counted?.n ?? 0);
   }
 
   let loop = Object.keys(update).length
@@ -533,25 +486,25 @@ async function terminalLifecycleTx(
 
   let failureStreak = 0;
   let autoPaused = false;
-  if (run.status === "blocked") {
+  if (run.phase === "done" && run.status === "block") {
     loop = (
       await tx
         .update(loops)
-        .set({ enabled: false, pauseCause: { kind: "blocked", at: terminalAt, runId: run.id, role: run.role }, nextCadenceAt: null, nextRunAt: null, updatedAt: terminalAt })
+        .set({ enabled: false, pauseCause: { kind: "blocked", at: terminalAt, runId: run.id }, nextCadenceAt: null, nextRunAt: null, updatedAt: terminalAt })
         .where(eq(loops.id, currentLoop.id))
         .returning()
     )[0]!;
     await cancelPendingTx(
       tx,
       and(eq(runs.loopId, currentLoop.id), eq(runs.phase, "pending"), eq(runs.requestedBy, "system")),
-      "canceled - loop auto-paused after a blocked run",
+      "canceled - loop auto-paused after a block report",
       terminalAt,
     );
     autoPaused = true;
   }
 
-  if (run.role === "exec" && run.phase === "error") {
-    failureStreak = await execFailureStreakTx(tx, currentLoop.id);
+  if (run.phase === "error") {
+    failureStreak = await failureStreakTx(tx, currentLoop.id);
     if (failureAutopauseStreak > 0 && failureStreak >= failureAutopauseStreak && loop.enabled) {
       loop = (
         await tx
@@ -570,32 +523,15 @@ async function terminalLifecycleTx(
     }
   }
 
-  if (autoEvolve && run.status !== "blocked" && run.role === "exec" && run.phase === "done" && loop.enabled && canEvolve(loop)) {
-    const counted = (
-      await tx
-        .select({ n: sql<number>`count(*)` })
-        .from(runs)
-        .where(and(eq(runs.loopId, loop.id), eq(runs.role, "exec"), inArray(runs.phase, ["done", "error"])))
-    )[0];
-    const execCount = Number(counted?.n ?? 0);
-    const last = (
-      await tx
-        .select({ ts: runs.ts })
-        .from(runs)
-        .where(and(eq(runs.loopId, loop.id), eq(runs.role, "evolve"), inArray(runs.phase, ["done", "error"])))
-        .orderBy(desc(runs.ts))
-        .limit(1)
-    )[0];
-    const evolved = loop.evolvedRunCount ?? 0;
-    const due = execCount >= 1 && (!last || (execCount - evolved >= EVOLVE_EVERY && Date.parse(terminalAt) - Date.parse(last.ts) >= EVOLVE_MIN_INTERVAL_MS));
-    if (due) await enqueueRunTx(tx, loop, { role: "evolve", requestedBy: "system" }, terminalAt);
-  }
-
   return { loop, failureStreak, autoPaused };
 }
 
 export async function addRun(
-  input: Omit<NewRun, "id" | "createdAt" | "updatedAt"> & { id?: string; createdAt?: string; updatedAt?: string },
+  input: Omit<NewRun, "id" | "createdAt" | "updatedAt"> & {
+    id?: string;
+    createdAt?: string;
+    updatedAt?: string;
+  },
 ): Promise<Run> {
   return db.transaction(async (tx) => {
     const loop = (await tx.select().from(loops).where(eq(loops.id, input.loopId)).for("update"))[0];
@@ -707,8 +643,8 @@ export async function countReportReceipts(): Promise<number> {
   return Number(row?.n ?? 0);
 }
 
-/** Idempotent startup repair for lifecycle rows left by an older server or a
- * crash across terminalization. Terminal runs can never retain active authority. */
+/** Idempotent startup repair for a crash across terminalization.
+ * Terminal runs can never retain active authority. */
 export async function repairTerminalRunLeases(now: number = Date.now()): Promise<number> {
   const repaired = await db.update(runLeases)
     .set({ state: "terminal-grace", expiresAt: new Date(now + TERMINAL_REPORT_GRACE_MS).toISOString() })
@@ -769,17 +705,16 @@ export async function refreshRunHeartbeats(
   return refreshed.length;
 }
 
-type RunMutationCapability = "always" | "report" | "control" | "set-ui" | "set-schema";
 type ActiveRunCheck =
   | { state: "active"; run: Run }
-  | { state: "invalid-lease" | "run-not-running" | "forbidden" };
+  | { state: "invalid-lease" | "run-not-running" };
 
-async function activeRunForMutationTx(
+/** Validate the report-only authority for one currently running run. */
+async function activeRunForReportTx(
   tx: StoreTx,
   loopId: string,
   runId: string,
   leaseTokenHash: string,
-  capability: RunMutationCapability,
 ): Promise<ActiveRunCheck> {
   const lease = (
     await tx
@@ -795,14 +730,6 @@ async function activeRunForMutationTx(
       .for("update")
   )[0];
   if (!lease) return { state: "invalid-lease" };
-  const canceled = (await tx.select({ cancelRequestedAt: runs.cancelRequestedAt }).from(runs)
-    .where(and(eq(runs.id, runId), eq(runs.loopId, loopId))).limit(1))[0];
-  if (canceled?.cancelRequestedAt && capability !== "report") return { state: "run-not-running" };
-  const permitted = capability === "always" || capability === "report" ||
-    (capability === "control" && lease.allowControl) ||
-    (capability === "set-ui" && lease.canSetUi) ||
-    (capability === "set-schema" && lease.canSetSchema);
-  if (!permitted) return { state: "forbidden" };
   const run = (
     await tx
       .select()
@@ -819,91 +746,38 @@ async function activeRunForMutationTx(
   return run ? { state: "active", run } : { state: "run-not-running" };
 }
 
-export type RunAuthorizedMutationResult =
-  | { state: "applied"; loop: Loop; run: Run }
-  | { state: "constraint-failed"; reason: string }
-  | { state: "missing-loop" | "invalid-lease" | "run-not-running" | "forbidden" };
+export type RecordRunReportResult =
+  | { state: "applied"; run: Run }
+  | { state: "already-reported" | "missing-loop" | "invalid-lease" | "run-not-running" };
 
-/** Deep run-token mutation seam: authority, run liveness, loop lifecycle writes,
- * run-local writes, and audit append share the loop lock and one transaction. */
-export async function mutateForActiveRun(input: {
+/** Record the agent-authored status/message exactly once. The loop row is the
+ * serialization point, so sequential and concurrent duplicate callbacks both
+ * lose before any field can be overwritten. */
+export async function recordRunReportOnce(input: {
   loopId: string;
   runId: string;
   leaseTokenHash: string;
-  capability: RunMutationCapability;
-  loopPatch?: Partial<NewLoop>;
-  runPatch?: Partial<NewRun>;
-  /** Run self-schedule floors evaluated against the effective locked loop state. */
-  constraints?: {
-    minCadenceMinutes?: number;
-    minCronMinutes?: number;
-    minNextRunLeadMinutes?: number;
-    maxNextRunLeadMs?: number;
-  };
-  audit?: ControlAction;
-}): Promise<RunAuthorizedMutationResult> {
+  status: "keep" | "no-change" | "block";
+  message: string;
+}): Promise<RecordRunReportResult> {
   return db.transaction(async (tx) => {
-    let loop = (await tx.select().from(loops).where(eq(loops.id, input.loopId)).for("update"))[0];
+    const loop = (await tx.select({ id: loops.id }).from(loops).where(eq(loops.id, input.loopId)).for("update"))[0];
     if (!loop) return { state: "missing-loop" as const };
-    const active = await activeRunForMutationTx(tx, input.loopId, input.runId, input.leaseTokenHash, input.capability);
+    const active = await activeRunForReportTx(tx, input.loopId, input.runId, input.leaseTokenHash);
     if (active.state !== "active") return active;
-    const effective = { ...loop, ...(input.loopPatch ?? {}) } as Loop;
-    const checkedAt = nowIso();
-    const minCadence = input.constraints?.minCadenceMinutes;
-    if (minCadence !== undefined) {
-      if (effective.scheduleMode === "continuous") {
-        if (effective.continuousDelayMinutes < minCadence) {
-          return { state: "constraint-failed", reason: `a run can't schedule more often than every ${minCadence} min (continuous delay is ${effective.continuousDelayMinutes} min) - the owner can set any cadence via edit` };
-        }
-      } else {
-        const first = nextCronAt(effective.cron, effective.timezone, checkedAt);
-        const second = nextCronAt(effective.cron, effective.timezone, first);
-        const intervalMinutes = (Date.parse(second) - Date.parse(first)) / 60_000;
-        if (intervalMinutes < minCadence) {
-          return { state: "constraint-failed", reason: `a run can't schedule more often than every ${minCadence} min (that cron fires every ~${Math.round(intervalMinutes)} min) - the owner can set any cadence via edit` };
-        }
-      }
-    }
-    const minCron = input.constraints?.minCronMinutes;
-    if (minCron !== undefined) {
-      const first = nextCronAt(effective.cron, effective.timezone, checkedAt);
-      const second = nextCronAt(effective.cron, effective.timezone, first);
-      const intervalMinutes = (Date.parse(second) - Date.parse(first)) / 60_000;
-      if (intervalMinutes < minCron) {
-        return { state: "constraint-failed", reason: `a run can't schedule more often than every ${minCron} min (that cron fires every ~${Math.round(intervalMinutes)} min) - the owner can set any cadence via edit` };
-      }
-    }
-    if (input.loopPatch?.nextRunAt) {
-      const leadMs = Date.parse(input.loopPatch.nextRunAt) - Date.parse(checkedAt);
-      const minLead = input.constraints?.minNextRunLeadMinutes;
-      if (minLead !== undefined && leadMs < minLead * 60_000) {
-        return { state: "constraint-failed", reason: `a run can't reschedule sooner than ${minLead} min out - the owner can set any time via edit` };
-      }
-      const maxLead = input.constraints?.maxNextRunLeadMs;
-      if (maxLead !== undefined && leadMs > maxLead) {
-        return { state: "constraint-failed", reason: "too far in the future (>30d)" };
-      }
-    }
-    if (input.loopPatch && Object.keys(input.loopPatch).length) {
-      loop = await updateLoopTx(tx, loop, input.loopPatch, input.audit?.ts ?? nowIso());
-    }
-    const patch: Partial<NewRun> = { ...(input.runPatch ?? {}) };
-    if (input.audit) {
-      patch.control = [
-        ...((active.run.control as ControlAction[] | null | undefined) ?? []),
-        input.audit,
-      ];
-    }
-    const run = Object.keys(patch).length
-      ? (
-          await tx
-            .update(runs)
-            .set({ ...patch, updatedAt: input.audit?.ts ?? nowIso() })
-            .where(and(eq(runs.id, input.runId), eq(runs.loopId, input.loopId), eq(runs.phase, "running")))
-            .returning()
-        )[0]
-      : active.run;
-    return run ? { state: "applied" as const, loop, run } : { state: "run-not-running" as const };
+    if (active.run.status != null || active.run.message != null) return { state: "already-reported" as const };
+    const at = nowIso();
+    const run = (await tx.update(runs)
+      .set({ status: input.status, message: input.message, updatedAt: at })
+      .where(and(
+        eq(runs.id, input.runId),
+        eq(runs.loopId, input.loopId),
+        eq(runs.phase, "running"),
+        isNull(runs.status),
+        isNull(runs.message),
+      ))
+      .returning())[0];
+    return run ? { state: "applied" as const, run } : { state: "already-reported" as const };
   });
 }
 
@@ -1081,7 +955,6 @@ export async function rejectTerminalReport(input: {
       run,
       input.incident.at,
       {},
-      false,
       input.failureAutopauseStreak ?? 0,
     );
     await tx.delete(runLeases).where(eq(runLeases.tokenHash, input.leaseTokenHash));
@@ -1111,7 +984,7 @@ export async function finalizeRunningRun(
       if (incident) return undefined;
     }
     if (leaseTokenHash) {
-      const active = await activeRunForMutationTx(tx, loopId, runId, leaseTokenHash, "report");
+      const active = await activeRunForReportTx(tx, loopId, runId, leaseTokenHash);
       if (active.state !== "active") return undefined;
     }
     const target = (await tx.select().from(runs)
@@ -1128,17 +1001,11 @@ export async function finalizeRunningRun(
         .returning()
     )[0];
     if (!run) return undefined;
-    const lifecycle = await terminalLifecycleTx(tx, current, run, at, loopPatch, true, failureAutopauseStreak);
+    const lifecycle = await terminalLifecycleTx(tx, current, run, at, loopPatch, failureAutopauseStreak);
     if (leaseTokenHash) await tx.delete(runLeases).where(eq(runLeases.runId, runId));
     if (receipt) await tx.insert(runReportReceipts).values(receipt);
     return { run, ...lifecycle };
   });
-}
-
-/** User cancellation competes with claim/report/reclaim under the loop lock,
- * transitions only a still-open row, and retires its lease in the same txn. */
-export async function cancelRun(loopId: string, runId: string): Promise<Run | undefined> {
-  return requestRunCancel(loopId, runId);
 }
 
 /** Sweep reclaim under the same loop lock as claim/report/cancel. Running
@@ -1174,7 +1041,7 @@ export async function reclaimRun(
         .returning()
     )[0];
     if (!reclaimed) return undefined;
-    const lifecycle = await terminalLifecycleTx(tx, loop, reclaimed, at, {}, false, failureAutopauseStreak);
+    const lifecycle = await terminalLifecycleTx(tx, loop, reclaimed, at, {}, failureAutopauseStreak);
     return { run: reclaimed, ...lifecycle };
   });
 }
@@ -1263,7 +1130,7 @@ export async function reconcileReclaimedRun(
     // the loop, trip the breaker, or otherwise mutate the successor lifecycle.
     const lifecycle = lease.state === "reconciliation-only"
       ? { loop: current, failureStreak: 0, autoPaused: false }
-      : await terminalLifecycleTx(tx, current, run, at, loopPatch, true, failureAutopauseStreak);
+      : await terminalLifecycleTx(tx, current, run, at, loopPatch, failureAutopauseStreak);
     await tx.delete(runLeases).where(eq(runLeases.runId, runId));
     if (receipt) await tx.insert(runReportReceipts).values(receipt);
     return { run, ...lifecycle, reportOnly: lease.state === "reconciliation-only" };
@@ -1273,9 +1140,7 @@ export async function reconcileReclaimedRun(
 export const TERMINAL_REPORT_GRACE_MS = 10 * 60 * 1000;
 
 export interface EnqueueRunRequest {
-  role: RunRole;
   requestedBy: RunRequester;
-  requestText?: string | null;
 }
 
 export type EnqueueRunResult =
@@ -1285,12 +1150,10 @@ export type EnqueueRunResult =
 /**
  * The durable run-queue write seam. It serializes on the loop row and owns every
  * queue invariant callers would otherwise have to reproduce:
- *  - at most one pending row per loop+role (also backed by a partial unique index),
- *  - a running role may retain one pending follow-up,
- *  - pending requests coalesce in place (stable run id),
+ *  - at most one ordinary pending row per loop (also backed by a partial unique index),
+ *  - a running run may retain one coalesced follow-up,
  *  - owner authority promotes an existing system row and never downgrades,
- *  - latest owner steer text wins,
- *  - paused loops accept owner work while recurring system work stays stopped.
+ *  - paused loops accept owner Run-once work while recurring system work stays stopped.
  */
 export async function enqueueRun(loopId: string, request: EnqueueRunRequest): Promise<EnqueueRunResult> {
   return db.transaction(async (tx) => {
@@ -1302,8 +1165,8 @@ export async function enqueueRun(loopId: string, request: EnqueueRunRequest): Pr
 
 export interface AdvancedSchedule {
   loop: Loop;
-  run: Run;
-  state: "queued" | "coalesced";
+  run?: Run;
+  state: "queued" | "coalesced" | "skipped";
 }
 
 /** Materialize every due schedule fact. Each loop is locked and rechecked in its
@@ -1348,8 +1211,20 @@ export async function advanceDueSchedules(
       )[0];
       if (graceLease) return undefined;
 
-      const queued = await enqueueRunTx(tx, loop, { role: "exec", requestedBy: "system" }, at);
-      if (!("run" in queued)) return undefined;
+      const open = (await tx.select({ id: runs.id }).from(runs)
+        .where(and(eq(runs.loopId, id), inArray(runs.phase, ["pending", "running"])))
+        .limit(1))[0];
+      // One-shot owner/system work is always materialized (and coalesces into the
+      // single queue slot). A recurring cron occurrence honors its overlap policy;
+      // continuous is intrinsically non-overlapping.
+      const skipRecurring = cadenceDue && !!open && (
+        loop.scheduleMode === "continuous" || loop.cronOverlap === "skip"
+      );
+      const shouldMaterialize = oneShotDue || !skipRecurring;
+      const queued = shouldMaterialize
+        ? await enqueueRunTx(tx, loop, { requestedBy: "system" }, at)
+        : undefined;
+      if (queued && !("run" in queued)) return undefined;
       const nextCadenceAt = cadenceDue
         ? loop.scheduleMode === "cron"
           ? nextCronAt(loop.cron, loop.timezone, at)
@@ -1366,7 +1241,9 @@ export async function advanceDueSchedules(
           .where(eq(loops.id, id))
           .returning()
       )[0]!;
-      return { loop: updatedLoop, run: queued.run, state: queued.state } as AdvancedSchedule;
+      return queued
+        ? { loop: updatedLoop, run: queued.run, state: queued.state } as AdvancedSchedule
+        : { loop: updatedLoop, state: "skipped" } as AdvancedSchedule;
     });
     if (result) advanced.push(result);
   }
@@ -1438,7 +1315,7 @@ export async function claimReadyRunForMachine(
         sql`not exists (select 1 from runs occupied where occupied.loop_id = ${loops.id} and occupied.phase = 'running')`,
         sql`not exists (select 1 from run_leases authority where authority.loop_id = ${loops.id} and (authority.state = 'active' or (authority.state = 'terminal-grace' and authority.expires_at > ${at})))`,
       ))
-      .orderBy(sql`case ${runs.role} when 'steer' then 0 when 'evolve' then 1 else 2 end`, asc(runs.createdAt), asc(runs.id))
+      .orderBy(asc(runs.createdAt), asc(runs.id))
       .limit(1))[0];
     if (!next) return undefined;
 
@@ -1460,14 +1337,18 @@ export async function claimReadyRunForMachine(
       reasoningEffort: loop.reasoningEffort, heartbeatAt: null, ts: at, updatedAt: at,
     }).where(and(eq(runs.id, candidate.id), eq(runs.phase, "pending"), isNull(runs.cancelRequestedAt))).returning())[0];
     if (!run) return undefined;
-    if (run.role === "exec" && loop.scheduleMode === "continuous" && loop.nextCadenceAt != null) {
+    if (loop.scheduleMode === "continuous" && loop.nextCadenceAt != null) {
       loop = (await tx.update(loops).set({ nextCadenceAt: null, updatedAt: at }).where(eq(loops.id, loop.id)).returning())[0]!;
     }
     const runToken = `rk_${randomBytes(16).toString("hex")}`;
     const tokenHash = createHash("sha256").update(runToken).digest("hex");
-    const structural = run.role === "evolve" || run.role === "steer";
-    await tx.insert(runLeases).values({ tokenHash, runId: run.id, loopId: loop.id, machineId, role: run.role,
-      allowControl: structural || loop.allowControl, canSetUi: structural, canSetSchema: structural, createdAt: at });
+    await tx.insert(runLeases).values({
+      tokenHash,
+      runId: run.id,
+      loopId: loop.id,
+      machineId,
+      createdAt: at,
+    });
     return { run, loop, runToken };
   });
 }
@@ -1502,28 +1383,6 @@ export async function reconciliationStatesForRuns(
   return new Map(rows.map((row) => [row.runId, row.state === "terminal-grace" ? "blocking" as const : "report-only" as const]));
 }
 
-/** Latest successful exec runs for dashboard charts, returned oldest-first. Filtering
- * happens before LIMIT so evolve/steer rows never shrink the chart window. */
-export async function listChartRuns(loopId: string, limit = 100): Promise<ChartRun[]> {
-  const rows = await db
-    .select({
-      runIndex: runs.runIndex,
-      ts: runs.ts,
-      status: runs.status,
-      metrics: runs.metrics,
-    })
-    .from(runs)
-    .where(and(
-      eq(runs.loopId, loopId),
-      eq(runs.role, "exec"),
-      isNotNull(runs.runIndex),
-      eq(runs.phase, "done"),
-    ))
-    .orderBy(desc(runs.runIndex), desc(runs.ts))
-    .limit(limit);
-  return rows.reverse().flatMap((row) => row.runIndex == null ? [] : [{ ...row, runIndex: row.runIndex }]);
-}
-
 /** One older page: runs strictly before `beforeTs`, newest-first then capped,
  *  returned chronological (oldest-first) to match listRuns. Cursor-based (by ts,
  *  not offset) so it's stable while new runs land at the head. */
@@ -1541,106 +1400,9 @@ export async function lastRun(loopId: string): Promise<Run | undefined> {
   return (await db.select().from(runs).where(eq(runs.loopId, loopId)).orderBy(desc(runs.ts)).limit(1))[0];
 }
 
-/** Newest scheduled (exec) run for a loop — the last-result anchor that a later
- *  evolve/steer must never mask. Null ⇒ no exec run yet. */
-export async function lastExecRun(loopId: string): Promise<Run | undefined> {
-  return (
-    await db
-      .select()
-      .from(runs)
-      .where(and(eq(runs.loopId, loopId), eq(runs.role, "exec")))
-      .orderBy(desc(runs.ts))
-      .limit(1)
-  )[0];
-}
-
 export async function countRuns(loopId: string): Promise<number> {
   const r = (await db.select({ n: sql<number>`count(*)` }).from(runs).where(eq(runs.loopId, loopId)))[0];
   return Number(r?.n ?? 0);
-}
-
-/**
- * Count consecutive FAILED exec runs ending at the loop's most recent finalized
- * exec run. Drives the failure-alert anti-spam cadence (`shouldNotifyFailure`)
- * entirely from persisted state — no in-memory counter to reset on deploy. Only
- * `exec` runs count: evolve/steer are internal and never produce user-facing
- * failure noise. Canceled / still-open runs are ignored (neither success nor
- * failure), so a user-stopped run doesn't break or extend the streak.
- *
- * EXACT, not a capped scan: one indexed query for the newest successful (done)
- * exec run, then a COUNT of the error exec runs after it. A capped newest-N scan
- * would pin the streak at the cap once a loop failed past it, and the every-Nth
- * "still broken" reminder (streak % FAILURE_NOTIFY_EVERY) would then never fire
- * again — reminders must keep pacing however long the failure streak grows.
- */
-export async function execFailureStreak(loopId: string): Promise<number> {
-  const lastOk = (
-    await db
-      .select({ ts: runs.ts })
-      .from(runs)
-      .where(and(eq(runs.loopId, loopId), eq(runs.role, "exec"), eq(runs.phase, "done")))
-      .orderBy(desc(runs.ts))
-      .limit(1)
-  )[0];
-  const conds = [eq(runs.loopId, loopId), eq(runs.role, "exec"), eq(runs.phase, "error")];
-  if (lastOk) conds.push(gt(runs.ts, lastOk.ts));
-  const r = (await db.select({ n: sql<number>`count(*)` }).from(runs).where(and(...conds)))[0];
-  return Number(r?.n ?? 0);
-}
-
-/** Atomically stamp the deferred hint from a sweep snapshot. Claim, owner
- * promotion, pause, and machine reconnect all win through the guarded
- * transaction, so only a still-pending system exec on an offline machine may
- * trigger the corresponding notification. Returns the locked loop only when the
- * stamp committed; callers gate notification on that result. */
-export async function markPendingRunDeferred(
-  runId: string,
-  expected: Pick<Run, "requestedBy" | "updatedAt">,
-  at: string,
-): Promise<Loop | undefined> {
-  if (expected.requestedBy !== "system") return undefined;
-  return db.transaction(async (tx) => {
-    const observed = (await tx.select({ loopId: runs.loopId, machineId: runs.machineId }).from(runs).where(eq(runs.id, runId)).limit(1))[0];
-    if (!observed) return undefined;
-    // Match claim's machine→loop lock order so reconnect/poll cannot deadlock
-    // with the offline deferred-marker transaction.
-    const machine = (
-      await tx.select({ online: machines.online }).from(machines)
-        .where(eq(machines.id, observed.machineId)).limit(1).for("update")
-    )[0];
-    if (!machine || machine.online) return undefined;
-    const loop = (await tx.select().from(loops).where(eq(loops.id, observed.loopId)).for("update"))[0];
-    if (!loop) return undefined;
-    const current = (
-      await tx
-        .select()
-        .from(runs)
-        .where(and(
-          eq(runs.id, runId),
-          eq(runs.loopId, loop.id),
-          eq(runs.phase, "pending"),
-          eq(runs.role, "exec"),
-          eq(runs.requestedBy, "system"),
-          eq(runs.updatedAt, expected.updatedAt),
-        ))
-        .limit(1)
-        .for("update")
-    )[0];
-    if (!current || current.deferredAt) return undefined;
-    const stamped = (
-      await tx
-        .update(runs)
-        .set({ deferredAt: at, updatedAt: at })
-        .where(and(
-          eq(runs.id, runId),
-          eq(runs.phase, "pending"),
-          eq(runs.requestedBy, "system"),
-          eq(runs.updatedAt, expected.updatedAt),
-        ))
-        .returning({ id: runs.id })
-    )[0];
-    return stamped ? loop : undefined;
-  });
 }
 
 /** Open runs (pending/running) — used by the timeout-reclaim sweep. */
@@ -1967,7 +1729,7 @@ export async function setTeamMemberRoleGuarded(
  * loop count INSIDE the transaction and abort (`has-loops`) if any loop exists,
  * closing the check-then-cascade gap where a loop created between the caller's
  * guard and here would be orphaned at a now-deleted team. On success we cascade
- * the team's own resources: channels, pending invites, memberships, and reassign
+ * the team's own resources: pending invites, memberships, and reassign
  * every machine whose cosmetic home-team was this team back to its owner's
  * personal team (machines are user-owned; the team pointer is only a home hint).
  */
@@ -1983,7 +1745,6 @@ export async function deleteTeamCascade(teamId: string): Promise<"ok" | "has-loo
     for (const m of homed) {
       await tx.update(machines).set({ teamId: teamIdForUser(m.userId) }).where(eq(machines.id, m.id));
     }
-    await tx.delete(notificationChannels).where(eq(notificationChannels.teamId, teamId));
     await tx.delete(teamInvites).where(eq(teamInvites.teamId, teamId));
     await tx.delete(teamMembers).where(eq(teamMembers.teamId, teamId));
     await tx.delete(teams).where(eq(teams.id, teamId));
@@ -2090,47 +1851,6 @@ export async function isTeamMember(teamId: string, userId: string): Promise<bool
   )[0];
 }
 
-// ---- notification channels ----
-
-export async function listChannels(teamId: string): Promise<NotificationChannel[]> {
-  return db
-    .select()
-    .from(notificationChannels)
-    .where(eq(notificationChannels.teamId, teamId))
-    .orderBy(desc(notificationChannels.createdAt));
-}
-
-export async function getChannel(id: string): Promise<NotificationChannel | undefined> {
-  return (await db.select().from(notificationChannels).where(eq(notificationChannels.id, id)))[0];
-}
-
-/** The channel a new loop auto-routes to when none is picked — the team's newest
- *  (listChannels is newest-first), or null when the team has none. */
-export async function defaultChannelId(teamId: string): Promise<string | null> {
-  return (await listChannels(teamId))[0]?.id ?? null;
-}
-
-export async function createChannel(input: Omit<NewNotificationChannel, "id" | "createdAt"> & { id?: string }): Promise<NotificationChannel> {
-  const row: NewNotificationChannel = {
-    ...input,
-    id: input.id ?? `ch-${randomUUID().slice(0, 12)}`,
-    createdAt: nowIso(),
-  };
-  return (await db.insert(notificationChannels).values(row).returning())[0]!;
-}
-
-export async function deleteChannel(id: string): Promise<boolean> {
-  return db.transaction(async (tx) => {
-    // Detach any loops pointing at it so they fall back to dashboard-only (no dangling ref).
-    await tx.update(loops).set({ channelId: null, updatedAt: nowIso() }).where(eq(loops.channelId, id));
-    const deleted = await tx
-      .delete(notificationChannels)
-      .where(eq(notificationChannels.id, id))
-      .returning({ id: notificationChannels.id });
-    return deleted.length > 0;
-  });
-}
-
 // ---- blobs (content-addressed metadata; bytes live in the configured BlobStore) ----
 
 /** Does the server already have metadata for this blob hash? (drives needHashes). */
@@ -2146,12 +1866,9 @@ export async function blobSizes(hashes: string[]): Promise<Map<string, number>> 
   return new Map(rows.map((row) => [row.hash, row.size]));
 }
 
-/** Record a blob's metadata (idempotent — same hash ⇒ same bytes, so a no-op on
- *  conflict). `meta` is the parsed front-matter subset for a non-binary product
- *  (null for binary / unparsed); computed once at ingress and reused on every
- *  content-addressed re-reference (the conflict no-op keeps the first-parsed meta). */
-export async function recordBlob(hash: string, size: number, binary: boolean, meta: ArtifactMeta | null = null): Promise<void> {
-  await db.insert(blobs).values({ hash, size, binary, meta, createdAt: nowIso() }).onConflictDoNothing();
+/** Record verified blob metadata idempotently. */
+export async function recordBlob(hash: string, size: number): Promise<void> {
+  await db.insert(blobs).values({ hash, size, createdAt: nowIso() }).onConflictDoNothing();
 }
 
 /** Does any LIVE artifact_files row on a loop bound to `machineId` point at `hash`?
@@ -2164,7 +1881,12 @@ export async function machineReferencesBlob(machineId: string, hash: string): Pr
       .select({ id: artifactFiles.id })
       .from(artifactFiles)
       .innerJoin(loops, eq(artifactFiles.loopId, loops.id))
-      .where(and(eq(loops.machineId, machineId), eq(artifactFiles.hash, hash), eq(artifactFiles.deleted, false)))
+      .where(and(
+        eq(loops.machineId, machineId),
+        eq(artifactFiles.hash, hash),
+        eq(artifactFiles.deleted, false),
+        sql`${loops.artifacts} @> jsonb_build_array(${artifactFiles.path})`,
+      ))
       .limit(1)
   )[0];
 }
@@ -2178,13 +1900,10 @@ export interface ArtifactFileInput {
   size: number | null;
   binary: boolean;
   oversize: boolean;
-  lastRunId: string | null;
 }
 
-/** Upsert one live file row (keyed by loopId+path); clears any prior tombstone. */
-export async function upsertArtifactFile(input: ArtifactFileInput): Promise<void> {
-  const ts = nowIso();
-  await db
+async function writeConfiguredArtifactTx(tx: StoreTx, input: ArtifactFileInput, ts: string): Promise<void> {
+  await tx
     .insert(artifactFiles)
     .values({
       id: randomUUID(),
@@ -2196,7 +1915,6 @@ export async function upsertArtifactFile(input: ArtifactFileInput): Promise<void
       oversize: input.oversize,
       deleted: false,
       updatedAt: ts,
-      lastRunId: input.lastRunId,
     })
     .onConflictDoUpdate({
       target: [artifactFiles.loopId, artifactFiles.path],
@@ -2207,29 +1925,47 @@ export async function upsertArtifactFile(input: ArtifactFileInput): Promise<void
         oversize: input.oversize,
         deleted: false,
         updatedAt: ts,
-        lastRunId: input.lastRunId,
       },
     });
 }
 
-/** Tombstone the paths that vanished from a loop's manifest (keep != in `keepPaths`). */
-export async function tombstoneMissingArtifacts(loopId: string, keepPaths: string[], lastRunId: string | null): Promise<number> {
-  const keep = new Set(keepPaths);
-  const live = await db
-    .select()
-    .from(artifactFiles)
-    .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.deleted, false)));
-  const ts = nowIso();
-  let tombstoned = 0;
-  for (const row of live) {
-    if (keep.has(row.path)) continue;
-    await db
-      .update(artifactFiles)
-      .set({ hash: null, deleted: true, updatedAt: ts, lastRunId })
-      .where(eq(artifactFiles.id, row.id));
-    tombstoned++;
-  }
-  return tombstoned;
+/** Upsert only while the exact literal path remains configured, serialized with
+ * owner edits by the loop row lock. */
+export async function upsertConfiguredArtifactFile(input: ArtifactFileInput): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const loop = (await tx.select({ artifacts: loops.artifacts }).from(loops)
+      .where(eq(loops.id, input.loopId)).for("update"))[0];
+    if (!loop || !loop.artifacts.includes(input.path)) return false;
+    await writeConfiguredArtifactTx(tx, input, nowIso());
+    return true;
+  });
+}
+
+/** Reconcile deletions against both the request's starting allowlist and the
+ * current locked loop config. Newly-added paths are never tombstoned by an older
+ * in-flight manifest; removed paths can never remain live. */
+export async function reconcileConfiguredArtifacts(
+  loopId: string,
+  configuredAtStart: string[],
+  keepPaths: string[],
+): Promise<number> {
+  return db.transaction(async (tx) => {
+    const loop = (await tx.select({ artifacts: loops.artifacts }).from(loops)
+      .where(eq(loops.id, loopId)).for("update"))[0];
+    if (!loop) return 0;
+    const current = new Set(loop.artifacts);
+    const started = new Set(configuredAtStart);
+    const keep = new Set(keepPaths);
+    const live = await tx.select().from(artifactFiles)
+      .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.deleted, false)));
+    const stale = live.filter((file) => !current.has(file.path) || (started.has(file.path) && !keep.has(file.path)));
+    if (!stale.length) return 0;
+    const at = nowIso();
+    await tx.update(artifactFiles)
+      .set({ hash: null, deleted: true, updatedAt: at })
+      .where(inArray(artifactFiles.id, stale.map((file) => file.id)));
+    return stale.length;
+  });
 }
 
 /** The loop's current (non-deleted) file set, path-sorted. */
@@ -2241,39 +1977,7 @@ export async function listArtifacts(loopId: string): Promise<ArtifactFile[]> {
     .orderBy(artifactFiles.path);
 }
 
-/** One live artifact row joined with its blob's parsed front-matter meta (null for
- *  a binary / oversize / not-yet-stored / untyped file). Read path only — the list
- *  view surfaces the type/title/date without a per-file blob byte fetch. */
-export interface ArtifactFileWithMeta extends ArtifactFile {
-  meta: ArtifactMeta | null;
-}
-
-/** The loop's current (non-deleted) file set with each file's blob meta joined
- *  out, path-sorted. One indexed join (artifact_files ⋈ blobs on hash), not a
- *  point query per file. */
-export async function listArtifactsWithMeta(loopId: string): Promise<ArtifactFileWithMeta[]> {
-  const rows = await db
-    .select({
-      id: artifactFiles.id,
-      loopId: artifactFiles.loopId,
-      path: artifactFiles.path,
-      hash: artifactFiles.hash,
-      size: artifactFiles.size,
-      binary: artifactFiles.binary,
-      oversize: artifactFiles.oversize,
-      deleted: artifactFiles.deleted,
-      updatedAt: artifactFiles.updatedAt,
-      lastRunId: artifactFiles.lastRunId,
-      meta: blobs.meta,
-    })
-    .from(artifactFiles)
-    .leftJoin(blobs, eq(artifactFiles.hash, blobs.hash))
-    .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.deleted, false)))
-    .orderBy(artifactFiles.path);
-  return rows.map((r) => ({ ...r, meta: r.meta ?? null }));
-}
-
-/** Every artifact_files row for a loop, including tombstones (Phase 3 diff seam). */
+/** Every artifact row for a loop, including tombstones. */
 export async function listAllArtifactFiles(loopId: string): Promise<ArtifactFile[]> {
   return db.select().from(artifactFiles).where(eq(artifactFiles.loopId, loopId)).orderBy(artifactFiles.path);
 }
@@ -2298,7 +2002,7 @@ export async function buildLoopManifest(loopId: string): Promise<SnapshotManifes
   return manifest;
 }
 
-// ---- run_snapshots (the loop's full manifest at each run boundary; Phase 3 diff) ----
+// ---- exact-artifact snapshots captured at run boundaries ----
 
 /** Write/overwrite a run's snapshot (path → file metadata). Idempotent on runId
  *  so a re-report of the same run just refreshes the captured artifact state. */
@@ -2351,7 +2055,7 @@ export async function pruneRunSnapshots(loopId: string, keep: number): Promise<n
     : [];
   // Delete by the loop + NOT-IN-survivors predicate directly, NOT by an inArray of
   // every victim runId: survivors is bounded by `keep` (≤20), so this binds a small,
-  // fixed number of variables even when a pre-feature backlog leaves thousands of
+  // fixed number of variables even when a large backlog leaves thousands of
   // snapshots to prune in one pass — no "too many SQL variables" on the first prune.
   const pred = survivors.length
     ? and(eq(runSnapshots.loopId, loopId), notInArray(runSnapshots.runId, survivors))
@@ -2436,97 +2140,4 @@ export async function snapshotBlobRefs(): Promise<Set<string>> {
 export async function countRunSnapshots(): Promise<number> {
   const r = (await db.select({ n: sql<number>`count(*)` }).from(runSnapshots))[0];
   return Number(r?.n ?? 0);
-}
-
-/** Distinct loop ids with a LIVE (non-deleted) file row pointing at this hash.
- *  Drives the per-loop cap re-check at putBlob, where the only loop context is
- *  the artifact_files rows a prior sync already wrote for the requested hash. */
-export async function loopsReferencingHash(hash: string): Promise<string[]> {
-  return (
-    await db
-      .selectDistinct({ loopId: artifactFiles.loopId })
-      .from(artifactFiles)
-      .where(and(eq(artifactFiles.hash, hash), eq(artifactFiles.deleted, false)))
-  ).map((r) => r.loopId);
-}
-
-/** A loop's live byte footprint EXCLUDING any rows pointing at `hash` — the base
- *  the putBlob cap guard adds the blob's REAL byte length to (the placeholder row
- *  a sync wrote for `hash` carries a client-reported size we must not trust). Sums
- *  the VERIFIED blobs.size where the bytes are stored, falling back to the reported
- *  artifact_files.size only for not-yet-stored (pending) rows, so a daemon that
- *  under-reports sizes can't keep the base artificially low. */
-export async function loopStoredBytesExcludingHash(loopId: string, hash: string): Promise<number> {
-  const row = (
-    await db
-      .select({ total: sql<number>`coalesce(sum(coalesce(${blobs.size}, ${artifactFiles.size})), 0)` })
-      .from(artifactFiles)
-      .leftJoin(blobs, eq(artifactFiles.hash, blobs.hash))
-      .where(
-        and(
-          eq(artifactFiles.loopId, loopId),
-          eq(artifactFiles.deleted, false),
-          eq(artifactFiles.oversize, false),
-          isNotNull(artifactFiles.hash),
-          ne(artifactFiles.hash, hash),
-        ),
-      )
-  )[0];
-  return Number(row?.total ?? 0);
-}
-
-/** Hard-delete a loop's file rows pointing at `hash` — used when putBlob refuses
- *  the bytes (per-loop cap), so nothing dangles pointing at a blob never stored.
- *  Returns the number removed. */
-export async function dropArtifactFilesForHash(loopId: string, hash: string): Promise<number> {
-  const deleted = await db
-    .delete(artifactFiles)
-    .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.hash, hash)))
-    .returning({ id: artifactFiles.id });
-  return deleted.length;
-}
-
-/** A loop's current live (non-deleted) byte footprint: sum of sizes over files
- *  that actually have bytes stored (hash non-null, not oversize). Prefers the
- *  VERIFIED blobs.size (real length recorded at recordBlob) and only falls back to
- *  the client-reported artifact_files.size for a row whose blob isn't stored yet
- *  (pending), so an under-reporting daemon can't creep past the cap. This is the
- *  figure the per-loop storage cap is enforced against. */
-export async function loopStoredBytes(loopId: string): Promise<number> {
-  const row = (
-    await db
-      .select({ total: sql<number>`coalesce(sum(coalesce(${blobs.size}, ${artifactFiles.size})), 0)` })
-      .from(artifactFiles)
-      .leftJoin(blobs, eq(artifactFiles.hash, blobs.hash))
-      .where(
-        and(
-          eq(artifactFiles.loopId, loopId),
-          eq(artifactFiles.deleted, false),
-          eq(artifactFiles.oversize, false),
-          isNotNull(artifactFiles.hash),
-        ),
-      )
-  )[0];
-  return Number(row?.total ?? 0);
-}
-
-/** The PER-PATH breakdown of loopStoredBytes: each live, byte-backed file row's
- *  counted size (verified blobs.size, falling back to the client-reported
- *  artifact_files.size for a pending row — the exact per-row basis
- *  loopStoredBytes sums). One query per sync so the overwrite "freed" credit
- *  doesn't cost two point queries per manifest file on the ~1.5s flush path. */
-export async function liveArtifactSizes(loopId: string): Promise<Map<string, number>> {
-  const rows = await db
-    .select({ path: artifactFiles.path, size: sql<number | null>`coalesce(${blobs.size}, ${artifactFiles.size})` })
-    .from(artifactFiles)
-    .leftJoin(blobs, eq(artifactFiles.hash, blobs.hash))
-    .where(
-      and(
-        eq(artifactFiles.loopId, loopId),
-        eq(artifactFiles.deleted, false),
-        eq(artifactFiles.oversize, false),
-        isNotNull(artifactFiles.hash),
-      ),
-    );
-  return new Map(rows.map((r) => [r.path, Number(r.size ?? 0)]));
 }

@@ -1,6 +1,6 @@
 import { createFileRoute, redirect, useRouter } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
-import { getAuthState, getDefaultTeam, listTemplates } from '../server/loopApi'
+import { getAuthState, getDefaultTeam } from '../server/loopApi'
 import { authClient, useSession } from '../lib/auth-client'
 import { DashboardView, fetchLiveData, type DashboardData } from '../components/DashboardView'
 import { SignIn } from '../components/SignIn'
@@ -28,7 +28,7 @@ export const Route = createFileRoute('/')({
       throw redirect({ to: '/t/$teamId', params: { teamId } })
     }
     // Open mode: one shared workspace, no team segment. Render the dashboard here.
-    const initial = { ...(await fetchLiveData()), templates: await listTemplates() }
+    const initial = await fetchLiveData()
     return { mode: 'dashboard', auth, initial }
   },
   component: Home,

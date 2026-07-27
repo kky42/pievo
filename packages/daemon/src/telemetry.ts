@@ -219,7 +219,7 @@ function makeCollector(agent: CodingAgent): TerminalCollector {
         if (!codexBaseline) {
           // Codex cumulative totals can include persisted historical session
           // usage. total-minus-last is the pre-subprocess baseline. Pievo does
-          // not currently initiate resumes, but parsing remains future-compatible.
+          // not currently initiate resumes, but the parser handles cumulative totals.
           codexBaseline = snapshot.last
             ? subtractRawCodexUsage(snapshot.total, snapshot.last)
             : { totalInputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
@@ -289,5 +289,8 @@ function makeCollector(agent: CodingAgent): TerminalCollector {
 }
 
 export function makeTerminalCollector(agent: CodingAgent): TerminalCollector {
+  if (agent !== "claude-code" && agent !== "codex") {
+    throw new Error(`unsupported coding agent: ${String(agent)}`);
+  }
   return makeCollector(agent);
 }

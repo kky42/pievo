@@ -34,10 +34,8 @@ const btnBase = `inline-flex cursor-pointer items-center gap-1.5 rounded-control
 export const btn = `${btnBase} border border-wire bg-surface text-primary hover:bg-raised`
 export const btnPrimary = `${btnBase} border border-display bg-display text-paper hover:opacity-85`
 export const btnDanger = `${btnBase} border border-transparent bg-rubik-red text-white hover:opacity-85`
-// The metered tier - actions that spend real credits (Run / Evolve). Heavier
-// than the wire-bordered secondary (full ink border) so cost reads as more
-// consequential than a free toggle, but still no fill - it sits visually
-// between `btn` (free) and `btnPrimary` (the screen's lead verb).
+// Emphasized secondary action: stronger than the wire-bordered default while
+// remaining visually below the screen's filled primary action.
 export const btnCost = `${btnBase} border border-display bg-transparent text-display hover:bg-[color:var(--color-display)]/8`
 // Compact control - its own padding/size base (NOT btnBase) so it can't lose
 // the px/text tug-of-war on CSS source-order. For inline affordances like Copy
@@ -102,7 +100,7 @@ export function ErrorBanner({
   )
 }
 
-/** A read-only mono code block (task file / control dump). */
+/** A read-only mono code block. */
 export function Pre({ children }: { children: ReactNode }) {
   return (
     <pre className="max-h-[300px] overflow-auto whitespace-pre-wrap rounded-control border border-hairline bg-raised px-4 py-3.5 font-mono text-meta leading-relaxed text-secondary">

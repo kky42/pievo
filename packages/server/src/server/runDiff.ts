@@ -1,5 +1,5 @@
 /**
- * Per-run artifact diff (Phase 3). Computed lazily on the SERVER at read time
+ * Per-run artifact diff. Computed lazily on the server at read time
  * (no stored diffs): load run N's snapshot + the previous run's snapshot and diff
  * the two path → metadata maps. For changed TEXT files we load both blobs and
  * compute a unified line diff with `diff` (jsdiff) — a pure-string library, no

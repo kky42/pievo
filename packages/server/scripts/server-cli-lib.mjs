@@ -101,6 +101,15 @@ export function buildEnvPlan(options, baseEnv = process.env) {
   };
 }
 
+/** Replace the current process environment with the launch plan. Foreground
+ * starts need the same bind/database/nonce environment a detached child gets. */
+export function applyProcessEnv(nextEnv, currentEnv = process.env) {
+  for (const key of Object.keys(currentEnv)) {
+    if (!(key in nextEnv)) delete currentEnv[key];
+  }
+  Object.assign(currentEnv, nextEnv);
+}
+
 export function buildRestartPlan(options, baseEnv, record) {
   const preserved = { ...options };
   if (preserved.host === undefined && firstSet(baseEnv, ["NITRO_HOST", "HOST"]) === undefined && record?.host) {
@@ -148,15 +157,18 @@ export function processStartTime(pid, exec = execFileSync) {
 }
 
 function validPidRecord(value) {
-  if (![1, 2].includes(value?.version)) return false;
-  if (!Number.isInteger(value.pid) || value.pid <= 0 || typeof value.startTime !== "string" || !value.startTime) return false;
-  if (typeof value.host !== "string" || !value.host || !Number.isInteger(value.port)) return false;
-  if (value.version === 2) {
-    if (!['starting', 'running'].includes(value.state)) return false;
-    if (typeof value.launchNonce !== "string" || !value.launchNonce) return false;
-    if (typeof value.managedGroup !== "boolean") return false;
-  }
-  return true;
+  return value?.version === 2
+    && Number.isInteger(value.pid)
+    && value.pid > 0
+    && typeof value.startTime === "string"
+    && !!value.startTime
+    && typeof value.host === "string"
+    && !!value.host
+    && Number.isInteger(value.port)
+    && ['starting', 'running'].includes(value.state)
+    && typeof value.launchNonce === "string"
+    && !!value.launchNonce
+    && typeof value.managedGroup === "boolean";
 }
 
 function readPidResult(pidFile) {
@@ -225,13 +237,8 @@ export function updatePidRecordState(plan, expected, state) {
 }
 
 export function clearPidRecord(pidFile, expected) {
-  if (expected !== undefined) {
-    const record = readPidRecord(pidFile);
-    if (typeof expected === "number") {
-      if (record?.pid !== expected) return false;
-    } else if (!sameIdentity(expected, record)) {
-      return false;
-    }
+  if (expected !== undefined && !sameIdentity(expected, readPidRecord(pidFile))) {
+    return false;
   }
   try {
     fs.rmSync(pidFile);

@@ -4,10 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { buildAgentSpawn, resolveExecTimeoutMs, runDelivery, type Delivery } from "./runner.js";
+import { buildAgentSpawn, resolveExecTimeoutMs, type Delivery } from "./runner.js";
 import { makeTerminalCollector } from "./telemetry.js";
 
 describe("terminal JSONL collectors", () => {
+  test("unknown agents fail closed instead of using a provider parser", () => {
+    expect(() => makeTerminalCollector("unknown" as any)).toThrow("unsupported coding agent: unknown");
+  });
+
   test("Claude reads init session, result text/usage, ignores dollar cost, and flushes an unterminated line", () => {
     const c = makeTerminalCollector("claude-code");
     c.feed('{"type":"system","subtype":"init","session_id":"sess-1"}\n');
@@ -91,15 +95,14 @@ describe("buildAgentSpawn", () => {
     delete process.env.PIEVO_CODEX_BIN;
   });
 
-  test("claude-code: default bin + the claude arg vector (--verbose, stream-json, sys file)", () => {
-    const { bin, args } = buildAgentSpawn({ agent: "claude-code", prompt: "do it", sysFile: "/tmp/sys.md" });
+  test("claude-code: default bin + canonical argument vector", () => {
+    const { bin, args } = buildAgentSpawn({ agent: "claude-code", prompt: "do it" });
     expect(bin).toBe("claude");
     expect(args).toEqual([
       "-p", "do it",
       "--output-format", "stream-json",
       "--verbose",
       "--permission-mode", "bypassPermissions",
-      "--append-system-prompt-file", "/tmp/sys.md",
       "--disallowed-tools", "ScheduleWakeup,CronCreate,CronList,CronDelete",
     ]);
   });
@@ -110,7 +113,6 @@ describe("buildAgentSpawn", () => {
     expect(bin).toBe("/opt/claude");
     expect(args.slice(0, 2)).toEqual(["-p", "p"]);
     expect(args).not.toContain("--resume");
-    expect(args).not.toContain("--append-system-prompt-file");
     expect(args.slice(-2)).toEqual(["--model", "opus"]);
   });
 
@@ -124,8 +126,7 @@ describe("buildAgentSpawn", () => {
   });
 
   test("codex: codex exec arm — not claude flags; unattended + json + skip-git", () => {
-    // A sysFile is passed but codex has no Claude sys-prompt-file flag — drop it.
-    const { bin, args } = buildAgentSpawn({ agent: "codex", prompt: "do it", sysFile: "/tmp/sys.md" });
+    const { bin, args } = buildAgentSpawn({ agent: "codex", prompt: "do it" });
     expect(bin).toBe("codex");
     expect(args).toEqual([
       "exec",
@@ -138,7 +139,6 @@ describe("buildAgentSpawn", () => {
     // Never emit Claude-shaped flags on the codex arm.
     expect(args).not.toContain("-p");
     expect(args).not.toContain("--verbose");
-    expect(args).not.toContain("--append-system-prompt-file");
     expect(args).not.toContain("stream-json");
     expect(args).not.toContain("--permission-mode");
     expect(args).not.toContain("--disallowed-tools");
@@ -151,6 +151,10 @@ describe("buildAgentSpawn", () => {
       reasoningEffort: "custom-high",
     });
     expect(args).toContain('model_reasoning_effort="custom-high"');
+  });
+
+  test("an unknown agent throws instead of defaulting to Claude", () => {
+    expect(() => buildAgentSpawn({ agent: "unknown" as any, prompt: "must not run" })).toThrow("unsupported coding agent: unknown");
   });
 
   test("codex: PIEVO_CODEX_BIN escape hatch + model, with no resume subcommand", () => {
@@ -174,7 +178,7 @@ describe("buildAgentSpawn", () => {
   });
 });
 
-// ---- fallback path integration ----
+// ---- runner integration fixtures ----
 
 let root: string;
 let workdir: string;
@@ -216,18 +220,17 @@ function delivery(overrides: Partial<Delivery> = {}): Delivery {
     runId: "run-1",
     runIndex: 1,
     runToken: "tok-1",
-    role: "exec",
     loop: {
       id: "loop-1",
       name: "cookie-report",
       workdir,
-      taskFile: null,
       model: null,
       reasoningEffort: null,
-      allowControl: false,
+      agent: "claude-code",
     },
-    systemPrompt: "SYS",
+    roots: [],
     task: "ORIGINAL TASK: produce the daily report",
+    artifacts: [],
     ...overrides,
   };
 }

@@ -1,7 +1,5 @@
-import { useRef, useState } from 'react'
 import { signIn } from '../lib/auth-client'
 import { PievoLogo } from './PievoLogo'
-import { LoopPlaybook } from './LoopPlaybook'
 import { GITHUB_URL, GitHubIcon } from './SocialLinks'
 import { btnPrimary } from './ui'
 
@@ -11,26 +9,13 @@ import { btnPrimary } from './ui'
  * (the dashboard by default, or the deep-linked loop/run page) after the OAuth
  * round-trip, so a logged-out deep link lands back on the page it was for.
  *
- * The playbook band renders below the card as the signed-out pitch; its
- * "Start a loop" CTA scrolls back up to this card (with a brief highlight)
- * so the path to signing in is obvious.
+ * This stays intentionally focused on authentication; signed-out product prose
+ * belongs to the surrounding route.
  */
 export function SignIn({ callbackURL = '/' }: { callbackURL?: string }) {
-  const cardRef = useRef<HTMLDivElement>(null)
-  const [hint, setHint] = useState(false)
-  const scrollToSignIn = () => {
-    cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    setHint(true)
-    setTimeout(() => setHint(false), 1800)
-  }
   return (
     <main className="mx-auto max-w-[1180px] px-8 pb-24">
-      <div
-        ref={cardRef}
-        className={`mx-auto mt-32 max-w-sm rounded-card p-6 text-center transition-shadow duration-500 ${
-          hint ? 'shadow-[0_0_0_2px_var(--color-surface),0_0_0_4px_var(--color-interactive)]' : ''
-        }`}
-      >
+      <div className="mx-auto mt-32 max-w-sm rounded-card p-6 text-center">
         <PievoLogo size={52} />
         <h1 className="mt-4 text-2xl font-semibold tracking-tight text-display">Pievo</h1>
         <p className="mt-2 text-sm text-secondary">Sign in to manage your scheduled agent loops.</p>
@@ -46,7 +31,6 @@ export function SignIn({ callbackURL = '/' }: { callbackURL?: string }) {
           </a>
         </div>
       </div>
-      <LoopPlaybook onStart={scrollToSignIn} />
     </main>
   )
 }

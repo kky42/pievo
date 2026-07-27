@@ -28,7 +28,7 @@ export function inlineHref(loopId: string, path: string): string {
 type Loaded = ArtifactContent | { loading: true }
 
 /**
- * One artifact row, shared by the loop "Files" view (Phase 2) and the run-detail
+ * One artifact row, shared by the loop Files view and the run-detail
  * recorded-files list (historical runs with no snapshot). A text file expands its
  * content inline (lazy `getArtifact`), a binary/oversize file is a download link.
  * Owns its own expand+fetch state so it can be dropped into either list.

@@ -27,17 +27,18 @@ describe("PendingReportOutbox", () => {
     reopened.close();
   });
 
-  test("multiple reports retry independently and a poisoned row does not block another loop", async () => {
+  test("multiple reports retry independently and one failed row does not block another loop", async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-outbox-"));
     const box = new PendingReportOutbox(path.join(root, "pending.sqlite"));
-    const first = box.put("rk_1", report());
-    const second = box.put("rk_2", report({ reportId: "22222222-2222-4222-8222-222222222222", runId: "run-2" }));
+    const first = box.put("rk_1", report(), 0);
+    const second = box.put("rk_2", report({ reportId: "22222222-2222-4222-8222-222222222222", runId: "run-2" }), 0);
 
-    box.applyAck({ kind: "conflict", reportId: first.reportId, error: "different payload" });
-    expect(box.ready().map((row) => row.runId)).toEqual(["run-2"]);
+    box.applyAck({ kind: "retry", reportId: first.reportId, error: "unrecognized acknowledgement" }, 0);
+    expect(box.ready(0).map((row) => row.runId)).toEqual(["run-2"]);
     box.applyAck({ kind: "ack", reportId: second.reportId });
     expect(box.all().map((row) => row.runId)).toEqual(["run-1"]);
-    expect(box.diagnostics()).toMatchObject({ pendingRunIds: ["run-1"], poisonedRunIds: ["run-1"] });
+    expect(box.diagnostics()).toMatchObject({ pendingRunIds: ["run-1"], lastError: "unrecognized acknowledgement" });
+    expect(box.ready(1_000).map((row) => row.runId)).toEqual(["run-1"]);
     box.close();
   });
 
@@ -48,7 +49,7 @@ describe("PendingReportOutbox", () => {
     const responses = [
       new Response("{}", { status: 500 }),
       new Response(JSON.stringify({ reportId: "other" }), { status: 200 }),
-      new Response(JSON.stringify({ reportId: report().reportId }), { status: 200 }),
+      new Response(JSON.stringify({ ok: true, reportId: report().reportId }), { status: 200 }),
     ];
     for (let i = 0; i < responses.length; i++) {
       const ack = await sendTerminalReport("https://example.test", box.peek()!, async () => responses[i]);
@@ -56,25 +57,29 @@ describe("PendingReportOutbox", () => {
       expect(Boolean(box.peek())).toBe(i < 2);
     }
     box.put("rk_retired", report({ reportId: "22222222-2222-4222-8222-222222222222", runId: "run-2" }));
-    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "RETIRED", reportId: "wrong" }), { status: 410 })));
+    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ error: "execution authority retired", code: "RETIRED", reportId: "wrong" }), { status: 410 })));
     expect(box.peek()).toBeDefined();
-    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "RETIRED", reportId: "22222222-2222-4222-8222-222222222222" }), { status: 410 })));
+    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ error: "execution authority retired", code: "RETIRED", reportId: "22222222-2222-4222-8222-222222222222" }), { status: 410 })));
     expect(box.peek()).toBeUndefined();
     box.close();
   });
 
-  test("a handled rejection ACK must match the exact payload digest and disposition", async () => {
+  test("a handled rejection ACK must exactly match the current digest-bound contract", async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-outbox-"));
     const box = new PendingReportOutbox(path.join(root, "pending.sqlite"));
     box.put("rk_secret", report());
     const pending = box.peek()!;
-    const response = (payloadDigest: string, disposition: string) => new Response(JSON.stringify({
-      ok: true, accepted: false, terminal: true, reportId: pending.reportId, payloadDigest, disposition, extra: "additive-ok",
+    const response = (payloadDigest: string, disposition: string, extra = false) => new Response(JSON.stringify({
+      ok: true, accepted: false, terminal: true, reportId: pending.reportId,
+      code: "REPORT_INVALID", issues: ["usage.inputTokens must be an integer"],
+      payloadDigest, disposition, ...(extra ? { extra: "not-current" } : {}),
     }), { status: 200 });
 
     box.applyAck(await sendTerminalReport("https://example.test", pending, async () => response("wrong", "run-error")));
     expect(box.peek()).toBeDefined();
     box.applyAck(await sendTerminalReport("https://example.test", pending, async () => response(pending.payloadDigest, "unknown")));
+    expect(box.peek()).toBeDefined();
+    box.applyAck(await sendTerminalReport("https://example.test", pending, async () => response(pending.payloadDigest, "run-error", true)));
     expect(box.peek()).toBeDefined();
     box.applyAck(await sendTerminalReport("https://example.test", pending, async () => response(pending.payloadDigest, "run-error")));
     expect(box.peek()).toBeUndefined();
@@ -94,7 +99,7 @@ describe("PendingReportOutbox", () => {
     expect(box.peek()).toBeDefined();
     const second = await sendTerminalReport("https://example.test", box.peek()!, async (_url, init) => {
       sent.push(String(init.body));
-      return new Response(JSON.stringify({ reportId: report().reportId }), { status: 200 });
+      return new Response(JSON.stringify({ ok: true, reportId: report().reportId }), { status: 200 });
     });
     box.applyAck(second);
     expect(sent[1]).toBe(sent[0]);
@@ -102,27 +107,18 @@ describe("PendingReportOutbox", () => {
     box.close();
   });
 
-  test("REPORT_CONFLICT poisons the report and blocks retry without deleting it", async () => {
+  test.each([
+    [409, "REPORT_CONFLICT"],
+    [422, "REPORT_INVALID"],
+  ])("non-current %i %s is diagnostic and retryable, never a terminal ACK", async (status, code) => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-outbox-"));
     const box = new PendingReportOutbox(path.join(root, "pending.sqlite"));
     box.put("rk_secret", report());
-    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "REPORT_CONFLICT", reportId: "wrong" }), { status: 409 })));
-    expect(box.diagnostics()).toMatchObject({ pendingRunIds: ["run-1"], poisonedRunIds: [] });
-    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "REPORT_CONFLICT", reportId: report().reportId }), { status: 409 })));
-    expect(box.diagnostics()).toMatchObject({ pendingRunIds: ["run-1"], poisonedRunIds: ["run-1"] });
-    expect(box.peek()).toBeDefined();
-    box.close();
-  });
-
-  test("matching REPORT_INVALID poisons the report while a mismatched id remains retryable", async () => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-outbox-"));
-    const box = new PendingReportOutbox(path.join(root, "pending.sqlite"));
-    box.put("rk_secret", report());
-    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "REPORT_INVALID", reportId: "wrong", issues: ["result"] }), { status: 422 })));
-    expect(box.diagnostics().poisonedRunIds).toEqual([]);
-    box.applyAck(await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code: "REPORT_INVALID", reportId: report().reportId, issues: ["result"] }), { status: 422 })));
-    expect(box.diagnostics()).toMatchObject({ poisonedRunIds: ["run-1"], pendingRunIds: ["run-1"] });
-    expect(box.diagnostics().lastError).toContain("REPORT_INVALID");
+    const ack = await sendTerminalReport("https://example.test", box.peek()!, async () => new Response(JSON.stringify({ code, reportId: report().reportId }), { status }));
+    expect(ack).toMatchObject({ kind: "retry", error: expect.stringContaining(`${status} ${code}`) });
+    box.applyAck(ack, 0);
+    expect(box.diagnostics()).toMatchObject({ pendingRunIds: ["run-1"], lastError: expect.stringContaining(code) });
+    expect(box.ready(1_000).map((row) => row.runId)).toEqual(["run-1"]);
     box.close();
   });
 });

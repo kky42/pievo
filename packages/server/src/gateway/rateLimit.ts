@@ -1,6 +1,6 @@
 /**
- * In-process rate limiting for the machine routes (`/api/machine/*` + the legacy
- * `/agent-api/loop`, `/machine/report` aliases). There is deliberately no heavy
+ * In-process rate limiting for `/api/machine/*` and `/machine/report`.
+ * There is deliberately no heavy
  * framework: a single-scheduler Pievo deployment runs one process, so an
  * in-memory token bucket per key is the right-sized backstop. It bounds the
  * unauthenticated self-registration / resource-creation surface (audit H-01 / M2)
@@ -22,7 +22,7 @@
  * `machineRouteLimit`). Both require a valid registered device token (unknown ⇒
  * 401, not an unauthenticated surface) and are already bounded by the sync
  * hash-handshake (the server only accepts hashes it asked THIS machine for) plus
- * the per-loop 500MB / per-file 10MB / 32MB-body caps. A large first sync bursts
+ * the exact-path/hash handshake and per-file/body caps. A large first sync bursts
  * many concurrent PUTs on ONE device token, so either tier would only throttle
  * legitimate uploads with no real security gain. Every OTHER machine route keeps
  * both tiers.
@@ -146,10 +146,8 @@ export function clientIp(request: Request): string {
 }
 
 /**
- * A 429 response with a Retry-After hint. Carries a text-sink `text` + `exitCode`
- * alongside `error` so the batch-7 text-sink routes (`/api/machine/cli`,
- * `/agent-api/loop`) surface a real rate-limit message — the daemon prints
- * `body.text`, and an absent `text` would read as a pre-0.12 `SERVER_TOO_OLD`.
+ * A 429 response with a Retry-After hint. Carries `text` + `exitCode` alongside
+ * `error` so `/api/machine/cli` can print the response directly.
  */
 function tooMany(): Response {
   return Response.json(

@@ -26,12 +26,16 @@ afterEach(() => {
 });
 
 describe("execEnv", () => {
+  test("unknown agents fail closed instead of inheriting Claude credentials", () => {
+    expect(() => execEnv("unknown" as any)).toThrow("unsupported coding agent: unknown");
+  });
+
   test("keeps claude auth/config keys — incl. the ANTHROPIC_* proxy family and CLAUDE_CONFIG_DIR", () => {
     setEnv("ANTHROPIC_API_KEY", "sk-x");
     setEnv("ANTHROPIC_BASE_URL", "https://gw.example"); // proxy/gateway users
     setEnv("ANTHROPIC_AUTH_TOKEN", "tok");
     setEnv("CLAUDE_CONFIG_DIR", "/tmp/claude-config"); // relocated Claude config
-    const env = execEnv();
+    const env = execEnv("claude-code");
     expect(env.ANTHROPIC_API_KEY).toBe("sk-x");
     expect(env.ANTHROPIC_BASE_URL).toBe("https://gw.example");
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe("tok");
@@ -43,7 +47,7 @@ describe("execEnv", () => {
     setEnv("AWS_SECRET_ACCESS_KEY", "leak-me-not");
     setEnv("GITHUB_TOKEN", "leak-me-not");
     setEnv("PIEVO_TOKEN", "dk_secret"); // the device token never reaches claude
-    const env = execEnv();
+    const env = execEnv("claude-code");
     expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
     expect(env.GITHUB_TOKEN).toBeUndefined();
     expect(env.PIEVO_TOKEN).toBeUndefined();
@@ -68,7 +72,7 @@ describe("execEnv", () => {
   test("claude path does NOT forward OpenAI/Codex keys", () => {
     setEnv("OPENAI_API_KEY", "sk-openai");
     setEnv("CODEX_API_KEY", "codex-secret");
-    const env = execEnv();
+    const env = execEnv("claude-code");
     expect(env.OPENAI_API_KEY).toBeUndefined();
     expect(env.CODEX_API_KEY).toBeUndefined();
   });

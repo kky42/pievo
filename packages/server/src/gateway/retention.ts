@@ -103,7 +103,7 @@ export async function gcBlobs(blobStore: BlobStore, graceMs: number = blobGcGrac
       // the hash, dropping the (possibly sync-recreated) blobs row forces blobExists()
       // false so the bytes self-heal on the next sync; if not, this is plain cleanup.
       // No post-delete recheck: deleteBlob runs regardless, so re-scanning snapshots
-      // here would only adjust a counter while paying a full manifest scan on the
+      // here would only adjust a counter while paying another snapshot scan on the
       // common genuine-garbage path. The pre-delete guard above is the correctness gate.
       await store.deleteBlob(hash);
       reclaimed++;

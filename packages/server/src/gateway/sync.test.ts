@@ -5,11 +5,11 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 
 import { LocalBlobStore, MemoryBlobStore } from "./blobstore.js";
+import { testStore, type TestStore } from "../../test/store.js";
 
 let tmp: string;
 let db: typeof import("../db/index.js");
-let store: typeof import("../db/store.js");
-let gatewayMod: typeof import("./index.js");
+let store: TestStore;
 let syncMod: typeof import("./sync.js");
 let tokens: typeof import("./tokens.js");
 
@@ -20,8 +20,7 @@ beforeAll(async () => {
   process.env.PIEVO_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();
-  store = await import("../db/store.js");
-  gatewayMod = await import("./index.js");
+  store = testStore(await import("../db/store.js"));
   syncMod = await import("./sync.js");
   tokens = await import("./tokens.js");
 });
@@ -38,13 +37,13 @@ function sha256(s: string | Buffer): string {
   return createHash("sha256").update(s).digest("hex");
 }
 
-const scheduler = {
-  advanceDueSchedules(): never[] { return []; },
-  enqueueInitialExec(): void {},
-  addLoop(): void {},
-  removeLoop(): void {},
-  runNow(): void {},
-} as any;
+function manifestEntry(path: string, hash: string, size: number, binary = false) {
+  return { path, hash, size, binary, oversize: false };
+}
+
+function oversizeEntry(path: string, size: number, binary = false) {
+  return { path, hash: null, size, binary, oversize: true };
+}
 
 /** An ArtifactSync with an injected in-memory blob store we can assert against. */
 function syncWithStore(): { art: InstanceType<typeof syncMod.ArtifactSync>; blobs: MemoryBlobStore } {
@@ -52,14 +51,31 @@ function syncWithStore(): { art: InstanceType<typeof syncMod.ArtifactSync>; blob
   return { art: new syncMod.ArtifactSync(blobs), blobs };
 }
 
+const TEST_ARTIFACTS = [
+  "report.md", "note.txt", "f.txt", "big.bin", "huge.dat", ".git/config",
+  "node_modules/dep/index.js", ".worktrees/2026-07-07-fix/src/App.jsx", ".next/cache/blob",
+  ".env", "secrets/server.pem", "nested/id_rsa", "ok/file.txt", "a.md", "b.md", "out.md",
+  "real.txt", "a.txt", "idea.md", "copy.md", "broken.md", "plain.md", " spaced report.md ",
+];
+
 /** A registered machine (by device token) + a loop bound to it. */
 async function seed() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
+  const loop = (await store.createLoop({ workdir: "/work", userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, artifacts: TEST_ARTIFACTS }));
   return { token, machineId, loop };
 }
+
+test("sync and blob ingress reject a truncated-machine-id collision", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "different-full-hash", online: true });
+  const art = syncWithStore().art;
+
+  expect((await art.sync(token, { loopId: "loop-any", manifest: [] })).status).toBe(401);
+  expect((await art.putBlob(token, "a".repeat(64), Buffer.from("x"))).status).toBe(401);
+});
 
 test("negotiated upload: manifest → needHashes → PUT blob lands bytes in the store", async () => {
   const { token, loop } = (await seed());
@@ -70,7 +86,7 @@ test("negotiated upload: manifest → needHashes → PUT blob lands bytes in the
   // 1. Post the manifest only — server has no bytes yet → it asks for the hash.
   const r1 = await art.sync(token, {
     loopId: loop.id,
-    manifest: [{ path: "report.md", hash, size: content.length }],
+    manifest: [manifestEntry("report.md", hash, content.length)],
   });
   expect(r1.status).toBe(200);
   expect((r1.body as any).needHashes).toEqual([hash]);
@@ -91,9 +107,24 @@ test("negotiated upload: manifest → needHashes → PUT blob lands bytes in the
   // 3. Re-sync the unchanged manifest → content-addressed dedupe ⇒ zero uploads.
   const r2 = await art.sync(token, {
     loopId: loop.id,
-    manifest: [{ path: "report.md", hash, size: content.length }],
+    manifest: [manifestEntry("report.md", hash, content.length)],
   });
   expect((r2.body as any).needHashes).toEqual([]);
+});
+
+test("manifest binary classification is retained for artifact viewer and run snapshots", async () => {
+  const { token, loop } = await seed();
+  const { art } = syncWithStore();
+  const bytes = Buffer.from([0x41, 0x00, 0x42]);
+  const hash = sha256(bytes);
+
+  const synced = await art.sync(token, {
+    loopId: loop.id,
+    manifest: [manifestEntry("big.bin", hash, bytes.length, true)],
+  });
+  expect(synced.status).toBe(200);
+  expect((await store.listArtifacts(loop.id))[0]).toMatchObject({ path: "big.bin", binary: true, oversize: false });
+  expect(await store.buildLoopManifest(loop.id)).toMatchObject({ "big.bin": { binary: true, oversize: false } });
 });
 
 test("a missing local byte object is requested and restored even when its database metadata remains", async () => {
@@ -103,7 +134,7 @@ test("a missing local byte object is requested and restored even when its databa
   const art = new syncMod.ArtifactSync(blobs);
   const content = "restore after byte-store loss";
   const hash = sha256(content);
-  const manifest = [{ path: "report.md", hash, size: content.length }];
+  const manifest = [manifestEntry("report.md", hash, content.length)];
 
   await art.sync(token, { loopId: loop.id, manifest });
   expect((await art.putBlob(token, hash, Buffer.from(content))).status).toBe(200);
@@ -116,43 +147,12 @@ test("a missing local byte object is requested and restored even when its databa
   expect((await blobs.get(hash))?.toString()).toBe(content);
 });
 
-test("inline small text blobs are stored in one round-trip (no needHashes)", async () => {
-  const { token, loop } = (await seed());
-  const { art, blobs } = syncWithStore();
-  const content = "hello inline";
-  const hash = sha256(content);
-
-  const r = await art.sync(token, {
-    loopId: loop.id,
-    manifest: [{ path: "note.txt", hash, size: content.length }],
-    blobs: [{ hash, encoding: "base64", data: Buffer.from(content).toString("base64") }],
-  });
-  expect(r.status).toBe(200);
-  expect((r.body as any).needHashes).toEqual([]);
-  expect((await blobs.get(hash))!.toString()).toBe(content);
-});
-
-test("inline blob whose bytes don't match its hash is rejected (anti-poisoning) → needs PUT", async () => {
-  const { token, loop } = (await seed());
-  const { art, blobs } = syncWithStore();
-  const claimed = sha256("the real bytes");
-
-  const r = await art.sync(token, {
-    loopId: loop.id,
-    manifest: [{ path: "f.txt", hash: claimed, size: 14 }],
-    blobs: [{ hash: claimed, encoding: "base64", data: Buffer.from("WRONG bytes").toString("base64") }],
-  });
-  // The poisoned inline blob is dropped → the server still needs the hash.
-  expect((r.body as any).needHashes).toEqual([claimed]);
-  expect(await blobs.has(claimed)).toBe(false);
-});
-
 test("files over 10MB are recorded as metadata only (no bytes, no needHashes)", async () => {
   const { token, loop } = (await seed());
   const { art } = syncWithStore();
   const r = await art.sync(token, {
     loopId: loop.id,
-    manifest: [{ path: "big.bin", hash: sha256("x"), size: 11 * 1024 * 1024, oversize: true }],
+    manifest: [oversizeEntry("big.bin", 11 * 1024 * 1024)],
   });
   expect((r.body as any).needHashes).toEqual([]);
   const file = (await store.getArtifactFile(loop.id, "big.bin"))!;
@@ -161,54 +161,87 @@ test("files over 10MB are recorded as metadata only (no bytes, no needHashes)", 
   expect(file.size).toBe(11 * 1024 * 1024);
 });
 
-test("a size over the cap is treated as oversize even if oversize flag is absent", async () => {
-  const { token, loop } = (await seed());
-  const { art } = syncWithStore();
-  const hash = sha256("doesn't matter");
-  const r = await art.sync(token, {
-    loopId: loop.id,
-    manifest: [{ path: "huge.dat", hash, size: 20 * 1024 * 1024 }],
-  });
-  expect((r.body as any).needHashes).toEqual([]); // server won't request oversize bytes
-  expect((await store.getArtifactFile(loop.id, "huge.dat"))!.oversize).toBe(true);
-});
-
-test("ignore rules keep .git / node_modules / secrets out entirely (server defense in depth)", async () => {
+test("explicit artifacts are not classified by directory, filename, extension, or secret-like name", async () => {
   const { token, loop } = (await seed());
   const { art } = syncWithStore();
   const h = (s: string) => sha256(s);
   const r = await art.sync(token, {
     loopId: loop.id,
     manifest: [
-      { path: "report.md", hash: h("ok"), size: 2 },
-      { path: ".git/config", hash: h("g"), size: 1 },
-      { path: "node_modules/dep/index.js", hash: h("n"), size: 1 },
-      { path: ".worktrees/2026-07-07-fix/src/App.jsx", hash: h("w"), size: 1 },
-      { path: ".next/cache/blob", hash: h("c"), size: 1 },
-      { path: ".env", hash: h("e"), size: 1 },
-      { path: "secrets/server.pem", hash: h("p"), size: 1 },
-      { path: "nested/id_rsa", hash: h("k"), size: 1 },
+      manifestEntry("report.md", h("ok"), 2),
+      manifestEntry(".git/config", h("g"), 1),
+      manifestEntry("node_modules/dep/index.js", h("n"), 1),
+      manifestEntry(".worktrees/2026-07-07-fix/src/App.jsx", h("w"), 1),
+      manifestEntry(".next/cache/blob", h("c"), 1),
+      manifestEntry(".env", h("e"), 1),
+      manifestEntry("secrets/server.pem", h("p"), 1),
+      manifestEntry("nested/id_rsa", h("k"), 1),
     ],
   });
   expect(r.status).toBe(200);
-  // Only the report survives; everything ignored never becomes an artifact row.
-  expect((await store.listArtifacts(loop.id)).map((f) => f.path)).toEqual(["report.md"]);
-  // …and the server never asked for any secret/junk hash.
-  expect((r.body as any).needHashes).toEqual([h("ok")]);
+  expect((await store.listArtifacts(loop.id)).map((f) => f.path)).toEqual([
+    ".env", ".git/config", ".next/cache/blob", ".worktrees/2026-07-07-fix/src/App.jsx",
+    "nested/id_rsa", "node_modules/dep/index.js", "report.md", "secrets/server.pem",
+  ]);
+  expect(new Set((r.body as any).needHashes)).toEqual(new Set(["ok", "g", "n", "w", "c", "e", "p", "k"].map(h)));
 });
 
-test("path traversal / absolute paths are rejected", async () => {
-  const { token, loop } = (await seed());
+test("sync preserves an exact literal path configured on the loop", async () => {
+  const { token, loop } = await seed();
   const { art } = syncWithStore();
-  const r = await art.sync(token, {
+  const configured = sha256("configured");
+  const response = await art.sync(token, {
+    loopId: loop.id,
+    manifest: [manifestEntry(" spaced report.md ", configured, 10)],
+  });
+  expect(response.status).toBe(200);
+  expect((await store.listArtifacts(loop.id)).map((file) => file.path)).toEqual([" spaced report.md "]);
+});
+
+test("removing a configured path tombstones it immediately and blocks its pending PUT", async () => {
+  const { token, loop } = await seed();
+  const { art, blobs } = syncWithStore();
+  const content = "pending bytes";
+  const hash = sha256(content);
+  const handshake = await art.sync(token, { loopId: loop.id, manifest: [manifestEntry("report.md", hash, content.length)] });
+  expect((handshake.body as any).needHashes).toEqual([hash]);
+  await store.updateLoop(loop.id, { artifacts: TEST_ARTIFACTS.filter((path) => path !== "report.md") });
+  expect(await store.listArtifacts(loop.id)).toEqual([]);
+  expect((await art.putBlob(token, hash, Buffer.from(content))).status).toBe(403);
+  expect(await blobs.has(hash)).toBe(false);
+});
+
+test("artifact ingress applies only the per-file byte cap", async () => {
+  const { token, loop } = await seed();
+  const { art, blobs } = syncWithStore();
+  const a = Buffer.alloc(1024, "a");
+  const b = Buffer.alloc(1024, "b");
+  const response = await art.sync(token, {
     loopId: loop.id,
     manifest: [
-      { path: "../../etc/passwd", hash: sha256("a"), size: 1 },
-      { path: "/abs/path", hash: sha256("b"), size: 1 },
-      { path: "ok/file.txt", hash: sha256("c"), size: 1 },
+      manifestEntry("a.md", sha256(a), a.length),
+      manifestEntry("b.md", sha256(b), b.length),
     ],
   });
-  expect((await store.listArtifacts(loop.id)).map((f) => f.path)).toEqual(["ok/file.txt"]);
+  expect(response.status).toBe(200);
+  expect(new Set((response.body as any).needHashes)).toEqual(new Set([sha256(a), sha256(b)]));
+  expect((await art.putBlob(token, sha256(a), a)).status).toBe(200);
+  expect((await art.putBlob(token, sha256(b), b)).status).toBe(200);
+  expect(await blobs.has(sha256(a))).toBe(true);
+  expect(await blobs.has(sha256(b))).toBe(true);
+});
+
+test("path traversal and absolute paths reject the whole manifest", async () => {
+  const { token, loop } = await seed();
+  const { art } = syncWithStore();
+  for (const hostile of ["../../etc/passwd", "/abs/path"]) {
+    const response = await art.sync(token, {
+      loopId: loop.id,
+      manifest: [{ ...manifestEntry("ok/file.txt", sha256("c"), 1), path: hostile }],
+    });
+    expect(response.status).toBe(400);
+    expect(await store.listArtifacts(loop.id)).toEqual([]);
+  }
 });
 
 test("deletions: a path absent from the manifest is tombstoned, not hard-deleted", async () => {
@@ -220,40 +253,26 @@ test("deletions: a path absent from the manifest is tombstoned, not hard-deleted
   await art.sync(token, {
     loopId: loop.id,
     manifest: [
-      { path: "a.md", hash: a, size: 9 },
-      { path: "b.md", hash: b, size: 9 },
+      manifestEntry("a.md", a, 9),
+      manifestEntry("b.md", b, 9),
     ],
   });
   expect((await store.listArtifacts(loop.id)).map((f) => f.path)).toEqual(["a.md", "b.md"]);
 
-  // Re-sync with b.md gone → it tombstones (drops out of the live set, kept as a row).
-  await art.sync(token, { loopId: loop.id, manifest: [{ path: "a.md", hash: a, size: 9 }] });
+  // Reconcile with b.md absent: it leaves the live set and becomes a tombstone.
+  await art.sync(token, { loopId: loop.id, manifest: [manifestEntry("a.md", a, 9)] });
   expect((await store.listArtifacts(loop.id)).map((f) => f.path)).toEqual(["a.md"]);
   const tomb = (await store.getArtifactFile(loop.id, "b.md"))!;
   expect(tomb.deleted).toBe(true);
   expect(tomb.hash).toBeNull();
 });
 
-test("runId is attributed onto the synced file when it names a run on the loop", async () => {
-  const { token, machineId, loop } = (await seed());
+test("device-token auth is exact: malformed/unknown credentials are 401; another machine's loop is 404", async () => {
+  const { loop } = await seed();
   const { art } = syncWithStore();
-  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() }));
-  const hash = sha256("from a run");
-  await art.sync(token, {
-    loopId: loop.id,
-    runId: run.id,
-    manifest: [{ path: "out.md", hash, size: 10 }],
-  });
-  expect((await store.getArtifactFile(loop.id, "out.md"))!.lastRunId).toBe(run.id);
-
-  // A runId for a different loop is ignored (not attributed).
-  await art.sync(token, { loopId: loop.id, runId: "run-bogus", manifest: [{ path: "out.md", hash, size: 10 }] });
-  expect((await store.getArtifactFile(loop.id, "out.md"))!.lastRunId).toBeNull();
-});
-
-test("device-token auth: unknown machine 401; a loop on another machine 404", async () => {
-  const { loop } = (await seed());
-  const { art } = syncWithStore();
+  for (const malformed of ["", "dev-token", `rk_${"a".repeat(32)}`, `dk_${"A".repeat(30)}`]) {
+    expect((await art.sync(malformed, { loopId: loop.id, manifest: [] })).status).toBe(401);
+  }
   const stranger = tokens.mintDeviceToken();
   const unknown = await art.sync(stranger, { loopId: loop.id, manifest: [] });
   expect(unknown.status).toBe(401);
@@ -266,13 +285,55 @@ test("device-token auth: unknown machine 401; a loop on another machine 404", as
   expect(wrong.status).toBe(404);
 });
 
+test("malformed sync envelopes are 400 and cannot mutate or tombstone artifacts", async () => {
+  const { token, loop } = await seed();
+  const { art } = syncWithStore();
+  const original = manifestEntry("report.md", sha256("original"), 8);
+  expect((await art.sync(token, { loopId: loop.id, manifest: [original] })).status).toBe(200);
+  const before = await store.listAllArtifactFiles(loop.id);
+
+  const malformed: unknown[] = [
+    null,
+    [],
+    { loopId: 1, manifest: [] },
+    { loopId: "", manifest: [] },
+    { loopId: "bad\u0000id", manifest: [] },
+    { loopId: "x".repeat(201), manifest: [] },
+    { loopId: loop.id },
+    { loopId: loop.id, manifest: {} },
+    { loopId: loop.id, manifest: [], blobs: [] },
+    { loopId: loop.id, manifest: [{ ...original, extra: true }] },
+    { loopId: loop.id, manifest: [{ path: "report.md", hash: original.hash, size: 8 }] },
+    { loopId: loop.id, manifest: [{ ...original, size: "8" }] },
+    { loopId: loop.id, manifest: [{ ...original, size: 1.5 }] },
+    { loopId: loop.id, manifest: [oversizeEntry("big.bin", 2_147_483_648)] },
+    { loopId: loop.id, manifest: [{ ...original, binary: 0 }] },
+    { loopId: loop.id, manifest: [{ ...original, oversize: 0 }] },
+    { loopId: loop.id, manifest: [{ ...original, hash: original.hash.toUpperCase() }] },
+    { loopId: loop.id, manifest: [{ ...original, hash: null }] },
+    { loopId: loop.id, manifest: [oversizeEntry("big.bin", 8)] },
+    { loopId: loop.id, manifest: [{ ...oversizeEntry("big.bin", 11 * 1024 * 1024), hash: original.hash }] },
+    { loopId: loop.id, manifest: [{ ...original, size: 11 * 1024 * 1024 }] },
+    { loopId: loop.id, manifest: [{ ...original, path: "../../etc/passwd" }] },
+    { loopId: loop.id, manifest: [{ ...original, path: "unconfigured.txt" }] },
+    { loopId: loop.id, manifest: [manifestEntry("note.txt", sha256("new"), 3), { path: "report.md" }] },
+    { loopId: loop.id, manifest: [manifestEntry("note.txt", sha256("new"), 3), { ...original, path: "unconfigured.txt" }] },
+    { loopId: loop.id, manifest: [original, original] },
+  ];
+
+  for (const body of malformed) {
+    expect((await art.sync(token, body)).status, JSON.stringify(body)).toBe(400);
+    expect(await store.listAllArtifactFiles(loop.id)).toEqual(before);
+  }
+});
+
 test("putBlob rejects a hash that doesn't match the body, and a bad hash format", async () => {
   const { token, loop } = (await seed());
   const { art, blobs } = syncWithStore();
   const realHash = sha256("real");
   // The handshake first: sync writes the referencing row + asks for the hash
   // (an unsolicited PUT is refused outright — see the upload-gate test below).
-  await art.sync(token, { loopId: loop.id, manifest: [{ path: "real.txt", hash: realHash, size: 4 }] });
+  await art.sync(token, { loopId: loop.id, manifest: [manifestEntry("real.txt", realHash, 4)] });
 
   const mismatch = await art.putBlob(token, realHash, Buffer.from("tampered"));
   expect(mismatch.status).toBe(400);
@@ -306,7 +367,7 @@ test("putBlob refuses a hash only ANOTHER machine's loop references (per-machine
   const content = "machine A's file";
   const hash = sha256(content);
   // Machine A's sync legitimately requests the hash…
-  await art.sync(tokenA, { loopId: loop.id, manifest: [{ path: "a.txt", hash, size: content.length }] });
+  await art.sync(tokenA, { loopId: loop.id, manifest: [manifestEntry("a.txt", hash, content.length)] });
 
   // …but machine B (registered, unrelated) may not supply the bytes for it.
   const tokenB = tokens.mintDeviceToken();
@@ -320,216 +381,4 @@ test("putBlob refuses a hash only ANOTHER machine's loop references (per-machine
   const ok = await art.putBlob(tokenA, hash, Buffer.from(content));
   expect(ok.status).toBe(200);
   expect(await blobs.has(hash)).toBe(true);
-});
-
-// ---- front-matter meta indexing (batch 1) ----
-
-const PRODUCT = `---\ntype: idea\ntitle: My Idea\ndate: 2026-07-01\n---\n\n# Body\n`;
-
-/** The joined-out meta for a loop's live file at `path` (null when untyped). */
-async function metaOf(loopId: string, path: string) {
-  return (await store.listArtifactsWithMeta(loopId)).find((f) => f.path === path)?.meta ?? null;
-}
-
-test("sync inline path parses + persists front-matter meta on the blob", async () => {
-  const { token, loop } = (await seed());
-  const { art } = syncWithStore();
-  const hash = sha256(PRODUCT);
-  const r = await art.sync(token, {
-    loopId: loop.id,
-    manifest: [{ path: "idea.md", hash, size: PRODUCT.length }],
-    blobs: [{ hash, encoding: "utf8", data: PRODUCT }],
-  });
-  expect(r.status).toBe(200);
-  expect((await metaOf(loop.id, "idea.md"))).toEqual({ type: "idea", title: "My Idea", date: "2026-07-01" });
-});
-
-test("putBlob path parses + persists front-matter meta", async () => {
-  const { token, loop } = (await seed());
-  const { art } = syncWithStore();
-  const hash = sha256(PRODUCT);
-  // Manifest first (no inline) → the server asks for the hash…
-  const r1 = await art.sync(token, { loopId: loop.id, manifest: [{ path: "idea.md", hash, size: PRODUCT.length }] });
-  expect((r1.body as any).needHashes).toEqual([hash]);
-  // …then the PUT lands the bytes and parses meta at that ingress point.
-  const put = await art.putBlob(token, hash, Buffer.from(PRODUCT));
-  expect(put.status).toBe(200);
-  expect((await metaOf(loop.id, "idea.md"))).toEqual({ type: "idea", title: "My Idea", date: "2026-07-01" });
-});
-
-test("dedup: a re-referenced hash keeps its already-parsed meta (no re-parse needed)", async () => {
-  const { token, loop } = (await seed());
-  const { art } = syncWithStore();
-  const hash = sha256(PRODUCT);
-  await art.sync(token, {
-    loopId: loop.id,
-    manifest: [{ path: "idea.md", hash, size: PRODUCT.length }],
-    blobs: [{ hash, encoding: "utf8", data: PRODUCT }],
-  });
-  // Re-sync the SAME content under a NEW path (same hash → content-addressed dedup,
-  // no bytes re-uploaded) — the new file row inherits the blob's stored meta.
-  const r = await art.sync(token, {
-    loopId: loop.id,
-    manifest: [
-      { path: "idea.md", hash, size: PRODUCT.length },
-      { path: "copy.md", hash, size: PRODUCT.length },
-    ],
-  });
-  expect((r.body as any).needHashes).toEqual([]); // dedup: nothing re-requested
-  expect((await metaOf(loop.id, "copy.md"))).toEqual({ type: "idea", title: "My Idea", date: "2026-07-01" });
-});
-
-test("malformed front matter stores null meta and never fails the sync", async () => {
-  const { token, loop } = (await seed());
-  const { art } = syncWithStore();
-  const broken = "---\ntype: idea\nnever closes the fence\n"; // no closing `---`
-  const plain = "# Just a heading, no front matter\n";
-  const bh = sha256(broken);
-  const ph = sha256(plain);
-  const r = await art.sync(token, {
-    loopId: loop.id,
-    manifest: [
-      { path: "broken.md", hash: bh, size: broken.length },
-      { path: "plain.md", hash: ph, size: plain.length },
-    ],
-    blobs: [
-      { hash: bh, encoding: "utf8", data: broken },
-      { hash: ph, encoding: "utf8", data: plain },
-    ],
-  });
-  expect(r.status).toBe(200);
-  expect((await metaOf(loop.id, "broken.md"))).toBeNull();
-  expect((await metaOf(loop.id, "plain.md"))).toBeNull();
-});
-
-test("getArtifacts (listLoopArtifacts) surfaces meta per file; null for untyped", async () => {
-  const { token, loop } = (await seed());
-  const { art } = syncWithStore();
-  const plain = "# no front matter\n";
-  await art.sync(token, {
-    loopId: loop.id,
-    manifest: [
-      { path: "idea.md", hash: sha256(PRODUCT), size: PRODUCT.length },
-      { path: "plain.md", hash: sha256(plain), size: plain.length },
-    ],
-    blobs: [
-      { hash: sha256(PRODUCT), encoding: "utf8", data: PRODUCT },
-      { hash: sha256(plain), encoding: "utf8", data: plain },
-    ],
-  });
-  const { listLoopArtifacts } = await import("../server/artifactFiles.js");
-  const rows = await listLoopArtifacts(loop.id);
-  expect(rows.find((f) => f.path === "idea.md")!.meta).toEqual({ type: "idea", title: "My Idea", date: "2026-07-01" });
-  expect(rows.find((f) => f.path === "plain.md")!.meta).toBeNull();
-});
-
-test("poll response carries the watch set for every loop bound to the machine", async () => {
-  const { token, machineId } = (await seed());
-  // A second loop on the same machine, one with a taskFile.
-  (await store.createLoop({ userId: "u1", machineId, name: "L2", cron: "0 0 1 1 *", enabled: true, notify: "auto", taskFile: "/proj/pievo/l2/README.md", workdir: "/proj" }));
-  const machineGw = new gatewayMod.MachineGateway(scheduler, new MemoryBlobStore());
-  const res = await machineGw.pollV3(token, {
-    protocolVersion: 3,
-    currentRuns: [],
-    info: { version: "2.2.0" },
-  });
-  const watch = (res.body as any).watch as Array<{ loopId: string; workdir: string | null; taskFile: string | null }>;
-  expect(watch).toHaveLength(2);
-  const withTask = watch.find((w) => w.taskFile)!;
-  expect(withTask.taskFile).toBe("/proj/pievo/l2/README.md");
-  expect(withTask.workdir).toBe("/proj");
-});
-
-// ---- task-file content refresh (the create-time README gap) ----
-// The loop record's taskFileContent is what the Files panel's task pane renders.
-// It used to be written ONLY by report(), so a brand-new loop showed no README
-// until its first run finished — even though the watcher had already synced the
-// bytes. sync()/putBlob now mirror the task file's bytes onto the loop record.
-
-/** A machine + a loop whose task file lives at an ABSOLUTE machine path (the
- *  daemon syncs paths RELATIVE to the watched folder — suffix matching applies). */
-async function seedWithTaskFile(taskFile = "/home/u/loops/demo/README.md") {
-  const token = tokens.mintDeviceToken();
-  const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto", taskFile }));
-  return { token, machineId, loop };
-}
-
-test("syncing the task file mirrors its content onto the loop record — no run needed", async () => {
-  const { token, loop } = (await seedWithTaskFile());
-  const { art } = syncWithStore();
-  const content = "# Demo loop\n\n## Spec\nDo the thing daily.\n";
-  const hash = sha256(content);
-
-  expect((await store.getLoop(loop.id))!.taskFileContent).toBeNull();
-  await art.sync(token, {
-    loopId: loop.id,
-    manifest: [{ path: "README.md", hash, size: content.length }],
-    blobs: [{ hash, encoding: "utf8", data: content }],
-  });
-  const after = (await store.getLoop(loop.id))!;
-  expect(after.taskFileContent).toBe(content);
-  expect(after.taskFileSyncedAt).toBeTruthy();
-});
-
-test("task-file bytes arriving via PUT (over the inline cap path) also mirror onto the loop", async () => {
-  const { token, loop } = (await seedWithTaskFile());
-  const { art } = syncWithStore();
-  const content = "# Big spec\n" + "x".repeat(100);
-  const hash = sha256(content);
-
-  // Manifest only — bytes not in hand yet ⇒ no mirror (and no stale write).
-  const r1 = await art.sync(token, { loopId: loop.id, manifest: [{ path: "README.md", hash, size: content.length }] });
-  expect((r1.body as any).needHashes).toEqual([hash]);
-  expect((await store.getLoop(loop.id))!.taskFileContent).toBeNull();
-
-  // The PUT lands the bytes → the loop record catches up without another sync.
-  await art.putBlob(token, hash, Buffer.from(content));
-  expect((await store.getLoop(loop.id))!.taskFileContent).toBe(content);
-});
-
-test("a non-task artifact never touches taskFileContent", async () => {
-  const { token, loop } = (await seedWithTaskFile());
-  const { art } = syncWithStore();
-  const content = "not the task file";
-  const hash = sha256(content);
-  await art.sync(token, {
-    loopId: loop.id,
-    manifest: [{ path: "notes.md", hash, size: content.length }],
-    blobs: [{ hash, encoding: "utf8", data: content }],
-  });
-  expect((await store.getLoop(loop.id))!.taskFileContent).toBeNull();
-});
-
-test("best-match selection: root README wins over a nested one (same rule as the Files panel)", async () => {
-  const { token, loop } = (await seedWithTaskFile());
-  const { art } = syncWithStore();
-  const root = "# the real spec\n";
-  const nested = "# archived copy\n";
-  await art.sync(token, {
-    loopId: loop.id,
-    manifest: [
-      { path: "ARCHIVE/README.md", hash: sha256(nested), size: nested.length },
-      { path: "README.md", hash: sha256(root), size: root.length },
-    ],
-    blobs: [
-      { hash: sha256(nested), encoding: "utf8", data: nested },
-      { hash: sha256(root), encoding: "utf8", data: root },
-    ],
-  });
-  expect((await store.getLoop(loop.id))!.taskFileContent).toBe(root);
-});
-
-test("a loop without a taskFile is untouched by sync's mirror", async () => {
-  const { token, loop } = (await seed()); // no taskFile
-  const { art } = syncWithStore();
-  const content = "README.md content on a taskFile-less loop";
-  const hash = sha256(content);
-  await art.sync(token, {
-    loopId: loop.id,
-    manifest: [{ path: "README.md", hash, size: content.length }],
-    blobs: [{ hash, encoding: "utf8", data: content }],
-  });
-  expect((await store.getLoop(loop.id))!.taskFileContent).toBeNull();
 });

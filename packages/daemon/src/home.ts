@@ -6,9 +6,8 @@
  * whole TOON render (`renderHomeText`). The daemon just prints `body.text`.
  *
  * Never empty (P5/P8): when this machine has no stored credential/server the post
- * short-circuits to a DEFINITIVE local "not connected — run `pievo daemon start`" view; on a
- * too-old server (no `home` verb → no rendered `text`) a DEFINITIVE "server too old"
- * home is rendered (no structured-render fallback anymore). The in-run bare `pievo`
+ * short-circuits to a definitive local "not connected — run `pievo daemon start`"
+ * view. The in-run bare `pievo`
  * is handled separately (cli.ts routes it to the callback as `home` on the run cred).
  *
  * Bounded for responsive interactive use: the home POST goes through `boundedFetch`
@@ -22,8 +21,8 @@
 import os from "node:os";
 
 import { resolveDurableBinPath } from "./bin-shim.js";
-import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
-import { postCli, printText } from "./cli-client.js";
+import type { PostCliDeps } from "./cli-client.js";
+import { postCli, printCliResponse } from "./cli-client.js";
 import { resolveServerUrl } from "./config.js";
 import { boundedFetch } from "./http.js";
 import { verifiedRunningPid } from "./pidfile.js";
@@ -73,23 +72,13 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
     ...("token" in injected ? { deviceToken: injected.token } : {}),
   };
 
-  // postCli 404-fallback (a server without /api/machine/cli): the legacy loops list. On
-  // a batch-1+ server its GET carries `text` (printed as a degraded home); a truly
-  // ancient server yields no `text` → the definitive `tooOldHome` below. Retained here
-  // (its own upgrade-window gate) even though the render fallback is gone.
-  const legacy: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
-    const res = await fetchImpl(`${server}/api/machine/loop`, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
-    return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
-  };
-
-  const r = await postCli(["home", ...ctx], legacy, cliDeps);
+  const r = await postCli(["home", ...ctx], cliDeps);
   // Not connected: no credential/server on this machine yet — render the DEFINITIVE
   // local state (never empty output), telling the owner exactly how to connect.
   if (r.kind === "not-configured") {
     out(notConnectedHome(bin));
     return 0;
   }
-  if (r.kind === "read-error") return out(`error: "cannot read ${r.path}"\ncode: ERROR\n`), 1;
   // Unreachable / hung server: render a definitive degraded home — never hang,
   // never empty, never surface a raw transport error.
   if (r.kind === "network-error") {
@@ -97,15 +86,7 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
     return 0;
   }
 
-  // Text-sink primary: print the server's rendered TOON home.
-  const code = printText(r.body, r.status, out);
-  if (code !== null) return code;
-
-  // A too-old server (no `text` — predates the axi home verb). Keep home
-  // never-empty/never-alarm by rendering a definitive "server too old" view (exit 0)
-  // rather than the SERVER_TOO_OLD error other verbs print.
-  out(tooOldHome(bin, serverDisplay));
-  return 0;
+  return printCliResponse(r.body, r.status, out);
 }
 
 /** The `bin:` line that leads EVERY home view (P8): the real durable path when known,
@@ -137,18 +118,5 @@ function degradedHome(bin: string | null, server: string, reason: string): strin
     `machine: configured${server ? ` · ${server}` : ""} — server unreachable right now (${reason})\n` +
     "help[1]:\n" +
     "  Run `pievo loops` once the server is reachable to list this machine's loops\n"
-  );
-}
-
-/** The definitive home when the server predates the axi `home` verb (no rendered
- *  `text`). The machine is configured, so this isn't the not-connected view; it names
- *  the too-old server + the fix. Never empty; exits 0. */
-function tooOldHome(bin: string | null, server: string): string {
-  return (
-    `${binLine(bin)}\n` +
-    "description: Run your scheduled Pievo agent loops on this machine with your own coding agent.\n" +
-    `machine: configured${server ? ` · ${server}` : ""} — server too old for this CLI; update the Pievo server\n` +
-    "help[1]:\n" +
-    "  Run `pievo loops` after updating the server to list this machine's loops\n"
   );
 }

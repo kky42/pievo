@@ -1,510 +1,338 @@
-# Project agent memory
+# Server agent notes
 
-This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
+Package: `@kky42/pievo-server`. Read the repository-level [`AGENTS.md`](../../AGENTS.md)
+first. This file keeps server-specific interfaces and sharp edges; do not duplicate
+ordinary code structure here.
 
-- Add durable project-specific notes here as they are discovered through real work.
+## Runtime shape
 
-## Published server launcher
+One TanStack Start/Nitro process owns:
 
-- `@kky42/pievo-server` ships `.output`, source and bundled migrations, copied pglite
-  assets, and `scripts/{pievo-server,server-cli-lib,prestart}.mjs`. The global binary
-  resolves all runtime paths from its installed package root, never cwd, and launches
-  Nitro `.output/server/index.mjs` only. `start` is detached/idempotent;
-  `start --foreground` is the supervisor/container path; `restart` never updates npm.
-- CLI-local defaults are `127.0.0.1:3000`, `<PIEVO_DATA_DIR>/server.pid`, and
-  `<PIEVO_DATA_DIR>/server.log`. With no `DATABASE_URL`, the CLI injects
-  `PIEVO_DB=pglite`, then always runs `scripts/prestart.mjs`. The starting process is
-  recorded before the async prestart child runs; PID authority requires pid + process
-  start time, and uncertain identity is never signaled/cleared. One per-data-dir
-  lifecycle lock spans detached readiness. `/api/ready` awaits `ensureServer()` and
-  echoes a random launch nonce, so shallow health or another port owner cannot satisfy
-  startup. Signal cleanup aborts Pievo internals but leaves HTTP draining to Nitro.
-  `restart --data-dir` selects the instance and preserves its recorded host/port unless
-  a bind flag/env overrides them. Existing `pnpm start` and Docker startup are unchanged.
-- Blob selection remains one adapter instance from `boot.ts`: absent selector uses
-  complete R2 config when present, otherwise fixed `<PIEVO_DATA_DIR>/blobs`; partial
-  R2 config fails loud. `local|r2|memory` are explicit selectors. Memory is accepted
-  by the production launcher only as an explicit ephemeral opt-in, emits a loud
-  data-loss warning, and is never selected as fallback.
+- the web UI and server functions;
+- the in-process `Scheduler`;
+- `MachineGateway` for poll/report/sweep/retention and owner methods;
+- `CliGateway` for device-vs-run credential dispatch;
+- `ArtifactSync` for exact manifest/blob ingress;
+- one Drizzle database and one shared `BlobStore`.
 
-## axi-conformance CLI (`gateway/toon.ts` — the TOON spine, batch 1)
+`server/boot.ts` constructs the blob adapter once and passes the same instance to
+`MachineGateway` and `ArtifactSync`. This is required for memory-test adapters and keeps
+sync, reads, and GC on the same byte store. `ensureServer()` caches the in-flight boot
+promise on `globalThis`; do not create a second scheduler in another entry point.
 
-- `gateway/toon.ts` is a PURE, dependency-free TOON serializer (no I/O, no clock):
-  `scalar`/`quote`/`needsQuote`, `detailBlock`, `countLine`, `listBlock`,
-  `emptyList`, `inlineArray`, `helpBlock`, `errorBlock`/`codeForStatus`, `truncate`,
-  `doc`. Unit-tested in isolation (`toon.test.ts`). Quoting rule mirrors gh-axi:
-  a value is bare unless empty or it carries whitespace/comma/colon/quote. The
-  absent-value placeholder is a bare em-dash `—` (`ABSENT`); truncation hints and
-  `classification:`/`finished:` lines DELIBERATELY use `—` to match the axi reference
-  shapes verbatim (the one place em-dashes are intentional in this repo).
-- **Superset body (batch 1, RETIRED in batch 7)**: batch 1 had every `/api/machine/cli`
-  verb return its axi TOON in a `text` field (+ `exitCode`) ALONGSIDE its structured JSON
-  fields, so the 0.11 daemon could keep rendering structured while `text` shipped
-  server-first with no daemon release. `renderLoopLog`/`listLoops`/`createLoop`/`editLoop`
-  add `text` at the source (so the legacy routes benefit too); `finalizeCli` (wraps
-  `cli()`) fills `text` from a structured `{error}` and ensures `exitCode`. **Batch 7
-  retired the superset**: `finalizeCli` now STRIPS the cli body to `{text, exitCode,
-  loops, runs}` (the daemon is a pure text sink) — see the batch-7 section below. The
-  legacy endpoints skip `finalizeCli`, so their full structured bodies are unchanged.
-- **F2** (in-run `pievo log` printed nothing): fixed for free by `renderLoopLog`
-  gaining `text` — the in-run callback already prints `body.text`. Proven at the
-  callback boundary by `daemon/src/callback.test.ts` (a stub server returning the new
-  body, asserting non-empty stdout — that test changes NO daemon source).
-- **F5** (fail-loud): `dispatch` `report` requires `kept|no-change|blocked` plus a
-  non-empty message. Exec runs with a metric schema also require `--metrics` with
-  exactly every declared key; steer/evolve runs reject metrics.
-- All dispatch errors render via `derr(code, message, slug?)` → `errorBlock` (slug
-  defaults from HTTP status).
+Import direction is `gateway/index.ts` core → satellite helpers, with generic wire
+plumbing in leaf `gateway/http.ts`. Keep `gateway/layout.test.ts` green when moving seams.
+Route files should dynamically import server-only/native dependencies inside handlers.
 
-## axi-conformance CLI (batch 4 — per-verb `--help`, in-run help TOON, F4)
+## Canonical configuration
 
-- **F4 naming**: `applyMutation` reschedule reads `str("run-at") ?? str("next")` —
-  `--run-at` is canonical (matches the `runAt` edit key + all help text), `--next`
-  stays a working back-compat alias. This closed the shipped drift where the help
-  documented `--run-at` but the code only read `--next` (following the help failed).
-- **In-run `help`** (`helpText`) renders the §4.9 TOON: a `verbs:` top key with
-  grouped typed lists (`always[3]`, `schedule[4]`) + `dashboard/gate:`
-  lines, each carrying an availability TAG that flips with the lease caps (exec vs
-  evolve/steer: `evolve/steer pass only — this run is "exec"` ↔ `available to this run`;
-  schedule tag gates on `allowControl`), then a trailing `help[]`. The schedule list
-  header carries its tag AFTER the `{…}:` (a list-header-with-tag, hand-built since
-  `listBlock` emits a bare header); groups are nested under `verbs:` via `indent()`.
-- **Per-verb `--help`** (P10): `<verb> --help` returns `verb:`/`syntax:`/`summary:`
-  (+ role-aware `availability:` for a run) + a short `help[]`, via `verbHelpText(verb,
-  lease?)` over two spec maps — `RUN_VERB_HELP` (lease present ⇒ role-aware) and
-  `DEVICE_VERB_HELP` (owner surface, no availability line; `new`/`edit` summaries list
-  `EDITABLE_LOOP_FIELDS` so schemas are discoverable without failing). Help is
-  intercepted in THREE places: `deviceCli` + `runCli` (unified CLI,
-  after the DEVICE_ONLY/loop-fence checks so an owner-only verb still 403s on a run
-  credential, never leaks help) and at the top of `dispatch` (the legacy
-  `/agent-api/loop` transport). An unknown verb has no spec → `verbHelpText` returns
-  undefined and the caller falls through to its unknown-command 400 (device) / 400
-  (run dispatch). Availability values are multi-word ⇒ TOON-quoted (`availability:
-  "available to this run"`); inner `"exec"` quotes escape inside the quoted value.
+`gateway/loopConfig.ts` owns the only current create/edit grammar:
 
-## axi-conformance CLI — `show` full editable envelope (batch 2)
+```ts
+{
+  name,
+  schedule:
+    | { mode: "cron", cron, timezone, overlap: "skip" | "queue-one" }
+    | { mode: "continuous", delayMinutes },
+  workdir,
+  agent,
+  model,
+  reasoningEffort,
+  prompt,
+  statusDefinitions: { keep, noChange, block },
+  artifacts,
+  enabled,
+}
+```
 
-- **`show` emits the FULL editable envelope** keyed EXACTLY as `edit --json` accepts
-  (`loopEnvelope(loop)`: id + every `EDITABLE_LOOP_FIELDS` key — name, cron, timezone,
-  notify, model, reasoningEffort, agent, allowControl, taskFile, enabled, runAt,
-  goal, ui, metricSchema) PLUS the derived read-only aggregates `nextFire`/`lifecycle`/`runs`.
-  `renderShowText` is the pure TOON renderer; `describe(loopId, {allowControl,
-  full})` wraps it with the loop lookup + runs tally. Large fields (`ui`)
-  render as `present, N bytes — use --full to see` (or `absent`); `metricSchema` renders
-  STRUCTURALLY (`[N]{key,label,unit}:` rows); `--full` inlines complete bodies (scalar-
-  quoted, newlines escaped). A RUN credential adds the effective `selfSchedule`
-  line + run help; a DEVICE credential gets owner help (edit/log).
-- **Naming (F4):** the writable pinned override is `runAt` (the edit key; the DB column
-  stays `nextRunAt`); the derived cron fire is the read-only `nextFire` (formatted in the
-  loop's own tz via Intl, `nextFireDisplay`). The old wire display name `nextRunAt`
-  retired. Both `runAt` and `nextFire` appear in `show`, distinct.
-- **`show --json`** emits the envelope with COMPLETE bodies (no truncation) — body
-  `{ok, loop: <env>, text: JSON.stringify(env)}`, served by the device `show` handler
-  and a runCli `show --json` special-case (dispatch returns text-only, so `--json` can't
-  ride the TOON path). Derived aggregates are NOT in the `--json` envelope (only the 14
-  editable keys + id), so dropping `id` yields a clean no-op `edit` patch.
-- **Read/write identity is REAL, pinned by the roundtrip test:** `show --json` minus
-  `id` fed to `edit --dry-run` reports zero changes. Two `buildEditUpdate` changes make
-  this hold: (1) `set()` still writes to `update` but only RECORDS a change when the
-  value actually differs (`sameLoopValue`, structural, null≡undefined) — so an all-no-op
-  patch is a harmless idempotent re-apply (still 200, not "nothing to change"), while the
-  dry-run preview shows zero changes; (2) `runAt`/`ui`/`metricSchema` accept
-  `null` as an explicit clear (symmetric with `goal:null`), which is what `show --json`
-  re-feeds for an unset field — a no-op when already null.
+New loops require every field except provider settings, artifacts, and enabled.
+Provider settings are arbitrary strings; `null` delegates to the selected CLI. Prompt
+and status definition whitespace is preserved after non-empty/NUL/size validation.
+Artifacts are an optional array of unique exact relative paths. Unknown keys and mixed
+schedule shapes are 400s. Web `patchLoop` and machine `editLoop` both reuse this validator.
 
-## axi-conformance CLI (batch 3 — list/create aggregates, edit no-op, `new` idempotency)
+DB cadence columns are internal. Continuous rows use a harmless cron placeholder so
+one internal non-null cadence column can serve both modes; never expose it as a second
+schedule. Retired product columns and run roles do not exist.
 
-- **`loops` `--fields`**: default columns are the minimal `{id,name,cron,enabled,nextFire}`
-  (`LIST_DEFAULT_FIELDS`); `--fields` EXTENDS them from the optional set
-  `LIST_OPTIONAL_FIELDS` = `{timezone,notify,model,reasoningEffort,goal,taskFile,runs,lastOutcome}`
-  (request order, deduped, never re-listing a default). An unknown field — including
-  a DEFAULT column requested as an extra — fails loud: 400 `VALIDATION_ERROR`,
-  `unknown field(s): … — available: <optional set>`, exit 1. `listLoops(deviceToken,
-  fieldsFlag?)` computes per-loop `nextFire` (derived cron fire in the loop's tz, `—`
-  when paused), `runs` (`countRuns`), and `lastOutcome` (`runOutcomeToken` of the
-  newest run). The structured `loops` body carries the WHOLE `LoopListRecord` — a
-  RETAINED data channel (`CLI_RETAINED_KEYS`, batch 7) the daemon reads to resolve
-  cwd→loop client-side, not for rendering; `renderLoopsText(records, fields)` picks
-  columns via `loopCell` into the `text` the daemon prints.
-- **`new` idempotency (F8, OQ3)**: the daemon (`create.ts`) computes
-  `idempotencyKey = sha256(machineId + canonicalJson(resolvedBody))` over the ENTIRE
-  outgoing request body (config + `timezone` + `claim`/connect-key + `agent`) MINUS the
-  `idempotencyKey` nonce itself — `machineId` derived from the device token by the SAME
-  frozen `m-sha256(tok)[:16]` scheme. Hashing the full resolved body (not a cherry-picked
-  subset) closes the whole envelope-collision class: a genuine retry has identical
-  argv+env ⇒ identical body ⇒ same key (still dedupes), while ANY envelope difference —
-  a different `--tz`, `--connect-key`/team, `--agent`, or config field — yields a DISTINCT
-  key so genuinely-different creates never collide. Deliberate, documented deviation from
-  the literal §8.1 "config-without-nonce" wording (intent: collapse exactly the retry
-  case). Sent on REAL creates only (a dry-run creates nothing). Server keeps an in-memory `newIdempotency` map
-  (`tokens.ts`, 15-min TTL `NEW_IDEMPOTENCY_TTL_MS`, pruned on write like
-  `claimIntents`); `readNewIdempotency(key, machineId)` also rechecks the record's
-  machineId (a cross-machine key never replays another machine's loop) and
-  `createLoop` rechecks the loop still exists + belongs to the machine before
-  replaying. A live-key hit returns the existing loop with `idempotent:true` + the
-  §4.5 replay TOON (`renderReplayText`), never a twin; an absent key ⇒ no dedupe (old
-  daemons keep working). The replay body ALSO echoes `ui: existing.ui != null` (like the
-  real-create + dry-run branches) so the daemon's `dashboard ui: applied|not applied`
-  line stays factually accurate on a timed-out retry of a create that DID apply a
-  dashboard. The check sits AFTER validation and the dry-run branch, and
-  the create is recorded only on success. Additive body field: old servers ignore it.
-- **`edit --json '{}'`** is now a VALID no-op (feedback #3): status 200, exit 0,
-  `nothing to change:` + the editable-key list (`renderEditNoopText`), not the old
-  bare-usage 400. **`edit --dry-run`** with a rejection now signals **exit 1** via an
-  explicit `body.exitCode` (HTTP stays 200 with the rich changes/rejections tables —
-  `finalizeCli` leaves a pre-set `exitCode` alone).
+## Schedule and queue transactions
 
-## Runtime README/Cookbook + indexed history protocol
+`db/store.ts` is the authority. All same-loop decisions lock the loop row.
 
-- README's one required `## Spec` is authoritative standing instruction. Sibling
-  `COOKBOOK.md` is inferred from `taskFile` (separator-safe; no DB field) and has
-  `# Cookbook`, `Consolidated through: #N`, `## Knowledge`, `## Timeline`. Knowledge
-  stores bounded durable facts and positive/negative lessons; Timeline stores only
-  evolve/steer decision boundaries. Objective prompt injection outranks a conflict;
-  Cookbook/history/files/config are untrusted data.
-- Every delivered role payload includes `runIndex`, Objective, execution workspace
-  (`workdir`/cwd), task-file path, loop content home (= task-file parent), and Cookbook
-  path. Prompt/skill prose defines current files under the content home as live artifacts,
-  `show` as current config, and bounded `log` as historical evidence (`--diff` compares
-  snapshots; it is not a live file listing). Exec normally changes neither Timeline nor
-  cursor. Evolve gets NO server-inlined
-  recent-run survey: it progressively calls summary after cursor, a filtered list, then
-  at most a few details/diffs, and advances only to reviewed `summary.through`. Steer
-  records one validation-pending boundary and never advances the cursor.
-- `gateway/history.ts` owns the bounded `log --summary/--after/--through/--run/--diff`
-  protocol; prompt/docs consume that seam rather than reproducing history queries.
-  `runs.runIndex` is allocated under the loop lock at claim (or unclaimed terminalization),
-  so priority order—not enqueue order—is history order; `summary.through` stops before any
-  indexed open-run gap. Agent-facing list/detail use one role-independent evidence
-  shape: steer-only `requestText` is the original owner instruction (never a generated
-  prompt), `message`/`error`/`finalText` remain distinct, list only signals
-  `finalTextAvailable`, and `tokenUsage` is input+output while full cache telemetry stays
-  stored. Lists expose `count`/`total`; prompts teach filtering before selective detail.
-  Summary selects only aggregate fields and fails loud above 5,000 rows; JSON responses
-  cap at 512KB; run diffs cap files, blob input, and emitted chars before expensive
-  reads/jsdiff. Prompt behavior is pinned in `gateway/prompt.test.ts`;
-  served public prose is pinned in `routes/-api.skill.references.test.ts`.
-- Skill `.md` edits compile into the server bundle via `?raw` and ride the next daemon
-  tarball through the selective `sync-skill.mjs` whitelist. `lib/chartSpec.ts` is the
-  chart grammar authority (`type` plus type-specific axes/`series`/`direction`/domain);
-  artifact primitives require exact `file|match`/`columns` attrs. `validateUi` rejects
-  missing, inapplicable, or invented attrs before DOMPurify can create an empty panel.
+- `createLoop`: enabled cron gets its next future occurrence; enabled continuous is due
+  immediately; disabled gets no cadence facts.
+- `advanceDueSchedules`: locks and rechecks due facts, coalesces at most one pending run,
+  and advances cron strictly after `at`. A cron occurrence with an open run obeys
+  `cronOverlap`; continuous skips materialization while open. One-shot and recurring
+  facts due together coalesce.
+- `claimReadyRunForMachine`: locks the machine, selects one FIFO pending ordinary run,
+  locks loop/run, rechecks exclusion, assigns `runIndex`, captures provider settings,
+  transitions to running, and inserts the hashed active lease in one transaction.
+- `terminalLifecycleTx`: restores continuous cadence only for done/error, atomically
+  pauses on `block`, and applies the consecutive-error breaker. Pending system rows are
+  canceled on automatic pause.
+- `updateLoopTx`: owns pause/start/schedule-edit cadence changes and tombstones removed
+  artifact config paths. Do not reproduce these rules in a gateway or server fn.
 
-## axi-conformance CLI (batch 6 — daemon text sink + content-first home)
+Partial unique indexes enforce one pending and one running row per loop. Timers are
+hints; scheduler startup and every poll converge on persisted due facts. There is no
+historical occurrence reconstruction.
 
-- **Server `home` verb** (`gateway/cli.ts`): bare `pievo` posts `["home", …ctx]`.
-  DEVICE branch (`homeDevice`) is handled in `deviceCli` BEFORE the unknown-machine 401
-  guard, so an unregistered machine renders the DEFINITIVE `machine: not connected — run
-  \`pievo daemon start\`` state (never a 401/empty, P5/P8). A registered machine → `machinePresence`
-  (`lib/machinePresence.ts`) line + cwd-scoped loop list + `recentMachineRuns` across the
-  machine + help. RUN branch (`homeRun`, in `runCli` before the read branch) → the lease's
-  OWN loop context (`renderRunHomeText`: identity + role + goal + recent), scoped to
-  `lease.loopId`. Both render via pure helpers (`renderHomeText`/`renderRunHomeText`).
-- **Text-sink render is server-side; local facts ride as flags.** The daemon can't have
-  the server render `bin:`/`daemon pid`/cwd-scoping, so it passes them as `home` argv
-  flags: `--bin`/`--pid`/`--server` (header) + `--cwd`/`--home` (scoping). `scopeLoopsByCwd`
-  replicates the daemon's `resolveLoopDir` (dirname(taskFile)→workdir, tilde-expanded
-  against the passed `--home` since the SERVER's home is irrelevant) to split loops into
-  "here" vs an `elsewhere` count; no cwd (or none matching) ⇒ ALL loops are "here". This
-  is the one place `gateway/cli.ts` imports `node:path` (pure, no I/O).
-- **Daemon is a text sink** (`packages/daemon/src`): every server-verb path PRINTS
-  `body.text`+`body.exitCode` via the shared `cli-client.ts`. Batch 6 had `printText`
-  return null on a text-less OLD server for a one-release structured fallback; **batch 7
-  retired that fallback** — `printTextOrTooOld` now prints a definitive `SERVER_TOO_OLD`
-  error instead (the render-only `printLoops`/`printEditDryRun`/`printCreateDryRun`/
-  `formatRun`-fallback were deleted; `home` prints a definitive `tooOldHome` exit 0). See
-  the batch-7 section below. `--json` (log/show) stays the structured-data escape hatch.
-  Converged on
-  `callback`/`interactive`/`log`/`create`/`show`/`home`.
-- **Routing lives in the pure `route.ts` `classify(argv, env)`** (unit-tested; `cli.ts`
-  maps a `Route` to its lazily-imported handler). The Batch-6 behavior change (OQ1): bare
-  `pievo` = the content-first HOME (device out-of-run; in-run bare posts `home` on the
-  run cred). Lifecycle exists only under `pievo daemon start|stop|restart|status`;
-  detached re-exec uses `daemon start --foreground` and keeps the token env-only.
-  Top-level `up|down|status|doctor|update`, raw lifecycle flags, `--api-key`, and
-  `finish|complete` are unknown. `report` outside a run is forwarded to the server
-  (device cred → the crafted run-only 403, F3). `pievo show` out-of-run resolves the loop client-side (like
-  `log`, reusing `log.ts` `resolveLoopId`) then forwards.
-- **No coding-agent SessionStart hook.** Pievo does not inject home into unrelated
-  Claude Code/Codex sessions. Ordinary sessions discover it through the user-scope skill
-  or explicit `pievo`; daemon steer/evolve/exec runs use the self-sufficient server-delivered
-  first user turn. `daemon start` and `new` refresh the skill + PATH shim. Home still uses a
-  bounded fetch (`HOME_TIMEOUT_MS`) so explicit interactive use degrades quickly.
-- **PATH shim** (`bin-shim.ts`, feedback #4): `pievo daemon start`/`new` write a `pievo`
-  re-exec wrapper (same launcher-replay as `callback-bin.ts`) to the npm global bin
-  (`npm_config_prefix`) else `~/.local/bin`, with one-line PATH guidance when the dir
-  isn't on PATH. `home` reports the shim as `bin:` via `existingBinShim`. HARDENED so
-  the durable shim is never fragile/destructive: it lands ONLY from a durable install
-  (`isEphemeralEntry` skips an npx/npm-cache `/_npx/`,`/_cacache/` re-exec entry, with
-  `npm install -g @kky42/pievo@latest` guidance) and NEVER clobbers a foreign `pievo` (only refreshes our own
-  shim, detected by the `SHIM_MARKER` prefix); `ensureBinShim` returns
-  `{path,onPath,written}` so callers/tests can assert skipped-vs-written.
-- **TEST HAZARD**: `ensureBinShim` writes the REAL `~/.local/bin` if not injected.
-  `daemon-lifecycle.test.ts`'s `seams()` MUST no-op it (it does); bin-shim tests inject
-  fs/env seams and never touch the real home.
+Owner lifecycle meanings:
 
-## axi-conformance CLI (prod-E2E fixes — gate for batch 7)
+- Pause: disable cadence, clear schedule facts, cancel pending system work; running and
+  owner-requested work survive.
+- Start: clear pause cause and re-arm the existing schedule.
+- Stop: Pause + cancel every pending row + set current-run cancellation intent.
+- Delete: set the durable delete marker, Stop, then delete once open work/authority is
+  gone. Force delete is team-owner-only, retires authority, and logs the destructive
+  uncertainty. It never touches machine-local files.
 
-Conformance/polish fixes from the 0.12.0 production E2E (`e2e-axi-prod-v1`). Split
-server (deploys) vs daemon (rides the NEXT `@kky42/pievo` npm release):
-- **`loops` flag cluster (F1–F4), ONE root cause: the daemon `interactive.ts` loops
-  path HARDCODED `postCli(["loops"])`, dropping every user flag** — the server never
-  saw `--fields`/`--json`/unknown flags. Fix is BOTH sides: the daemon now forwards
-  `--fields`/`--json` (+ `--help`), rejects an unknown loops flag CLIENT-side (exit 2,
-  same as an unknown VERB — exit 2 is a client concern, `route.ts`), and `parseFlags`
-  learned the `--k=v` form; the server `listLoops(token, fields?, json?)` gained
-  `--json` → `text = JSON.stringify(records)` (real JSON, mirroring `show --json`;
-  `--fields` validation was already correct). **`log`/`show` had the lesser variant**
-  (they honored known flags but silently IGNORED unknown ones) — now they reject an
-  unknown flag client-side too (uniform exit 2). `new`/`edit` already rejected unknowns.
-- **NOT_FOUND (F5)**: `log`/`show` resolve the loop id CLIENT-side (`resolveLoopId`,
-  `log.ts`), so a nonexistent explicit id never reaches the server. It used to print a
-  prose `pievo:` line at exit 2 (a usage failure). Now `resolveLoopId` tags the
-  explicit-not-found case `code: "NOT_FOUND"` and the shared `renderResolveError`
-  emits `error:`/`code: NOT_FOUND` to STDOUT at exit 1 (message quoted via
-  `JSON.stringify`, keeping the actionable "run `pievo loops`" guidance). Other
-  resolve failures (no-folder-match, ambiguous) STAY prose/exit-2 usage errors.
-- **`bin:` line always (F7, P8)**: the home MUST lead with `bin:`. The daemon `home.ts`
-  now resolves the durable bin via `resolveDurableBinPath` (shim OR non-ephemeral PATH
-  global, real path) and passes `--bin` when known; the server `renderHomeText` renders
-  the honest `bin: (not on PATH — run \`npm install -g @kky42/pievo@latest\`)` fallback when
-  `--bin` is absent (both the connected and not-connected branches). The daemon-local
-  homes (`notConnectedHome`/`degradedHome`/`fallbackHome`) lead with the same
-  `binLine(bin)`.
-- **`edit --json '{}'` no-op (F8)**: the SERVER already renders the `nothing to change:`
-  + editable-key list (batch 3). The daemon short-circuited an empty patch to the usage
-  screen (exit 2) BEFORE the server. Fix: only show usage when NO input flag was given
-  (`--json`/`--*-file` absent); an explicit `--json '{}'` forwards → the server no-op.
-- **`nextRuns` tz (F9)**: `new`'s `nextRuns` rendered raw unlabeled UTC while `show`'s
-  `nextFire` renders loop-tz. New shared `fmtTimeZoned(iso, tz, {seconds?})` (Intl, zone
-  label) backs BOTH — `nextFireDisplay` (seconds) and the create/dry-run `nextRuns`
-  (minute granularity + zone label).
-- **home header (F11)**: the cwd-scoped list block is `loops here[N]` (design §5.1) only
-  when there IS an elsewhere count (`elsewhere > 0`); an unscoped full-machine view stays
-  the plain `loops[N]`.
+`pauseCause` is only an annotation (`owner`, `blocked`, or `failure-streak`), not a
+separate lifecycle state. Timeout reclaim does not pass the breaker threshold while its
+result can still reconcile.
 
-## axi-conformance CLI (batch 7 — retire the superset scaffolding)
+## Poll, lease, and terminal report protocol
 
-The final axi batch: the daemon is a PURE text sink, so the transitional "superset" render
-fields are retired. Ships server-first (deploys); the daemon changes ride the next
-`@kky42/pievo` npm release (0.13.0) with PR #80's daemon fixes.
-- **Server strips at the cli boundary.** `finalizeCli` (wraps `cli()` ONLY) now reduces
-  every `/api/machine/cli` body to `CLI_RETAINED_KEYS` = `{text, exitCode, loops, runs}`
-  after filling `text`/`exitCode` — dropping the render-only `ok`/`id`/`name`/`loop`/
-  `loopId`/`changes`/`rejections`/`applied`/`config`/`nextRuns`/`classification`/`ui`/
-  `warning`/`idempotent`/`dryRun`. `loops` (client-side cwd→loop resolution) and `runs`
-  (`log --json` normalized-data escape hatch) are RETAINED data channels, not scaffolding
-  — the daemon reads them as data, and the server's `log`/`show` dispatch needs an explicit
-  id (design §3), so resolution must stay client-side. The verb HANDLERS still construct the
-  full structured bodies (createLoop/editLoop/listLoops/renderLoopLog) because the LEGACY
-  endpoints (`/api/machine/loop|log`, `/agent-api/loop`) call the methods DIRECTLY (not
-  through `finalizeCli`) and their bodies are UNCHANGED — a pre-0.12 daemon on the postCli
-  404-fallback still renders. `--json` is unaffected: it renders JSON into `text`
-  (`show`/`loops`) which the daemon prints verbatim.
-- **Daemon has no structured-render fallback.** `cli-client.ts` `printTextOrTooOld` replaces
-  the per-verb `printText`-null → `printLoops`/`printEditDryRun`/`printCreateDryRun`/
-  `formatRun` fallback: when `text` is ABSENT (a pre-0.12 server) it prints a definitive
-  `error:`/`code: SERVER_TOO_OLD` to stdout, exit 1, never blank. `home` is the ONE
-  exception — it stays never-empty/never-alarm for interactive use, rendering a
-  definitive `tooOldHome` (exit 0). `log --json` reads the retained normalized `runs`.
+Current daemon protocol is 4; `gateway/protocol.ts` requires daemon `2.4.0`. Unknown or
+unsupported package versions get `needsUpdate` and no delivery; protocol mismatch gets
+426. For any breaking daemon-produced payload or behavior, bump `MIN_DAEMON_VERSION`
+to the matching package in the same change and update pinned fixtures/UI copy.
 
-## Run telemetry
+Idle `pollV4Wait()` parks for at most 20 seconds on a process-local per-machine waiter.
+Active/reporting polls never park. Each successful poll may claim one run, so repeated
+polls permit cross-loop concurrency. `currentRuns` updates provider-neutral liveness;
+`daemonInstanceId + recoveryComplete` is the authoritative startup recovery snapshot.
 
-- Poll liveness is provider-neutral: a protocol-v3 daemon sends `currentRuns` with each stage (`executing|reporting`); the machine/phase-scoped update refreshes every listed run's `heartbeatAt` (claim `ts` is the pre-first-heartbeat fallback). Offline pending notification dedup uses separate `runs.deferredAt`.
-- Claim atomically copies `loops.agent` to nullable `runs.agent`, preserving the actual executor as run history even after an owner edits the loop agent. Final reports store normalized `exitCode`, `durationMs`, `sessionId`, `finalText`, `error`, and provider-neutral token `usage`; each run has exactly one provider invocation. `sessionId` is metadata for future use — there is no current resume UI or command generation. Dollar cost, provider activity/progress, slim transcripts, and transcript-derived run artifacts are not stored or rendered. Live artifact sync + `artifact_files`/`blobs`/`run_snapshots` remain the file/diff authority.
-- `/machine/report` treats a correlatable but semantically invalid terminal payload as a durable terminal attempt, never a poison retry: after lease auth, `store.rejectTerminalReport` loop-locks, rechecks the hashed lease, writes `runs.reportIncident`, applies the ordinary failure lifecycle (or preserves a terminal-grace outcome), consumes the lease, and inserts the exact 200 ACK in `terminal_report_incidents`. The receipt key is `sha256(reportId + daemon-byte-compatible JSON payload digest)` and survives loop deletion; payload drift after a normal same-run commit replays that authoritative ACK, while rejected attempts replay only on an exact digest and a cross-run reportId conflict terminalizes the currently leased run. Missing/non-string/NUL/over-cap reportIds remain authenticated, mutation-free 400s. Per-reportId transaction advisory locking serializes normal and incident receipts across different loop locks.
+Leases are durable in `run_leases`, keyed by SHA-256 of the full `rk_…` wire token:
 
-## Poll transport (long-poll + hot-path budget)
+- `active` authorizes the once-only callback and terminal payload;
+- inactivity reclaim moves it to blocking `terminal-grace` for 24 hours;
+- an absent run in a completed daemon snapshot becomes `reconciliation-only`, allowing
+  successor work while retaining one late report;
+- expiry becomes non-authorizing `retired`, consumed only with the matching durable 410.
 
-- `/api/machine/poll` is the breaking protocol-v3 `gateway.pollV3Wait()` seam.
-  Idle requests park automatically on the per-machine waiter (held <=
-  `LONG_POLL_WAIT_MS` 20s); executing/reporting requests never park and may receive
-  one delivery from another free loop. Dispatcher wakeups resolve the in-memory waiter so durable pending work
-  claims promptly; a deploy merely drops the hint and the daemon re-polls. A
-  protocol mismatch returns `426 UPGRADE_REQUIRED` and updates the authenticated
-  machine's stored protocol so Dashboard capability cannot stay stale.
-- Daemon side (`daemon.ts`): an unbounded per-run map sends `currentRuns`; each entry
-  clears only after execution's exact terminal payload is durable in its own local
-  SQLite outbox row and receives a definitive report ACK. A nonblocking sequential
-  report worker skips poisoned rows, so report transport cannot cap other loops. Startup begins replay immediately but
-  keeps polling, heartbeating, and accepting unrelated loops while report transport
-  is in flight. `nextPollDelayMs(elapsed)` keeps the short-poll/held-poll cadence.
-- Poll hot-path DB budget: `machines.lastSeen` re-stamps only when the flag must
-  flip or the stamp is older than `LAST_SEEN_REFRESH_MS` (10s) - an idle poll is
-  read-only when no schedule fact is due. Poll first calls
-  `advanceDueSchedules(machineId)`, then `store.claimReadyRunForMachine`: a
-  targeted pending scan plus machine row lock claims at most one free loop and
-  inserts its hashed run lease before committing. Active polls repeat, so there is
-  no configured machine cap; `one_running_run_per_loop` is the final DB defense.
-  Pending rows are durable inbox entries and are never failed merely because an
-  online daemon has not claimed them. Protocol v3 requires daemon 2.2.0 (the
-  first package shipping the new dashboard skill grammar); older protocol-v3
-  daemons receive HTTP 200 with `needsUpdate` and no delivery. `426 UPGRADE_REQUIRED`
-  is reserved for protocol mismatch. `openRuns()` remains sweep-only.
-- Watch set: served from a per-machine cache (`WATCH_CACHE_TTL_MS` 15s), response
-  always carries `watchDigest`; when the daemon echoes a matching digest the
-  `watch` array is OMITTED. Omission requires the echo (proof the client speaks
-  the protocol) - an old daemon always gets the full list, and an ABSENT `watch`
-  means "unchanged", never "empty" (`daemon.ts` only reconciles on `Array.isArray`).
-  Any delivery forces a recompute (the run may belong to a brand-new loop whose
-  folder must be watched before it writes); gateway `createLoop`/`editLoop` call
-  `invalidateWatch`; store-direct write paths (web loopApi) are covered by the TTL.
+Normal finalize and one reconciliation consume authority in the same loop-lock
+transaction as run/loop writes and report receipt. A report-only reconciliation changes
+only the historical run/receipt. Loop deletion preserves retired evidence. Startup
+`repairTerminalRunLeases()` repairs active leases attached to terminal rows.
 
-## Durable schedule facts + run queue
+The callback records `{status,message}` exactly once through `recordRunReportOnce`.
+Only `keep|no-change|block` and a non-empty message are accepted. A successful provider
+terminal without both becomes an error.
 
-- `loops.nextCadenceAt` is recurring work not yet materialized;
-  `loops.nextRunAt` remains an independent one-shot. `advanceDueSchedules(now)`
-  locks/rechecks each due loop, coalesces one system exec, consumes both facts when
-  both are due, advances cron strictly after `now`, and clears continuous. Scheduler
-  timers/Dispatcher wakes are hints; machine poll invokes the same seam before claim.
-- Queue persistence reuses `runs`: `requestedBy: owner|system`, role-scoped
-  `requestText`, immutable `createdAt`, and mutation `updatedAt`. One partial unique
-  index enforces one pending row per loop+role. Coalescing only promotes
-  system→owner; latest owner steer wins; a running role may retain one follow-up.
-  Cross-role rows survive and claim priority is `steer > evolve > exec`.
-- `store.updateLoop` owns lifecycle/cadence atomically. `loops.pauseCause` annotates an ordinary owner pause/stop vs circuit-breaker `failure-streak` (run/count); explicit start clears it. Pause clears both schedule
-  facts and cancels pending system rows, but owner-requested exec/steer/evolve remain
-  claimable while the loop stays paused; their terminal path cannot restore cadence.
-  Mode switches never cancel queue rows: cron stores its next future occurrence; continuous stores
-  null behind open exec, otherwise now. Create/resume use the same rules.
-- Claim + run-lease insert are one store transaction returning run+loop+wire token.
-  Every run-token mutation atomically rechecks its matching active lease and running
-  run under the loop lock (`mutateForActiveRun`; terminal helpers use the same check).
-  Only exec claim clears `nextCadenceAt`, and only exec done/error restores
-  `terminalAt + delay` when no exec is open; steer/evolve never shift exec cadence
-  and canceled exec never continues. Terminal run,
-  cursor/task, cadence, auto-evolve system request, and lease retirement share the
-  loop-lock transaction. Reclaim terminalizes its lease and writes provisional
-  cadence atomically; due advancement fences on terminal-grace, and one unexpired
-  late report may replace that fact before consuming the lease. Expiry is rechecked
-  after taking the lock. The terminal transaction also computes the exec failure streak and atomically
-  auto-pauses/clears facts/cancels pending system work.
-- Migration 0003 converts and clears legacy steer/evolve markers but retains their
-  deprecated columns/defaults only to reduce old-image SELECT/INSERT breakage. This
-  is not rollback support: migrations are forward-only, post-migration legacy writes
-  are unsupported, and new runtime never reads/drains them. Boot
-  performs no history inference/misfire catch-up: it only initializes enabled cron
-  rows with null cadence to the next future occurrence, idempotently. Pending system
-  retention uses immutable `createdAt`, so coalescing cannot extend the 7d max life;
-  final sweep writes recheck phase/authority/updatedAt/eligibility under the loop lock.
+`/machine/report` is idempotent by report ID and exact payload evidence. Its JSON object
+has one exact top-level allowlist; every present optional diagnostic is type-checked,
+and `usage` is an exact-key object of bounded non-negative integer token counts. A
+correlatable semantic failure becomes a durable `reportIncident`, exact-digest handled
+200 ACK, and run error (or diagnostics-only rejection for a prior reconciliation
+outcome), all in one transaction. Never turn these into mutation-free retries that
+occupy a daemon slot. Per-report-ID advisory locking serializes receipt races across
+loop locks.
 
-## Gateway layout (the MachineGateway decomposition)
+## CLI dispatch
 
-- `gateway/index.ts` (`MachineGateway`) is the run-lifecycle core: public
-  protocol-v3 `pollV3`/`pollV3Wait` over private `pollCore`,
-  report/reclaimRun/sweep, `maintainStorage` (retention/GC), the
-  owner verbs (createLoop/listLoops/editLoop/loopLog/renderLoopLog), and the
-  presence/watch state.
-- The artifact byte-ingress cluster lives in `gateway/sync.ts` as `ArtifactSync`:
-  `sync()` (POST /api/machine/sync manifest reconcile), `putBlob()` (PUT
-  /api/machine/blob/:hash), `readBlob()` (the download seam `artifactFiles.ts` /
-  `runDiff.ts` resolve bytes through), plus the private task-file mirror
-  `refreshTaskFileContent`.
-- The CLI dispatch cluster lives in `gateway/cli.ts` as `CliGateway`
-  (constructor-injected with the `MachineGateway`): `cli()` (the unified
-  /api/machine/cli credential router + `finalizeCli`), `agentApi()`
-  (/agent-api/loop), the per-run `dispatch()` verb switch, and the CLI-only
-  renders/help/home. It reuses the core's methods through the injected gateway -
-  `renderLoopLog` (the flat-404 scoping body), the owner verbs, and
-  the scheduler are public on `MachineGateway` for exactly that second consumer -
-  so floors/allowControl and the credential-type-first routing flow
-  through unchanged. `gateway/toon.ts` stays the shared render spine.
-- `gateway/validate.ts` holds the ui/schema validators. ANTI-DRIFT
-  INVARIANT: the owner edit surface (`createLoop`/`editLoop` in index.ts) and the
-  run-token `set-*` surface (`applySet*` in cli.ts) import this ONE module, so the
-  two write paths cannot validate differently.
-- **Boot constructs ONE `createBlobStore()` and hands the SAME instance to
-  `MachineGateway` and `ArtifactSync`** (`boot.ts`; accessors `getGateway()` /
-  `getArtifactSync()` / `getCliGateway()`). This is load-bearing with the
-  injected adapters and keeps all writes/reads/retention on one store instance;
-  two in-memory test adapters would otherwise observe different bytes. Tests mirror the sharing
-  (`retention.test.ts` `gatewayWithStore`).
-- Import direction: the generic wire plumbing (`HttpResult`, `WIRE_TEXT_CAP`,
-  `clipText`/`stripNul`, `nowIso`) lives in the leaf module `gateway/http.ts`,
-  imported by index/cli/sync alike - one clipping/NUL-stripping discipline, no
-  fork; domain helpers (caps, renders) still flow `index.ts` -> `cli.ts`/`sync.ts`,
-  and `index.ts` never imports its satellites, so there is no cycle. The whole
-  shape is pinned by `gateway/layout.test.ts`.
-- The legacy `/api/machine/loop` + `/api/machine/log` routes call the owner-verb
-  methods on `MachineGateway` directly; `/api/machine/cli` + `/agent-api/loop`
-  route through `getCliGateway()`.
+`POST /api/machine/cli` branches on credential type before verb:
 
-## Team CRUD + membership management
+- `dk_` device credential: `new`, `loops`, `edit`, `pause`, `start`, `stop`, `delete`,
+  `run stop`, `log`, `show`, and `home`; `report` is 403.
+- `rk_` run lease: only `report` and help; owner/read/control verbs are forbidden.
 
-- **Logic lives in `server/teamAdmin.ts`; `server/teamFns.ts` is a THIN RPC wrapper.**
-  teamAdmin is framework-free (plain async fns over `store`, `(actorUserId, ...)` in),
-  so every rule is directly testable against real pglite without mocking the Start
-  runtime (`server/teamCrud.integration.test.ts`, 15 scenarios). teamFns resolves the
-  signed-in user (`currentUserId`) and delegates; team management is GATED (open mode /
-  signed-out ⇒ a uniform "sign-in required").
-- **Every fn takes an EXPLICIT teamId and authorizes by membership+role, NEVER the
-  active-team cookie** (the URL report's hard lesson — managing team B while browsing A
-  must work). `assertOwner` is the single owner-gate chokepoint; a non-member gets the
-  enumeration-safe generic not-found, never the owner-only message.
-- **The six approved design decisions (`data/teamcrud-design/report.md` §7):**
-  (1) delete is BLOCKED while the team owns loops (`store.countLoopsForTeam(teamId)`),
-  never cascaded — `store.deleteTeamCascade` only removes channels/invites/members and
-  reassigns machine home-team pointers (cosmetic, machines are user-owned) to each
-  owner's personal team; (2) invites are BOTH direct-add-by-email (existing account
-  fast path) AND a single-use, 7-day invite link (`team_invites` table, migration
-  `0002`); (3) an invite never bypasses `PIEVO_ALLOWED_LOGINS` (the redeemer already
-  signed in through the gate); (4) team management is owner-only, loop creation stays
-  any-member; (5) the personal team is renamable — **`store.ensureTeam` is now
-  INSERT-ONLY for the name** (the old force-rename at every requestScope silently
-  reverted manual renames); (6) multi-owner allowed, the ONLY invariant is the
-  last-owner guard.
-- **The last-owner guard is enforced TRANSACTIONALLY in the store**
-  (`removeTeamMemberGuarded` / `setTeamMemberRoleGuarded` count owners + mutate in ONE
-  txn → `'ok'|'last-owner'|'not-member'`), so two concurrent self-removals can't both
-  win and strand a memberless team. `leaveTeam` reuses `removeTeamMemberGuarded` (self)
-  and also blocks the personal team.
-- **Invite redeem** (`/invite/$token` route → `redeemTeamInvite`): any signed-in user
-  may redeem (the token is the authority). Outcomes: invalid / already-used (single-use,
-  stamped `redeemedAt`) / expired / already-member (success, no double-add, still burns
-  the link) / fresh join at the invite's role. The route forges nothing — a signed-out
-  visitor hits the normal gated `SignIn` with `callbackURL` back to the invite.
-- **UI**: `components/TeamsModal.tsx` (header "Teams" button in `DashboardView`, shown
-  only when the user has teams). Master list + selected-team detail (rename, members
-  with role select + remove, add-by-email, invite links + revoke, leave, delete with the
-  blocked-by-loops disabled state). Owner-only controls hide for a plain member; the
-  server re-authorizes regardless.
-- **Verifying the gated flow in a browser without GitHub OAuth**: seed a `user` + a
-  `session` row into a temp-`PIEVO_DATA_DIR` pglite, then forge the cookie
-  `better-auth.session_token=<token>.<makeSignature(token, secret)>` (`makeSignature`
-  from `better-auth/crypto`) — Better Auth verifies the HMAC signature regardless of
-  cookie domain. pglite is single-writer, so seed in a separate process that exits
-  before the dev server opens the same dir.
+The run-token restriction is defense in depth with daemon callback routing. Do not add
+run-scoped reads or loop mutation verbs.
 
-## Notification webhook SSRF guard (`gateway/webhookGuard.ts`)
+`gateway/toon.ts` is the pure TOON serializer. `/api/machine/cli` finalization retains
+only `{text,exitCode,loops,runs}`: text is the render, while loops/runs are data channels
+for cwd resolution and JSON history. Missing `text` is an invalid server response. No
+endpoint aliases or daemon fallback transport exist.
 
-- The built-in Feishu/Lark notifier POSTs to a user-supplied `webhookUrl`, so it is
-  guarded against SSRF by `gateway/webhookGuard.ts` (pure, unit-tested):
-  `validateFeishuWebhookUrl` (require `https:` + an EXACT host allowlist
-  `FEISHU_WEBHOOK_HOSTS` + the `/open-apis/bot/v2/hook/` path shape) and
-  `classifyAddress` (blocks loopback/RFC1918/link-local incl. `169.254.169.254`/
-  ULA/multicast/reserved; IPv4 + IPv6 + IPv4-mapped). `safeWebhookFetch` composes
-  them: allowlist → DNS-resolve + IP-guard EVERY host → bounded timeout
-  (`WEBHOOK_TIMEOUT_MS`) + bounded response read (`WEBHOOK_MAX_BYTES`); redirects
-  NOT auto-followed (`redirect:"manual"`, each hop re-runs the full guard).
-- Enforced at BOTH ends: `CHANNELS.feishu.validate` runs the pure allowlist check at
-  create/edit time (called by `notifyFns.createChannel` via the new optional
-  `ChannelKind.validate` hook); `CHANNELS.feishu.send` runs the FULL DNS/IP guard at
-  every send/test (a stored URL is untrusted - re-checked, never trusted from create).
-- **Test seam**: `setWebhookFetchDeps({lookup, fetchImpl})` in `notify.ts` injects DNS
-  + fetch so `notify.test.ts` exercises the guard without network (restore with `{}` in
-  `afterEach`). `webhookGuard.test.ts` covers the pure helpers directly.
-- Residual: global `fetch` re-resolves DNS on connect (no stdlib socket-pinning without
-  a custom undici dispatcher, deliberately not pulled in) - the exact-host allowlist
-  bounds any rebind to an official Feishu/Lark domain. Adding a NEW outbound integration?
-  Reuse this module; do NOT reintroduce a raw `fetch(userUrl)`.
-- FOLLOW-UP (audit H-02): channel create/test is any-member (open mode may be
-  unauthenticated). The destination restriction closes the SSRF regardless of creator;
-  tightening create to team-owner-only is a separate change.
+`show --json` emits `id` plus the exact editable envelope. `log` is bounded by row,
+response, detail-text, diff-file, diff-input, and emitted-diff caps in
+`gateway/history.ts`. History exposes report, error, and final assistant output as
+separate facts; token totals exclude cache fields from the displayed total while raw
+normalized usage remains stored.
 
-## Maintaining this file
+## Exact artifact ingress
 
-Keep entries durable and project-intrinsic (build/test/release, architecture, sharp
-edges) — not task narration. Prefer a pointer to the authoritative file/command/test
-over copying detail. Update or prune an entry when the code it describes changes; delete
-what no longer holds rather than letting it drift. `CLAUDE.md` symlinks here, so one edit
-serves both. English only, tight prose.
+`ArtifactSync.sync()` requires a registered device token and loop-machine match. Its
+only POST envelope is `{loopId,manifest}`; both the top level and each complete manifest
+item are exact, strictly typed schemas. It accepts only paths literally present in the
+loop's current `artifacts` array. The daemon sends the full existing-file manifest after
+provider exit; absence tombstones prior live rows. Validation completes before writes.
+Store helpers lock/recheck the current allowlist so an edit racing sync cannot revive a
+removed path or tombstone a newly added one.
+
+Security and durability constraints:
+
+- `POST /api/machine/sync`: 32 MB body cap.
+- blob bytes: 10 MB per-file cap; larger files are metadata-only.
+- verified SHA-256 for every blob PUT.
+- PUT accepts only a hash referenced by a live configured artifact on this machine.
+- metadata and byte presence are separate; missing byte objects are requested again.
+- there is intentionally no aggregate per-loop byte cap or filename/content filter.
+
+Do not add directory traversal, recursive scanning, or secret-name policy. The daemon
+is responsible for realpath confinement; the server also validates relative wire paths
+and the exact config allowlist.
+
+Snapshots are captured after terminal sync and keyed by run. `runDiff.ts` computes
+text diffs lazily with a 512 KB per-side file guard plus caller budgets; server diffing
+is pure string computation and preserves zero-exec. Snapshot retention defaults to 20.
+GC uses a one-hour grace period, fresh reference rechecks, and bytes-before-metadata
+delete ordering. Bias toward keeping a leaked blob rather than deleting live bytes.
+
+`createBlobStore()` selection:
+
+- explicit `local`: `<PIEVO_DATA_DIR>/blobs`;
+- explicit `r2`: requires complete `PIEVO_R2_*`;
+- explicit `memory`: loud ephemeral/data-loss warning;
+- absent selector: complete R2 config, else local. Partial R2 config fails boot.
+
+## Artifact serving and browser containment
+
+`routes/api.artifact.$loopId.$.ts` uses the same session/team authorization as server
+functions and returns flat 404 across scope. Default disposition is attachment. Only
+known image extensions may use `?view=inline`, with the real allowlisted MIME,
+`X-Content-Type-Options: nosniff`, and `Content-Security-Policy: sandbox`.
+
+The browser viewer:
+
+- HTML uses `srcDoc` in `sandbox="allow-scripts"` **without** `allow-same-origin`;
+- images, including SVG, use the hardened image URL and are never inserted as markup;
+- Markdown uses the sanitized shared pipeline;
+- binary files download; oversize files have no bytes.
+
+Vite's static layer intercepts asset-extension routes in development. Verify image
+serving against a Nitro production build (`pnpm build && pnpm start`, bind with `PORT`).
+Markdown byte reads use a server function and are unaffected.
+
+## Auth, teams, and machine enrollment
+
+`lib/loginGate.ts` is the one lightweight gate condition: both GitHub OAuth values must
+exist. `auth.ts` throws at module load if the gate is on without
+`PIEVO_AUTH_SECRET`. Empty `PIEVO_ALLOWED_LOGINS` means every GitHub account may sign
+in; entries may be exact emails or domain wildcards. Gate off means one open shared
+workspace.
+
+`requestScope(explicitTeam?)` gives the URL team precedence over the last-used cookie,
+membership-validates either, and otherwise selects the personal team. `canAccessLoop`
+authorizes a direct loop link against that loop's team even when another team is active.
+A denied team/loop/artifact is indistinguishable from not found.
+
+Machine plaintext device tokens are owner-only under auth; teammates may see a
+membership-visible machine but receive `token:null`. Poll is the sole self-enrollment
+surface. Gate on requires a live 24-hour connect-key row; gate off permits anonymous
+well-shaped tokens. Existing machines recheck the full token hash.
+
+A connect key is indexed by derived machine ID, not stored plaintext. It binds minter
+and team across deploys. Create rechecks machine ownership and live team membership.
+Machine home team remains its owner's personal team; each loop lands in the validated
+claim team. One machine can serve every team its owner belongs to.
+
+Team rules live in framework-free `server/teamAdmin.ts`; `teamFns.ts` is a thin RPC
+wrapper. Management is owner-only, direct-add requires an existing account, invite
+links are single-use for seven days, last-owner removal/demotion is transactionally
+blocked, personal teams cannot be left/deleted, and deletion is blocked while loops
+exist. Invites never bypass the login allowlist because redemption requires sign-in.
+
+## Rate and wire boundaries
+
+`readJsonBody()` caps ordinary machine JSON at 2 MB before parsing. Sync has its own
+32 MB cap; blob PUT is bounded by the route and 10 MB ingress check.
+
+Every machine route except sync/blob calls `machineRouteLimit()` before gateway work:
+per-IP and per-token in-process buckets, bounded key maps, 429 when spent. Defaults are
+240 burst + 8/s per IP and 120 burst + 4/s per token. Rate limiting defaults off in
+tests, on elsewhere, and is tunable with `PIEVO_RL_*` / `PIEVO_RATE_LIMIT`.
+
+Byte ingress is entirely exempt from token buckets. It is not anonymous: unknown device
+tokens are 401, and exact path/hash authorization plus body/file caps bound accepted
+writes. Do not cite a nonexistent aggregate storage cap as its guard.
+
+Client IP order is `Fly-Client-IP`, first `X-Forwarded-For`, `X-Real-IP`, then one
+shared `unknown` bucket. This assumes the deployment edge overwrites/trusts those
+headers; add network-layer controls when exposing the service directly.
+
+## Database and migrations
+
+Driver selection in `db/index.ts`:
+
+- `DATABASE_URL` set: postgres-js. Transaction pooler detection uses `:6543` unless
+  `PIEVO_DB_POOL_MODE` overrides; transaction mode disables prepared statements.
+- unset: file-backed PGlite at `<PIEVO_DATA_DIR>/pgdata`. Production requires
+  `PIEVO_DB=pglite`; tests/dev do not.
+
+Hosted migrations run out-of-process in `scripts/prestart.mjs` through
+`DIRECT_DATABASE_URL` (or a safe non-pooler runtime URL). PGlite migrations run
+in-process at boot. `db:migrate` is for a configured real Postgres only.
+
+The project targets fresh deployments. `drizzle/0000_baseline.sql` and the single
+journal entry must match `db/schema.ts`; no prior SQL, data transforms, migration
+fixtures, or generated snapshots are retained. Verify both fresh PGlite boot and the
+Postgres-dialect baseline. Drizzle `text(...,{enum})` is TypeScript-only and creates no
+DB CHECK.
+
+The external-Postgres watchdog is on by default outside tests and exits after sustained
+timed-out `select 1` probes. Fly health checks only de-route; the watchdog is what lets
+an on-failure supervisor recover a wedged pool.
+
+## Published launcher and deployment
+
+`@kky42/pievo-server` ships Nitro output, copied PGlite assets, the baseline migration,
+and `scripts/{pievo-server,server-cli-lib,prestart}.mjs`. Runtime paths are
+resolved from the installed package root, never cwd.
+
+Launcher invariants:
+
+- detached/idempotent start; foreground for containers/supervisors;
+- local defaults `127.0.0.1:3000`, data/pid/lock/log under `PIEVO_DATA_DIR`;
+- no `DATABASE_URL` injects `PIEVO_DB=pglite` for this local launcher path;
+- lifecycle lock spans detached readiness;
+- `starting` pid authority is recorded before async prestart;
+- authority is pid + process start time + launch nonce;
+- `/api/ready` waits for full boot and echoes the nonce;
+- stop clears records only after exact-process death is proven;
+- restart selects by data dir and preserves bind unless explicitly overridden.
+
+Production `pnpm start` and Docker always run prestart. Without external Postgres they
+require the explicit PGlite opt-in and persistent data directory. Run one process only.
+The included Fly files are unconfigured single-process examples; workflows are manual
+and fail preflight without explicit app/origin/token settings.
+
+`publish-server.yml` uses npm OIDC on `server-v*`. Keep tag/version identity, npm 11,
+no token-based registry config, workspace tests/typecheck, strict PGlite asset build,
+package verification, repository provenance, and package `bin`/`files` intact.
+
+## Web UI rules
+
+- Team is in `/t/$teamId`; bare `/` is open mode or gated redirect. Keep
+  `DashboardView key={teamId}` for same-route remount semantics.
+- Dashboard and detail refreshes are fetch-then-set; transient failures keep stale data.
+- Loop and run detail are standalone pages. Base UI dialog parts require a root.
+- Keep `min-w-0` through flex/grid boundaries and put horizontal scrolling inside the
+  owning diff/table pane, never on the page.
+- The loop form mirrors only the canonical config union. Loop detail shows lifecycle,
+  machine presence, complete stored config, exact artifacts, and runs. Run detail keeps
+  report, error, final assistant output, session ID, token usage, incident, and diff
+  distinct.
+- Semantic status colors: keep green, no-change gray, block yellow, execution error red.
+  Do not add aggregate status visualization in this iteration.
+
+## Skill surface
+
+Source of truth:
+
+- `src/skill/bootstrap.md`: server-only first-contact flow at `/api/bootstrap`;
+- `src/skill/SKILL.md` and `references/{connect,create,update}.md`: public owner skill;
+- no runtime prose file: `gateway/prompt.ts` assembles the complete report contract.
+
+`daemon/scripts/sync-skill.mjs` must copy exactly those four public files. Never make it
+recursive. The three references are also served from the exact static route map.
+`?raw` imports compile Markdown into the server bundle, so prose changes require a new
+build/deployment. Skill installation is best-effort and cannot be a runtime dependency.
+
+## Maintenance
+
+Keep this file about durable server-specific invariants. If code changes make a note
+false, rewrite or remove it in the same change. Prefer module/test pointers over batch
+history or duplicated implementation detail.

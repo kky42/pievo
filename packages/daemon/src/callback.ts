@@ -1,27 +1,29 @@
 /**
  * Callback mode — `pievo <verb> [...flags]` invoked by claude (via the PATH
  * wrapper) inside a run. Delegates to the shared CLI client (`postCli`): it picks the
- * run token from the env, inlines the file flags, and POSTs `{argv}` to the unified
- * `/api/machine/cli`, falling back to the legacy `/agent-api/loop` on a 404 (old
- * server). This module just renders the `{text, exitCode}` reply for the agent.
+ * run token from the env and POSTs `{argv}` to
+ * `/api/machine/cli`. This module renders the `{text, exitCode}` reply.
  */
-import { legacyRun, postCli, printTextOrTooOld } from "./cli-client.js";
+import { postCli, printCliResponse } from "./cli-client.js";
 
 export async function runCallback(argv: string[]): Promise<number> {
-  const r = await postCli(argv, legacyRun);
-  if (r.kind === "not-configured") {
-    process.stderr.write("pievo: control channel not configured\n");
+  const verb = argv[0];
+  if (verb === "--help" || verb === "-h" || verb === "help" || (verb === "report" && argv.slice(1).some((arg) => arg === "--help" || arg === "-h"))) {
+    process.stdout.write("pievo report --status keep|no-change|block --message <text>\n");
+    return 0;
+  }
+  if (verb !== "report") {
+    process.stderr.write("pievo: only `report` is available inside a run\n");
     return 2;
   }
-  if (r.kind === "read-error") {
-    process.stderr.write(`pievo: cannot read ${r.path}\n`);
-    return 1;
+  const r = await postCli(argv);
+  if (r.kind === "not-configured") {
+    process.stderr.write("pievo: run callback not configured\n");
+    return 2;
   }
   if (r.kind === "network-error") {
     process.stderr.write(`pievo: ${r.message}\n`);
     return 1;
   }
-  // Text-sink: print the server's rendered `text` + exit its `exitCode`. A too-old
-  // server (no `text`) surfaces a definitive SERVER_TOO_OLD error, never blank output.
-  return printTextOrTooOld(r.body, r.status, (s) => process.stdout.write(s));
+  return printCliResponse(r.body, r.status, (s) => process.stdout.write(s));
 }

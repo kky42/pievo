@@ -69,9 +69,9 @@ test("detailBlock renders a top key with indented key: value rows", () => {
     ["name", "Docs Sweep"],
     ["cron", "0 6 * * 1"],
     ["enabled", true],
-    ["goal", null],
+    ["owner", null],
   ]);
-  expect(out).toBe(['loop:', '  name: "Docs Sweep"', '  cron: "0 6 * * 1"', "  enabled: true", `  goal: ${ABSENT}`].join("\n"));
+  expect(out).toBe(['loop:', '  name: "Docs Sweep"', '  cron: "0 6 * * 1"', "  enabled: true", `  owner: ${ABSENT}`].join("\n"));
 });
 
 test("detailBlock passes a { raw } value through verbatim (pre-rendered size hints)", () => {
@@ -116,7 +116,7 @@ test("emptyList + countLine(0) is the definitive empty state", () => {
 // ---- inline array ----
 
 test("inlineArray joins scalar items on one line with the given separator", () => {
-  expect(inlineArray("applied", ["cron", "goal"])).toBe("applied[2]: cron, goal");
+  expect(inlineArray("applied", ["name", "cron"])).toBe("applied[2]: name, cron");
   expect(inlineArray("nextRuns", ["2026-07-13 06:00", "2026-07-20 06:00"], " · ")).toBe(
     'nextRuns[2]: "2026-07-13 06:00" · "2026-07-20 06:00"',
   );
@@ -138,8 +138,8 @@ test("helpBlock renders help[N]: with indented command templates verbatim", () =
 // ---- errors ----
 
 test("errorBlock quotes the message and emits a bare code slug", () => {
-  expect(errorBlock('status must be kept|no-change|blocked (got "wibble")', "VALIDATION_ERROR")).toBe(
-    'error: "status must be kept|no-change|blocked (got \\"wibble\\")"\ncode: VALIDATION_ERROR',
+  expect(errorBlock('status must be keep|no-change|block (got "wibble")', "VALIDATION_ERROR")).toBe(
+    'error: "status must be keep|no-change|block (got \\"wibble\\")"\ncode: VALIDATION_ERROR',
   );
 });
 

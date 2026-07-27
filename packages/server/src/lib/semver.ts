@@ -5,6 +5,29 @@
  * as older than its release (a "0.9.0-rc.1" daemon is still behind "0.9.0").
  */
 
+/** Strict SemVer validation for security/protocol gates. Unlike the update-hint
+ * comparison below, this accepts no whitespace, `v` prefix, partial core, or
+ * trailing garbage. */
+export function isValidSemver(value: string): boolean {
+  const plus = value.split("+");
+  if (plus.length > 2) return false;
+  const [versionAndPre, build] = plus;
+  if (build !== undefined && !validIdentifiers(build, false)) return false;
+  const dash = versionAndPre!.indexOf("-");
+  const numeric = dash < 0 ? versionAndPre! : versionAndPre!.slice(0, dash);
+  const pre = dash < 0 ? undefined : versionAndPre!.slice(dash + 1);
+  if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(numeric)) return false;
+  return pre === undefined || validIdentifiers(pre, true);
+}
+
+function validIdentifiers(value: string, rejectNumericLeadingZero: boolean): boolean {
+  if (!value) return false;
+  return value.split(".").every((identifier) => {
+    if (!/^[0-9A-Za-z-]+$/.test(identifier)) return false;
+    return !rejectNumericLeadingZero || !/^\d+$/.test(identifier) || identifier === "0" || !identifier.startsWith("0");
+  });
+}
+
 /** Parse the leading numeric core `x.y.z` of a version, ignoring any pre-release
  *  / build suffix. Returns null when it isn't a recognizable version. */
 function core(v: string): [number, number, number] | null {

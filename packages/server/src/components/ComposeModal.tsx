@@ -1,17 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import type { CodingAgent, TemplateInfo } from '../types'
+import type { CodingAgent } from '../types'
 import { claimStatus, getConfig, mintClaim } from '../server/loopApi'
 import { Modal, ModalHead } from './Modal'
-import { LoopFlow, hasLoopFlow } from './LoopFlow'
 import { btnPrimary, btnPrimaryPill, btnSm } from './ui'
 
 // How long to wait on a silent paste before nudging the user to check things.
 const SLOW_WAIT_MS = 100_000
 
-// Display label for the coding agent the daemon MEASURED on the host and the
-// server recorded on the loop. There is no manual picker: `pievo new` resolves
-// the agent from the host env fingerprint (Claude Code or Codex), so the
-// dialog only ever displays the recorded value — it never declares one.
+// Display label for the coding agent selected in the canonical loop config and
+// returned with the created-loop claim.
 const AGENT_LABEL: Record<CodingAgent, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
@@ -55,9 +52,8 @@ function CodexMark({ size = 14 }: { size?: number }) {
 // BOOTSTRAP doc (skill/bootstrap.md) — it owns ALL first-capture intelligence: it
 // interprets the pasted values, connects the machine, reads the session to decide
 // what loop to build (turn a just-done task into a loop, else brainstorm loops for
-// this project), and routes into the create/update/evolve references. So the snippet
-// is just a bootstrap: fetch it and ask to build a loop. A template appends its canned
-// task description below (the INTENT); the create flow still confirms cadence/config.
+// this project), and routes into the focused create/update references. So the snippet
+// is just a bootstrap: fetch it and ask to build a loop.
 const instructionFor = (origin: string) => `Fetch ${origin}/api/bootstrap and help me build a loop.`
 
 /**
@@ -66,34 +62,29 @@ const instructionFor = (origin: string) => `Fetch ${origin}/api/bootstrap and he
  * into their own Claude Code session (where they just did the task); Claude
  * follows /api/bootstrap — ensures a daemon is running (the token authorizes a new
  * machine, or the machine's stored token reuses an existing one) and POSTs the
- * loop to /api/machine/loop with this token as `claim`. We poll the claim until
+ * loop through /api/machine/cli with this token as `claim`. We poll until
  * the loop lands, then close. No machine selection: the binding is decided on the
  * machine, the claim just correlates the result back to this dialog.
  *
- * A `template` (a canned loop intent picked from the dashboard cards) reuses this exact
- * machinery and appends its `description` under the config lines — bootstrap.md +
- * create.md then handle cadence/config the same way. Pievo is BYOA-only: every loop runs
- * on the connected machine; there is no hosted-agent option.
+ * Pievo is BYOA-only: every loop runs on the connected machine; there is no
+ * hosted-agent option.
  */
 export function ComposeModal({
   open,
   onClose,
   onCreated,
-  template = null,
   teamId,
 }: {
   open: boolean
   onClose: () => void
   onCreated: () => void
-  template?: TemplateInfo | null
   /** The dashboard's explicit team (the `/t/<id>` route) so a captured loop binds
    *  to the tab's team, not the shared last-used cookie. Undefined in open mode. */
   teamId?: string
 }) {
   const [token, setToken] = useState<string | null>(null)
   const [config, setConfig] = useState<{ pievoCli: string; customCli: boolean } | null>(null)
-  // Carries the MEASURED agent (`loops.agent`, from the daemon's env fingerprint)
-  // back from `claimStatus`, so the confirmation shows what actually ran, not a pick.
+  // Carries the configured loop agent back from `claimStatus` for confirmation.
   const [created, setCreated] = useState<{ id: string; name: string; agent: CodingAgent } | null>(null)
   const [copied, setCopied] = useState(false)
   const [slow, setSlow] = useState(false)
@@ -111,9 +102,8 @@ export function ComposeModal({
   // and goes on the clipboard, so the two can't desync.
   const instruction = instructionFor(origin)
 
-  // The machine config lines stay fixed and read-only — never user-editable. No
-  // `agent:` line: `pievo new` resolves the agent from the host env fingerprint
-  // (Claude Code or Codex), so the snippet never declares one to override it.
+  // The connection config lines stay fixed and read-only. The bootstrap flow
+  // collects the loop's explicit agent selection in the canonical JSON config.
   const configLines = token && config
     ? [
         `server-url: ${origin}`,
@@ -122,11 +112,7 @@ export function ComposeModal({
       ].join('\n')
     : ''
 
-  // A template appends its canned task description under the config (the INTENT).
-  const description = template?.description?.trim() ?? ''
-  const snippet = token && config
-    ? [instruction, '', configLines, ...(description ? ['', description] : [])].join('\n')
-    : ''
+  const snippet = token && config ? [instruction, '', configLines].join('\n') : ''
 
   // Reset each time the dialog opens.
   useEffect(() => {
@@ -138,7 +124,7 @@ export function ComposeModal({
     setConfigError(false)
     setCopied(false)
     setSlow(false)
-  }, [open, template])
+  }, [open])
 
   // Mint a claim + load config for the connected-machine flow.
   useEffect(() => {
@@ -162,11 +148,10 @@ export function ComposeModal({
     pollRef.current = setInterval(() => {
       void claimStatus({ data: token })
         .then((s) => {
-          if (s.done && s.id) {
+          if (s.done) {
+            if (!s.id || !s.name || !s.agent) throw new Error('invalid claim response')
             if (pollRef.current) clearInterval(pollRef.current)
-            // The agent is the daemon's measured value; default only guards an older
-            // server that doesn't yet return it on the claim.
-            setCreated({ id: s.id, name: s.name ?? 'loop', agent: s.agent ?? 'claude-code' })
+            setCreated({ id: s.id, name: s.name, agent: s.agent })
             onCreatedRef.current()
           }
         })
@@ -191,9 +176,8 @@ export function ComposeModal({
     }
   }
 
-  // The snippet box — shared by the blank-loop step 2 and the template screen. Copy
-  // takes the full `snippet` string (instruction + config + any description), so the
-  // rendered pieces below can't desync from the clipboard.
+  // Copy takes the same instruction + connection config rendered below, so the
+  // visible snippet and clipboard cannot drift.
   const snippetBox = (showInlineCopy = true) => (
     <div className="min-w-0 flex-1">
       <div className="flex items-center justify-between gap-3">
@@ -222,16 +206,9 @@ export function ComposeModal({
                 : 'Minting a connect key…'}
           </div>
         )}
-        {/* Template intent - the canned task description, appended below the config. */}
-        {description && configLines && (
-          <p className="mt-3 whitespace-pre-wrap border-t border-hairline pt-3 leading-relaxed text-primary">
-            {description}
-          </p>
-        )}
       </div>
       <p className="mt-2 text-body leading-snug text-secondary">
-        Paste it in that same session - reuses this machine automatically. Your agent will{' '}
-        {template ? 'set the loop up from here.' : 'ask what the loop should do.'}
+        Paste it in that same session - reuses this machine automatically. Your agent will ask what the loop should do.
       </p>
     </div>
   )
@@ -258,7 +235,7 @@ export function ComposeModal({
   if (created) {
     return (
       <Modal open={open} onClose={onClose}>
-        <ModalHead title="Loop created" sub={`${AGENT_LABEL[created.agent]} built and registered it.`} />
+        <ModalHead title="Loop created" sub={`Configured to run with ${AGENT_LABEL[created.agent]}.`} />
         <div className="mt-5 rounded-card border border-hairline bg-surface p-5 shadow-card">
           <div className="text-[17px] font-medium text-display">✓ {created.name}</div>
           <div className="mt-1 text-body text-secondary">It’s scheduled now and will run on the machine.</div>
@@ -268,40 +245,6 @@ export function ComposeModal({
             Done
           </button>
         </div>
-      </Modal>
-    )
-  }
-
-  // Template screen — straight to the snippet (no two-step rail).
-  // Templates with a flow diagram open a wider, two-column modal: the paste
-  // prompt on the left, the loop visualization on the right. Templates without one
-  // keep the plain single-column screen.
-  if (template) {
-    const showFlow = hasLoopFlow(template.name)
-    const promptCol = (
-      <div className="min-w-0">
-        {snippetBox(false)}
-        {error && <div className="mt-3 text-body text-accent">Error: {error}</div>}
-        <div className="mt-6 flex items-start gap-3">
-          <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${wait.dot}`} />
-          <span className="text-label leading-relaxed text-secondary">{wait.text}</span>
-          {copyPromptButton}
-        </div>
-      </div>
-    )
-    return (
-      <Modal open={open} onClose={onClose} wide={showFlow}>
-        <ModalHead title={template.label} sub="Paste this into your coding agent, in the project you want the loop for." />
-        {showFlow ? (
-          <div className="mt-5 grid gap-8 md:grid-cols-[minmax(0,1fr)_400px]">
-            {promptCol}
-            <div className="min-w-0 md:border-l md:border-hairline md:pl-8">
-              <LoopFlow template={template} />
-            </div>
-          </div>
-        ) : (
-          <div className="mt-6">{promptCol}</div>
-        )}
       </Modal>
     )
   }

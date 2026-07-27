@@ -1,11 +1,8 @@
 /**
- * Better Auth — GitHub social login, gated by a login allowlist
- * (PIEVO_ALLOWED_LOGINS = comma-separated emails). Shared workspace: any
- * allowed user sees all loops/machines; `userId` is attribution only.
- *
- * OFF by default: with no GITHUB_CLIENT_ID/SECRET the app stays open (no gate),
- * so local dev + the verified Cookie/dashboard flow are unaffected. Set the
- * GitHub OAuth creds + PIEVO_ALLOWED_LOGINS to turn the gate on.
+ * Better Auth with GitHub social login. Supplying the GitHub OAuth credentials
+ * enables authentication; `PIEVO_ALLOWED_LOGINS` optionally narrows who may sign
+ * in. Authenticated data is team-scoped, while `userId` retains creator/owner
+ * attribution. With no GitHub credentials the local server runs in open mode.
  */
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
@@ -100,10 +97,10 @@ export interface RequestScope {
 }
 
 /**
- * Per-request data scope. Machines / loops / channels are scoped by `teamId`.
+ * Per-request data scope. Machines and loops are scoped by `teamId`.
  * The active team is resolved from (in precedence order) an EXPLICIT team — the
  * `/t/<teamId>` route param, so a tab/bookmark pins its own team independent of
- * any cookie (Phase 2) — else the `pievo.team` cookie (now only a last-used
+ * any cookie; otherwise the `pievo.team` cookie (only a last-used
  * default hint). Either source is VALIDATED here against membership, never
  * trusted blind, and falls back to the user's personal team.
  *
@@ -125,7 +122,7 @@ export async function requestScope(explicitTeam?: string | null): Promise<Reques
   const user = await currentUser();
   const userId = user?.id ?? null;
   const personalTeam = store.teamIdForUser(userId);
-  // Ensure the personal/placeholder team exists (covers pre-hook users etc.) and
+  // Ensure the personal/shared team exists and
   // keep its name in sync with the email — also renames pre-existing teams.
   await store.ensureTeam(personalTeam, userId ? teamNameForEmail(user?.email) : "Shared Workspace", userId);
 
@@ -184,7 +181,7 @@ export const auth = betterAuth({
           }
           return { data: user };
         },
-        // Give every new user their own team (machines/notifications bind to it).
+        // Give every new user a personal team for their machines and loops.
         after: async (user) => {
           try {
             const teamId = store.teamIdForUser(user.id);

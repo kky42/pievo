@@ -1,5 +1,5 @@
 /**
- * Phase 3 — per-run snapshot + diff. Runs the real path: gateway sync (stores
+ * Per-run artifact snapshot and diff. Runs the real path: gateway sync (stores
  * blobs + reconciles artifact_files) → gateway report (writes the run snapshot at
  * finalize) → computeRunDiff (lazily diffs run N vs N-1 with a pure-string text
  * diff). All against the booted gateway's local blob store (no R2/creds).
@@ -10,9 +10,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 
+import { testStore, type TestStore } from "../../test/store.js";
+
 let tmp: string;
 let db: typeof import("../db/index.js");
-let store: typeof import("../db/store.js");
+let store: TestStore;
 let boot: typeof import("./boot.js");
 let tokens: typeof import("../gateway/tokens.js");
 let runDiff: typeof import("./runDiff.js");
@@ -26,7 +28,7 @@ beforeAll(async () => {
   process.env.PIEVO_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();
-  store = await import("../db/store.js");
+  store = testStore(await import("../db/store.js"));
   boot = await import("./boot.js");
   tokens = await import("../gateway/tokens.js");
   runDiff = await import("./runDiff.js");
@@ -48,7 +50,10 @@ async function seed() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = await store.createLoop({ userId: "u1", teamId: "team-u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  const loop = await store.createLoop({ workdir: "/work",
+    userId: "u1", teamId: "team-u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true,
+    artifacts: ["report.md", "a.md", "b.md", "c.md", "gone.md", "new.md", "keep.md", "blob.bin", "huge.txt", "first.md"],
+  });
   return { token, machineId, loop };
 }
 
@@ -59,27 +64,23 @@ interface FileSpec {
   oversize?: boolean;
 }
 
-/** One full run cycle: create the run, sync its files (run-tagged), report → snapshot. */
+/** One full run cycle: create the run, sync its files, report, then snapshot. */
 async function doRun(token: string, machineId: string, loopId: string, ts: string, files: FileSpec[]) {
-  const run = await store.addRun({ loopId, userId: "u1", machineId, phase: "running", role: "exec", ts });
+  const run = await store.addRun({ loopId, machineId, phase: "running", ts });
   const runToken = await tokens.registerRunLease({
     runId: run.id,
     loopId,
     machineId,
-    role: "exec",
-    allowControl: false,
-    canSetUi: false,
-    canSetSchema: false,
   });
   const manifest = files.map((f) =>
     f.oversize
-      ? { path: f.path, hash: sha256(f.bytes), size: f.bytes.length, oversize: true }
-      : { path: f.path, hash: sha256(f.bytes), size: f.bytes.length, binary: !!f.binary },
+      ? { path: f.path, hash: null, size: f.bytes.length, binary: !!f.binary, oversize: true }
+      : { path: f.path, hash: sha256(f.bytes), size: f.bytes.length, binary: !!f.binary, oversize: false },
   );
-  const blobs = files
-    .filter((f) => !f.oversize)
-    .map((f) => ({ hash: sha256(f.bytes), encoding: "base64" as const, data: f.bytes.toString("base64") }));
-  await art.sync(token, { loopId, runId: run.id, manifest, blobs });
+  await art.sync(token, { loopId, manifest });
+  for (const file of files.filter((f) => !f.oversize)) {
+    expect((await art.putBlob(token, sha256(file.bytes), file.bytes)).status).toBe(200);
+  }
   const r = await gw.report(runToken, { reportId: `018f47a2-9c2b-7d11-8f52-${run.id.replace(/-/g, "").slice(0, 12)}`, runId: run.id, result: "success" as const, durationMs: 1 });
   expect(r.status).toBe(200);
   return run;
@@ -164,7 +165,7 @@ test("getRunDiff: first run (no previous snapshot) shows everything as added", a
 
 test("getRunDiff degrades cleanly for a run with no snapshot (predates the feature)", async () => {
   const { machineId, loop } = await seed();
-  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: "2026-05-01T00:00:00.000Z" });
+  const run = await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: "2026-05-01T00:00:00.000Z" });
   const diff = await runDiff.computeRunDiff(run.id);
   expect(diff).toEqual({ hasSnapshot: false, files: [] });
 });

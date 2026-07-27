@@ -1,4 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { readByteBody } from '../gateway/http'
 import { safeDecode } from '../lib/url'
 
 /**
@@ -10,7 +11,7 @@ import { safeDecode } from '../lib/url'
  * This byte-ingress route is deliberately NOT rate limited: it requires a valid
  * registered device token (unknown ⇒ 401, not an unauthenticated surface) and is
  * already bounded by the sync hash-handshake (the server only accepts hashes it
- * asked THIS machine for) plus the per-loop 500MB / per-file 10MB byte caps. A
+ * asked THIS machine for) plus the per-file 10MB byte cap. A
  * large first sync bursts many concurrent PUTs on one token, so any limiter would
  * only throttle legitimate uploads without adding real protection.
  */
@@ -25,11 +26,10 @@ export const Route = createFileRoute('/api/machine/blob/$hash')({
         const hash = safeDecode(new URL(request.url).pathname.split('/').pop() ?? '')
         if (hash === null) return Response.json({ error: 'bad hash' }, { status: 400 })
         const { BLOB_CAP } = await import('../gateway/artifacts.js')
-        const declared = Number(request.headers.get('content-length') ?? '')
-        if (Number.isFinite(declared) && declared > BLOB_CAP)
-          return Response.json({ error: 'blob exceeds size cap' }, { status: 413 })
-        const buf = Buffer.from(await request.arrayBuffer())
-        if (buf.length > BLOB_CAP) return Response.json({ error: 'blob exceeds size cap' }, { status: 413 })
+        const body = await readByteBody(request, BLOB_CAP)
+        if (body.kind === 'too-large') return Response.json({ error: 'blob exceeds size cap' }, { status: 413 })
+        if (body.kind === 'invalid') return Response.json({ error: 'could not read blob body' }, { status: 400 })
+        const buf = Buffer.from(body.bytes.buffer, body.bytes.byteOffset, body.bytes.byteLength)
         const { getArtifactSync } = await import('../server/boot.js')
         const r = await (await getArtifactSync()).putBlob(token, hash, buf)
         return Response.json(r.body, { status: r.status })

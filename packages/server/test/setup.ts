@@ -8,8 +8,8 @@ import path from "node:path";
 delete process.env.DATABASE_URL;
 
 // Isolate the data dir per vitest worker: without this, any test that reaches
-// db/index.ts through a STATIC import chain (e.g. notify.test.ts -> notify.ts ->
-// store.ts) opens a PGlite on the developer's REAL ~/.pievo/pgdata - the same
+// db/index.ts through a static import chain opens a PGlite on the developer's
+// REAL ~/.pievo/pgdata - the same
 // live data dir a running `pnpm dev` uses (pglite data dirs are single-instance,
 // so a concurrent open risks corrupting the dev database, and test rows would
 // pollute it either way). Test files that mkdtemp their own dir before

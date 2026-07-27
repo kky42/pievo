@@ -1,31 +1,28 @@
 /**
- * `pievo log` — indexed terminal history, aggregates, and bounded run detail.
+ * `pievo log` — bounded terminal history and run detail.
  * Every mode, including `--json`, is rendered by the server and printed verbatim;
  * provider transcripts are not a daemon telemetry or CLI surface.
  *
  * Like `pievo loops`/`edit`, this is an owner-OUTSIDE-a-run command: it goes
  * through the shared CLI client (`postCli`), which reuses the device token + server
- * URL the daemon persisted under ~/.pievo and POSTs `{argv}` to the unified
- * `/api/machine/cli`, falling back to the legacy `/api/machine/log` on a 404 (old
- * server). No run token, no re-auth — the machine is already connected.
+ * URL the daemon persisted under ~/.pievo and POSTs `{argv}` to
+ * `/api/machine/cli`. No run token, no re-auth — the machine is already connected.
  *
- * The loop is resolved like the watcher resolves what to watch: an explicit
- * `<loop>` id wins; otherwise the current working directory is matched against
- * each loop's folder (`resolveLoopDir`), so running it inside a loop's workdir
+ * An explicit `<loop>` id wins; otherwise the current working directory is
+ * matched against each loop's configured workdir (`resolveLoopDir`), so running there
  * finds that loop — a CLIENT-side resolution, since the server's `log` dispatch
  * needs an explicit loop id. Every external touch is an injectable seam for tests.
  */
 import path from "node:path";
 
-import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
-import { postCli, printTextOrTooOld } from "./cli-client.js";
+import type { PostCliDeps } from "./cli-client.js";
+import { postCli, printCliResponse } from "./cli-client.js";
 import { resolveLoopDir } from "./loopdir.js";
 
 export interface LoopRow {
   id: string;
   name: string;
-  workdir: string | null;
-  taskFile: string | null;
+  workdir: string;
 }
 
 export type LogDeps = {
@@ -56,17 +53,13 @@ function seams(d: LogDeps): Seams {
 
 /** Boolean flags that never take a value — so `log --json <loop>` keeps `<loop>`
  *  as a positional instead of swallowing it as `--json`'s argument. */
-const BOOL_FLAGS = new Set(["json", "summary", "diff", "help"]);
-const VALUE_FLAGS = ["run", "after", "through", "since", "until", "role", "status", "phase", "limit"] as const;
+const BOOL_FLAGS = new Set(["json", "diff", "help"]);
+const VALUE_FLAGS = ["run", "since", "until", "status", "phase", "limit"] as const;
 
 /** The daemon only recognizes syntax; the server owns semantic validation. */
 const LOG_FLAGS = new Set([...BOOL_FLAGS, ...VALUE_FLAGS, "server-url"]);
 
 /** `--k v` / `--k=v` pairs, bare/boolean `--flag` → true; everything else is positional. */
-function boolFlag(value: string | boolean | undefined): boolean {
-  return value === true || value === "true";
-}
-
 function parseArgs(args: string[]): { positional: string[]; flags: Record<string, string | boolean> } {
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
@@ -96,10 +89,9 @@ function parseArgs(args: string[]): { positional: string[]; flags: Record<string
 }
 
 /** Resolve the loop to read: an explicit id (matched by id, else name) wins;
- *  otherwise pick the loop whose folder contains the current directory (the most
- *  specific match if several nest). Returns the id, or an error explaining why. A
- *  `code` marks a structured P6 error (rendered `error:`/`code:` to stdout, exit 1);
- *  an uncoded error is a usage failure (prose to stderr, exit 2). */
+ * otherwise pick the loop whose workdir contains the current directory, choosing
+ * the most specific nested match. Coded errors go to stdout with exit 1; ordinary
+ * usage errors go to stderr with exit 2. */
 export type ResolveError = { error: string; code?: "NOT_FOUND" };
 export function resolveLoopId(
   loops: LoopRow[],
@@ -112,27 +104,24 @@ export function resolveLoopId(
     const byName = loops.filter((l) => l.name === explicit);
     if (byName.length === 1) return { id: byName[0]!.id, name: byName[0]!.name };
     if (byName.length > 1) return { error: `"${explicit}" matches multiple loops — pass the loop id instead` };
-    // An explicitly-named loop that doesn't exist is the P6 NOT_FOUND case (exit 1,
-    // structured to stdout) — NOT a usage error. Keep the actionable guidance.
+    // An explicit missing loop is a structured NOT_FOUND result, not a usage error.
     return { error: `no loop "${explicit}" on this machine — run \`pievo loops\` to list them`, code: "NOT_FOUND" };
   }
   if (loops.length === 0) return { error: "no loops on this machine yet" };
   const here = path.resolve(cwd);
   const matches = loops
-    .map((l) => ({ l, dir: resolveLoopDir({ loopId: l.id, workdir: l.workdir, taskFile: l.taskFile }) }))
+    .map((l) => ({ l, dir: resolveLoopDir({ workdir: l.workdir }) }))
     .filter(({ dir }) => here === dir || here.startsWith(dir + path.sep))
     // Most specific folder wins when loops nest.
     .sort((a, b) => b.dir.length - a.dir.length);
   if (matches.length === 0) {
-    return { error: "no loop folder matches this directory — pass a loop id, e.g. `pievo log <loop-id>` (`pievo loops` lists them)" };
+    return { error: "no loop workdir contains this directory — pass a loop id, e.g. `pievo log <loop-id>` (`pievo loops` lists them)" };
   }
   return { id: matches[0]!.l.id, name: matches[0]!.l.name };
 }
 
-/** Render a `resolveLoopId` failure. A coded error (NOT_FOUND) is a P6 structured
- *  error to STDOUT at exit 1 (`error: "<msg>"` / `code: <SLUG>`, the message quoted via
- *  JSON so backticks/quotes survive); an uncoded error stays a prose usage failure to
- *  stderr at exit 2. Shared by `pievo log` and `pievo show`. */
+/** Render a `resolveLoopId` failure. A coded error is structured stdout at
+ * exit 1; an uncoded error is a prose usage failure on stderr at exit 2. */
 export function renderResolveError(
   e: ResolveError,
   out: (s: string) => void,
@@ -169,20 +158,13 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   if (positional.length > 1) return d.err("pievo: log accepts at most one loop id or name\n"), 2;
   const missingValue = VALUE_FLAGS.find((key) => flags[key] === true);
   if (missingValue) return d.err(`pievo: --${missingValue} requires a value\n`), 2;
-  const limit = typeof flags["limit"] === "string" ? flags["limit"] : undefined;
-
   const notConnected = () =>
     d.err("pievo: this machine isn't connected yet — run `pievo daemon start --server-url … --connect-key …` first\n");
 
   // 1. List the machine's loops so we can resolve which one this directory belongs
   //    to (client-side — the server's unified `log` needs an explicit loop id).
-  const legacyLoops: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
-    const res = await fetchImpl(`${server}/api/machine/loop`, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
-    return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
-  };
-  const listed = await postCli(["loops"], legacyLoops, cliDeps);
+  const listed = await postCli(["loops"], cliDeps);
   if (listed.kind === "not-configured") return notConnected(), 2;
-  if (listed.kind === "read-error") return d.err(`pievo: cannot read ${listed.path}\n`), 1;
   if (listed.kind === "network-error") return d.err(`pievo: ${listed.message}\n`), 1;
   const listData = listed.body as { loops?: LoopRow[]; error?: string };
   if (listed.status >= 400 || !listData.loops) {
@@ -195,34 +177,14 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   // 2. Fetch the resolved loop's history. Canonicalize flags so the positional
   // loop used for client-side resolution is not sent twice.
   const forwarded: string[] = [];
-  for (const key of ["summary", "diff", "json"] as const) if (flags[key] === true || flags[key] === "true") forwarded.push(`--${key}`);
+  for (const key of ["diff", "json"] as const) if (flags[key] === true || flags[key] === "true") forwarded.push(`--${key}`);
   for (const key of VALUE_FLAGS) {
     const value = flags[key];
     if (typeof value === "string") forwarded.push(`--${key}`, value);
   }
   const logArgv = ["log", resolved.id, ...forwarded];
-  const advanced = [...BOOL_FLAGS].some((key) => key !== "help" && key !== "json" && boolFlag(flags[key])) ||
-    flags["json"] !== undefined || VALUE_FLAGS.some((key) => key !== "limit" && flags[key] !== undefined);
-  const legacyLog: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
-    if (advanced) {
-      return { status: 400, body: { text: 'error: "this server only supports legacy recent-list log; upgrade it for history flags"\ncode: SERVER_TOO_OLD', exitCode: 1 } };
-    }
-    const qs = new URLSearchParams({ loopId: resolved.id });
-    if (limit) qs.set("limit", limit);
-    const res = await fetchImpl(`${server}/api/machine/log?${qs.toString()}`, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
-    return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
-  };
-  const got = await postCli(logArgv, legacyLog, cliDeps);
+  const got = await postCli(logArgv, cliDeps);
   if (got.kind === "not-configured") return notConnected(), 2;
-  if (got.kind === "read-error") return d.err(`pievo: cannot read ${got.path}\n`), 1;
   if (got.kind === "network-error") return d.err(`pievo: ${got.message}\n`), 1;
-  // Unified servers before indexed history ignore advanced flags and retain their
-  // legacy `runs` channel. Fail loud instead of printing a successful wrong shape.
-  if (advanced && Array.isArray(got.body.runs)) {
-    d.out('error: "this server only supports legacy recent-list log; upgrade it for history flags"\ncode: SERVER_TOO_OLD\n');
-    return 1;
-  }
-  // All modes are a pure text sink. A text-less old server fails definitively;
-  // JSON is never reconstructed from retained structured channels.
-  return printTextOrTooOld(got.body, got.status, d.out);
+  return printCliResponse(got.body, got.status, d.out);
 }

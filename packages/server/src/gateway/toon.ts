@@ -1,11 +1,7 @@
 /**
- * gateway/toon.ts — a pure, dependency-free TOON serializer (the axi-conformance
- * spine, batch 1). Every `/api/machine/cli` verb renders its result through these
- * helpers into the response `text` field the daemon prints. Batch 1 rode the
- * structured JSON fields ALONGSIDE (superset body); batch 7 retired that — the
- * `/api/machine/cli` boundary (`finalizeCli`) now STRIPS to `{text, exitCode, loops,
- * runs}`, so `text` is the sole render channel (the legacy endpoints keep the full
- * structured bodies, they don't pass through `finalizeCli`).
+ * gateway/toon.ts — a pure, dependency-free TOON serializer. Every
+ * `/api/machine/cli` verb renders through these helpers into the response `text`
+ * field the daemon prints. `finalizeCli` retains only `{text, exitCode, loops, runs}`.
  *
  * TOON (token-oriented object notation, https://axi.md/) is the axi default output:
  * braces/commas/quotes omitted where unambiguous. The shapes this module produces
@@ -108,8 +104,8 @@ export function emptyList(name: string): string {
 
 /**
  * An inline array value on one line: `key[N]: a<sep>b<sep>c` (each item
- * scalar-rendered). Used for short lists that read better inline than as a block —
- * `applied[2]: cron, goal` (sep `, `) or `nextRuns[3]: "…" · "…"` (sep ` · `).
+ * scalar-rendered). Used for short lists that read better inline than as a block,
+ * such as `applied[2]: schedule, model`.
  */
 export function inlineArray(key: string, items: Scalar[], sep = ", "): string {
   return `${key}[${items.length}]: ${items.map(scalar).join(sep)}`;
@@ -128,7 +124,7 @@ export function helpBlock(lines: string[]): string {
  * slug, both to stdout. Slugs: VALIDATION_ERROR, FORBIDDEN, NOT_FOUND, CONFLICT,
  * UNAUTHORIZED, RATE_LIMITED, ERROR.
  *
- *   error: "status must be kept|no-change|blocked (got \"wibble\")"
+ *   error: "status must be keep|no-change|block (got \"wibble\")"
  *   code: VALIDATION_ERROR
  */
 export function errorBlock(message: string, code: string): string {

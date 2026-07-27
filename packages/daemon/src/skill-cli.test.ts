@@ -58,7 +58,7 @@ describe("pievo skill status — multi-agent", () => {
     expect(out).toContain(path.join(".agents", "skills", "pievo"));
   });
 
-  test.each(["--project", "--local"])("rejects retired project flag %s", async (flag) => {
+  test.each(["-g", "--global", "--project", "--local"])("rejects unsupported flag %s", async (flag) => {
     let err = "";
     const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
       err += String(chunk);

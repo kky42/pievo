@@ -4,7 +4,7 @@ import { sectionHeadCls } from './ui'
 
 /** Shared modal shell — Base UI Dialog handles focus trap, Esc, scroll lock.
  *  Content-height, optically centered — sized for the small form/compose dialogs
- *  (the old `detail`/`wide` variants died with the modal-era job/run views). */
+ *  (the old `detail`/`wide` variants died with the modal-era loop/run views). */
 export function Modal({
   open,
   onClose,
@@ -14,12 +14,10 @@ export function Modal({
   open: boolean
   onClose: () => void
   children: ReactNode
-  /** Two-column dialogs (e.g. a template's prompt + flow diagram) opt into a
-   *  wider shell; the default stays sized for the small compose/form dialogs. */
+  /** Content-heavy dialogs may opt into a wider shell. */
   wide?: boolean
 }) {
-  // Small dialogs sit optically high (top-46%); the tall two-column template modal
-  // centres true so it's balanced top-and-bottom, scrolling internally if needed.
+  // Small dialogs sit optically high; wide content centers vertically and scrolls.
   const pos = `-translate-y-1/2 max-h-[calc(100dvh-4rem)] ${wide ? 'top-1/2 max-w-[62rem]' : 'top-[46%] max-w-160'}`
   return (
     <Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>

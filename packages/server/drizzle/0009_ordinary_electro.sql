@@ -1,1 +1,0 @@
-ALTER TABLE "loops" ADD COLUMN "reasoning_effort" text;

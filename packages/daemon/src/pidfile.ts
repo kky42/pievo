@@ -20,8 +20,8 @@ import { PIEVO_DIR } from "./config.js";
 
 export const PID_FILE = path.join(PIEVO_DIR, "daemon.pid");
 
-/** A pidfile record: the daemon's pid plus a best-effort identity marker. */
-export type PidRecord = { pid: number; startTime?: string };
+/** A pidfile record: the daemon's pid plus its process identity marker. */
+export type PidRecord = { pid: number; startTime: string };
 
 /**
  * Best-effort process start time, used as a second identity field so a REUSED
@@ -48,25 +48,22 @@ export function writePidFile(pid: number = process.pid): void {
   try {
     fs.mkdirSync(PIEVO_DIR, { recursive: true });
     const startTime = processStartTime(pid);
-    const body = startTime ? `${pid}:${startTime}` : `${pid}`;
-    fs.writeFileSync(PID_FILE, `${body}\n`, { mode: 0o600 });
+    if (!startTime) return;
+    fs.writeFileSync(PID_FILE, `${pid}:${startTime}\n`, { mode: 0o600 });
   } catch {
     /* best-effort — daemon status/stop just won't see a local pid */
   }
 }
 
-/**
- * The pid + start-time recorded in the pidfile, or undefined if absent/garbage.
- * Back-compat: an old bare-`<pid>` file parses with `startTime` undefined.
- */
+/** The pid + start-time recorded in the pidfile, or undefined if absent/invalid. */
 export function readPidFile(): PidRecord | undefined {
   try {
     const raw = fs.readFileSync(PID_FILE, "utf8").trim();
     const sep = raw.indexOf(":");
-    const pidPart = sep === -1 ? raw : raw.slice(0, sep);
-    const startTime = sep === -1 ? undefined : raw.slice(sep + 1).trim() || undefined;
-    const pid = Number(pidPart);
-    return Number.isInteger(pid) && pid > 0 ? { pid, startTime } : undefined;
+    if (sep < 1) return undefined;
+    const pid = Number(raw.slice(0, sep));
+    const startTime = raw.slice(sep + 1).trim();
+    return Number.isInteger(pid) && pid > 0 && startTime ? { pid, startTime } : undefined;
   } catch {
     return undefined;
   }
@@ -108,12 +105,9 @@ export type PidCheckDeps = {
 
 /**
  * The pid of a daemon that is ACTUALLY ours and alive, or undefined. A pid is
- * "our daemon" iff it is alive AND (no recorded start-time, or the live process's
- * start-time still equals the one we recorded) — so a pid REUSED by an unrelated
- * process after an unclean crash (which left the pidfile behind) is NOT mistaken
- * for the daemon and never signaled. A dead pid OR a start-time mismatch is
- * cleared as a side effect so a stale file doesn't linger. When the start-time
- * can't be read at check time we degrade to alive-only (best-effort, never crash).
+ * "our daemon" iff it is alive and the live process start-time equals the recorded
+ * value. A reused pid is never signaled. A dead pid or identity mismatch is cleared;
+ * an unavailable live identity is left untouched and treated as uncertain.
  */
 export function verifiedRunningPid(deps: PidCheckDeps = {}): number | undefined {
   const readPid = deps.readPid ?? readPidFile;
@@ -126,12 +120,11 @@ export function verifiedRunningPid(deps: PidCheckDeps = {}): number | undefined 
     clearPid();
     return undefined;
   }
-  if (rec.startTime !== undefined) {
-    const live = startTime(rec.pid);
-    if (live !== undefined && live !== rec.startTime) {
-      clearPid();
-      return undefined;
-    }
+  const live = startTime(rec.pid);
+  if (live === undefined) return undefined;
+  if (live !== rec.startTime) {
+    clearPid();
+    return undefined;
   }
   return rec.pid;
 }

@@ -2,12 +2,12 @@
  * Best-effort local install of the pievo agent skill via the `npx skills` CLI
  * (vercel-labs/skills). Installed at USER scope to match the daemon's per-machine
  * scope: coding agents discover user-level skills from ANY workdir, so a loop agent
- * still triggers the create/update/evolve references no matter where it runs — no
+ * still discovers the connection/create/update references from any workdir — no
  * per-workdir copies scattering. It's fired at `pievo daemon start` (refreshing the install
  * to whatever daemon version just launched) and again after a successful
  * `pievo new`, and it NEVER blocks: any failure (no network, no npx, no write
- * permission, bundled skill absent) degrades silently to the always-working
- * /api/skill inline path. It just prints one status line. `pievo skill install`
+ * permission, bundled skill absent) degrades silently to the server's
+ * `/api/bootstrap` and served-reference path. It just prints one status line. `pievo skill install`
  * is the manual refresh command.
  *
  * MULTI-AGENT: the skill is installed for every coding agent pievo knows about
@@ -32,10 +32,6 @@
  * → ~/.claude/skills/pievo/ for Claude Code, ~/.agents/skills/pievo/ for Codex;
  * `-y` is non-interactive + idempotent-overwrite; `--copy` makes a self-contained
  * copy, no symlink into this package's temp dir).
- *
- * A PRE-EXISTING per-workdir skill copy left behind by the retired project-scope
- * installer is NOT auto-removed — it must be deleted by hand, or it shadows the
- * user-level skill (project scope wins in agent discovery).
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -164,7 +160,7 @@ export async function installSkill(opts: InstallOpts = {}): Promise<InstallOutco
   if (!bundledSkillAvailable(dir)) {
     return {
       ok: false,
-      line: "pievo skill: skipped (bundled skill not found — falling back to /api/skill)",
+      line: "pievo skill: skipped (bundled skill not found — use the server bootstrap flow)",
     };
   }
   const runner = opts.runner ?? defaultRunner;
@@ -179,7 +175,7 @@ export async function installSkill(opts: InstallOpts = {}): Promise<InstallOutco
     return { ok: true, line: `pievo skill: installed → ${where}` };
   }
   const why = firstLine(res.stderr) || firstLine(res.stdout) || `exit ${res.code}`;
-  return { ok: false, line: `pievo skill: skipped (${why}) — falling back to /api/skill` };
+  return { ok: false, line: `pievo skill: skipped (${why}) — use the server bootstrap flow` };
 }
 
 function firstLine(s: string): string {

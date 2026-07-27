@@ -29,7 +29,6 @@ const file = (overrides: Partial<ArtifactSummary> & { path: string }): ArtifactS
   updatedAt: '2026-07-07T08:00:00.000Z',
   binary: false,
   oversize: false,
-  meta: null,
   ...overrides,
 })
 
@@ -103,7 +102,7 @@ describe('ArtifactBody - markdown / oversize / binary', () => {
   it('renders markdown as formatted prose', async () => {
     const el = await mount(file({ path: 'notes/report.md' }))
     // The shared markdown pipeline emits a real heading node, not raw hashes.
-    expect(el.querySelector('.taskmd h1')?.textContent).toContain('Heading')
+    expect(el.querySelector('.artifact-markdown h1')?.textContent).toContain('Heading')
   })
 
   it('oversize (metadata-only) shows a no-bytes note, not an empty pane', async () => {

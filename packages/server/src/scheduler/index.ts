@@ -78,19 +78,11 @@ export class Scheduler {
   }
 
   runNow(id: string): Promise<QueueResult> {
-    return this.enqueue(id, { role: "exec", requestedBy: "owner" });
+    return this.enqueue(id, { requestedBy: "owner" });
   }
 
   enqueueInitialExec(id: string): Promise<QueueResult> {
-    return this.enqueue(id, { role: "exec", requestedBy: "system" });
-  }
-
-  evolveNow(id: string): Promise<QueueResult> {
-    return this.enqueue(id, { role: "evolve", requestedBy: "owner" });
-  }
-
-  requestSteer(id: string, instruction: string): Promise<QueueResult> {
-    return this.enqueue(id, { role: "steer", requestedBy: "owner", requestText: instruction });
+    return this.enqueue(id, { requestedBy: "system" });
   }
 
   /** Poll fallback and timer callback converge here. */
@@ -98,7 +90,7 @@ export class Scheduler {
     const advanced = await store.advanceDueSchedules(new Date().toISOString(), { machineId, loopId });
     for (const item of advanced) {
       this.addLoop(item.loop);
-      await this.wake(item.loop, item.run);
+      if (item.run) await this.wake(item.loop, item.run);
     }
     return advanced;
   }

@@ -29,7 +29,7 @@ describe("verifiedRunningPid (seams injected)", () => {
   test("dead pid → undefined, stale file cleared", () => {
     let cleared = false;
     const pid = verifiedRunningPid({
-      readPid: () => ({ pid: 7 }),
+      readPid: () => ({ pid: 7, startTime: "t1" }),
       alive: () => false,
       startTime: () => undefined,
       clearPid: () => { cleared = true; },
@@ -50,14 +50,14 @@ describe("verifiedRunningPid (seams injected)", () => {
     expect(cleared).toBe(true);
   });
 
-  test("start-time unreadable at check time → degrades to alive-only", () => {
+  test("start-time unreadable at check time remains uncertain", () => {
     const pid = verifiedRunningPid({
       readPid: () => ({ pid: 7, startTime: "t1" }),
       alive: () => true,
       startTime: () => undefined,
       clearPid: noClear,
     });
-    expect(pid).toBe(7);
+    expect(pid).toBeUndefined();
   });
 
   test("no pidfile → undefined", () => {
@@ -85,7 +85,7 @@ describe("clearPidFile ownership (real fs under a temp PIEVO_HOME)", () => {
 
     // Daemon #2 owns the file (pid 222); an exiting daemon #1 (pid 111) must not delete it.
     fs.mkdirSync(home, { recursive: true });
-    fs.writeFileSync(mod.PID_FILE, "222\n");
+    fs.writeFileSync(mod.PID_FILE, "222:start-two\n");
     mod.clearPidFile(111);
     expect(fs.existsSync(mod.PID_FILE)).toBe(true);
 
@@ -94,7 +94,7 @@ describe("clearPidFile ownership (real fs under a temp PIEVO_HOME)", () => {
     expect(fs.existsSync(mod.PID_FILE)).toBe(false);
 
     // …and the unconditional form (stale-file cleanup) still clears anything.
-    fs.writeFileSync(mod.PID_FILE, "333\n");
+    fs.writeFileSync(mod.PID_FILE, "333:start-three\n");
     mod.clearPidFile();
     expect(fs.existsSync(mod.PID_FILE)).toBe(false);
   });

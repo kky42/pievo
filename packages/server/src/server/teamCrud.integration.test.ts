@@ -3,6 +3,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
+import { testStore, type TestStore } from '../../test/store.js'
+
 /**
  * End-to-end proof of the Team CRUD lifecycle at the data boundary, over a REAL
  * pglite store. Drives `teamAdmin` directly (the ONE authorization + rules
@@ -17,7 +19,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 let tmp: string
 let db: typeof import('../db/index.js')
-let store: typeof import('../db/store.js')
+let store: TestStore
 let team: typeof import('./teamAdmin.js')
 let userTable: typeof import('../db/auth-schema.js').user
 
@@ -34,7 +36,7 @@ async function seedUser(id: string, email: string) {
 }
 
 async function seedLoop(teamId: string, name: string) {
-  await store.createLoop({ userId: ALICE, teamId, machineId: 'm_x', name, cron: '0 6 * * *' })
+  await store.createLoop({ workdir: "/work", userId: ALICE, teamId, machineId: 'm_x', name, cron: '0 6 * * *' })
 }
 
 beforeAll(async () => {
@@ -45,7 +47,7 @@ beforeAll(async () => {
 
   db = await import('../db/index.js')
   await db.runMigrations()
-  store = await import('../db/store.js')
+  store = testStore(await import('../db/store.js'))
   team = await import('./teamAdmin.js')
   userTable = (await import('../db/auth-schema.js')).user
 
@@ -112,15 +114,12 @@ describe('create / rename / delete lifecycle', () => {
     expect(await store.getTeam(id)).toBeUndefined()
   })
 
-  it('deleteTeam cascades channels, members, and invites but leaves other teams', async () => {
+  it('deleteTeam cascades members and invites but leaves other teams', async () => {
     const id = await freshTeam('Cascade')
     await store.addTeamMember(id, BOB, 'member')
-    await store.createChannel({ teamId: id, type: 'telegram', name: 'ch', config: { botToken: 'x', chatId: 'y' } })
     await team.createInvite(ALICE, id, 'member', Date.now())
-    expect((await store.listChannels(id)).length).toBe(1)
 
     await team.deleteTeam(ALICE, id)
-    expect((await store.listChannels(id)).length).toBe(0)
     expect(await store.getTeamMember(id, BOB)).toBeUndefined()
     expect((await store.listPendingInvites(id)).length).toBe(0)
     // Bob's own personal team is untouched.

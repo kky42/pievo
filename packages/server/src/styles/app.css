@@ -21,7 +21,7 @@
  *   3. RUBIK SEMANTIC HUES - the six cube colors each own ONE meaning:
  *      green = success/resolved/completed, red = error/destructive,
  *      orange = warning/failure streak, yellow = running/pending,
- *      blue = interactive/new/evolve, white = surface itself.
+ *      blue = interactive/new, white = surface itself.
  *      The raw cube hue is a "signal light" (dots, solid fills) and stays
  *      identical across modes; text/borders use the contrast-tuned base tokens
  *      below, and `-soft` steps tint chip/hint backgrounds.
@@ -34,8 +34,7 @@
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
   --font-display: ui-serif, "New York", Georgia, "Times New Roman", serif;
-  /* Pixel display face - the brand wordmark + the Playbook section's big titles
-     ONLY (self-hosted, see @font-face below). Never body copy. */
+  /* Pixel display face for the brand wordmark only. */
   --font-pixel: "Geist Pixel", ui-monospace, "SF Mono", Menlo, monospace;
 
   /* Apple-scale radii -> rounded-control / rounded-card / rounded-sheet */
@@ -90,8 +89,7 @@
 
   /*
    * Contrast-tuned semantic inks (text/borders) + `-soft` chip backgrounds.
-   * Legacy names kept (accent/success/interactive) so existing call sites keep
-   * meaning: accent = the red, success = the green, interactive = the blue.
+   * Semantic names: accent = red, success = green, interactive = blue.
    * The -soft values are low-alpha tints of each hue with HAND-TUNED alphas
    * (yellow needs ~2x red's alpha to read at all) - deliberately not a single
    * color-mix formula. Dark mode lightens the inks and deepens the softs
@@ -108,26 +106,16 @@
   --color-running: #8a6d00;      /* yellow's text-safe ink; the dot uses rubik-yellow */
   --color-running-soft: rgba(255, 213, 0, 0.16);
 
-  /*
-   * Functional run-result ramp. Role chooses copy (exec/steer/evolve); severity
-   * chooses color: gray = normal no-change, green = kept, red = blocked/error,
-   * amber = protocol warning. Reused by the timeline gauge and status pills.
-   */
-  --color-run-kept: var(--color-success);
+  /* Functional run-result ramp: green keep, gray no-change, yellow block,
+   * red infrastructure error, and amber protocol warning. */
+  --color-run-keep: var(--color-success);
   --color-run-no-change: var(--color-secondary);
-  --color-run-blocked: var(--color-accent);
-  --color-run-error: color-mix(in srgb, var(--color-accent) 82%, var(--color-running));
-  --color-run-warning: var(--color-running);
+  --color-run-block: var(--color-running);
+  --color-run-error: var(--color-accent);
+  --color-run-warning: var(--color-warn);
   --color-run-canceled: var(--color-disabled);
   --color-run-queued: var(--color-secondary);
-  --color-run-active-exec: var(--color-display);
-  --color-run-active-steer: color-mix(in srgb, var(--color-accent) 55%, var(--color-interactive));
-  --color-run-active-evolve: var(--color-interactive);
-  /* Legacy aliases kept for old CSS/test references while run result colors settle. */
-  --color-run-nothing: var(--color-run-no-change);
-  --color-run-new: var(--color-run-kept);
-  --color-run-resolved: var(--color-run-kept);
-  --color-run-silent: var(--color-run-canceled);
+  --color-run-active: var(--color-display);
 
   /*
    * Diff line tints for the run-detail Changes view - green = added, red =
@@ -138,16 +126,6 @@
   --color-diff-del-bg: rgba(183, 18, 52, 0.08);
   --color-diff-hunk-bg: var(--color-raised);
 
-  /*
-   * Chart series ramp (shadcn-style --chart-N naming): display ink first,
-   * then the Rubik semantic inks. Consumed by the Recharts-backed LoopChart;
-   * tracks light/dark automatically via the base tokens.
-   */
-  --color-chart-1: var(--color-display);
-  --color-chart-2: var(--color-interactive);
-  --color-chart-3: var(--color-success);
-  --color-chart-4: var(--color-accent);
-  --color-chart-5: var(--color-secondary);
 }
 
 /*
@@ -232,110 +210,39 @@
 }
 
 /*
- * Template fan - a hand of tilted cards on the dashboard hero. The tilt/lift
- * ride on custom props set inline per card (computed from its index); hover
- * straightens and floats the card above its siblings.
- */
-.fan-card {
-  transform: rotate(var(--tilt, 0deg)) translateY(var(--lift, 0px));
-  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
-}
-.fan-card:hover,
-.fan-card:focus-visible {
-  transform: rotate(0deg) translateY(-6px) scale(1.04);
-  z-index: 3;
-}
-
-/*
- * Agent-authored dashboard (generative UI, `LoopView`). DEFAULT layout is a
- * responsive grid so independent top-level panels sit side by side on desktop
- * (the motivating case: calendar left, rendered document right) and stack on
- * narrow viewports. The layout is capped at AT MOST TWO columns: an uncapped
- * `auto-fit` let a wide (~1180px) content area spill panels into 3+ narrow
- * columns, squeezing a kanban's own columns and card titles. The per-track min
- * `min(100%, max(28rem, (100% - var(--loopview-gap)) / 2))` guarantees the cap:
- * the `(100% - gap) / 2` term is never smaller than half the row, so no third
- * track can ever fit, while `auto-fit` still collapses to ONE full-width column
- * both when a single panel is present (no regression for chart-only /
- * single-embed dashboards) and when the container is too narrow to hold two
- * readable panels (~below 916px, where the 28rem floor wins). The outer
- * `min(100%, ...)` clamp keeps a lone panel from overflowing a container
- * narrower than the 28rem floor (mobile/phone widths), so a single panel never
- * forces an internal horizontal scroll. The gap is a shared `--loopview-gap`
- * custom property used in BOTH the track formula and the `gap` declaration so
- * the two-column cap math can never drift from the actual gap. `align-items:
- * start` stops a short panel (a calendar) from stretching to a tall neighbour's
- * (a long document) height.
- *
- * Headings, prose, AND content blocks (lists, tables, code, quotes, figures,
- * images) span the full width so ONLY block panels (the custom loop-* elements +
- * their div wrappers) tile - a top-level intro line, list, or table never becomes
- * a lone narrow column. A top-level <section> joins header/footer as a full-width
- * semantic container; explicit <div> wrappers still tile (the intended two-column
- * panel mechanism).
- */
-.loopview {
-  --loopview-gap: 1.25rem;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(28rem, (100% - var(--loopview-gap)) / 2)), 1fr));
-  gap: var(--loopview-gap);
-  align-items: start;
-}
-.loopview > h1,
-.loopview > h2,
-.loopview > h3,
-.loopview > h4,
-.loopview > h5,
-.loopview > h6,
-.loopview > p,
-.loopview > hr,
-.loopview > header,
-.loopview > footer,
-.loopview > section,
-.loopview > ul,
-.loopview > ol,
-.loopview > table,
-.loopview > pre,
-.loopview > blockquote,
-.loopview > figure,
-.loopview > img {
-  grid-column: 1 / -1;
-}
-
-/*
- * Rendered task-file markdown - a calm document inside the app. Sans body for
+ * Rendered artifact markdown - a calm document inside the app. Sans body for
  * prose, ink headings, mono ONLY for code; no card/box. Prose wraps naturally,
  * so the raw file's runaway horizontal scroll is gone - only fenced code may
  * scroll across.
  */
-.taskmd {
+.artifact-markdown {
   font-family: var(--font-sans);
   font-size: 13px;
   line-height: 1.6;
   color: var(--color-secondary);
 }
-.taskmd > :first-child { margin-top: 0; }
-.taskmd h1, .taskmd h2, .taskmd h3, .taskmd h4 {
+.artifact-markdown > :first-child { margin-top: 0; }
+.artifact-markdown h1, .artifact-markdown h2, .artifact-markdown h3, .artifact-markdown h4 {
   color: var(--color-display);
   font-weight: 600;
   line-height: 1.3;
   margin: 1.1em 0 0.4em;
 }
-.taskmd h1 { font-size: 15px; }
-.taskmd h2 { font-size: 13.5px; }
-.taskmd h3, .taskmd h4 { font-size: 12.5px; }
-.taskmd p { margin: 0.5em 0; }
-.taskmd ul, .taskmd ol { margin: 0.5em 0; padding-left: 1.3em; }
-.taskmd ul { list-style: disc; }
-.taskmd ol { list-style: decimal; }
-.taskmd li { margin: 0.2em 0; }
-.taskmd a {
+.artifact-markdown h1 { font-size: 15px; }
+.artifact-markdown h2 { font-size: 13.5px; }
+.artifact-markdown h3, .artifact-markdown h4 { font-size: 12.5px; }
+.artifact-markdown p { margin: 0.5em 0; }
+.artifact-markdown ul, .artifact-markdown ol { margin: 0.5em 0; padding-left: 1.3em; }
+.artifact-markdown ul { list-style: disc; }
+.artifact-markdown ol { list-style: decimal; }
+.artifact-markdown li { margin: 0.2em 0; }
+.artifact-markdown a {
   color: var(--color-interactive);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.taskmd strong { color: var(--color-primary); font-weight: 600; }
-.taskmd code {
+.artifact-markdown strong { color: var(--color-primary); font-weight: 600; }
+.artifact-markdown code {
   font-family: var(--font-mono);
   font-size: 0.9em;
   background: var(--color-surface);
@@ -343,7 +250,7 @@
   border-radius: 4px;
   overflow-wrap: anywhere; /* long inline URLs/tokens wrap instead of overflowing */
 }
-.taskmd pre {
+.artifact-markdown pre {
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
@@ -355,14 +262,14 @@
   overflow-wrap: anywhere;
   margin: 0.6em 0;
 }
-.taskmd pre code { background: none; padding: 0; }
-.taskmd blockquote {
+.artifact-markdown pre code { background: none; padding: 0; }
+.artifact-markdown blockquote {
   border-left: 2px solid var(--color-wire);
   padding-left: 12px;
   color: var(--color-disabled);
   margin: 0.6em 0;
 }
-.taskmd hr { border: 0; border-top: 1px solid var(--color-hairline); margin: 1em 0; }
+.artifact-markdown hr { border: 0; border-top: 1px solid var(--color-hairline); margin: 1em 0; }
 /*
  * A wide table scrolls WITHIN its own pane instead of stretching the panel (and
  * with it the whole page) - the GitHub-markdown pattern: a max-content block
@@ -370,7 +277,7 @@
  * this a multi-column table in a synced artifact shoves the runs rail
  * off-screen.
  */
-.taskmd table {
+.artifact-markdown table {
   display: block;
   width: max-content;
   max-width: 100%;
@@ -378,8 +285,8 @@
   border-collapse: collapse;
   margin: 0.6em 0;
 }
-.taskmd th, .taskmd td { border: 1px solid var(--color-hairline); padding: 4px 8px; text-align: left; white-space: nowrap; }
-.taskmd img { max-width: 100%; }
+.artifact-markdown th, .artifact-markdown td { border: 1px solid var(--color-hairline); padding: 4px 8px; text-align: left; white-space: nowrap; }
+.artifact-markdown img { max-width: 100%; }
 
 /*
  * Minimal scrollbars - thin, trackless, monochrome. Firefox uses
@@ -514,141 +421,4 @@
 /* The runner parks at its home sticker instead of chasing. */
 @media (prefers-reduced-motion: reduce) {
   .ring-logo-animated .ring-cell { animation: none; }
-}
-
-/* ─── LoopFlow — template-modal flow diagram (components/LoopFlow.tsx) ─────
- * Absolutely-positioned HTML step nodes over an SVG wire layer; a token rides
- * the wire and lights each step in turn. Colours ride the theme vars so it
- * follows light/dark for free. The .active/.visited classes are toggled
- * imperatively by the rAF loop (not React), so they live here to survive the
- * DOM writes — same reason the ring-logo chase classes sit in this file. Nodes
- * are opaque (never a translucent tint) so the wire/comet behind can't ghost
- * through the box. */
-.lpf-node {
-  position: absolute;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
-  padding: 0 11px;
-  border: 1px solid var(--color-wire);
-  border-radius: 11px;
-  background: var(--color-surface);
-  transition: border-color 0.3s, box-shadow 0.3s, transform 0.3s;
-}
-.lpf-node.tick {
-  border-color: color-mix(in srgb, var(--color-interactive) 45%, var(--color-wire));
-  background: color-mix(in srgb, var(--color-interactive) 7%, var(--color-surface));
-}
-/* The one-time setup gate — a dashed pre-node above the tick, outside the cycle. */
-.lpf-node.setup {
-  border-style: dashed;
-}
-.lpf-node.setup .lpf-k {
-  color: var(--color-warn);
-}
-.lpf-node.visited {
-  border-color: color-mix(in srgb, var(--color-interactive) 40%, var(--color-wire));
-}
-.lpf-node.active {
-  border-color: var(--color-interactive);
-  box-shadow: 0 0 0 3px var(--color-interactive-soft), 0 10px 24px -12px var(--color-interactive);
-  transform: translateY(-2px);
-}
-.lpf-k {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-family: var(--font-mono);
-  font-size: 8.5px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--color-disabled);
-}
-.lpf-node.tick .lpf-k,
-.lpf-node.active .lpf-k {
-  color: var(--color-interactive);
-}
-.lpf-k .g {
-  font-size: 11px;
-}
-.lpf-t {
-  font-size: 12.5px;
-  font-weight: 650;
-  line-height: 1.15;
-  letter-spacing: -0.01em;
-  color: var(--color-display);
-}
-.lpf-node.tick .lpf-t {
-  color: var(--color-interactive);
-}
-.lpf-d {
-  font-size: 10.5px;
-  line-height: 1.28;
-  color: var(--color-secondary);
-}
-.lpf-d code {
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-.lpf-wire {
-  stroke: color-mix(in srgb, var(--color-interactive) 55%, transparent);
-}
-.lpf-comet {
-  stroke: var(--color-interactive);
-}
-.lpf-pulse {
-  fill: var(--color-interactive);
-}
-@media (prefers-reduced-motion: reduce) {
-  .lpf-pulse,
-  .lpf-comet {
-    display: none;
-  }
-}
-
-/*
- * Loop Playbook roles diagram (LoopPlaybook.tsx RolesFlow) - a 9s narrative
- * cycle that walks the dispatch story: trigger + orchestrator -> executors ->
- * verifiers -> proof -> report-back. Each element opts in with `.lpb-stage`
- * (cards: soft ring in its role ink) or `.lpb-flow` (connectors: brighten),
- * `--lpb-i` picks its 1.8s slot and `--lpb-c` its highlight ink. Negative
- * delays keep all slots in phase from first paint.
- */
-@keyframes lpb-stage-hl {
-  0%, 20%, 100% {
-    box-shadow: var(--shadow-card);
-  }
-  5%, 15% {
-    box-shadow:
-      var(--shadow-card),
-      0 0 0 3px color-mix(in srgb, var(--lpb-c, var(--color-interactive)) 22%, transparent),
-      0 10px 24px -10px color-mix(in srgb, var(--lpb-c, var(--color-interactive)) 50%, transparent);
-  }
-}
-@keyframes lpb-flow-hl {
-  0%, 20%, 100% {
-    opacity: 0.45;
-  }
-  5%, 15% {
-    opacity: 1;
-  }
-}
-.lpb-stage {
-  animation: lpb-stage-hl 9s ease-in-out infinite;
-  animation-delay: calc(var(--lpb-i, 0) * 1.8s - 9s);
-}
-.lpb-flow {
-  opacity: 0.45;
-  animation: lpb-flow-hl 9s ease-in-out infinite;
-  animation-delay: calc(var(--lpb-i, 0) * 1.8s - 9s);
-}
-@media (prefers-reduced-motion: reduce) {
-  .lpb-stage,
-  .lpb-flow {
-    animation: none;
-    opacity: 1;
-  }
 }

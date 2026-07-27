@@ -191,7 +191,7 @@ export async function deleteTeam(userId: string, teamId: string): Promise<Result
 // ---- members ----
 
 /** Direct-add-by-email fast path (design §4 option A): add an EXISTING account to
- *  the team immediately. No account yet ⇒ steer the owner to an invite link. */
+ *  the team immediately. No account yet ⇒ direct the owner to an invite link. */
 export async function addMemberByEmail(
   userId: string,
   teamId: string,

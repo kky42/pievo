@@ -2,38 +2,33 @@
  * Server functions backing the dashboard. They run server-side (createServerFn
  * → RPC) and call the IN-PROCESS scheduler + store directly — the scheduler
  * lives in this same TanStack process (booted on first call via ensureServer).
- * The machine-facing endpoints (poll / agent-api / report) are sibling server
- * routes in this same process, so one process owns the single scheduler.
+ * The machine-facing poll, CLI, report, and artifact-sync endpoints are sibling
+ * server routes in this same process, so one process owns the single scheduler.
  *
- * Shared workspace (v1): no per-user filtering — every signed-in user sees all
- * loops/machines. `userId` is creator attribution only.
+ * Reads and writes are scoped through requestScope/ownedLoop so users only see
+ * teams and loops their current session is authorized to access.
  */
 import { createServerFn } from '@tanstack/react-start'
 
 import type {
   ArtifactContent,
   ArtifactSummary,
-  ChartRun,
   CodingAgent,
-  JobDetail,
-  JobPayload,
-  JobSummary,
+  LoopDetail,
+  LoopPayload,
+  LoopSummary,
   MutationResult,
   RunDiffResult,
   RunSummary,
   TeamsView,
-  TemplateInfo,
 } from '../types'
-import { coerceCodingAgent } from '../types'
 import * as store from '../db/store.js'
-import type { MetricField } from '../db/schema.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
-import { toJobDetail, toJobSummary, toRunSummaries } from './adapters.js'
-import { normalizeProviderSetting, validateSchema, validateSteerInstruction } from '../gateway/validate.js'
+import { toLoopDetail, toLoopSummary, toRunSummaries } from './loopProjection.js'
+import { validateLoopEdit } from '../gateway/loopConfig.js'
 import { machinePresence } from '../lib/machinePresence.js'
-import { DAEMON_PROTOCOL_VERSION } from '../gateway/compat.js'
-import { TEMPLATES } from './templates.js'
+import { DAEMON_PROTOCOL_VERSION } from '../gateway/protocol.js'
 
 function backend() {
   return ensureServer()
@@ -53,7 +48,7 @@ async function ownedLoop(id: string) {
   // team, so a cross-team link works; a non-member is indistinguishable from a
   // missing loop.
   if (!(await canAccessLoop(loop.teamId, scope))) return undefined
-  // Hand back the scope too — callers that mutate (e.g. patchJob) need `enforce`
+  // Hand back the scope too — callers that mutate (e.g. patchLoop) need `enforce`
   // and would otherwise re-run requestScope() (a second session decrypt).
   return { loop, enforce: scope.enforce, teamId: scope.teamId }
 }
@@ -128,38 +123,39 @@ export const getDefaultTeam = createServerFn({ method: 'GET' }).handler(async ()
  *  Gate on ⇒ only the given/active team's loops; open mode ⇒ the full shared list.
  *  An explicit `teamId` (the `/t/<id>` route) scopes this request independent of
  *  the cookie, so different tabs on /t/A and /t/B list different teams at once. */
-export const listJobs = createServerFn({ method: 'GET' })
+export const listLoops = createServerFn({ method: 'GET' })
   .validator((teamId?: string) => teamId)
   .handler(async ({ data: teamId }) => {
     await backend()
     const { enforce, userId, teamId: active } = await requestScope(teamId)
-    if (enforce && !userId) return [] as JobSummary[]
+    if (enforce && !userId) return [] as LoopSummary[]
     // Scope to the resolved active team (open mode ⇒ no team filter, the single
     // shared workspace).
     const loops = (await store.listLoops(enforce ? active : undefined)).sort((a, b) =>
       a.createdAt < b.createdAt ? 1 : -1,
     )
-    return (await Promise.all(loops.map(toJobSummary))) as JobSummary[]
+    return (await Promise.all(loops.map(toLoopSummary))) as LoopSummary[]
   })
 
-/** GET — full detail (job + summary + reversed runs). */
-export const getJobDetail = createServerFn({ method: 'GET' })
+/** GET — full detail (loop + summary + reversed runs). */
+export const getLoopDetail = createServerFn({ method: 'GET' })
   .validator((id: string) => id)
-  .handler(async ({ data: id }): Promise<JobDetail> => {
+  .handler(async ({ data: id }): Promise<LoopDetail> => {
     await backend()
     const owned = await ownedLoop(id)
     // Generic, enumeration-safe copy: a nonexistent loop and one in a team the
     // caller can't access return the SAME message (never confirm a loop exists to
     // someone without access).
     if (!owned) throw new Error('This loop does not exist, or you do not have access to it.')
-    const detail = await toJobDetail(owned.loop)
+    const detail = await toLoopDetail(owned.loop)
     // Team context for the header: which team owns the loop and whether it's the
     // caller's active team. Only under the gate (open mode is a single workspace).
     // When it isn't the active team (a member opened a cross-team link), the header
     // offers a "switch to this team" affordance.
-    if (owned.enforce && owned.loop.teamId) {
+    if (owned.enforce) {
       const team = await store.getTeam(owned.loop.teamId)
-      detail.team = { id: owned.loop.teamId, name: team?.name ?? 'Unknown team', isActive: owned.loop.teamId === owned.teamId }
+      if (!team) throw new Error(`invariant: loop ${owned.loop.id} references missing team ${owned.loop.teamId}`)
+      detail.team = { id: owned.loop.teamId, name: team.name, isActive: owned.loop.teamId === owned.teamId }
     }
     return detail
   })
@@ -173,17 +169,6 @@ export const loadOlderRuns = createServerFn({ method: 'GET' })
     if (!(await ownedLoop(data.loopId))) return []
     const limit = Math.min(Math.max(data.limit ?? 16, 1), 100)
     return toRunSummaries(data.loopId, await store.listRunsBefore(data.loopId, data.beforeTs, limit))
-  })
-
-/** GET — the latest 100 successful exec rows needed by dashboard charts. This is a
- * compact, authorized read: role filtering happens before the fixed limit, and
- * messages/provider telemetry never ride the response. */
-export const getChartRuns = createServerFn({ method: 'GET' })
-  .validator((d: { loopId: string }) => d)
-  .handler(async ({ data }): Promise<ChartRun[]> => {
-    await backend()
-    if (!(await ownedLoop(data.loopId))) return []
-    return store.listChartRuns(data.loopId, 100)
   })
 
 /** GET — the loop's current live-synced files (metadata only; path-sorted). */
@@ -207,7 +192,7 @@ export const getArtifact = createServerFn({ method: 'GET' })
     return readLoopArtifact(data.loopId, data.path)
   })
 
-/** GET — a run's per-file diff vs the previous run (Phase 3). Lazy by runId like
+/** GET — a run's per-file diff vs the previous run. Lazy by runId like
  *  computed on the server at read time (no stored diffs). Old runs
  *  with no snapshot return `hasSnapshot: false` for the degrade copy. */
 export const getRunDiff = createServerFn({ method: 'GET' })
@@ -221,79 +206,29 @@ export const getRunDiff = createServerFn({ method: 'GET' })
     return computeRunDiff(data.runId)
   })
 
-// ---- catalog ----
-
-export const listTemplates = createServerFn({ method: 'GET' }).handler((): TemplateInfo[] => {
-  // The file-based template registry (server/templates.ts): canned loop intents shown
-  // as cards beside "New Loop". Metadata only — the description rides the snippet.
-  return TEMPLATES
-})
-
 // ---- writes (apply via the live in-process Scheduler) ----
 
-export const patchJob = createServerFn({ method: 'POST' })
-  .validator((d: { id: string; patch: JobPayload }) => d)
+export const patchLoop = createServerFn({ method: 'POST' })
+  .validator((d: { id: string; patch: LoopPayload }) => d)
   .handler(async ({ data }): Promise<MutationResult> => {
     const { scheduler } = await backend()
     const owned = await ownedLoop(data.id)
     if (!owned) return { error: 'not found' }
-    const { enforce } = owned
     const p = data.patch
-    if (p.scheduleMode !== undefined && p.scheduleMode !== 'cron' && p.scheduleMode !== 'continuous') {
-      return { error: 'scheduleMode must be cron|continuous' }
+    {
+      const validated = validateLoopEdit(owned.loop, p)
+      if (!validated.ok) return { error: validated.detail }
+      const loop = await store.updateLoop(data.id, validated.value)
+      if (!loop) return { error: 'not found' }
+      if (loop.enabled) scheduler.addLoop(loop)
+      else scheduler.removeLoop(loop.id)
+      return { ok: true }
     }
-    if (p.continuousDelayMinutes !== undefined && (!Number.isInteger(p.continuousDelayMinutes) || p.continuousDelayMinutes < 1)) {
-      return { error: 'continuousDelayMinutes must be an integer >= 1' }
-    }
-    // A chosen channel must belong to the LOOP's team — not the requester's active
-    // team (an admin patching from another team's view, or the All-teams aggregate,
-    // would otherwise reject the loop's own valid channels / accept foreign ones).
-    if (p.channelId && enforce && (await store.getChannel(p.channelId))?.teamId !== owned.loop.teamId) {
-      return { error: 'channel not found' }
-    }
-    // Enforce the SAME agent enum as the gateway/CLI edit surface via the shared
-    // validator: coerce once (null when absent or unrecognized) and only write a
-    // known value, so the web surface can't persist an arbitrary agent string.
-    const agent = coerceCodingAgent(p.agent)
-    let metricSchema: MetricField[] | null | undefined
-    if (p.metricSchema !== undefined) {
-      if (p.metricSchema === null) metricSchema = null
-      else {
-        const validated = await validateSchema(data.id, p.metricSchema)
-        if (!validated.ok) return { error: validated.detail }
-        metricSchema = validated.value
-      }
-    }
-    const loop = await store.updateLoop(data.id, {
-      ...(p.name !== undefined ? { name: p.name.trim() || null } : {}),
-      ...(p.cron !== undefined ? { cron: p.cron } : {}),
-      ...(p.scheduleMode !== undefined ? { scheduleMode: p.scheduleMode } : {}),
-      ...(p.continuousDelayMinutes !== undefined ? { continuousDelayMinutes: p.continuousDelayMinutes } : {}),
-      ...(p.notify !== undefined ? { notify: p.notify as 'auto' | 'always' | 'never' } : {}),
-      ...(p.channelId !== undefined ? { channelId: p.channelId || null } : {}),
-      ...(p.enabled !== undefined ? { enabled: !!p.enabled } : {}),
-      ...(agent ? { agent } : {}),
-      // Goal is optional standing guidance; setting or clearing it does not alter lifecycle.
-      ...(p.goal !== undefined ? { goal: p.goal?.trim() || null } : {}),
-      ...(p.taskFile !== undefined ? { taskFile: p.taskFile.trim() || null } : {}),
-      ...(p.metricSchema !== undefined ? { metricSchema: metricSchema ?? null } : {}),
-      ...(p.ui !== undefined ? { ui: store.coerceUi(p.ui) ?? null } : {}),
-      ...(p.exec?.workdir !== undefined ? { workdir: p.exec.workdir.trim() || null } : {}),
-      ...(p.exec?.model !== undefined ? { model: normalizeProviderSetting(p.exec.model) } : {}),
-      ...(p.exec?.reasoningEffort !== undefined ? { reasoningEffort: normalizeProviderSetting(p.exec.reasoningEffort) } : {}),
-      ...(p.exec?.allowControl !== undefined ? { allowControl: !!p.exec.allowControl } : {}),
-    })
-    if (!loop) return { error: 'not found' }
-    // updateLoop synchronously committed the lifecycle/cadence facts; this only
-    // refreshes the in-memory latency hint.
-    if (loop.enabled) scheduler.addLoop(loop)
-    else scheduler.removeLoop(loop.id)
-    return { ok: true }
   })
 
 /** Dedicated lifecycle operations. Dashboard callers never synthesize these
- * transitions with patchJob: each delegates to the loop-locked store operation. */
-export const pauseJob = createServerFn({ method: 'POST' })
+ * transitions with patchLoop: each delegates to the loop-locked store operation. */
+export const pauseLoop = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<MutationResult> => {
     const { scheduler } = await backend()
@@ -304,7 +239,7 @@ export const pauseJob = createServerFn({ method: 'POST' })
     return { ok: true }
   })
 
-export const startJob = createServerFn({ method: 'POST' })
+export const startLoop = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<MutationResult> => {
     const { scheduler } = await backend()
@@ -317,7 +252,7 @@ export const startJob = createServerFn({ method: 'POST' })
     return { ok: true }
   })
 
-export const stopJob = createServerFn({ method: 'POST' })
+export const stopLoop = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<MutationResult> => {
     const { scheduler } = await backend()
@@ -337,7 +272,7 @@ export const stopJob = createServerFn({ method: 'POST' })
  * Stop-and-wait path; a machine already offline at click time cannot acknowledge
  * Stop, so retire its execution authority and remove server data immediately.
  * Local files are never touched by either path. */
-export const deleteJob = createServerFn({ method: 'POST' })
+export const deleteLoop = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<MutationResult> => {
     const { scheduler } = await backend()
@@ -374,7 +309,7 @@ const FORCE_DELETE_CONFIRMATION = 'delete-server-data-anyway'
 
 /** Destructive uncertainty escape hatch. Team owners only; the explicit marker
  * is the server-side half of the Dashboard's second confirmation. */
-export const forceDeleteJob = createServerFn({ method: 'POST' })
+export const forceDeleteLoop = createServerFn({ method: 'POST' })
   .validator((d: { id: string; confirmation: string }) => d)
   .handler(async ({ data }): Promise<MutationResult> => {
     const { scheduler } = await backend()
@@ -400,38 +335,12 @@ export const forceDeleteJob = createServerFn({ method: 'POST' })
     return { ok: true, deleted: true }
   })
 
-export const runJob = createServerFn({ method: 'POST' })
+export const runLoop = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<MutationResult> => {
     const { scheduler } = await backend()
     if (!(await ownedLoop(id))) return { error: 'not found' }
     const queued = await scheduler.runNow(id)
-    if (!('run' in queued)) return { error: queued.reason }
-    return { ok: true, runId: queued.run.id, queued: true, coalesced: queued.state === 'coalesced' }
-  })
-
-export const evolveJob = createServerFn({ method: 'POST' })
-  .validator((id: string) => id)
-  .handler(async ({ data: id }): Promise<MutationResult> => {
-    const { scheduler } = await backend()
-    const owned = await ownedLoop(id)
-    if (!owned) return { error: 'not found' }
-    if (!store.canEvolve(owned.loop)) return { error: 'nothing to evolve' }
-    const queued = await scheduler.evolveNow(id)
-    if (!('run' in queued)) return { error: queued.reason }
-    return { ok: true, runId: queued.run.id, queued: true, coalesced: queued.state === 'coalesced' }
-  })
-
-/** Agent-first steer: durably queue an owner instruction. A pending steer is
- *  updated in place; a steer already running gets one follow-up. */
-export const requestSteer = createServerFn({ method: 'POST' })
-  .validator((d: { id: string; instruction: string }) => d)
-  .handler(async ({ data }): Promise<MutationResult> => {
-    const { scheduler } = await backend()
-    if (!(await ownedLoop(data.id))) return { error: 'not found' }
-    const instruction = validateSteerInstruction(data.instruction)
-    if (!instruction.ok) return { error: instruction.detail }
-    const queued = await scheduler.requestSteer(data.id, instruction.value)
     if (!('run' in queued)) return { error: queued.reason }
     return { ok: true, runId: queued.run.id, queued: true, coalesced: queued.state === 'coalesced' }
   })
@@ -451,9 +360,6 @@ export const stopRun = createServerFn({ method: 'POST' })
     const result = await store.requestRunCancel(run.loopId, id)
     return result ? { ok: true, waiting: result.phase === 'running' } : { error: 'run not found' }
   })
-
-/** Compatibility export for older web chunks; it now has truthful Stop-run semantics. */
-export const cancelRun = stopRun
 
 // ---- New-loop claim (capture-from-Claude-Code, no machine picker) ----
 
@@ -488,5 +394,7 @@ export const claimStatus = createServerFn({ method: 'GET' })
   .validator((token: string) => token)
   .handler(async ({ data: token }): Promise<{ done: boolean; id?: string; name?: string; agent?: CodingAgent }> => {
     const r = (await backend()).gateway.claimStatus(token)
-    return r ? { done: true, id: r.loopId, name: r.name, agent: r.agent } : { done: false }
+    return r
+      ? { done: true as const, id: r.loopId, name: r.name, agent: r.agent }
+      : { done: false as const }
   })

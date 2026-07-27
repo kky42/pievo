@@ -1,804 +1,343 @@
-# CLAUDE.md
+# Pievo agent guide
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Pievo is a multi-user **scheduled prompt runner and status ledger**. The TanStack
+Start server schedules, queues, stores, authenticates, and serves bytes. Execution is
+BYOA through the `@kky42/pievo` daemon on a user's machine.
 
-**Pievo** - multi-user scheduled **agent loops**. The server (TanStack Start)
-schedules/stores/authenticates/notifies; execution is **BYOA** - claude-code runs on
-each user's own machine via the `@kky42/pievo` daemon. **Zero-exec invariant:
-the server runs no LLM and executes no user code** - it only stores/reads bytes and
-computes pure functions. Run instructions: `README.md`.
+**Zero-exec invariant:** server code must never start an LLM or execute user code.
+It may store/read bytes and run bounded pure computations such as validation, hashing,
+and text diffs. The daemon is the only execution plane.
 
-## Layout (pnpm monorepo)
+`CLAUDE.md` symlinks to this file. Keep it concise, project-intrinsic, and current;
+prefer pointers to authoritative code/tests over task history.
 
-- `packages/server` (`@kky42/pievo-server`) - TanStack Start UI + server fns +
-  in-process Scheduler (croner) + machine routes + Better Auth + push notifications.
-  Drizzle over Postgres (tiered driver: embedded pglite when `DATABASE_URL` is
-  unset, postgres-js on Supabase when set).
-  - `src/scheduler/` - cron engine (tick -> pending run -> Dispatcher).
-  - `src/gateway/` - machine gateway (`index.ts`: `MachineGateway`, the
-    poll/report run-lifecycle core + owner verbs + retention/GC; `cli.ts`:
-    `CliGateway`, the credential-keyed CLI dispatch for /api/machine/cli +
-    /agent-api/loop; `validate.ts`: the ONE ui/schema validator module
-    both write surfaces import; `sync.ts`: `ArtifactSync`, the sync/blob byte
-    ingress - boot shares ONE blob store between the classes), run tokens,
-    delivery, prompt, notify, blobstore (local filesystem default/R2/in-memory test adapter), artifacts.
-  - `src/db/` - Drizzle schema
-    (machines/loops/runs/blobs/artifact_files/run_snapshots/run_leases/connect_keys)
-    + store + auth-schema.
-  - `src/server/` - boot (`ensureServer`), adapters (Loop/Run -> JobSummary/JobDetail),
-    loopApi server fns.
-  - `src/skill/` - ALL prompt/skill prose (see "The skill" below).
-  - `src/routes/` - pages + server-only route files.
-- `packages/daemon` (`@kky42/pievo`) - one binary, two roles: poll-loop daemon
-  and the in-run `pievo` callback; spawns claude.
+## Repository
+
+pnpm monorepo:
+
+- `packages/server` (`@kky42/pievo-server`): TanStack Start web UI and server fns,
+  in-process `croner` scheduler, machine gateway, Better Auth, Drizzle, Postgres/PGlite,
+  and local/R2 artifact storage.
+  - `src/gateway/index.ts`: poll/report lifecycle, owner loop methods, sweep, storage maintenance.
+  - `src/gateway/cli.ts`: device-vs-run credential routing and owner CLI rendering.
+  - `src/gateway/loopConfig.ts`: canonical create/edit validator.
+  - `src/gateway/sync.ts`: exact-artifact manifest/blob ingress.
+  - `src/db/store.ts`: loop-locked queue, cadence, lease, terminal, and storage transitions.
+  - `src/server/boot.ts`: one-process boot and shared scheduler/gateway/blob-store wiring.
+  - `src/skill/`: owner-facing connection/create/edit prose.
+- `packages/daemon` (`@kky42/pievo`): one binary acting as local poll daemon,
+  owner CLI, and the in-run report callback. It launches Claude Code or Codex.
 
 ## Commands
 
-- `pnpm dev` - server on :3000 (UI + scheduler + machine routes).
-- `pnpm -r typecheck` - both packages (server typecheck runs `tsr generate` first,
-  so a fresh checkout typechecks with no prior build).
-- `pnpm --filter @kky42/pievo-server test` / `pnpm --filter @kky42/pievo test` -
-  vitest; single file: append the path; single test: `vitest run -t "<name>"`.
-- `pnpm --filter @kky42/pievo-server db:generate` / `db:migrate` - Drizzle migrations.
-- `bash scripts/demo-cookie-unified.sh` - e2e demo loop through the unified server.
-- Prod from source: nitro build, then `pnpm start` = `scripts/prestart.mjs` +
-  `node .output/server/index.mjs`. The publishable `@kky42/pievo-server` exposes
-  `pievo-server start|status|restart|stop` (`start --foreground`; detached by default),
-  using the same prestart + packaged Nitro output with safe `server.pid` identity and
-  `server.log` under `PIEVO_DATA_DIR`. It records `starting` before an async, signalable
-  prestart child; readiness awaits `ensureServer()` and verifies a per-launch nonce;
-  stop only clears after proving the exact pid+start-time process gone. `restart` keeps
-  the recorded bind unless flags/env override it (`--data-dir` selects the instance).
-  prestart applies pending migrations via the postgres-js migrator over
-  `DIRECT_DATABASE_URL` for the hosted Supabase tier
-  (when `DATABASE_URL` is set; fails loud if that would route DDL over the :6543
-  pooler); the embedded pglite tier migrates in-process at boot - prestart just
-  gates it (no `DATABASE_URL` requires the explicit `PIEVO_DB=pglite` opt-in,
-  exit 1 otherwise, so a lost DB secret can't silently boot an empty pglite).
+```bash
+pnpm dev
+pnpm --filter @kky42/pievo-server test
+pnpm --filter @kky42/pievo test
+pnpm -r typecheck
+pnpm --filter @kky42/pievo-server db:generate
+pnpm --filter @kky42/pievo-server db:migrate
+```
 
-## Core model
+Server typecheck generates `src/routeTree.gen.ts` first. For one Vitest file, append
+its path to the package test command; use `vitest run -t "name"` for one case.
+Provider-schema acceptance is the explicit spend-bearing exception:
 
-- Manual/system work uses the durable run queue in `runs.phase=pending`
-  (`requestedBy: owner|system`, role-scoped `requestText`; no separate queue table).
-  Recurring work stays in `loops.nextCadenceAt` until due; `nextRunAt` is the
-  independent one-shot fact. Protocol-v3 **HTTP poll** reports `currentRuns` and
-  may atomically claim one ready run per poll (priority `steer > evolve > exec`).
-  Active daemons keep polling, so there is no machine run cap; the DB's partial
-  unique index enforces only one running run per loop. The response carries one
-  optional `delivery` plus run-targeted cancellations.
-  Timers/Dispatcher wakeups are latency hints, while DB facts + poll advancement
-  are authoritative. Terminal reports persist independently in the plural daemon
-  SQLite outbox and finalize idempotently by `reportId`; synced files + run
-  snapshots remain the artifact/diff authority. A correlatable but semantically invalid
-  terminal payload is handled on that SAME `/machine/report` seam after lease auth: the
-  server atomically records a structured run incident, terminalizes an active run as
-  error (or preserves a terminal reconciliation outcome), consumes the lease, and stores an
-  exact-digest durable 200 ACK. This frees the daemon slot without a second poll protocol;
-  exec incidents use the ordinary failure streak/circuit breaker, annotated by
-  `loops.pauseCause` when auto-paused.
-- Run roles: `exec` (scheduled/manual work), `evolve` (self-improvement pass),
-  `steer` (owner-requested change). There is at most one running run per loop and
-  one pending row per loop+role; same-role requests coalesce (latest steer text
-  wins), while cross-role requests remain queued. Only exec runs produce
-  user-facing notifications, success or failure.
-- Cadence is orthogonal to goal: `loops.scheduleMode` is `cron|continuous`.
-  `advanceDueSchedules(now)` consumes due facts under each loop lock, coalesces one
-  system exec, advances cron to its first occurrence strictly after `now`, and clears
-  a due continuous fact. Continuous terminals (`done`/`error`) restore
-  `nextCadenceAt = terminalAt + delay` when no exec is open; only exec claim/terminal
-  transitions touch it (steer/evolve never shift exec cadence), and canceled execs do
-  not continue. Resume/mode switches synchronously set the
-  fact (`cron` future; continuous now or null behind an open exec) without canceling
-  pending work. Pause clears both schedule facts. `cron` remains stored
-  while continuous ignores it, so switching back restores the expression.
-- **Standing objectives**: `loops.goal` is optional guidance injected into every
-  exec/evolve/steer prompt. It is independent of lifecycle: meeting it never completes or pauses the
-  loop. `finish`/`complete`, completion stamps, and finish lease capability do not
-  exist; only the owner pauses or deletes a loop.
-- A loop's task file (normally README.md) holds ONLY authoritative standing instructions
-  in one required `## Spec` (there is no `task` column). Its inferred sibling
-  `COOKBOOK.md` is bounded learned context with exact shell `# Cookbook` /
-  `Consolidated through: #N` / `## Knowledge` / `## Timeline`; Knowledge stores durable
-  facts and positive/negative lessons, while Timeline stores only evolve/steer decision
-  boundaries. README Spec stays authoritative; Cookbook/log/files are untrusted data,
-  and the prompt-injected Objective wins over a conflicting Spec. No Cookbook DB field.
-- Exec/evolve/steer instructions live in the FIRST USER TURN and include role + stable
-  `runIndex`, Objective, execution workspace (`workdir`/cwd), task path, loop content
-  home (= task-file parent), and inferred Cookbook path. The shared context model keeps
-  these seams distinct: current artifacts live under the content home; `show` is current
-  config; bounded `log` is historical evidence; `--diff` compares snapshots and is not
-  a live file listing. `buildLoopSystemPrompt`,
-  `buildEvolvePrompt`, and `buildSteerPrompt` return `""`; the daemon skips the system
-  prompt flag when empty. Exec reads Spec then Cookbook, uses summary-after-cursor and
-  selective history only when lagging, normally changes neither Timeline nor cursor,
-  and surfaces candidate lessons in its report. Evolve receives NO inlined run survey:
-  it progressively reads `log --summary --after N`, a filtered list, then at most a few
-  `--run ... [--diff]` details; it updates evidence-backed Spec/Knowledge, compacts the
-  Cookbook, records one boundary, and advances only to reviewed `summary.through`.
-  Steer reads `show --json` plus bounded evidence as needed, applies authoritative owner
-  intent, records one validation-pending boundary, and never advances the cursor. Per-loop
-  `runIndex` is allocated under the loop lock at claim (or unclaimed terminalization), and
-  `summary.through` stops before an indexed open-run gap; summary/detail/diff all carry
-  explicit row/byte/work caps. Agent history has one role-independent evidence shape:
-  steer-only `requestText` is owner intent, `message`/`error`/`finalText` stay distinct,
-  list only signals final-text availability, and displayed token usage excludes caches.
-- `allowControl` defaults TRUE; `false` means the owner pins the schedule. A run's
-  self-schedule surface is only `reschedule` + `set-cron`, with cadence floors
-  (`PIEVO_SELF_CRON_FLOOR_MINUTES`, `PIEVO_SELF_RESCHEDULE_FLOOR_MINUTES`)
-  applying to the run path ONLY - owner `pievo edit` is unlimited.
+```bash
+PIEVO_REAL_LLM_TESTS=1 pnpm --filter @kky42/pievo test src/telemetry.real.test.ts
+```
 
-## The skill (`packages/server/src/skill/`)
+## Canonical loop model
 
-- ALL prompt prose lives here, split by audience:
-  1. `bootstrap.md` - first-contact onboarding, served at `/api/bootstrap`; never
-     bundled or installed.
-  2. `SKILL.md` + `references/{create,update,evolve,dashboard,run}.md` - the PUBLIC installable
-     skill, bundled into the daemon npm package and auto-installed at USER scope for
-     EVERY coding agent pievo knows about (`SKILL_TARGET_AGENTS` in
-     `daemon/src/skill-install.ts` - Claude Code `~/.claude/skills/pievo` + Codex
-     `~/.agents/skills/pievo` today), via `npx skills add ... -a claude-code -a codex -g`
-     (repeated `-a` flags per agent; the comma form `-a a,b` is an invalid single
-     name, and `-a '*'` is deliberately avoided since it litters all ~72 supported
-     agents regardless of presence) on `pievo daemon start`/`new`; best-effort, never blocks.
-     `installArgs` + `pievo skill status` both derive from `SKILL_TARGET_AGENTS`, so
-     adding an agent is a one-line list edit.
-  3. `skill/run/{exec-core,steer}.md` - INTERNAL run prompts, imported `?raw` by
-     `gateway/prompt.ts`; never served, never bundled. `exec-core.md` is the exec
-     run's full first-user-turn CORE (folds the former `exec-trigger.md`, deleted).
-     `run/steer.md`
-     stays SEPARATE from `references/update.md` on purpose: the steer RUN uses
-     run-token verbs on the current loop (`pievo set-cron`/`set-ui` ..., no id)
-     and must be self-contained (skill install is best-effort), while update.md is
-     the OWNER authoring CLI (`pievo edit <id> --json`) - a merge would ship
-     run-token instructions in the public bundle.
-- `references/evolve.md` doubles as the evolve RUN prompt (same `?raw` import), so
-  skill and run-dispatch cannot drift. The concise `references/dashboard.md` is also
-  appended to evolve/steer user turns so dashboard mutation stays self-contained even
-  when skill installation failed. `references/run.md` is the PUBLIC runtime
-  protocol (dual-audience: in-run enrichment + owner docs) - task-file discipline,
-  report grammar, schedule levers, and front-matter conventions;
-  the server-injected exec CORE stays
-  authoritative and self-sufficient, so run.md is enrichment, never a dependency.
-- **HARD GUARDRAIL**: `packages/daemon/scripts/sync-skill.mjs` is a SELECTIVE
-  whitelist copy (exactly `SKILL.md` + the 5 references). Never make it recursive -
-  that would ship the internal run prompts and `bootstrap.md` into the public npm
-  tarball. Guarded by `sync-skill.test.ts`. Edit the source files; never fork
-  the content. `packages/daemon/skill/` is generated + gitignored.
-- References are also served at `/api/skill/references/<file>` (static map, only
-  the 5 exact names resolve; in dev vite's static layer 404s the `.md` path - the
-  handler works in prod, covered by unit test).
-- Skill/prompt markdown compiles INTO the server bundle via `?raw` imports, so a
-  prompt-only `.md` edit requires a new server build/deployment just like code.
+Every new loop is validated by `gateway/loopConfig.ts` and contains only:
 
-## Template market (`packages/server/src/skill/templates/`)
+- required `name` and machine binding;
+- required exclusive `schedule` union:
+  - `{mode:"cron", cron, timezone, overlap:"skip"|"queue-one"}`;
+  - `{mode:"continuous", delayMinutes}`;
+- required `workdir`, `agent`, and non-empty server-stored `prompt`;
+- optional `model` and `reasoningEffort` (`null` means provider default);
+- required non-empty `statusDefinitions.{keep,noChange,block}`;
+- optional `artifacts`: exact paths relative to `workdir`;
+- `enabled`.
 
-- A template is a **canned loop INTENT, not a flow** - metadata only. There is NO
-  template serving endpoint and NO per-template doc: all loop-building intelligence
-  stays in `bootstrap.md` + `references/create.md` (propose-then-confirm cadence,
-  config, dashboard authoring). The template just seeds the natural-language intent.
-- Each template is a **folder** under `skill/templates/<name>/` with a single static
-  `meta.json` (the `TemplateInfo`: `name`, `label`, `desc` = one-line card blurb,
-  `description` = the canned task text appended to the snippet). Zero-exec, file-based.
-- **Adding a template is pure content addition - no code change.** The registry
-  (`server/templates.ts`) builds `TEMPLATES` from an `import.meta.glob` over `meta.json`;
-  `listTemplates` returns it. Drop a new folder; the registry test (a non-empty
-  `desc`/`description` per entry) covers it automatically.
-- **Dashboard entry**: the template cards render directly beside "New Loop"
-  (`components/DashboardView.tsx`, `templates.map`). One click opens `ComposeModal` with that
-  `template` - it uses the same connected-machine snippet and appends the template's
-  `description` under the config lines. `ComposeModal` handles BOTH blank
-  loops (`template = null`, the two-step rail) and templates (`template` set) - there is
-  no separate modal. Snippet form:
-  `Fetch <origin>/api/bootstrap and help me build a loop.` + `server-url`/`connect-key` +
-  a blank line + the `description`. Same connect-key machinery as a blank loop
-  (`mintClaim`/`getConfig`/`claimStatus`).
-- **PUBLIC but NOT bundled.** `meta.json` rides to the client via `listTemplates`, and
-  `sync-skill.mjs`'s whitelist stays selective (`skill/templates/` never ships in the
-  daemon npm tarball; guarded by `sync-skill.test.ts`).
-- Seven templates ship today, each `description` a short English paragraph at the same
-  granularity (intent + defining disciplines, no tool flags, no machinery the create
-  flow already handles). Keep them tight. English only. `templates.test.ts` pins the
-  full name list AND asserts each template's defining behaviors stay in its
-  description. The v1 three:
-  - **React Doctor** (open): daily ~6am `npx react-doctor@latest`, fix the single worst
-    issue in a fresh worktree off `main` (never dirty the checkout), PR via gh,
-    no-stacking while a prior PR is unmerged (still refresh status + score), one
-    `type: open|merged` markdown card per PR for the kanban, daily health score, and a
-    **day-one dashboard set up at creation** (kanban + score chart, via the create-`ui`
-    support - see "Server gotchas"). No react-doctor flags beyond the npx one-liner.
-  - **Market Research** (open): infer the project's product/space, propose a research
-    focus and confirm before creating; every morning ~5am research the day's market
-    developments; exactly ONE dated report per day with `type: report` front matter so
-    reports ride the calendar; dashboard at create = calendar + newest-report embed;
-    sharpen the focus over time.
-  - **Follow-up Tracker**: paste right after shipping something - the session
-    context IS the invocation (no extra discovery machinery; skill-side template
-    fetching is deliberately deferred). Verify a CONCRETE observation path exists
-    (logs/MCP/URL/gh) and smoke-test it once - never create a blind loop; define a
-    standing objective and keep observing until the owner pauses it; confirm cadence;
-    report regressions plainly; modest
-    dashboard at create (latest-report embed + metric chart when one was defined).
-  The four added later (adapted from top-scoring public loop cases), same disciplines
-  at the same granularity:
-  - **Docs Sweep** (open): weekly Monday ~6am, compare docs against what the code
-    ships now, scoped to drift since the previous sweep; verify commands/links/examples
-    by actually running them; never rewrite accurate docs to create activity (zero
-    drift = clean stop); worktree + PR + no-stacking; drift count as metric; dashboard
-    = latest-summary embed + drift chart.
-  - **Housekeeper** (open): daily ~7am, ONE proven low-risk cleanup per day
-    (prove-before-delete with concrete evidence, keep only if checks stay green);
-    protect active/uncommitted/generated/uncertain work; uncertain candidates go to a
-    deferred-candidates file, never deleted; worktree + PR + no-stacking; `type:
-    open|merged` kanban cards + cleanups-landed metric.
-  - **Dependency Triage** (open): weekly Monday; smoke-test gh sees the repo's
-    Dependabot/Renovate PRs BEFORE creating, and confirm merge authority with the
-    owner (merge low-risk patch/minor vs review-and-report-only); snapshot open PRs,
-    process each exactly once on real evidence at the exact head (version labels are
-    inputs, not proof of safety), tests in a worktree; `type:
-    merged|deferred|blocked` kanban cards + open-PR-count metric.
-  - **Error Sweep** (open monitor): daily ~6am production reliability pass; carries
-    the Follow-up Tracker observation-path discipline (verify + smoke-test an error
-    source, propose source/window and confirm, never a blind loop); separate
-    actionable errors from noise, root-cause, smallest verified fix, one PR per fix,
-    no-stacking; NEVER copy credentials/tokens/PII into reports or PRs; one dated
-    `type: report` per run + actionable-error-count metric; nothing actionable = clean
-    stop.
+Never expose the denormalized cadence columns as an alternative write interface.
+Cron and continuous fields are mutually exclusive at CLI, web, and validator seams.
+Unknown config keys fail loudly. `CODING_AGENTS` in `server/src/types.ts` is the
+server-side source for the agent enum; widen the daemon executor alongside it.
 
-## Artifacts / storage
+Fresh deployments use one baseline schema. Retired strategy/config/run-role columns,
+data transforms, and backward-compatible write surfaces do not exist.
 
-- The daemon watcher (chokidar) syncs each loop's folder: full sha256 manifest
-  (deletions = absence) -> `POST /api/machine/sync` (device token, not run token) ->
-  server replies `needHashes` -> `PUT /api/machine/blob/:hash` (server verifies the
-  hash). The manifest is always FULL but hashing is INCREMENTAL (`watcher.ts`
-  `buildManifest`): a stat cache (size+mtime+ctime, git-index-style racy-write
-  guard) means unchanged files are never re-read; bytes are re-read + re-verified
-  only when the server wants them (never buffered per-flush); PUTs run
-  4-concurrent; a rebuild whose digest matches the last acked sync skips the
-  network entirely. Inline blobs (≤64KB each) are budgeted 1MB aggregate per POST
-  (a burst must never 413 the server's 32MB `SYNC_BODY_CAP`; overflow takes the
-  PUT path), and the FIRST flush after watcher start inlines nothing
-  (post-restart the server already has almost everything). Bytes live in the
-  local `<PIEVO_DATA_DIR>/blobs` by default (complete `PIEVO_R2_*` selects R2;
-  `PIEVO_BLOB_STORE=r2` can require it explicitly), metadata in
-  `blobs`/`artifact_files`. Adapter roles: `LocalBlobStore` is the production/server
-  default; `R2BlobStore` is the explicitly configured production option;
-  `MemoryBlobStore` is injectable for tests or selected only by explicit
-  `PIEVO_BLOB_STORE=memory` (loud ephemeral/data-loss warning, never a fallback). Sync verifies metadata-backed bytes still exist and requests a
-  re-upload when the byte object is missing. The **never-syncable dir** list
-  (`.git`, `node_modules`, `.worktrees`, common build/tool caches, `.pievo`) +
-  `.env*`/key files is enforced on BOTH daemon (`watcher.ts` `IGNORE_DIRS`) and
-  server (`gateway/artifacts.ts` `IGNORE_DIRS`) - keep the two in sync. Per-file
-  cap 10MB (larger = metadata-only `oversize`).
-- **A loop folder is a synced CONTENT home, not a scratch workspace** (the
-  2026-07-07 prod incident: a run dropped a 1.3GB/125k-file git worktree in the
-  loop dir and flooded sync). Two defenses: (1) the never-syncable dirs above
-  exclude a checkout/worktree/build tree at the source; (2) `watcher.ts`
-  `capManifest` bounds every sync to a per-loop file-count + byte ceiling
-  (`PIEVO_SYNC_MAX_FILES` 5000 / `PIEVO_SYNC_MAX_BYTES` 256MB) - over either,
-  it keeps the shallowest-then-smallest files (the top-level content home always
-  survives) and DROPS the overflow with ONE loud warning, so the bounded POST
-  can't 413/timeout into an endless retry storm. The SKILL teaches runs to keep
-  heavy work OUT of the loop folder (`skill/run/exec-core.md` non-negotiable +
-  `references/run.md` §1 + `create.md` §3 + the worktree templates).
-- `run_snapshots` capture the manifest at `report()`; `getRunDiff` diffs run N vs
-  the prior snapshot (jsdiff) for the run page's "Changes".
-- **Byte serving** (`routes/api.artifact.$loopId.$.ts`, session-authed, `loopInScope`):
-  default disposition is `attachment` (download); `?view=inline` on a KNOWN image
-  (`lib/artifactKind.ts` `imageMime` allowlist) serves the real image content-type
-  `inline` + `X-Content-Type-Options: nosniff` + `Content-Security-Policy: sandbox`
-  (so a direct hit on an inline SVG can't script the origin). **DEV GOTCHA: `pnpm dev`
-  (vite) intercepts asset-extension paths (`.png/.svg/.md/...`) BEFORE the SSR route
-  and 404s them** ("Cannot GET …"), so image rendering only works against a nitro
-  PROD build (`pnpm build && pnpm start`, `PORT=…` not `PIEVO_PORT`); markdown is
-  unaffected (it reads via the `getArtifact` server fn, not this route). Verify image
-  serving against prod, not dev.
-- **Front-matter convention** (migration `0018`, `blobs.meta`): markdown products
-  MAY open with a fenced `---` block of flat `key: value` scalars; the indexed
-  subset `{type?, title?, date?}` is parsed once at byte ingress (both `sync()`
-  inline and `putBlob`; `server/frontmatter.ts` - pure, bounded, never throws) and
-  stored on the blob row (dedup reuses the first parse; old blobs stay `meta` null,
-  no backfill). A SOFT convention (prompt + UI incentive, never a sync/storage
-  gate). Front-matter `date:` is the AUTHORITATIVE product date
-  (`lib/productDate.ts`); filename date is the fallback, sync time last. UI:
-  `LoopFilesPanel` type/title chips (task file exempt, keeps its TASK treatment).
-- Retention/GC (`gateway/retention.ts`, periodic `maintainStorage` with an in-flight
-  latch): snapshot pruning (keep 20) unpins old blobs; blob GC computes a live
-  keep-set, honors a 1h grace window, re-checks referencedness per candidate, and
-  deletes bytes BEFORE metadata (never leaves a live `blobs` row pointing at deleted
-  bytes). Bias: when in doubt KEEP (a leaked blob is a cost bug; a wrong delete is
-  data loss). Per-loop 500MB cap enforced at `sync()` AND authoritatively at
-  `putBlob` (real byte length; also handshake-gated - only accepts hashes the sync
-  asked THIS machine for, so a device token is not an uncapped write channel).
-  `store.deleteLoop` deletes runs/artifact_files/run_snapshots and every non-retired
-  lease; retired late-report evidence survives until its matching 410 receipt.
+## Scheduling and lifecycle
 
-## Security / hardening invariants
+Authoritative facts are `loops.nextCadenceAt`, the independent internal one-shot fact,
+and durable `runs.phase=pending` rows. Scheduler timers and dispatcher wakeups are
+latency hints; every machine poll advances due facts before claiming.
 
-- Wire boundary: `gateway/http.ts` `readJsonBody` caps machine-route bodies at 2MB
-  (413). Per-field caps (`WIRE_TEXT_CAP` 512KB, `MESSAGE_CAP` 2000, ...) are
-  row-bloat budgets, not the security boundary.
-- The device token fully impersonates the machine; it is serialized OWNER-ONLY
-  (`tokenVisibleTo`) - teammates/admins get `token: null`. `loopLog` (`pievo log`
-  backend) is scoped to loops bound to that machine; cross-scope = flat 404.
-- **Unified CLI dispatch `POST /api/machine/cli`** (`gateway/cli.ts`
-  `CliGateway.cli(token, argv)`, over the injected core `MachineGateway`) is a
-  ROUTER in front of the existing gateway logic, keying authority on CREDENTIAL TYPE
-  first: a `dk_`-prefixed **device** token → owner verbs (`new`→createLoop,
-  `loops`→listLoops, `edit`→editLoop, `steer`→requestSteer, `log`→loopLog, `show`→describe, `home`→homeDevice —
-  bare `pievo`'s content-first home, handled BEFORE the unknown-machine 401 guard so an
-  unregistered machine renders a DEFINITIVE not-connected state, never a 401/empty;
-  `report` is run-only → 403); a **run** credential (an `rk_`-prefixed run lease,
-  or a pre-Batch-6 bare UUID over a deploy) → the per-run `dispatch()` verbs PLUS a read
-  branch (`log`/`show`/`home`→homeRun, the lease's OWN loop context) scoped to the lease's
-  OWN loop (this closes the historical
-  in-run `pievo log` 400 seam; batch 4 also wired a `log` case into `dispatch`
-  itself, so run-credential `log` now works on BOTH the unified `/api/machine/cli`
-  and the legacy `/agent-api/loop` transports — keeping the in-run help that
-  advertises `log` truthful everywhere). Run-credential rules: owner-only verbs
-  (`new`/`edit`/`steer`/`loops`/`status`) → 403; a `--loop`/positional loop id that is not the
-  lease's loop → **403, never a silent retarget**; a terminal-grace (reclaimed) lease →
-  409 (same reclaim grace as `agentApi`). Floors/`allowControl`/the shared
-  content validators all flow through unchanged because the run path reuses `dispatch`.
-  The router branches on the `dk_` device prefix vs a run-lease lookup, NOT on an `rk_`
-  prefix — so a bare-UUID run token still routes to the run path (see the run-lease
-  gotcha above for the wire format + back-compat). `loopLog`'s scoping body is factored
-  into a private `renderLoopLog(machineId, loopId, limit)` shared by both the device
-  `loopLog` (derives machineId from the token) and the run `log` branch (uses
-  `lease.machineId`+`lease.loopId`), so the flat-404 existence-never-leaks rule cannot
-  drift between them. The legacy `/agent-api/loop`, `/api/machine/loop`, and
-  `/api/machine/log` routes stay as thin aliases onto the same gateway methods (no
-  behavior change for existing daemons); `/machine/report` is untouched (daemon
-  finalize, not a user verb). Same 2MB `readJsonBody` cap as every machine route.
-  Every `/api/machine/cli` verb returns an axi-shaped TOON `text` field (plus an
-  `exitCode`); the daemon is a pure text sink that prints `body.text`. Batch 1 shipped this
-  as a **superset body** (TOON ALONGSIDE the structured JSON) so the 0.11 daemon could keep
-  rendering structured server-first; **batch 7 retired that scaffolding** — `finalizeCli`
-  (wraps `cli()`) now STRIPS the body to `{text, exitCode}` plus the retained data channels
-  `{loops, runs}` (client-side loop resolution + the `log --json` escape hatch), and the
-  daemon dropped its structured-render fallback (a `text`-less server →
-  `SERVER_TOO_OLD`). The LEGACY endpoints (`/api/machine/loop|log`, `/agent-api/loop`) call
-  the gateway methods DIRECTLY, not through `finalizeCli`, so their full structured bodies
-  are unchanged. The axi-conformance spine lives in `gateway/toon.ts`; details +
-  batch-7 compat matrix in `packages/server/AGENTS.md`. The in-run callback prints
-  `body.text`, so `renderLoopLog` carrying `text` is what makes in-run `pievo log` print
-  (the F2 fix). `finalizeCli` fills `text` from any structured `{error}` and ensures
-  `exitCode`; errors render as `error:`/`code:` TOON. Two behavior changes ride along:
-  `report` requires a valid status and non-empty message. `describe()` (`show`) emits the FULL editable envelope:
-  every `EDITABLE_LOOP_FIELDS` key keyed EXACTLY as `edit --json` accepts (`runAt` is
-  the writable pinned override; the DB column stays `nextRunAt`) PLUS derived read-only
-  aggregates (`nextFire`/`classification`/`runs`). `show --json` emits the envelope
-  verbatim so dropping `id` roundtrips to a no-op `edit` patch (read/write identity,
-  pinned by a roundtrip test); large `ui` shows a `present, N bytes` hint
-  unless `--full`. A run credential adds the effective `selfSchedule` line. See
-  `packages/server/AGENTS.md` for the durable notes.
-- `auth.ts` THROWS at boot when the GitHub gate is on but `PIEVO_AUTH_SECRET` is
-  unset. Configure it in the chosen host before enabling the gate.
-- Per-team connect-key: the claim carries the team (`rememberConnectKey` ->
-  `connect_keys` table, keyed by the DERIVED machine id so the key itself is never
-  stored; 24h TTL, durable across deploys). One row serves BOTH consumers: the
-  self-register owner lookup (`getDeviceOwner`) and the createLoop team binding
-  (`readClaimIntent`) - the old `deviceOwners`/`claimIntents` maps are gone. A
-  cross-team create is fail-closed: claim minter must be the machine owner AND
-  membership is re-validated at `createLoop` time. A machine's home team is always
-  the owner's personal team; a loop's team comes from the validated claim.
-- **Machine ENROLLMENT is gated** (`gateway/index.ts` `poll` is the ONLY
-  self-register surface; every other machine route already 401s an unknown
-  machine). `poll` validates the `dk_` token SHAPE (`isDeviceTokenShape`, a cheap
-  malformed-input filter, NOT the auth boundary) then, on first contact: open mode
-  (gate off) enrolls anonymously into `shared` as before; GATED mode
-  (`loginGateEnabled()`, the live twin of auth.ts `authEnabled`) enrolls ONLY a
-  token that resolves to a live connect key (`getDeviceOwner`) — an unknown/forged
-  token is 401, never a `shared` machine (closes audit H-01/M2: unauthenticated
-  machine/loop-row creation). An existing machine also re-checks the full
-  `tokenHash` (id-collision guard). `lib/loginGate.ts` is the single source of the
-  gate condition (leaf module, no betterAuth — keeps it off the poll hot path).
-- **Machine routes are RATE LIMITED** (`gateway/rateLimit.ts`
-  `machineRouteLimit`, applied at the top of every `/api/machine/*` + `/agent-api/loop`
-  + `/machine/report` handler): in-process token buckets, per-IP (primary flood
-  guard — forged-token floods share one IP bucket) + per-token (per-machine
-  fairness), 429 when spent, bounded-memory LRU eviction. Env-tunable
-  (`PIEVO_RL_IP_BURST`/`_PER_SEC`, `PIEVO_RL_TOKEN_*`); defaults (240 burst /
-  8·s per IP) comfortably clear a connected daemon's 3s/20s poll.
-  The byte-ingress routes — blob-PUT (`api.machine.blob.$hash`) and sync-POST
-  (`api.machine.sync`) — are EXEMPT from rate limiting ENTIRELY (they never call
-  `machineRouteLimit`): a large first sync bursts many concurrent blob PUTs on ONE
-  device token, so either tier would only throttle legit uploads. Both already
-  require a VALID registered device token (unknown ⇒ 401, not an unauthenticated
-  surface) and are bounded by the sync hash-handshake (server only accepts hashes it
-  asked THIS machine for) + per-loop 500MB / per-file 10MB / 32MB-body caps, so a
-  limiter adds no real protection. Every OTHER machine route keeps BOTH tiers.
-  OFF under vitest (`VITEST`/`NODE_ENV=test`) unless `PIEVO_RATE_LIMIT=on`, so it
-  never trips the suites; force either way with `PIEVO_RATE_LIMIT`. `clientIp`
-  trusts `Fly-Client-IP` → first `X-Forwarded-For` hop → `X-Real-IP` → one shared
-  `unknown` bucket (fail-closed). NB: per-owner machine/loop QUOTAS are a noted
-  follow-up, not yet implemented.
-- Daemon jail: `PIEVO_ROOTS` is an always-applied local jail (`roots.ts`) -
-  server-sent roots can only NARROW it, paths are resolve-normalized before the
-  prefix check. Child env is allowlisted everywhere (`spawn.ts`); the All daemon
-  fetches go through `boundedFetch`; kills take the whole process group.
-- Exec timeout defaults to 12 hours and accepts a positive millisecond override via
-  `PIEVO_EXEC_TIMEOUT_MS` (missing/zero/invalid/negative falls back to 12h). The guard
-  against a vanished machine is also the SERVER's inactivity-based sweep: protocol-v3
-  polls carry provider-neutral `currentRuns` (`executing|reporting`), refreshing
-  each `heartbeatAt`; a run is reclaimed only
-  after `RUN_TIMEOUT_MS` of silence.
-  Cancellation intent is durable and does not terminalize a running run; only the
-  daemon's actual terminal result may produce `canceled`.
-- **The run credential is a RUN LEASE (`tokens.ts`, Batch 6)**, not a mint→revoke
-  token: the per-run caps (`runId/loopId/machineId/role/allowControl/canSet*`
-  — the old `RunSlot` fields, now `RunLeaseCaps`) PLUS a tiny state machine `state:
-  "active" | "terminal-grace" | "retired"` + `expiresAt`. `retired` is durable,
-  authorizes no mutation, never blocks claims, and exists only until a matching late
-  report atomically commits its permanent `410 RETIRED` receipt and consumes it. Wire token is `rk_<random>` (device
-  stays `dk_`); the unified `cli` router branches on the `dk_` prefix, so a run token
-  (rk_ OR a pre-Batch-6 bare UUID) falls through to the run path. The lease table is
-  keyed by the FULL wire token, so `resolveLease` needs NO prefix parsing — a
-  bare-UUID token minted before the deploy resolves identically (free back-compat; a
-  daemon release is NOT required for this batch — the daemon forwards whatever token
-  its env carries, opaque to shape). An expired `terminal-grace` transitions to
-  durable `retired`, never deletion; active/retired encode `expiresAt=null`. Leases are
-  DURABLE (`run_leases` table, keyed by sha256(wire token) — hash only, a DB leak never
-  hands out live credentials): a deploy
-  is invisible to an in-flight run, and a long-sleep wake-report survives a
-  restart inside its grace window. Loop deletion preserves retired tombstones.
-- **The old revoke/reclaim scatter collapses to ONE terminalize transition +
-  retire + prune.** Normal poll delivery uses `store.claimReadyRunForMachine` to
-  claim + insert an `active` lease atomically. `terminal-grace` is report-only:
-  `store.reclaimRun` opens the wake-reconciliation window under the loop lock, so a
-  stale observation cannot mutate the winning report's lease.
-  Normal finalize and the ONE terminal-grace reconcile consume the
-  lease in the SAME store transaction as their run/loop writes (so concurrent normal
-  reports and error→error reconcile are single-shot); reconcile rechecks grace
-  expiry from a fresh clock read after taking the loop lock, so an old report cannot
-  overwrite a successor claimed after expiry. Every run-token mutation goes through
-  `store.mutateForActiveRun` (or the equivalent terminal helper), which verifies the
-  matching active lease + running run under that same lock before writing.
-  `retireLease(token)` handles a canceled/losing report; `store.cancelRun` deletes that run's lease in the same
-  transaction, so a canceled local process immediately loses all run-token authority
-  (its late report may 401). `pruneExpiredLeases(now)` converts expired grace to retired.
-  Expiry restores machine liveness and a later report receives durable 410. Startup
-  idempotently repairs terminal-run active leases.
-  ALL loop deletion paths preserve retired tombstones; only the matching report→410
-  receipt transaction consumes them (ordinary Delete and Force-delete cannot differ).
-- **Sweep-reclaimed runs separate execution exclusion from late-report retention.**
-  `reclaimRun` first moves the lease to blocking `terminal-grace`. Protocol-v3 polls
-  carry a per-start `daemonInstanceId`, `recoveryComplete:true`, and the daemon's full
-  `currentRuns` snapshot (outbox rows are hydrated before polling). Any grace run absent
-  from that completed snapshot becomes `reconciliation-only`: queued work may claim in
-  the SAME poll, while the old token can still submit exactly one report until the
-  original 24h deadline. A report-only reconcile updates only the old run/receipt—never
-  loop cadence/config, snapshots, notifications, breaker, or successor lifecycle.
-  Runs still reported `executing|reporting` remain blocking; poisoned outbox rows are
-  diagnostic evidence but are not advertised as recoverable. Both reconciliation states
-  reject run-token mutations with 409 and expire to durable `retired`. Dashboard run
-  projections expose `blocking|report-only`, keep reconciliation pages polling, and
-  explain queued recovery waits instead of showing an unexplained error.
-- **Pending rows are the durable queue/inbox.** Same-role requests coalesce with a
-  stable id; authority only promotes `system → owner`, latest owner steer text wins,
-  and a running role may retain one pending follow-up. Pause cancels pending system
-  rows while owner exec/steer/evolve rows remain claimable; the loop stays paused and
-  their terminals never restore cadence. Reports/cancel/claim/reclaim share the loop lock;
-  terminal run + task + continuous cadence writes are one CAS transaction.
-  Auto-evolve is a system evolve requested from that terminal lifecycle. Pending
-  system rows use immutable `runs.createdAt` for the 7d offline backstop;
-  `updatedAt` remains the mutation stamp. Sweep's never-claimed/expiration writes
-  recheck phase, authority, timestamp, blocker eligibility, and machine state under
-  the loop lock, so a stale snapshot cannot erase a concurrent coalesce/promotion.
-- **Boot does no historical cron catch-up.** Migration converts legacy
-  `editRequest`/`evolveDue` markers once, clears them, and retains the deprecated
-  columns/defaults only to reduce old-image SELECT/INSERT breakage. This is NOT a
-  rollback protocol: prod migrations are forward-only, legacy writes after migration
-  are unsupported, and new runtime never reads/drains them. Boot idempotently initializes
-  only enabled cron loops whose `nextCadenceAt` is null to the next FUTURE occurrence;
-  it never infers cadence from run history. Cron timers are hints; every poll calls
-  `advanceDueSchedules` before claiming, so persisted facts recover lost timers.
-- **Machine presence is THREE-state** (`lib/machinePresence.ts`, shared by server
-  `adapters.toJobDetail` + client `MachinesModal`): `online` (polled < 30s),
-  `asleep` (seen < `MACHINE_ASLEEP_TTL_MS` = 6h — calm, "resumes automatically"),
-  else `offline`. `JobDetail.machine` carries `{online, presence, lastSeen}`;
-  offline machines cannot claim immediately, but manual work queues durably. The failure push copy
-  (`notify.ts` `failureMessage`) is de-alarmed and names sleep as the likely cause,
-  distinguishing an interrupted running run from a skipped scheduled one (no more
-  "📵 appears offline"). Banner/string edits in `LoopDetailView`: entities in JS
-  STRING literals are not decoded — write `&`, not `&amp;` (only JSX text decodes).
-- **Circuit breaker**: the store's terminal transaction auto-pauses a loop at
-  `PIEVO_FAILURE_AUTOPAUSE_STREAK` (default 3, 0=off) consecutive exec
-  failures - terminal error + `enabled=false` + unschedule + pending-system cancel
-  commit under one loop lock, then the gateway sends ONE autopause note that SUBSUMES the
-  failure alert (silent under `notify:"never"`; a plain pause, re-enable resumes).
-  A provisional running-timeout reclaim still alerts/counts but cannot auto-pause;
-  never-claimed errors and normal failure reports may trip the breaker. `skipped`
-  runs are transparent to the streak (it counts only phase `error`).
-- Failure alerting: notifications fire on failure too (`report()` !ok + sweep
-  reclaim). Anti-spam streak derives from persisted run rows (exact, deploy-safe):
-  notify at streak 1, then every 5th; a success resets. Only exec failures notify;
-  `notify:"never"` silences everything. The gateway takes an injectable notifier
-  (like its injectable blobStore) so tests observe pushes without network.
+- There is one pending row and at most one running row per loop, enforced by partial
+  unique indexes. Same-loop requests coalesce; owner authority promotes a system row
+  and is never downgraded.
+- Repeated polls can claim different loops, so there is no machine-wide concurrency
+  cap. A loop remains serialized.
+- Cron advances to the first occurrence strictly after the advancement clock.
+  With an open run, `skip` consumes the occurrence without a follow-up;
+  `queue-one` retains at most one coalesced follow-up.
+- Continuous clears its due fact when materialized and restores
+  `terminalAt + delayMinutes` only after `done` or `error`. It never overlaps.
+  Cancellation does not restart continuous cadence.
+- Boot does no inferred history catch-up. It initializes missing enabled cron facts
+  to a future occurrence, then consumes only persisted facts that are actually due.
+- **Pause** disables future cadence and cancels pending system work; a current run
+  continues. An owner Run-once row may still be claimed while paused.
+- **Start** clears the pause cause and re-arms the existing schedule.
+- **Stop** pauses, cancels all pending work, and records durable cancellation intent
+  for the current run. Running becomes `canceled` only after daemon proof.
+- **Delete** is Stop plus server-data removal. Normal deletion waits for execution
+  authority; the team-owner force path retires authority and may leave a local process
+  running. Local project files are never deleted.
 
-## Server gotchas
+`done + keep` and `done + no-change` continue normally. `done + block` atomically
+pauses with `pauseCause.kind="blocked"`. Consecutive `error` rows since the last
+successful row trigger the loop-locked breaker at
+`PIEVO_FAILURE_AUTOPAUSE_STREAK` (default 3, 0 disables). Canceled rows neither reset
+nor increment the streak. A timeout reclaim remains provisional during reconciliation
+and does not itself trip the breaker.
 
-- **One process owns the scheduler** (`ensureServer` globalThis guard). Never run
-  the unified server AND `main.ts` against the same DB (double-fire).
-- vite binds `127.0.0.1` (not IPv6 `localhost`) - see `vite.config.ts`.
-- `src/routeTree.gen.ts` is generated + gitignored; `typecheck` runs `tsr generate`
-  first. Run `routes:generate` standalone if you need the file otherwise.
-- **Changed `db/schema.ts`? Migrate locally right away**: hand-author and review the
-  forward-only SQL + journal entry; schema snapshots are local cache and are not
-  committed. `db:migrate` is the drizzle-kit CLI
-  and needs `DIRECT_DATABASE_URL`/`DATABASE_URL` set - it errors on an empty URL and
-  only targets a real Postgres (`drizzle.config.ts` routes it through `env.ts`
-  `directDatabaseUrl()`, which THROWS when only a Supabase pooler `DATABASE_URL` is
-  set with no `DIRECT_DATABASE_URL`, so DDL never runs over the `:6543` pooler);
-  the embedded pglite tier has NO CLI migrate, it
-  applies the reviewed migrations IN-PROCESS at boot. `boot.ts` `ensureServer` calls
-  `runMigrations()` on every boot, so `pnpm dev` DOES auto-migrate the pglite tier in
-  process; prod applies on `pnpm start`
-  (`scripts/prestart.mjs`, postgres-js migrator over DIRECT for the hosted tier).
-- Drizzle `text(col, { enum })` is TS-only (no DB CHECK) - enum value changes need
-  no migration and cannot break rows.
-- Server route files use `createFileRoute(path).server.handlers`; dynamic-import
-  heavy/native deps INSIDE handlers to stay out of the client bundle.
-- `editLoop` accepts the envelope fields plus content fields (ui/metricSchema)
-  through the SAME UI/schema validators the run-token `set-*` path
-  uses (two surfaces cannot drift; schema stays additive). Keys outside
-  `EDITABLE_LOOP_FIELDS` are rejected with a 400 listing the allowed set. Both
-  `pievo new` and `pievo edit` support `--dry-run` (server validate-only, zero
-  persistence).
-- **`createLoop` accepts optional `model`, `reasoningEffort`, and `ui`**. The two
-  provider settings are arbitrary text with no Pievo-side validity check; null is
-  the default and means the coding-agent CLI chooses. They persist at create so the
-  immediate first run cannot race a corrective edit; create `--dry-run` echoes them.
-  `ui` uses the same `validateUi` + `WIRE_TEXT_CAP` clip as `set-ui`/`editLoop`, so a
-  template-driven loop ships a **day-one dashboard** instead of waiting for an evolve
-  pass. The daemon `pievo new` spreads the whole `--json` config, so both pass through
-  with no whitelist change; `--dry-run` reports `ui` as a presence flag (like
-  `ui`), not the markup. `create.md`'s "Dashboard at create" step tells the
-  agent to author the initial `ui` when the product shape is already known
-  (cross-refs `references/dashboard.md`).
-  **A dropped dashboard is never silent**: the REAL create response echoes `ui`
-  presence (and the CLI prints `dashboard ui: applied|not applied`). `validateUi`
-  rejects invalid custom primitives (chart grammar requires explicit `type` and
-  type-specific axes/series; embed/kanban require `file|match`/`columns`);
-  create drops invalid UI with a loud
-  warning while edit/set-ui reject without mutating. Empty UI still clears explicitly.
-- `describe()`/`validCadence` probe crons in the LOOP's timezone (fire times shift
-  with it).
+## Prompt, report, and provider diagnostics
 
-## Daemon gotchas
+`gateway/prompt.ts` is intentionally tiny. The first user turn is exactly:
 
-- **Server/daemon compatibility gate is mandatory for breaking wire changes.** When a
-  server change stops accepting any payload/behavior produced by a published daemon,
-  bump `packages/server/src/gateway/compat.ts` `MIN_DAEMON_VERSION` to the FIRST
-  compatible `@kky42/pievo` version and update tests/UI fixtures that pin
-  `requiredDaemonVersion`. Do this in the same change as the incompatibility, so
-  old daemons get `needsUpdate`/`UPGRADE_REQUIRED` instead of running and failing
-  mid-run. If old daemons remain accepted because the change is additive or ignores
-  extra fields, leave the gate but make that compatibility explicit in the PR/commit.
-- **Routing lives in the pure `route.ts` `classify(argv, env)`** (batch 6, unit-tested
-  without hanging a subprocess); `cli.ts` maps the returned `Route` to its lazily-imported
-  handler. The in-run callback (`PIEVO_RUN_TOKEN`+args) still wins FIRST; `-v`/`--version`
-  (like `--help`/`-h`/`help`) is a light fast-path that prints just the version (`help.ts`
-  `printVersion`, reusing `daemonVersion()`) and never launches a daemon (the usage screen
-  also leads with that version). Nested `daemon <subcommand> --help` short-circuits before
-  every handler. **Bare `pievo` is the content-first HOME**; device out-of-run posts `home`
-  on the device credential and in-run bare posts `home` on the run credential. Daemon
-  lifecycle exists ONLY as `daemon start|stop|restart|status`; start is detached/idempotent
-  by default and `--foreground` also accepts first-connection flags. Detached re-exec uses
-  `daemon start --foreground`, with the device token in env only. Top-level
-  `up|down|status|doctor|update`, raw leading lifecycle flags, and `--api-key` are unknown.
-  `report` typed OUT of a run is FORWARDED to the server so its crafted run-only 403
-  reaches the agent (F3); `finish`/`complete` are unknown commands. `pievo show` out-of-run resolves the
-  loop client-side (like `log`, reusing `log.ts` `resolveLoopId`) then forwards.
-- **No coding-agent SessionStart hook.** Pievo deliberately does not inject its home
-  view into every Claude Code/Codex session. Ordinary sessions discover Pievo through
-  the user-scope skill or an explicit `pievo`; daemon steer/evolve/exec runs get their
-  complete context from the server-delivered first user turn. Keep skill installation
-  separate from agent hooks; `daemon start` and `new` refresh the skill + PATH shim.
-- **PATH shim** (`bin-shim.ts`): `daemon start`/`new` write a version-consistent `pievo`
-  re-exec wrapper (same launcher-replay as `callback-bin.ts`) to the npm global bin
-  (`npm_config_prefix`) else `~/.local/bin`, with one-line PATH guidance. It lands ONLY
-  from a durable install (`isEphemeralEntry` skips an npx/npm-cache re-exec) and NEVER
-  clobbers a foreign `pievo` (refreshes only our own shim, detected by `SHIM_MARKER`).
-  `ensureBinShim` returns `{path,onPath,written}` so callers/tests assert skipped-vs-written.
-  **TEST HAZARD**: `ensureBinShim` writes the REAL `~/.local/bin` unless injected —
-  `daemon-lifecycle.test.ts`'s `seams()` no-ops it, and bin-shim tests inject fs/env seams. See
-  `packages/server/AGENTS.md` for the server `home` verb + full text-sink notes.
-- Pidfile `~/.pievo/daemon.pid` records `<pid>:<startTime>` so a pid reused after
-  an unclean crash is never mistaken for the daemon (or SIGTERMed by `daemon stop`).
-  `pievo daemon start` consults the pidfile first; the detached child's device token
-  passes via ENV, never argv. `daemon stop` defaults to an unbounded correctness-first
-  report-persistence wait; `--force` bounds TERM drain then may SIGKILL. `daemon restart`
-  is stop + start of the currently installed package, preserves stored configuration,
-  and applies `--force` only to stop. npm exclusively owns upgrades; no running-version
-  file exists.
-- `pievo new` takes `--json '<inline>'` (or `--json -` for stdin); `pievo edit`
-  is JSON-only (`--json '<obj>'`) plus the content-file pair (`--ui-file`, `--schema-file`). Unknown flags reject loudly. The server is the sole
-  validator.
-- `pievo log [<loop>]` - concise run survey (session ids + metrics; `--json`
-  structured). Backed by `GET /api/machine/log` (device token).
-- `loops.agent` (`CodingAgent` enum: `claude-code|codex`) records the loop's host
-  coding agent AND selects the executor (at create: measured env fingerprint >
-  `--agent` > server default; detection markers in `create.ts detectAgentFromEnv`).
-  Editable afterward on the edit path - in `EDITABLE_LOOP_FIELDS`, `pievo edit
-  --json`/`show` roundtrip, and the web `LoopForm` agent select (the next run picks
-  up a changed agent). `runner.ts buildAgentSpawn` branches on `d.loop.agent`
-  (delivered by server `gateway/delivery.ts`):
-  - `claude-code` → `claude` (`PIEVO_CLAUDE_BIN`) with stream-json + bypassPermissions;
-    optional model/effort become `--model`/`--effort` only when set
-  - `codex` → `codex exec` (`PIEVO_CODEX_BIN`): `--json`,
-    `--dangerously-bypass-approvals-and-sandbox`, `--skip-git-repo-check`,
-    `-c shell_environment_policy.inherit=all`, optional `-m`, and optional
-    `-c model_reasoning_effort=<JSON string>`; the inherit override is
-    load-bearing because Codex otherwise may replace the daemon-prepended PATH and run
-    a stale global `pievo` instead of the run-token callback shim. `execEnv("codex")`
-    forwards `OPENAI_API_KEY`/`CODEX_API_KEY`/`CODEX_HOME` (session/config under
-    `~/.codex` free via `HOME`)
-  Both structured-output streams feed provider-specific TERMINAL collectors only:
-  session id, final assistant text, and normalized token usage. Events are consumed
-  locally and discarded—there is no transcript/tool-activity transport or dollar-cost
-  calculation. The enum's single source is `CODING_AGENTS` in `packages/server/src/types.ts`
-  (the schema type/column enum + the `coerceCodingAgent` validator + the web select all
-  derive from it; widening the set is a one-line edit there). Migration `0004`
-  moves retired Grok loops to `claude-code` and clears their incompatible model.
-- External touches (process/network/fs) are injectable seams throughout. The ordinary
-  suites remain hermetic; provider telemetry schema validation is the explicit,
-  spend-bearing exception: run `PIEVO_REAL_LLM_TESTS=1 pnpm --filter @kky42/pievo test
-  src/telemetry.real.test.ts` against real Claude/Codex CLIs—fixtures alone are not
-  acceptance evidence for provider JSONL.
-- **Unified CLI transport `cli-client.ts` `postCli(argv, legacy, deps)`** (batch 5):
-  the ONE client behind BOTH CLI worlds. It selects the credential by env (run token
-  from `PIEVO_RUN_TOKEN` wins, else the persisted device token), inlines the file
-  flags (`--message-file`→`--message`, `--metrics-file`→`--metrics-content`, `--file`→
-  `--file-content` — moved out of `callback.ts` so both credentials get it), and POSTs
-  `{argv}` to the unified `/api/machine/cli` (server batch 4). On a **404** (old server)
-  it invokes the per-credential `legacy` fallback — `legacyRun` → `/agent-api/loop` for
-  a run token; the caller-supplied device fallback (`/api/machine/loop` GET/POST/PATCH,
-  `/api/machine/log`) for owner verbs — one release of back-compat. `callback.ts` /
-  `interactive.ts` / `log.ts` / `create.ts` all converge onto it (batch 6 adds
-  `show`/`home` to the convergence, and every server-verb path now PRINTS the server's
-  `body.text`+`exitCode` via `cli-client.ts` `printTextOrTooOld` — batch 7 retired the
-  one-release structured-render fallback, so a `text`-less pre-0.12 server surfaces a
-  definitive `SERVER_TOO_OLD` error, `home` a `tooOldHome`); the LOCAL verbs
-  (`daemon start|stop|restart|status`, skill, help, version) keep their own fast-paths
-  and never touch the server. `log`'s cwd→loop resolution stays CLIENT-side (lists loops,
-  then posts `log <id>`) because the server's `log` dispatch needs an explicit id.
-  This ships in the npm daemon package, so it needs a coordinated `@kky42/pievo`
-  release. (The daemon still forwards whatever token its env carries — the `rk_` run
-  lease is batch 6, not here.)
-- A run launches its selected provider EXACTLY ONCE. There is no provider retry or
-  resume path today; captured session ids are terminal metadata reserved for future
-  use. Each invocation produces one normalized token-usage result. The daemon reports
-  every active run in `currentRuns`; different loops execute concurrently without a
-  machine cap. After each execution, its exact serialized terminal payload is stored
-  as an independent local SQLite outbox row and replayed to a definitive ACK before
-  that run leaves reporting. One poisoned/slow report never blocks other loops.
-- **`runner.ts` skips the sys file + `--append-system-prompt-file` when the delivery's
-  `systemPrompt` is empty** (batches 1-2 make it empty; an OLD server that still
-  populates it keeps working — the flag path is preserved when the string is non-empty).
+1. `loop.prompt`, byte-for-string unchanged;
+2. the three status definitions;
+3. the one required `pievo report --message "<summary>" --status
+   <keep|no-change|block>` instruction.
 
-## Web UI gotchas
+Do not inject loop identity, run index, working-directory prose, schedule controls,
+history methods, or execution methodology. The daemon sets cwd through spawn.
+Delivery has no system-prompt field or Claude system-prompt-file branch.
 
-- **The dashboard's team lives in the URL** (`/t/$teamId`, `routes/t.$teamId.tsx`;
-  Phase 2 of the team-URL design). The shared `DashboardView` renders it AND bare `/`
-  (open mode); the list server fns (`listJobs`/`listMachines`/`listMyTeams`) + `mintClaim`
-  take an EXPLICIT `teamId`, membership-validated via `requestScope(explicitTeam?)` (route
-  param wins over the `pievo.team` cookie), so tabs on `/t/A` and `/t/B` show different
-  teams at once. The cookie is now ONLY the bare-`/` redirect's last-used hint, never an
-  auth key. Gated `/` redirects to `/t/<last-used|personal>` (`getDefaultTeam`); the
-  signed-out CTA + open mode render at `/`. Non-member `/t/<x>` throws the same generic
-  not-found as a missing loop (`canViewTeam`, enumeration-safe). A team id rides the URL
-  verbatim (`params.teamId`). The `/t/$teamId` route mounts `DashboardView` with
-  `key={teamId}` so a switcher `/t/A`→`/t/B` navigation re-seeds its fetch-then-set poll
-  state (same route, new param ⇒ no natural remount). Guards:
-  `-index.regression.test.ts`, `auth.test.ts` (requestScope precedence).
-- Loop detail and run detail are PAGES, not modals: `/loops/$loopId` and
-  `/loops/$loopId/runs/$runId` (route file `loops.$loopId_.runs.$runId.tsx` - the
-  trailing `_` un-nests it). Never render Base UI `Dialog.*` parts (e.g. `ModalHead`)
-  without a `Dialog.Root` ancestor - it throws at runtime; bare-page edit modes use
-  `EditHead`.
-- Run detail self-polls every 3s while a run is queued/running, but provider event/tool
-  activity is deliberately not exposed. Liveness is the daemon's provider-neutral
-  `activeRunIds` poll fact persisted as `runs.heartbeatAt`; the server's inactivity
-  sweep uses it instead of output events.
-- **Loop-detail Steer composer (`steerVia`)** offers TWO paths: (1) **Dispatch** -
-  `requestSteer({id, instruction})` runs ONE agent pass on the owner's machine
-  (spends credits, no conversation); (2) **Copy prompt** - `copySteerPrompt` copies a
-  self-contained prompt (`lib/steerPrompt.ts` `buildSteerPrompt`, a PURE + unit-tested
-  helper) for the owner to paste into their OWN local coding-agent session and adjust
-  the loop conversationally (no dispatch, no credits). The hint names WHERE to run it,
-  deriving the loop's on-disk dir from `job.taskFile` via `loopDir` (degrades to a
-  generic instruction, never a fabricated path). Generic operation copy is
-  **agent-neutral** ("your coding agent"), NOT "Claude Code" - Pievo runs more than
-  one agent (claude-code, codex, more later); the only "Claude Code"/"Codex" survivors
-  are the `AGENT_LABEL` chip (the loop's ACTUAL recorded agent, a factual label).
-  Guarded by `loopDetailEdit.regression.test.ts`.
-- **Hard rule: no page-level horizontal scroll.** `min-w-0` on every grid/flex child;
-  wide content scrolls inside its own pane (dashboard `overflow-x-auto`, `.taskmd
-  table` as a scrolling block, `Timeline` row `min-w-0 overflow-x-auto`). Guarded by
-  the `*.regression.test.ts` files - keep them green.
-- Dashboard generative-UI primitives are `loop-chart`/`loop-embed`/`loop-calendar`/`loop-kanban`
-  (registry in `LoopView.tsx`; chart syntax is deliberately incompatible with the old
-  chart-only `series` form and is documented once in `references/dashboard.md`;
-  charts use the compact authorized latest-100-successful-exec query, filtering before LIMIT;
-  `loop-kanban` in `components/LoopKanban.tsx` is a
-  collection view grouping front-matter-`type`d markdown artifacts into columns -
-  `columns` REQUIRED + comma-separated, unmatched types collect in a trailing
-  "Other" column, task file always excluded). Registering one means moving THREE
-  things together: (1) `LOOP_TAGS`/`LOOP_ATTRS` + the DOMPurify `uponSanitizeAttribute`
-  force-keep hook (data-bearing attrs like `columns`/`match` are otherwise stripped,
-  silently blanking the element); (2) the html-react-parser `replace` swap; (3) the
-  skill authoring docs (`references/dashboard.md` plus concise pointers/examples in
-  create/evolve/steer). Board row is the ONLY horizontal-scroll container
-  (`min-w-0 overflow-x-auto`, columns `shrink-0` fixed-width) - a wide board scrolls
-  inside its pane, never widening the page. Skill markdown + UI copy is ENGLISH ONLY.
-- Recharts stays OUT of the base client bundle (`LoopDetailView` lazy-loads the
-  `LoopView` chunk). All animation is off, INCLUDING `<Tooltip
-  isAnimationActive={false}>` (the position tween causes a transient page scrollbar
-  flash). Testing: Recharts v3 mounts via effects - use a client render under `act`
-  plus a jsdom ResizeObserver stub that fires a real contentRect on `observe`.
-- Files panel: the task file IS the loop folder's README and appears EXACTLY ONCE
-  (`lib/fileEntries.ts` dedup on normalized paths); the task row renders
-  `taskFileContent` from the loop record, not the blob fetch.
-- Dashboard refresh is fetch-then-set, never `router.invalidate` (its loader re-run
-  throws on a transient blip; keep stale data instead).
-- **Artifact viewer** (`components/artifactView.tsx` `ArtifactBody`, one source for
-  the Files panel + every dashboard primitive's detail): dispatch by
-  `lib/artifactKind.ts` (extension only). HTML renders in a STRICT sandboxed iframe
-  (`srcDoc` + `sandbox="allow-scripts"`, NEVER `allow-same-origin` → opaque origin;
-  scripts run but can't read the app's cookies/session or reach `parent` - this is
-  the stored-XSS containment, load-bearing; a Preview/Source toggle exposes raw
-  markup). Images (incl. SVG - scriptable, so NEVER inlined into the app DOM) render
-  via `<img src=inlineHref>` off the hardened `?view=inline` route. Markdown → the
-  shared pipeline; oversize → a metadata-only note (no synced bytes). `LoopEmbed`
-  disables the pixel-collapse for html/image (they self-bound + scroll internally).
-- **The dashboard is a DEFAULT responsive grid CAPPED AT TWO COLUMNS** (`.loopview` in
-  `styles/app.css`, `auto-fit minmax(min(100%, max(28rem, (100% - gap) / 2)), 1fr)`):
-  independent top-level panels tile side by side on desktop (calendar left, document
-  right) and stack when narrow; headings/prose/`hr`/`section` AND content blocks
-  (`ul`/`ol`/`table`/`pre`/`blockquote`/`figure`/`img`) all span full width, so ONLY
-  the custom `loop-*` panels + their explicit `div` wrappers tile. The `(100% - gap) / 2`
-  per-track min is never smaller than half the row, so a third track can never fit (a
-  hard two-column cap at any width - an uncapped `auto-fit` used to spill a wide ~1180px
-  area into 3+ narrow columns, squeezing a kanban's own columns and card titles);
-  `auto-fit` still collapses to ONE full-width column for a lone panel (no regression for
-  chart-only / single-embed dashboards) and for a container too narrow (~below 916px,
-  where the 28rem floor wins). The gap is a shared `--loopview-gap` custom property used
-  in BOTH the track formula and the `gap` declaration so the cap math can never drift from
-  the actual gap. `LoopView` dropped `space-y-*` so the grid gap owns spacing.
+A run credential authorizes only `report` and its help. The callback requires one
+valid status and a non-empty message, records them once under the loop lock, and rejects
+duplicate reports. A provider process that exits successfully without a complete
+report protocol is finalized as `error`.
 
-## CI/CD (`.github/workflows/`)
+Each delivery launches the selected provider exactly once—no provider retry or session
+resume. Retain terminal diagnostics independently from the agent report: duration,
+exit code, error, session ID, final assistant text, and normalized input/output/cache
+token usage. Provider event streams and dollar cost are not transported. The web UI
+shows input + output usage; cache fields remain stored.
 
-- The repository owns NO Fly app/origin/volume and performs NO automatic server
-  deployment. `deploy.yml` and `deploy-prod.yml` are manual `workflow_dispatch`
-  examples that fail before `flyctl` unless their explicit app/origin GitHub vars and
-  token secrets are configured (`PIEVO_FLY_APP`/`PIEVO_FLY_ORIGIN` or
-  `PIEVO_PROD_FLY_APP`/`PIEVO_PROD_URL`). Both pass `--ha=false` (single-scheduler
-  invariant), bake `GIT_SHA`/`BUILT_AT`, and assert the configured origin serves the
-  pushed SHA. `fly.toml` is the embedded-PGlite/volume example; `fly.prod.toml` is the
-  stateless external-Postgres/object-store example. Migrations apply on container boot
-  and are forward-only.
-- `publish-server.yml`: tag `server-v*` -> `npm publish` of the server ONLY via npm
-  OIDC. The tag must match `packages/server/package.json`; it runs workspace typecheck/
-  tests, a strict publish build, and `verify:package`. Missing pglite assets/migrations
-  are fatal; build output, Nitro public files, copied pglite assets, and both migration
-  locations ship in the tarball. Keep its provenance metadata and `bin`/`files` intact.
-- `publish-daemon.yml`: tag `v*` -> `npm publish` of the daemon ONLY, via **npm OIDC
-  trusted publishing** - no `NPM_TOKEN`, and `setup-node` deliberately omits
-  `registry-url` (setting it writes a dummy-token `.npmrc` that breaks OIDC; that was
-  a real publish failure). Needs npm >= 11.5 (installed in-workflow). The tag must
-  match `packages/daemon/package.json` version. pnpm version comes solely from the
-  root `packageManager` field (do not also pass `version:` to `pnpm/action-setup`).
-  The repo is PUBLIC, so OIDC publishing emits a sigstore provenance statement -
-  `packages/daemon/package.json` MUST carry a `repository` object whose `url`
-  resolves to this source repo (`git+https://github.com/kky42/pievo.git`,
-  `directory: packages/daemon`) or npm rejects the publish with a 422 (an empty/
-  absent `repository.url` fails provenance validation). Do not strip that field.
-  Public server snippets install `@latest` globally then invoke `pievo`; source/dev
-  servers use `PIEVO_CLI` verbatim and must not add the global-install step.
+Claude Code and Codex spawn surfaces live in `daemon/src/runner.ts`. Optional model and
+effort flags are emitted only when configured. Codex's
+`shell_environment_policy.inherit=all` override is load-bearing so the run-scoped
+`pievo` shim stays first on PATH. The default provider timeout is 12 hours;
+`PIEVO_EXEC_TIMEOUT_MS` accepts only a positive override.
+
+## Queue, leases, reconciliation, and outbox
+
+Protocol v4 polls carry a per-start `daemonInstanceId`, `recoveryComplete:true`, and
+all local `currentRuns` as `executing|reporting`. Idle polls may park for 20 seconds;
+active/reporting polls return immediately. `machines.lastSeen` and run heartbeats are
+write-throttled.
+
+Claim and hashed lease insertion are one transaction. Wire run tokens are `rk_…`;
+only SHA-256 is stored. The lease states are:
+
+- `active`: run callback and terminal report authority;
+- `terminal-grace`: blocking report-only authority after inactivity reclaim;
+- `reconciliation-only`: late-report authority remains, but successor work may claim;
+- `retired`: no authority; durable evidence until a matching report receives 410.
+
+The server reclaims a silent run after `PIEVO_RUN_TIMEOUT_MS` (default 20 minutes) and
+keeps a 24-hour late-report window. A completed daemon recovery snapshot moves absent
+reclaimed runs to report-only state. Their late report may update only the old run and
+receipt, never successor cadence or breaker state. Normal finalization, reconciliation,
+lease consumption, loop lifecycle, and durable report receipt are serialized under the
+loop lock. Retired tombstones survive loop deletion.
+
+The daemon writes each exact terminal JSON payload and digest to an owner-only SQLite
+outbox before the run leaves `executing`. Independent rows retry to a definitive,
+report-ID-bound ACK; one slow row does not block other loops. Only the current exact
+200 normal/handled ACK shapes and exact 410 `RETIRED` shape consume a row; every other
+response remains diagnostic and retryable. Startup hydrates every outbox row as
+reporting before its first recovery poll. Daemon Stop waits for terminal-report
+persistence by default; `--force` bounds that wait.
+
+A correlatable but invalid terminal payload is not an endless retry: after lease auth,
+the server records a structured incident and exact-digest durable ACK, terminalizes an
+active run as `error` or preserves an already terminal reconciliation result, and
+consumes authority atomically. Missing, NUL-bearing, or over-cap report IDs stay
+authenticated but mutation-free 400s.
+
+Pending system work on a machine that remains offline for seven days is retired as a
+canceled/skipped ledger row. Owner work is not expired by that backstop.
+
+## Exact artifacts and retention
+
+There is no directory scanner. After provider exit and before outbox persistence, the
+daemon processes only configured exact paths:
+
+- no globs or recursive walk;
+- reject absolute, empty/dot/traversal paths and lexical escapes;
+- resolve real paths and reject symlink escapes outside the real `workdir`;
+- accept only regular files; missing/unreadable files are best-effort omissions;
+- read at most 10 MB + 1 byte; larger files become metadata-only;
+- apply no filename, extension, secret, MIME, or content classification policy.
+
+Because there is no secret-name filter, treat every configured artifact as an explicit
+upload decision. Never document an aggregate loop-byte cap that does not exist.
+
+The daemon posts a full manifest of the configured paths, receives missing hashes, and
+uploads verified bytes four-at-a-time. Sync uses a device token; the server accepts only
+paths still in the loop allowlist and blob hashes referenced by that machine's live
+manifest. `POST /api/machine/sync` is capped at 32 MB; each blob PUT at 10 MB. Missing
+byte objects are requested again. A removed config path is tombstoned under the loop
+lock so stale manifests cannot revive it.
+
+Artifact bytes are content-addressed and deduplicated in one shared `BlobStore`:
+local `<PIEVO_DATA_DIR>/blobs` by default, complete R2 config when selected, memory only
+by explicit data-loss opt-in. The daemon sync completes before terminalization, then
+the server captures a run snapshot. `server/runDiff.ts` computes bounded text diffs
+lazily; binary/oversize files show size changes.
+
+Retention prunes to `PIEVO_SNAPSHOT_RETENTION` (default 20), then GC deletes
+unreferenced blobs older than the grace window (default 1 hour). GC rechecks references
+and deletes bytes before metadata; when uncertain it keeps data. Maintenance runs every
+15 minutes by default and uses an in-flight latch. Loop deletion removes current files,
+snapshots, and non-retired leases; global unreferenced bytes leave through GC.
+
+## Security and authorization
+
+- Standard machine JSON bodies are capped at 2 MB before parse. Prompt/diagnostic
+  string caps are row budgets, not the request security boundary.
+- The device token fully impersonates a machine. Its plaintext is stored for reconnect
+  UX but serialized only to its owner under auth. Existing machines recheck the full
+  token hash, not only the truncated derived machine ID.
+- `poll` is the only enrollment surface. In open mode a shaped `dk_` token may enroll
+  into the shared workspace. With the GitHub gate enabled, first contact requires a
+  live connect key bound to a signed-in user; every other unknown-machine route is 401.
+- Connect-key bindings are durable for 24 hours, keyed by the derived machine ID rather
+  than plaintext. Loop creation revalidates minter, machine owner, and team membership.
+- Machine routes except sync/blob ingress use bounded in-process token buckets per IP
+  and per credential. Defaults are 240 burst/8 s⁻¹ per IP and 120 burst/4 s⁻¹ per
+  token; tests default off. `Fly-Client-IP`, first `X-Forwarded-For`, then
+  `X-Real-IP` determine the IP; missing values share one fail-closed `unknown` bucket.
+  Byte ingress is exempt because it already requires a registered device token and the
+  exact-path/hash handshake plus body/file caps.
+- `PIEVO_ROOTS` is an always-applied local cwd jail. Server roots may only narrow it.
+  Resolve-normalize before prefix checks. Child environments are agent-specific
+  allowlists, HTTP uses bounded fetches, and termination targets the process group.
+- Artifact reads use web sessions plus loop-team membership. Unknown/cross-scope
+  resources return a flat 404.
+
+GitHub auth turns on only when both OAuth credentials exist. With the gate on,
+`PIEVO_AUTH_SECRET` is mandatory; an empty login allowlist allows any GitHub account.
+With the gate off, the app is deliberately open. `requestScope(explicitTeam)` gives URL
+team IDs precedence over the last-used cookie and membership-validates both. Direct
+loop links authorize against the loop's team, not the active tab. Team management is
+owner-only, last-owner transitions are transactional, personal teams cannot be left or
+deleted, and teams with loops cannot be deleted.
+
+## Server, database, and deployment gotchas
+
+- **Exactly one server process owns a database.** `ensureServer()` caches the in-flight
+  boot promise across HMR. Fly examples use `--ha=false`.
+- Vite binds `127.0.0.1`. Production reads `PORT`/`NITRO_PORT`; the published launcher
+  accepts `PIEVO_PORT` as its public bind override.
+- PGlite lives at `<PIEVO_DATA_DIR>/pgdata`. Production source/Docker requires explicit
+  `PIEVO_DB=pglite` when `DATABASE_URL` is absent. The published launcher injects that
+  opt-in for its local default.
+- External runtime Postgres uses `DATABASE_URL`. Supabase transaction-pooler URLs use
+  `prepare:false`; migrations require `DIRECT_DATABASE_URL` and fail loudly rather
+  than route DDL/advisory locks through `:6543`.
+- Hosted Postgres migration runs in `scripts/prestart.mjs`; PGlite migrates in-process.
+  The hosted DB watchdog exits after sustained failed probes so a supervisor can restart
+  a wedged process.
+- The repository currently targets fresh deployments with one reviewed baseline SQL
+  and one journal entry. Do not commit generated Drizzle snapshots. `db:migrate` targets a configured real
+  Postgres, not local PGlite. Drizzle text enums are TypeScript-only, not DB CHECKs.
+- Route handlers should dynamically import native/heavy server dependencies so they do
+  not enter the client bundle. `routeTree.gen.ts` is generated and ignored.
+
+The published `pievo-server` launcher resolves runtime paths from its package root,
+runs prestart, records `starting` before the signalable migration child, and accepts
+readiness only from `/api/ready` with its per-launch nonce. Lifecycle authority is pid +
+process start time; uncertain identity is never signaled or cleared. Detached start is
+idempotent, foreground is the supervisor path, and restart preserves recorded bind
+settings unless explicitly overridden.
+
+The repository owns no Fly app, origin, region, or volume. Both Fly workflows are
+manual examples and verify the configured origin serves the pushed SHA. Persist `/data`
+for PGlite or local artifact bytes; external Postgres plus R2 is stateless.
+
+## Daemon protocol gotchas
+
+- Breaking server/daemon behavior must bump `gateway/protocol.ts`
+  `MIN_DAEMON_VERSION` to the matching daemon release in the same change.
+  Current protocol is v4 and current minimum is `2.4.0`; unknown/unsupported versions receive
+  `needsUpdate` and no delivery. Protocol mismatch is HTTP 426.
+- `route.ts classify(argv, env)` is the pure routing source. A run token wins first;
+  inside a run only `report` is accepted. Outside a run, bare `pievo` is machine home.
+  Daemon lifecycle exists only under `daemon start|stop|restart|status`.
+- `daemon start` is detached/idempotent by default; foreground accepts initial
+  connection flags. The detached token travels in env, never argv. The pid file records
+  pid + process start time. `restart` uses the installed version and preserved config;
+  npm alone performs upgrades.
+- The PATH shim is written only from durable installs, never overwrites a foreign
+  `pievo`, and falls back to `~/.local/bin`. Tests touching daemon lifecycle must inject
+  `ensureBinShim`; otherwise they can write the real home directory.
+- `cli-client.ts` is the shared device/run transport and only posts to
+  `/api/machine/cli`. The daemon is a text sink for server-rendered TOON and retains
+  structured `loops`/`runs` only for local resolution and JSON history. Missing `text`
+  is an invalid server response; there is no endpoint fallback.
+- No coding-agent session-start hook is installed. Normal sessions discover Pievo via
+  explicit `pievo` or the user-scope skill; runtime delivery is self-contained.
+
+## Web UI and skill
+
+- Team scope lives in `/t/$teamId`; the cookie is only the bare-`/` redirect hint.
+  Mount `DashboardView` keyed by team ID so a same-route team switch reseeds state.
+- Loop and run details are pages, not modals. Never render Base UI dialog parts without
+  a `Dialog.Root` ancestor.
+- Background refresh is fetch-then-set and retains stale data on transient errors;
+  do not replace it with route invalidation. Run detail polls every 3 seconds while
+  queued/running/reconciling. Provider tool activity is intentionally absent.
+- Keep page-level horizontal overflow impossible: `min-w-0` on flex/grid children and
+  local `overflow-x-auto` for diffs/tables.
+- Status colors are semantic: `keep` green, `no-change` gray, `block` yellow, execution
+  error red. Keep lifecycle controls, machine presence, report/final output, provider
+  diagnostics, artifact viewer, and run diffs. Do not add aggregate status widgets.
+- HTML artifacts render only in `sandbox="allow-scripts"` without
+  `allow-same-origin`. Images, including SVG, use the hardened inline route; never put
+  synced SVG/HTML directly in the app DOM. Default byte serving is attachment; known
+  images may be inline with `nosniff` and sandbox CSP.
+- Vite intercepts asset-extension URLs before the SSR artifact route, so direct image
+  serving must be tested against a Nitro production build. Markdown uses the server fn
+  and is unaffected.
+
+Public skill source is exactly `skill/SKILL.md` plus
+`references/{connect,create,update}.md`. `bootstrap.md` is server-only first contact.
+`daemon/scripts/sync-skill.mjs` must remain an exact selective whitelist—never recurse.
+The daemon best-effort installs the bundled skill at user scope for Claude Code and
+Codex during `daemon start` and after `new`; installation failure must never block.
+Runtime agents do not depend on the installed skill because delivery contains the full
+report contract. Markdown imported with `?raw` requires a server rebuild/deploy.
+
+## Releases
+
+- `server-v*` publishes only `@kky42/pievo-server` through npm OIDC. Tag and package
+  version must match. CI runs workspace typecheck/tests, strict build, and package
+  verification. Keep `.output`, public files, PGlite assets, migrations, launcher
+  scripts, `files`/`bin`, and repository provenance metadata in the package.
+- `v*` publishes only `@kky42/pievo` through npm OIDC. Do not add `registry-url` or an
+  `NPM_TOKEN`; npm 11 trusted publishing and the package repository object are
+  required for provenance. pnpm version comes only from root `packageManager`.
+- Public connection prose installs `@latest`; source/dev servers use `PIEVO_CLI`
+  verbatim and must not add a global-install step.
 
 ## Maintaining this file
 
-Keep this file for knowledge useful to almost every future agent session in this project.
-Do not repeat what the codebase already shows; point to the authoritative file or command instead.
-Prefer rewriting or pruning existing entries over appending new ones.
-When updating this file, preserve this bar for all agents and keep entries concise.
+Record only durable architecture, release, security, and sharp-edge knowledge useful to
+most sessions. Delete obsolete guidance instead of appending a correction. Keep English
+prose tight and point to the owning module or test whenever the code is clearer.

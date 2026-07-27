@@ -1,13 +1,12 @@
 /**
  * Workdir-jail helpers (PIEVO_ROOTS). The daemon's env roots are the LOCAL,
  * always-enforced jail; server-sent roots may only NARROW it, never widen it —
- * every server-controlled path (a run's workdir, a watched loop folder, a
- * task-file read) is checked against these before it's touched. With no local
+ * every server-controlled execution workdir is checked before it is touched.
+ * Configured artifact paths are additionally confined beneath that workdir. With no local
  * roots configured, behavior is unchanged (fully open — the documented default).
  */
 import path from "node:path";
 
-import { PIEVO_DIR } from "./config.js";
 import { expandTilde } from "./loopdir.js";
 
 /** Absolute, tilde-expanded form of a configured root. */
@@ -15,9 +14,7 @@ function resolveRoot(root: string): string {
   return path.resolve(expandTilde(root));
 }
 
-/** Absolute, tilde-expanded forms of a configured root list — resolve ONCE and
- *  reuse via isWithinResolvedRoots (hot callers like the watcher's per-poll
- *  reconcile shouldn't re-resolve the same fixed list on every check). */
+/** Absolute, tilde-expanded forms of a configured root list. */
 export function resolveRoots(roots: string[]): string[] {
   return roots.map(resolveRoot);
 }
@@ -36,19 +33,6 @@ export function isWithinResolvedRoots(abs: string, resolvedRoots: string[]): boo
 /** Is `abs` at/under any of the given (possibly unresolved) roots? */
 export function isWithinRoots(abs: string, roots: string[]): boolean {
   return isWithinResolvedRoots(abs, resolveRoots(roots));
-}
-
-/** The daemon-owned per-loop scratch parent (`~/.pievo/work`). Computed once —
- *  PIEVO_DIR is itself fixed at module load (env read at import time). */
-const SCRATCH_DIR = path.join(PIEVO_DIR, "work");
-
-/** Is `abs` the scratch parent or under it? Its location is fixed locally —
- *  never server-chosen — so it's allowed even under a jail (mirrors the
- *  runner's no-workdir fallback, which skips the roots check for the same
- *  reason). `abs` gets the same `..`-normalization as isWithinResolvedRoots. */
-export function isScratchDir(abs: string): boolean {
-  const a = path.resolve(abs);
-  return a === SCRATCH_DIR || a.startsWith(SCRATCH_DIR + path.sep);
 }
 
 /**

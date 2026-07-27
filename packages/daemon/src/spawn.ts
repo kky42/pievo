@@ -159,15 +159,18 @@ export function allowlistEnv(extra: { keys?: string[]; prefixes?: string[] } = {
  *   - codex: OPENAI_API_KEY / CODEX_API_KEY (+ optional CODEX_HOME); OAuth /
  *     session files under `~/.codex` are free via HOME
  * Keys ride ONLY their agent's path so a claude run never inherits an unrelated
- * OpenAI secret. `agent` defaults to claude-code so existing callers are unchanged. */
-export function execEnv(agent: CodingAgent = "claude-code"): NodeJS.ProcessEnv {
+ * OpenAI secret. */
+export function execEnv(agent: CodingAgent): NodeJS.ProcessEnv {
   if (agent === "codex") {
     return allowlistEnv({
       keys: ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_HOME"],
     });
   }
-  return allowlistEnv({
-    keys: ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"],
-    prefixes: ["ANTHROPIC_"],
-  });
+  if (agent === "claude-code") {
+    return allowlistEnv({
+      keys: ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"],
+      prefixes: ["ANTHROPIC_"],
+    });
+  }
+  throw new Error(`unsupported coding agent: ${String(agent)}`);
 }

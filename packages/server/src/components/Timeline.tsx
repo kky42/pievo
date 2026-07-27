@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Tooltip } from '@base-ui/react/tooltip'
-import type { JobSummary, RunSummary } from '../types'
+import type { LoopSummary, RunSummary } from '../types'
 import { dotColor, dotLabel, dotOpacity, dur, fmt, until } from '../lib/format'
 import { runPulseAnim, useHydrated } from './ui'
 
@@ -38,7 +38,7 @@ function RunSeg({ run, onClick }: { run: RunSummary; onClick: () => void }) {
             }}
             aria-label={dotLabel(run)}
             className={`${SEG} cursor-pointer transition-opacity hover:opacity-70`}
-            style={{ background: dotColor(run), opacity: dotOpacity(run), ...(run.running ? runPulseAnim : {}) }}
+            style={{ background: dotColor(run), opacity: dotOpacity(run), ...(run.phase === 'running' ? runPulseAnim : {}) }}
           />
         }
       />
@@ -94,13 +94,13 @@ function Pager({ count, onClick, loading }: { count: number; onClick: () => void
 }
 
 export function Timeline({
-  job,
+  loop,
   runs,
   total,
   onLoadMore,
   onPickRun,
 }: {
-  job: JobSummary
+  loop: LoopSummary
   /** The loaded runs, chronological (oldest-first). The card owns this list and
    *  grows it on the left via onLoadMore. */
   runs: RunSummary[]
@@ -111,7 +111,7 @@ export function Timeline({
   onPickRun: (run: RunSummary) => void
 }) {
   const all = runs
-  const en = job.enabled
+  const en = loop.enabled
   const L = all.length
   // Older runs that exist server-side but aren't fetched yet (never negative —
   // total can briefly lag the seeded page mid-poll).
@@ -152,11 +152,11 @@ export function Timeline({
   // pulsing RunSeg in `visible` and settles into its finished color in place once
   // the report lands. We only need the flag here to suppress the next-run marker
   // while it executes (the live block already stands in for "what's next").
-  const running = !!(job.running || job.queued) && atLatest
+  const running = !!(loop.running || loop.queued) && atLatest
 
   // Right edge: at the live edge we show the next-run marker; otherwise the
   // forward "+N" pager for the newer runs currently scrolled out of view.
-  const showNext = atLatest && en && !!job.nextRun && !running
+  const showNext = atLatest && en && !!loop.nextRun && !running
 
   return (
     // Contain the strip to its track. A full WINDOW of fixed-width (shrink-0) run
@@ -177,9 +177,9 @@ export function Timeline({
           <span className="w-12 border-t border-dashed border-wire" />
           <span
             className="size-[11px] shrink-0 rounded-full border border-wire"
-            title={hydrated ? `Next scheduled run · ${fmt(job.nextRun)}` : undefined}
+            title={hydrated ? `Next scheduled run · ${fmt(loop.nextRun)}` : undefined}
           />
-          <span className="text-caption text-disabled">{hydrated ? until(job.nextRun) : ''}</span>
+          <span className="text-caption text-disabled">{hydrated ? until(loop.nextRun) : ''}</span>
         </div>
       ) : (
         !atLatest && <Pager count={newerHidden} onClick={pageFwd} />

@@ -4,9 +4,9 @@ import { marked } from 'marked'
 /**
  * Shared markdown → sanitized HTML pipeline: marked (GFM) → DOMPurify (an
  * allowlisted prose subset, NO script/handlers). ONE sanitizer config for every
- * markdown surface (including the Files viewer's `TaskFileView`) so the allowlist
- * can't drift between them. Render the output under
- * the `.taskmd` styles.
+ * artifact markdown surface so the allowlist cannot drift between viewers.
+ * Render the output under
+ * the `.artifact-markdown` styles.
  */
 export const MD_SANITIZE: Config = {
   ALLOWED_TAGS: [

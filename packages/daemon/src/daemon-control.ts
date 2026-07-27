@@ -18,7 +18,7 @@ import path from "node:path";
 import { DEVICE_FILE, PIEVO_DIR, readStored, resolveServerUrl } from "./config.js";
 import { boundedFetch } from "./http.js";
 import { readPidFile, clearPidFile, isAlive, processStartTime, verifiedRunningPid, type PidRecord } from "./pidfile.js";
-import { readReportDiagnostics } from "./report-outbox.js";
+import { readReportDiagnostics, type ReportDiagnostics } from "./report-outbox.js";
 import { readRuntimeDiagnostics, type RuntimeDiagnostics } from "./runtime-diagnostics.js";
 
 export type MachineStatus = {
@@ -57,7 +57,7 @@ export type DaemonControlDeps = {
   fetchOnline?: (server: string, token: string) => Promise<MachineStatus | undefined>;
   out?: (s: string) => void;
   err?: (s: string) => void;
-  reportDiagnostics?: () => { pendingRunIds: string[]; poisonedRunIds: string[]; lastError?: string };
+  reportDiagnostics?: () => ReportDiagnostics;
   runtimeDiagnostics?: () => RuntimeDiagnostics | undefined;
   // The local config inputs `status` reports — overridable so tests are isolated
   // from the ambient ~/.pievo. Omitted ⇒ read from disk.
@@ -115,12 +115,9 @@ export async function runDaemonStatus(args: string[], injected: DaemonControlDep
     d.out(`  local persistence: needs attention — ${runtime.persistenceError}\n`);
     d.out(`  report database: ${runtime.outboxPath ?? "unknown"}; affected runs remain occupied\n`);
   }
-  const poisonedSet = new Set(report.poisonedRunIds);
   for (const runId of pendingRunIds) {
     d.out(`  current run: ${runId} (reporting)\n`);
-    d.out(poisonedSet.has(runId)
-      ? `  terminal report: needs attention (${runId}); affected loop remains occupied\n`
-      : `  terminal report: saved locally; retrying (${runId})\n`);
+    d.out(`  terminal report: saved locally; retrying (${runId})\n`);
   }
   if (report.lastError) d.out(`  last report error: ${report.lastError}\n`);
 
@@ -130,17 +127,17 @@ export async function runDaemonStatus(args: string[], injected: DaemonControlDep
     const view = await d.fetchOnline(server, token);
     if (view) {
       d.out(`  server connectivity: ${view.online ? "online" : "offline"}${view.name ? ` (${view.name})` : ""}\n`);
-      if (view.daemonProtocol === 3) d.out("  daemon protocol: 3\n");
-      else d.out(`  daemon upgrade required: protocol ${view.daemonProtocol ?? "unknown"} -> 3; run \`npm install -g @kky42/pievo@latest\`, then \`pievo daemon restart\`\n`);
+      if (view.daemonProtocol === 4) d.out("  daemon protocol: 4\n");
+      else d.out(`  daemon upgrade required: protocol ${view.daemonProtocol ?? "unknown"} -> 4; run \`npm install -g @kky42/pievo@latest\`, then \`pievo daemon restart\`\n`);
       const serverRuns = view.currentRuns ?? [];
       if (!runtimeRuns.length) for (const run of serverRuns) if (!pendingSet.has(run.runId)) d.out(`  current run: ${run.runId} (${run.stage})\n`);
       if (!runtime?.cancelPendingRunIds?.length && serverRuns.some((run) => run.cancelPending)) d.out("  cancel pending: stop requested; waiting for daemon confirmation\n");
     } else {
       d.out("  server connectivity: unknown — server unreachable\n");
-      d.out("  daemon protocol: 3 locally; server support unknown\n");
+      d.out("  daemon protocol: 4 locally; server support unknown\n");
     }
   } else {
-    d.out("  daemon protocol: 3 locally; server not configured\n");
+    d.out("  daemon protocol: 4 locally; server not configured\n");
   }
   return 0;
 }
@@ -156,16 +153,22 @@ export async function runDaemonStop(args: string[], injected: DaemonControlDeps 
   }
   const d = deps(injected);
   const record = d.readPid();
-  const pid = verifiedRunningPid({ ...d, readPid: () => record });
+  const recordAlive = record ? d.alive(record.pid) : false;
+  const observedStart = recordAlive && record ? d.startTime(record.pid) : undefined;
+  const pid = verifiedRunningPid({ ...d, readPid: () => record, startTime: () => observedStart });
 
   if (pid === undefined) {
+    if (record && recordAlive && observedStart === undefined) {
+      d.err(`pievo: refusing to stop pid ${record.pid} because process identity cannot be confirmed\n`);
+      return 1;
+    }
     d.out("no daemon running for this machine\n");
     return 0;
   }
   // Never signal a merely-live numeric PID. Current pidfiles always carry the
   // process start time; a malformed file or failed identity lookup requires
   // manual inspection rather than risking an unrelated reused process.
-  const confirmedStart = record?.startTime ? d.startTime(pid) : undefined;
+  const confirmedStart = observedStart;
   if (!record?.startTime || confirmedStart !== record.startTime) {
     d.err(`pievo: refusing to stop pid ${pid} because process identity cannot be confirmed\n`);
     return 1;

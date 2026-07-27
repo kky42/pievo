@@ -1,9 +1,9 @@
 /**
- * Server-side reads over a loop's live-synced artifacts (Phase 2). Pure helpers
+ * Server-side reads over a loop's current exact artifacts. Pure helpers
  * (no request/session context) so they're shared by the lazy server fns
  * (`getArtifacts` / `getArtifact` in loopApi) AND the download route, and are
  * directly unit-testable against an injected blob store — authorization is the
- * caller's job (the server fn via `ownedLoop`, the route via `canAccessLoop`).
+ * caller's loop (the server fn via `ownedLoop`, the route via `canAccessLoop`).
  *
  * The bytes live in the gateway's BlobStore (local by default, R2 when configured);
  * here we only read them — never write — so the feature is strictly read-only and
@@ -12,13 +12,12 @@
 import * as store from "../db/store.js";
 import { safeRelPath } from "../gateway/artifacts.js";
 import { getArtifactSync } from "./boot.js";
-import { toArtifactSummary } from "./adapters.js";
+import { toArtifactSummary } from "./loopProjection.js";
 import type { ArtifactContent, ArtifactSummary } from "../types.js";
 
-/** The loop's current (non-deleted) file set as compact UI rows, path-sorted, each
- *  carrying its blob's front-matter meta (one indexed join, no per-file fetch). */
+/** The loop's current (non-deleted) file set as compact UI rows, path-sorted. */
 export async function listLoopArtifacts(loopId: string): Promise<ArtifactSummary[]> {
-  return (await store.listArtifactsWithMeta(loopId)).map(toArtifactSummary);
+  return (await store.listArtifacts(loopId)).map(toArtifactSummary);
 }
 
 /**

@@ -12,10 +12,8 @@ export interface TerminalReport {
   result: TerminalResult;
   durationMs: number;
   exitCode: number | null;
-  message?: string;
   sessionId?: string;
   usage?: unknown;
-  taskFileContent?: string;
   error?: string;
   finalText?: string;
 }
@@ -35,15 +33,17 @@ export interface PersistedReport {
 export type ReportAck =
   | { kind: "ack"; reportId: string }
   | { kind: "retired"; reportId: string }
-  | { kind: "conflict"; reportId: string; error: string }
-  | { kind: "invalid"; reportId: string; error: string }
   | { kind: "retry"; reportId: string; error: string };
 
-const POISON_PREFIXES = ["REPORT_CONFLICT:", "REPORT_INVALID:"] as const;
+export interface ReportDiagnostics {
+  pendingRunIds: string[];
+  lastError?: string;
+}
+
 const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000] as const;
 
-/** Durable terminal-report outbox. Rows are independent so one slow or poisoned
- * report never caps execution/reporting for other loops. The database lives under
+/** Durable terminal-report outbox. Rows are independent so one slow report
+ * never caps execution/reporting for other loops. The database lives under
  * PIEVO_HOME, outside loop roots, and is owner-only even with a permissive umask. */
 export class PendingReportOutbox {
   private readonly db: DatabaseSync;
@@ -93,7 +93,7 @@ export class PendingReportOutbox {
   }
 
   ready(now = Date.now()): PersistedReport[] {
-    return this.all().filter((row) => row.nextAttemptAt <= now && !POISON_PREFIXES.some((prefix) => row.lastError?.startsWith(prefix)));
+    return this.all().filter((row) => row.nextAttemptAt <= now);
   }
 
   peek(): PersistedReport | undefined { return this.all()[0]; }
@@ -105,45 +105,77 @@ export class PendingReportOutbox {
       this.db.prepare("DELETE FROM pending_reports WHERE report_id=?").run(row.reportId);
       return;
     }
-    if (ack.kind === "conflict" || ack.kind === "invalid") {
-      const code = ack.kind === "conflict" ? "REPORT_CONFLICT" : "REPORT_INVALID";
-      this.db.prepare("UPDATE pending_reports SET last_error=? WHERE report_id=?").run(`${code}: ${ack.error}`, row.reportId);
-      return;
-    }
     const attempts = row.attemptCount + 1;
     const delay = BACKOFF_MS[Math.min(attempts - 1, BACKOFF_MS.length - 1)];
     this.db.prepare("UPDATE pending_reports SET attempt_count=?,next_attempt_at=?,last_error=? WHERE report_id=?")
       .run(attempts, now + delay, ack.error, row.reportId);
   }
 
-  diagnostics(): { pendingRunIds: string[]; poisonedRunIds: string[]; lastError?: string } {
+  diagnostics(): ReportDiagnostics {
     const rows = this.all();
-    const poisoned = rows.filter((row) => POISON_PREFIXES.some((prefix) => row.lastError?.startsWith(prefix)));
-    const first = rows[0];
+    const lastError = rows.find((row) => row.lastError)?.lastError;
     return {
       pendingRunIds: rows.map((row) => row.runId),
-      poisonedRunIds: poisoned.map((row) => row.runId),
-      ...(first?.lastError ? { lastError: first.lastError } : {}),
+      ...(lastError ? { lastError } : {}),
     };
   }
 
   close(): void { this.db.close(); }
 }
 
-export function readReportDiagnostics(file: string): { pendingRunIds: string[]; poisonedRunIds: string[]; lastError?: string } {
-  if (!fs.existsSync(file)) return { pendingRunIds: [], poisonedRunIds: [] };
+export function readReportDiagnostics(file: string): ReportDiagnostics {
+  if (!fs.existsSync(file)) return { pendingRunIds: [] };
   try {
     const box = new PendingReportOutbox(file);
     const result = box.diagnostics();
     box.close();
     return result;
   } catch (err) {
-    return { pendingRunIds: [], poisonedRunIds: [], lastError: `could not read report outbox: ${err instanceof Error ? err.message : String(err)}` };
+    return { pendingRunIds: [], lastError: `could not read report outbox: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
 
 const REPORT_TIMEOUT_MS = 60_000;
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
+
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length && expected.every((key, index) => actual[index] === key);
+}
+
+function isNormalAck(status: number, value: unknown, reportId: string): boolean {
+  return status === 200 && record(value)
+    && hasExactKeys(value, ["ok", "reportId"])
+    && value.ok === true
+    && value.reportId === reportId;
+}
+
+function isHandledAck(status: number, value: unknown, report: PersistedReport): boolean {
+  if (status !== 200 || !record(value) || !hasExactKeys(value, [
+    "accepted", "code", "disposition", "issues", "ok", "payloadDigest", "reportId", "terminal",
+  ])) return false;
+  return value.ok === true
+    && value.accepted === false
+    && value.terminal === true
+    && value.reportId === report.reportId
+    && value.payloadDigest === report.payloadDigest
+    && (value.code === "REPORT_CONFLICT" || value.code === "REPORT_INVALID")
+    && (value.disposition === "run-error" || value.disposition === "telemetry-rejected")
+    && Array.isArray(value.issues)
+    && value.issues.every((issue) => typeof issue === "string");
+}
+
+function isRetiredAck(status: number, value: unknown, reportId: string): boolean {
+  return status === 410 && record(value)
+    && hasExactKeys(value, ["code", "error", "reportId"])
+    && value.code === "RETIRED"
+    && value.error === "execution authority retired"
+    && value.reportId === reportId;
+}
 
 /** One report transport attempt. Only definitive, report-id-bound responses can
  * tell the outbox to delete. Every ambiguous response remains retryable. */
@@ -160,27 +192,16 @@ export async function sendTerminalReport(
       headers: { Authorization: `Bearer ${report.runToken}`, "Content-Type": "application/json" },
       body: report.payloadJson,
     });
-    let body: { reportId?: unknown; code?: unknown; issues?: unknown; accepted?: unknown; payloadDigest?: unknown; disposition?: unknown } = {};
-    try { body = await res.json() as typeof body; } catch { /* malformed is ambiguous */ }
-    if (body.reportId === report.reportId && res.status === 409 && body.code === "REPORT_CONFLICT") {
-      return { kind: "conflict", reportId: report.reportId, error: "server rejected a different payload for this reportId" };
-    }
-    if (body.reportId === report.reportId && res.status === 422 && body.code === "REPORT_INVALID") {
-      const issues = Array.isArray(body.issues) ? body.issues.filter((issue): issue is string => typeof issue === "string").join("; ") : "invalid terminal payload";
-      return { kind: "invalid", reportId: report.reportId, error: issues };
-    }
-    if (body.reportId === report.reportId && res.status === 410 && body.code === "RETIRED") return { kind: "retired", reportId: report.reportId };
-    if (res.ok && body.reportId === report.reportId) {
-      // A handled rejection is a terminal transport ACK, not acceptance of the
-      // claimed result. Bind it to the exact durable bytes; tolerate additive
-      // response fields, but never clear the row for another payload/disposition.
-      if (body.accepted === false && (
-        body.payloadDigest !== report.payloadDigest ||
-        (body.disposition !== "run-error" && body.disposition !== "telemetry-rejected")
-      )) return { kind: "retry", reportId: report.reportId, error: "ambiguous handled-report acknowledgement" };
+    let body: unknown;
+    try { body = await res.json(); } catch { /* malformed is ambiguous */ }
+    if (isNormalAck(res.status, body, report.reportId) || isHandledAck(res.status, body, report)) {
       return { kind: "ack", reportId: report.reportId };
     }
-    return { kind: "retry", reportId: report.reportId, error: `ambiguous report response (${res.status})` };
+    if (isRetiredAck(res.status, body, report.reportId)) {
+      return { kind: "retired", reportId: report.reportId };
+    }
+    const code = record(body) && typeof body.code === "string" ? ` ${body.code}` : "";
+    return { kind: "retry", reportId: report.reportId, error: `unrecognized report acknowledgement (${res.status}${code})` };
   } catch (err) {
     return { kind: "retry", reportId: report.reportId, error: err instanceof Error ? err.message : String(err) };
   }

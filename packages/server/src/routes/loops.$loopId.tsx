@@ -5,9 +5,8 @@ import { LoopDetailView } from '../components/LoopDetailView'
 import { SignIn } from '../components/SignIn'
 
 /**
- * Loop detail PAGE — `/loops/$loopId`. The dedicated page that replaced the old
- * dashboard modal: a loop header + action toolbar, the unified Files panel (task
- * file alongside synced artifacts), and the runs timeline. The view owns its own
+ * Loop detail page — `/loops/$loopId`: a loop header and action toolbar, the
+ * exact artifact Files panel, and the runs timeline. The view owns its own
  * data + self-poll (ssr:false so the session cookie rides along with its fetches,
  * like the dashboard loader). Run rows link on to `/loops/$loopId/runs/$runId`.
  *

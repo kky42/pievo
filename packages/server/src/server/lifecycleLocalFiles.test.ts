@@ -3,11 +3,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 
+import { testStore, type TestStore } from '../../test/store.js'
+
 let tmp: string
 let workdir: string
 let sentinel: string
 let db: typeof import('../db/index.js')
-let store: typeof import('../db/store.js')
+let store: TestStore
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pievo-lifecycle-local-files-'))
@@ -20,14 +22,14 @@ beforeAll(async () => {
   process.env.PIEVO_LOG_LEVEL = 'silent'
   db = await import('../db/index.js')
   await db.runMigrations()
-  store = await import('../db/store.js')
+  store = testStore(await import('../db/store.js'))
 })
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
 
 async function loop(id: string, machineId: string) {
-  await store.createMachine({ id: machineId, userId: 'owner', name: machineId, tokenHash: `hash-${machineId}`, online: true, daemonProtocol: 3 })
-  return store.createLoop({ id, userId: 'owner', machineId, name: id, cron: '0 6 * * *', workdir, enabled: true, notify: 'auto' })
+  await store.createMachine({ id: machineId, userId: 'owner', name: machineId, tokenHash: `hash-${machineId}`, online: true, daemonProtocol: 4 })
+  return store.createLoop({ id, userId: 'owner', machineId, name: id, cron: '0 6 * * *', workdir, enabled: true })
 }
 
 function expectSentinel() {
@@ -40,7 +42,7 @@ test('Pause, Stop, Delete, and Force-delete only mutate server state and never r
   expectSentinel()
 
   const stopped = await loop('stop-loop', 'stop-machine')
-  await store.enqueueRun(stopped.id, { role: 'exec', requestedBy: 'owner' })
+  await store.enqueueRun(stopped.id, { requestedBy: 'owner' })
   expect(await store.claimReadyRunForMachine(stopped.machineId)).toBeTruthy()
   await store.stopLoop(stopped.id)
   expectSentinel()
@@ -52,7 +54,7 @@ test('Pause, Stop, Delete, and Force-delete only mutate server state and never r
   expectSentinel()
 
   const forced = await loop('force-loop', 'force-machine')
-  await store.enqueueRun(forced.id, { role: 'exec', requestedBy: 'owner' })
+  await store.enqueueRun(forced.id, { requestedBy: 'owner' })
   expect(await store.claimReadyRunForMachine(forced.machineId)).toBeTruthy()
   await store.requestDeleteLoop(forced.id)
   expect(await store.forceDeleteLoop(forced.id)).toBe(true)

@@ -16,9 +16,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 
+import { testStore, type TestStore } from "../../test/store.js";
+
 let tmp: string;
 let db: typeof import("../db/index.js");
-let store: typeof import("../db/store.js");
+let store: TestStore;
 let gatewayMod: typeof import("./index.js");
 let cliMod: typeof import("./cli.js");
 let tokens: typeof import("./tokens.js");
@@ -31,7 +33,7 @@ beforeAll(async () => {
   process.env.PIEVO_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();
-  store = await import("../db/store.js");
+  store = testStore(await import("../db/store.js"));
   gatewayMod = await import("./index.js");
   cliMod = await import("./cli.js");
   tokens = await import("./tokens.js");
@@ -47,16 +49,7 @@ beforeEach(async () => {
 });
 
 /** A recording notifier: captures every push instead of hitting a channel. */
-function recordingNotify() {
-  const sent: Array<{ loopId: string; message: string }> = [];
-  const fn = (loop: any, message: string): Promise<void> => {
-    sent.push({ loopId: loop.id, message });
-    return Promise.resolve();
-  };
-  return { sent, fn };
-}
-
-function gateway(notify?: (loop: any, message: string) => Promise<void>, scheduler?: any) {
+function gateway(scheduler?: any) {
   const gw = new gatewayMod.MachineGateway(
     scheduler ?? {
       advanceDueSchedules(): never[] { return []; },
@@ -65,8 +58,6 @@ function gateway(notify?: (loop: any, message: string) => Promise<void>, schedul
       removeLoop(): void {},
       runNow(): void {},
     } as any,
-    undefined,
-    notify,
   );
   const rawReport = gw.report.bind(gw);
   gw.report = async (token, body) => {
@@ -88,28 +79,25 @@ async function seedMachineLoop(lastSeenAgoMs: number) {
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "Laptop", tokenHash: tokens.sha256(token), online: true }));
   (await store.updateMachine(machineId, { lastSeen: isoAgo(lastSeenAgoMs) }));
-  const loop = (await store.createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" }));
+  const loop = (await store.createLoop({ workdir: "/work", userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
   return { machineId, loop };
 }
 
 test("(a) a running run reclaimed while asleep is reconciled to done by the late wake-report — message preserved", async () => {
-  const { sent, fn } = recordingNotify();
-  const gw = gateway(fn);
+  const gw = gateway();
   // Laptop slept mid-run: no heartbeat for 21 min, run was claimed 21 min ago.
   const { machineId, loop } = (await seedMachineLoop(21 * MIN));
-  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) }));
-  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const run = (await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: isoAgo(21 * MIN) }));
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId });
   // The in-run report is the durable source of status/message. The later machine
   // terminal report only contributes provider/process telemetry.
-  await store.updateRun(run.id, { status: "kept", message: "opened PR #42" });
+  await store.updateRun(run.id, { status: "keep", message: "opened PR #42" });
 
-  // Sweep reclaims the stuck run and pushes the (soft) offline alert.
+  // Sweep reclaims the stuck run and records its lifecycle facts.
   (await gw.sweep());
   const swept = (await store.getRun(run.id))!;
   expect(swept.phase).toBe("error");
   expect(swept.error).toBe("machine timed out / disconnected");
-  expect(sent).toHaveLength(1);
-  expect(sent[0]!.message).toMatch(/asleep|interrupted/i);
   // The lease was NOT retired (terminalized to grace for the wake-report) — it still
   // resolves, now in terminal-grace.
   expect((await tokens.resolveLease(rt))?.state).toBe("terminal-grace");
@@ -123,22 +111,19 @@ test("(a) a running run reclaimed while asleep is reconciled to done by the late
   expect(final.message).toBe("opened PR #42");
   expect(final.durationMs).toBe(1234);
   // The false failure no longer counts against the streak (derived from rows).
-  expect((await store.execFailureStreak(loop.id))).toBe(0);
-  // A retraction push carried the real result.
-  expect(sent).toHaveLength(2);
-  expect(sent[1]!.message).toBe("opened PR #42");
+  // Reconciliation updates only the durable run and cadence facts.
   // Single-shot: the lease is now retired — a second late report is rejected.
   expect(await tokens.resolveLease(rt)).toBeUndefined();
   expect((await gw.report(rt, { result: "success" as const, finalText: "again" })).status).toBe(401);
 });
 
 test("a reclaimed late success stays failed when the run skipped its required report", async () => {
-  const gw = gateway(() => Promise.resolve());
+  const gw = gateway();
   const { machineId, loop } = await seedMachineLoop(21 * MIN);
   const run = await store.addRun({
-    loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN),
+    loopId: loop.id, machineId, phase: "running", ts: isoAgo(21 * MIN),
   });
-  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId });
 
   await gw.sweep();
   expect((await tokens.resolveLease(rt))?.state).toBe("terminal-grace");
@@ -153,14 +138,14 @@ test("a reclaimed late success stays failed when the run skipped its required re
 
 test("terminal-grace fences due cadence; late success consumes grace and retimes the fact", async () => {
   const scheduler = new schedulerMod.Scheduler({ dispatch(): void {} });
-  const gw = gateway(() => Promise.resolve(), scheduler);
+  const gw = gateway(scheduler);
   const { machineId, loop: created } = await seedMachineLoop(21 * MIN);
   await store.updateLoop(created.id, { scheduleMode: "continuous", continuousDelayMinutes: 5 });
   const loop = (await store.getLoop(created.id))!;
   const run = await store.addRun({
-    loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", requestedBy: "system", ts: isoAgo(21 * MIN),
+    loopId: loop.id, machineId, phase: "running", requestedBy: "system", ts: isoAgo(21 * MIN),
   });
-  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId });
 
   await gw.sweep();
   const reclaimDue = (await store.getLoop(loop.id))!.nextCadenceAt!;
@@ -177,81 +162,69 @@ test("terminal-grace fences due cadence; late success consumes grace and retimes
 });
 
 test("a report-only late success updates only the old run after queued work starts", async () => {
-  const { sent, fn } = recordingNotify();
-  const gw = gateway(fn);
+  const gw = gateway();
   const { machineId, loop } = await seedMachineLoop(21 * MIN);
   await store.updateLoop(loop.id, { scheduleMode: "continuous", continuousDelayMinutes: 5 });
   const interrupted = await store.addRun({
-    loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", requestedBy: "system", ts: isoAgo(21 * MIN),
+    loopId: loop.id, machineId, phase: "running", requestedBy: "system", ts: isoAgo(21 * MIN),
   });
-  const rt = await tokens.registerRunLease({ runId: interrupted.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
-  await store.updateRun(interrupted.id, { status: "kept", message: "old result" });
+  const rt = await tokens.registerRunLease({ runId: interrupted.id, loopId: loop.id, machineId });
+  await store.updateRun(interrupted.id, { status: "keep", message: "old result" });
   await gw.sweep();
-  await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "new work" });
+  await store.enqueueRun(loop.id, { requestedBy: "owner" });
   await store.releaseAbsentReconciliations(machineId, []);
   const successor = await store.claimReadyRunForMachine(machineId);
-  expect(successor?.run.role).toBe("steer");
+  expect(successor?.run.phase).toBe("running");
   const before = await store.getLoop(loop.id);
-  const alertsBefore = sent.length;
-
-  expect((await gw.report(rt, { result: "success", finalText: "late old result", taskFileContent: "stale task" })).status).toBe(200);
+  expect((await gw.report(rt, { result: "success", finalText: "late old result" })).status).toBe(200);
   expect(await store.getRun(interrupted.id)).toMatchObject({ phase: "done", message: "old result" });
   expect((await store.getRun(successor!.run.id))?.phase).toBe("running");
-  expect(await store.getLoop(loop.id)).toMatchObject({ nextCadenceAt: before?.nextCadenceAt, taskFileContent: before?.taskFileContent });
-  expect(sent).toHaveLength(alertsBefore);
+  expect(await store.getLoop(loop.id)).toMatchObject({ nextCadenceAt: before?.nextCadenceAt });
 });
 
-test("a provisional reclaim defers the breaker; confirmed late failure pauses atomically without duplicate alert", async () => {
-  const { sent, fn } = recordingNotify();
-  const gw = gateway(fn);
+test("a provisional reclaim defers the breaker; confirmed late failure pauses atomically", async () => {
+  const gw = gateway();
   const { machineId, loop } = await seedMachineLoop(21 * MIN);
   await store.updateLoop(loop.id, { scheduleMode: "continuous", continuousDelayMinutes: 5 });
   for (let i = 0; i < 2; i += 1) {
     await store.addRun({
-      loopId: loop.id, userId: "u1", machineId, phase: "error", role: "exec", requestedBy: "system", ts: isoAgo((23 - i) * MIN),
+      loopId: loop.id, machineId, phase: "error", requestedBy: "system", ts: isoAgo((23 - i) * MIN),
     });
   }
   const running = await store.addRun({
-    loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", requestedBy: "system", ts: isoAgo(21 * MIN),
+    loopId: loop.id, machineId, phase: "running", requestedBy: "system", ts: isoAgo(21 * MIN),
   });
-  const rt = await tokens.registerRunLease({ runId: running.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
-  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });
+  const rt = await tokens.registerRunLease({ runId: running.id, loopId: loop.id, machineId });
+  await store.enqueueRun(loop.id, { requestedBy: "system" });
 
   await gw.sweep();
   expect((await store.getRun(running.id))!.phase).toBe("error");
-  expect((await store.execFailureStreak(loop.id))).toBe(3);
   expect((await store.getLoop(loop.id))!.enabled).toBe(true);
-  expect(sent).toHaveLength(0); // streak 3 is anti-spam-silent while provisional
 
   expect((await gw.report(rt, { result: "failure" as const, error: "confirmed" })).status).toBe(200);
   expect((await store.getLoop(loop.id))).toMatchObject({ enabled: false, nextCadenceAt: null, nextRunAt: null });
   expect((await store.openRunsForLoop(loop.id))).toHaveLength(0);
-  expect(sent).toHaveLength(1); // one autopause note, never a second failure alert
 });
 
-test("(a') a late FAILURE report records the real error honestly, without a second push", async () => {
-  const { sent, fn } = recordingNotify();
-  const gw = gateway(fn);
+test("(a') a late FAILURE report records the real error honestly", async () => {
+  const gw = gateway();
   const { machineId, loop } = (await seedMachineLoop(21 * MIN));
-  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) }));
-  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const run = (await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: isoAgo(21 * MIN) }));
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId });
 
   (await gw.sweep());
-  expect(sent).toHaveLength(1); // the reclaim alert
   const res = (await gw.report(rt, { result: "failure" as const, error: "claude reported an error" }));
   expect(res.status).toBe(200);
   const final = (await store.getRun(run.id))!;
   expect(final.phase).toBe("error");
   expect(final.error).toBe("claude reported an error"); // real reason replaces the generic reclaim reason
-  // No double-alert: the reclaim already notified once for this run.
-  expect(sent).toHaveLength(1);
 });
 
 test("a cancellation report that races timeout reclaim remains canceled", async () => {
-  const gw = gateway(() => Promise.resolve());
+  const gw = gateway();
   const { machineId, loop } = await seedMachineLoop(21 * MIN);
-  const run = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) });
-  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const run = await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: isoAgo(21 * MIN) });
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId });
 
   await gw.sweep();
   expect((await store.getRun(run.id))!.phase).toBe("error");
@@ -261,34 +234,30 @@ test("a cancellation report that races timeout reclaim remains canceled", async 
 
 
 
-test("(b) a pending run on an unreachable machine is DEFERRED — held claimable, no error, no alert", async () => {
-  const { sent, fn } = recordingNotify();
-  const gw = gateway(fn);
+test("(b) a pending run on an unreachable machine is deferred and remains claimable", async () => {
+  const gw = gateway();
   // Machine last polled 2 min ago (asleep presence), pending run 2 min old. The
   // old sweep failed this as "machine offline" after 60s; now the pending row is
   // the durable inbox — it waits for the machine's next poll (catch-up).
   const { machineId, loop } = (await seedMachineLoop(2 * MIN));
-  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", ts: isoAgo(2 * MIN) }));
+  const run = (await store.addRun({ loopId: loop.id, machineId, phase: "pending", ts: isoAgo(2 * MIN) }));
 
   (await gw.sweep());
   const held = (await store.getRun(run.id))!;
   expect(held.phase).toBe("pending");
   expect(held.error).toBeNull();
-  // An asleep machine is the common calm case — fully silent (the one-shot
-  // offline note fires only past the 6h presence threshold; see index.test.ts).
-  expect(sent).toHaveLength(0);
   // The machine itself was flipped offline by the sweep.
   expect((await store.getMachine(machineId))!.online).toBe(false);
 });
 
-test("a ready pending row gets a fresh claim window after a 21-minute cross-role blocker ends", async () => {
+test("a ready pending row gets a fresh claim window after a 21-minute blocker ends", async () => {
   const gw = gateway();
   const { machineId, loop } = await seedMachineLoop(5_000);
   const pending = await store.addRun({
-    loopId: loop.id, userId: "u1", machineId, phase: "pending", role: "exec", requestedBy: "system", ts: isoAgo(21 * MIN),
+    loopId: loop.id, machineId, phase: "pending", requestedBy: "system", ts: isoAgo(21 * MIN),
   });
   const blocker = await store.addRun({
-    loopId: loop.id, userId: "u1", machineId, phase: "running", role: "steer", requestedBy: "owner", ts: isoAgo(21 * MIN),
+    loopId: loop.id, machineId, phase: "running", requestedBy: "owner", ts: isoAgo(21 * MIN),
   });
   // The blocker just ended. The old pending timestamp must not make the follow-up
   // instantly look 21m stale on this very first eligible sweep.
@@ -301,22 +270,22 @@ test("(c) a long-running run with a fresh heartbeat survives the sweep", async (
   const gw = gateway();
   const { machineId, loop } = (await seedMachineLoop(5_000)); // machine polled 5s ago (online)
   // Claimed 30 min ago, but heartbeat stamped 10s ago — still actively working.
-  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(30 * MIN) }));
+  const run = (await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: isoAgo(30 * MIN) }));
   (await store.updateRun(run.id, { heartbeatAt: isoAgo(10_000) }));
 
   (await gw.sweep());
   expect((await store.getRun(run.id))!.phase).toBe("running"); // inactivity timeout keyed off the fresh stamp
 });
 
-test("agent-api verbs are refused for a reclaimed run (only the final report reconciles)", async () => {
-  const gw = gateway(() => Promise.resolve());
+test("run-token CLI verbs are refused for a reclaimed run (only the final report reconciles)", async () => {
+  const gw = gateway();
   const { machineId, loop } = (await seedMachineLoop(21 * MIN));
-  const run = (await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: isoAgo(21 * MIN) }));
-  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId, role: "exec", allowControl: true });
+  const run = (await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: isoAgo(21 * MIN) }));
+  const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId });
 
   (await gw.sweep());
   // The CLI verbs live on CliGateway (over the same core instance, like boot).
-  const out = (await new cliMod.CliGateway(gw).agentApi(rt, ["reschedule", "1h"]));
+  const out = await new cliMod.CliGateway(gw).cli(rt, ["reschedule", "1h"]);
   expect(out.status).toBe(409);
   expect(String((out.body as any).text)).toMatch(/terminal|no longer accepts/i);
 });

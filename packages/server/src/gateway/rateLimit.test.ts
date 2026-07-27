@@ -98,7 +98,7 @@ describe("machineRouteLimit", () => {
     const now = 4_000_000;
     // Distinct IP per call so the per-IP tier never trips; only the per-token tier
     // could throttle a shared device token. It always does now (no exemption option).
-    const from = (ip: string) => new Request("http://x/api/machine/loop", { method: "POST", headers: { "x-forwarded-for": ip } });
+    const from = (ip: string) => new Request("http://x/api/machine/cli", { method: "POST", headers: { "x-forwarded-for": ip } });
     let tripped = false;
     for (let i = 0; i < 200; i++) {
       if (rl.machineRouteLimit(from(`11.0.0.${i}`), "dk_shared", { now })) {

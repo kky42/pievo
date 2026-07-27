@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import type { JobSummary, RunSummary } from '../types'
+import type { LoopSummary, RunSummary } from '../types'
 import { cronText, dotLabel, lastRunOf, rel } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { deriveLoopLifecycle } from '../lib/lifecycleUi'
@@ -8,29 +8,29 @@ import { Timeline, WINDOW } from './Timeline'
 import { Pill, useHydrated } from './ui'
 
 export function LoopCard({
-  job,
+  loop,
   onOpen,
   onPickRun,
 }: {
-  job: JobSummary
+  loop: LoopSummary
   onOpen: (id: string) => void
   onPickRun: (id: string, run: RunSummary) => void
 }) {
-  const en = job.enabled
-  const last = lastRunOf(job)
-  const lifecycle = deriveLoopLifecycle(job)
+  const en = loop.enabled
+  const last = lastRunOf(loop)
+  const lifecycle = deriveLoopLifecycle(loop)
   const hydrated = useHydrated()
 
-  // The loader seeds `job.runs` with the newest page; we lazily fetch OLDER
-  // pages on demand and keep them here. The merged list (job's fresh newest page
+  // The loader seeds `loop.runs` with the newest page; we lazily fetch OLDER
+  // pages on demand and keep them here. The merged list (loop's fresh newest page
   // wins on overlap, so live status updates survive a poll) is what the timeline
   // renders. `older` are strictly before the newest page, so no holes form.
   const [older, setOlder] = useState<RunSummary[]>([])
   // Common case (never paged): no older runs, so skip the merge entirely — this
   // runs on every poll for every card.
   const runs = useMemo(
-    () => (older.length ? mergeRuns(job.runs ?? [], older) : (job.runs ?? [])),
-    [job.runs, older],
+    () => (older.length ? mergeRuns(loop.runs ?? [], older) : (loop.runs ?? [])),
+    [loop.runs, older],
   )
   const newestRun = runs.at(-1)
   const latestIncidentRun = newestRun?.reportIncident ? newestRun : undefined
@@ -38,7 +38,7 @@ export function LoopCard({
   const loadMore = async (): Promise<number> => {
     const oldest = runs[0]
     if (!oldest) return 0
-    const more = await loadOlderRuns({ data: { loopId: job.id, beforeTs: oldest.ts, limit: WINDOW } })
+    const more = await loadOlderRuns({ data: { loopId: loop.id, beforeTs: oldest.ts, limit: WINDOW } })
     if (more.length) setOlder((prev) => mergeRuns(prev, more))
     return more.length
   }
@@ -48,9 +48,9 @@ export function LoopCard({
   // a button inside a button (the timeline's run blocks are buttons too).
   return (
     <div
-      onClick={() => onOpen(job.id)}
+      onClick={() => onOpen(loop.id)}
       className={`mb-[18px] cursor-pointer rounded-card border border-hairline bg-surface px-[26px] pb-5 pt-[22px] shadow-card transition-colors hover:border-wire ${
-        en || latestIncidentRun?.reportIncident || job.pauseCause?.kind === 'failure-streak' || job.pauseCause?.kind === 'blocked' ? '' : 'opacity-60'
+        en || latestIncidentRun?.reportIncident || loop.pauseCause?.kind === 'failure-streak' || loop.pauseCause?.kind === 'blocked' ? '' : 'opacity-60'
       }`}
       style={{ animation: 'fadeIn .25s cubic-bezier(0.25,0.1,0.25,1) both' }}
     >
@@ -59,58 +59,54 @@ export function LoopCard({
           type="button"
           onClick={(e) => {
             e.stopPropagation()
-            onOpen(job.id)
+            onOpen(loop.id)
           }}
           className="cursor-pointer rounded-sm text-left text-[17px] font-semibold tracking-[-0.01em] text-display outline-none focus-visible:ring-2 focus-visible:ring-interactive focus-visible:ring-offset-4 focus-visible:ring-offset-surface"
         >
-          {job.name}
+          {loop.name}
         </button>
         {lifecycle === 'stopping' ? (
           <Pill tone="running" dot="pulse">Stopping</Pill>
         ) : lifecycle === 'paused-finishing' ? (
-          <Pill>{job.pauseCause?.kind === 'blocked' ? 'Paused — blocked · current run finishing' : job.pauseCause?.kind === 'owner' ? 'Paused by owner · current run finishing' : 'Paused · current run finishing'}</Pill>
+          <Pill>{loop.pauseCause?.kind === 'blocked' ? 'Paused — blocked · current run finishing' : loop.pauseCause?.kind === 'owner' ? 'Paused by owner · current run finishing' : 'Paused · current run finishing'}</Pill>
         ) : lifecycle === 'deleting' ? (
           <Pill>Deleting</Pill>
-        ) : job.running ? (
+        ) : loop.running ? (
           <Pill tone="running" dot="pulse">Running</Pill>
-        ) : job.queued && job.reconciliationBlocking ? (
+        ) : loop.queued && loop.reconciliationBlocking ? (
           <Pill tone="outline">Queued · waiting for machine recovery</Pill>
-        ) : job.queued ? (
+        ) : loop.queued ? (
           <Pill tone="outline">Queued</Pill>
         ) : null}
-        {job.graduation && <Pill>{job.graduation}</Pill>}
-        {job.goal && (
-          <Pill tone="success" title={job.goal ?? undefined}>
-            Objective
-          </Pill>
-        )}
         {lifecycle === 'paused' && (
-          <Pill tone={job.pauseCause?.kind === 'blocked' ? 'accent' : undefined}>{job.pauseCause?.kind === 'blocked' ? 'Paused — blocked' : job.pauseCause?.kind === 'failure-streak' ? 'Paused automatically' : job.pauseCause?.kind === 'owner' ? 'Paused by owner' : 'Paused'}</Pill>
+          <Pill tone={loop.pauseCause?.kind === 'blocked' ? 'accent' : undefined}>{loop.pauseCause?.kind === 'blocked' ? 'Paused — blocked' : loop.pauseCause?.kind === 'failure-streak' ? 'Paused automatically' : loop.pauseCause?.kind === 'owner' ? 'Paused by owner' : 'Paused'}</Pill>
         )}
         <div className="ml-auto min-w-0 text-right text-meta text-secondary">
           <div className="whitespace-nowrap">
-            <span className="text-primary" title={job.cron}>
-              {job.scheduleMode === 'continuous' ? `continuous · ${job.continuousDelayMinutes}m` : cronText(job.cron)}
+            <span className="text-primary" title={loop.schedule.mode === 'cron' ? loop.schedule.cron : undefined}>
+              {loop.schedule.mode === 'continuous'
+                ? `continuous · ${loop.schedule.delayMinutes}m`
+                : `${cronText(loop.schedule.cron)} · ${loop.schedule.timezone} · ${loop.schedule.overlap}`}
             </span>
             <span className="mx-2.5 text-wire">·</span>
-            {job.kind}
+            {loop.agent}
           </div>
-          <div className="mt-1 truncate text-caption text-disabled" title={`Model: ${job.model || 'default'} · Reasoning: ${job.reasoningEffort || 'default'}`}>
-            Model: {job.model || 'default'} · Reasoning: {job.reasoningEffort || 'default'}
+          <div className="mt-1 truncate text-caption text-disabled" title={loop.workdir}>
+            {loop.workdir} · Model: {loop.model || 'default'} · Reasoning: {loop.reasoningEffort || 'default'}
           </div>
         </div>
       </div>
 
       <Timeline
-        job={job}
+        loop={loop}
         runs={runs}
-        total={job.runCount}
+        total={loop.runCount}
         onLoadMore={loadMore}
-        onPickRun={(run) => onPickRun(job.id, run)}
+        onPickRun={(run) => onPickRun(loop.id, run)}
       />
 
       <div className="mt-[18px] flex items-center gap-2 text-label text-secondary">
-        <span>{job.runCount} runs</span>
+        <span>{loop.runCount} runs</span>
         {last && (
           <span>
             · last {dotLabel(last)}

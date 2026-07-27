@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-import { legacyRun, postCli, resolveCredential } from "./cli-client.js";
+import { postCli, resolveCredential } from "./cli-client.js";
 import { classify } from "./route.js";
 import { daemonVersion } from "./version.js";
 
@@ -59,7 +59,7 @@ describe("pievo CLI dispatch", () => {
     }
   });
 
-  test("bare pievo remains the content home", async () => {
+  test("bare pievo opens the machine home", async () => {
     const r = await runCli([]);
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("pievo daemon start");
@@ -92,8 +92,6 @@ describe("classify lifecycle routing", () => {
   test("owner loop verbs remain interactive", () => {
     expect(classify(["start", "loop-1"], {})).toEqual({ kind: "interactive", argv: ["start", "loop-1"] });
     expect(classify(["stop", "loop-1"], {})).toEqual({ kind: "interactive", argv: ["stop", "loop-1"] });
-    expect(classify(["steer", "loop-1", "--message", "change it"], {})).toEqual({ kind: "interactive", argv: ["steer", "loop-1", "--message", "change it"] });
-    expect(classify(["steer", "--help"], {})).toEqual({ kind: "help", verb: "steer" });
   });
 
   test("in-run routing still wins", () => {
@@ -111,12 +109,12 @@ describe("classify lifecycle routing", () => {
 describe("postCli credential selection", () => {
   test("resolveCredential: the run token (env) wins over the device token", () => {
     const cred = resolveCredential({ env: { PIEVO_RUN_TOKEN: "run-1" }, deviceToken: "dk_dev" });
-    expect(cred).toEqual({ token: "run-1", isRun: true });
+    expect(cred).toEqual({ token: "run-1" });
   });
 
-  test("resolveCredential: no run token in env → the persisted device token, isRun=false", () => {
+  test("resolveCredential: no run token in env → the persisted device token", () => {
     const cred = resolveCredential({ env: {}, deviceToken: "dk_dev" });
-    expect(cred).toEqual({ token: "dk_dev", isRun: false });
+    expect(cred).toEqual({ token: "dk_dev" });
   });
 
   test("resolveCredential: neither present → undefined (not connected)", () => {
@@ -129,7 +127,7 @@ describe("postCli credential selection", () => {
       calls.push({ url: String(url), init });
       return { status: 200, ok: true, json: async () => ({ text: "ok", exitCode: 0 }) };
     }) as unknown as typeof fetch;
-    const r = await postCli(["report", "--status", "new"], legacyRun, {
+    const r = await postCli(["report", "--status", "new"], {
       env: { PIEVO_RUN_TOKEN: "run-xyz" },
       server: "https://srv.test",
       fetchImpl,
@@ -146,7 +144,7 @@ describe("postCli credential selection", () => {
       calls.push({ url: String(url), init });
       return { status: 200, ok: true, json: async () => ({ ok: true, loops: [] }) };
     }) as unknown as typeof fetch;
-    await postCli(["loops"], legacyRun, { env: {}, deviceToken: "dk_dev", server: "https://srv.test", fetchImpl });
+    await postCli(["loops"], { env: {}, deviceToken: "dk_dev", server: "https://srv.test", fetchImpl });
     expect(calls[0].init.headers.Authorization).toBe("Bearer dk_dev");
   });
 
@@ -156,7 +154,7 @@ describe("postCli credential selection", () => {
       called = true;
       return { status: 200, ok: true, json: async () => ({}) };
     }) as unknown as typeof fetch;
-    const r = await postCli(["loops"], legacyRun, { env: {}, deviceToken: undefined, server: "", fetchImpl });
+    const r = await postCli(["loops"], { env: {}, deviceToken: undefined, server: "", fetchImpl });
     expect(r).toEqual({ kind: "not-configured" });
     expect(called).toBe(false);
   });

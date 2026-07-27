@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   acquireStartLock,
   acquireStartLockEventually,
+  applyProcessEnv,
   buildEnvPlan,
   buildRestartPlan,
   clearPidRecord,
@@ -63,7 +64,7 @@ function installShutdown(plan, expected) {
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
   // This process is authoritative for its own clean exit. SIGKILL cannot run this
-  // hook, so an external stopper still has to prove death before clearing.
+  // handler, so an external stopper still has to prove death before clearing.
   process.on("exit", () => clearPidRecord(plan.pidFile, expected));
 
   return {
@@ -227,6 +228,7 @@ async function start(basePlan, foreground) {
 
     const plan = withLaunchNonce(basePlan);
     if (foreground) {
+      applyProcessEnv(plan.env);
       const record = writePidRecord(plan, {
         launchNonce: plan.launchNonce,
         managedGroup: false,

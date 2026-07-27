@@ -7,11 +7,12 @@
  */
 import { describe, expect, test } from 'vitest'
 
-import { MACHINE_BODY_CAP, readJsonBody } from '../gateway/http'
-import { gatewayPollRequest, Route as PollRoute } from './api.machine.poll'
+import { SYNC_BODY_CAP } from '../gateway/artifacts'
+import { MACHINE_BODY_CAP, POLL_INFO_TEXT_CAP, POLL_VERSION_CAP, readJsonBody } from '../gateway/http'
+import { gatewayPollRequest, parsePollBody, Route as PollRoute } from './api.machine.poll'
 import { Route as ReportRoute } from './machine.report'
-import { Route as LoopRoute } from './api.machine.loop'
-import { Route as AgentApiRoute } from './agent-api.loop'
+import { parseCliBody, Route as CliRoute } from './api.machine.cli'
+import { Route as SyncRoute } from './api.machine.sync'
 
 type Handler = (ctx: { request: Request }) => Response | Promise<Response>
 const handler = (route: unknown, method: string): Handler =>
@@ -65,7 +66,7 @@ describe('readJsonBody', () => {
     expect(await readJsonBody(req('not json'), 1024)).toEqual({ kind: 'invalid' })
   })
 
-  test('empty and unreadable bodies parse as {}', async () => {
+  test('empty bodies parse as {} and unreadable streams are invalid', async () => {
     expect(await readJsonBody(req(''), 1024)).toEqual({ kind: 'ok', body: {} })
     const unreadable = new ReadableStream<Uint8Array>({
       pull(controller) { controller.error(new Error('read failed')) },
@@ -73,7 +74,7 @@ describe('readJsonBody', () => {
     const request = new Request('http://localhost/x', {
       method: 'POST', body: unreadable, duplex: 'half',
     } as RequestInit)
-    expect(await readJsonBody(request, 1024)).toEqual({ kind: 'ok', body: {} })
+    expect(await readJsonBody(request, 1024)).toEqual({ kind: 'invalid' })
   })
 
   test('declared content-length is rejected before streaming', async () => {
@@ -81,33 +82,111 @@ describe('readJsonBody', () => {
   })
 })
 
-test('poll route forwards a completed daemon recovery snapshot', () => {
+test('poll route forwards a completed recovery snapshot and constructs exact machine info', () => {
   expect(gatewayPollRequest({
-    protocolVersion: 3,
+    protocolVersion: 4,
     daemonInstanceId: 'daemon-new',
     recoveryComplete: true,
     currentRuns: [{ runId: 'run-1', stage: 'reporting' }],
-  })).toMatchObject({
-    protocolVersion: 3,
+    host: 'mac',
+  })).toEqual({
+    protocolVersion: 4,
     daemonInstanceId: 'daemon-new',
     recoveryComplete: true,
     currentRuns: [{ runId: 'run-1', stage: 'reporting' }],
+    info: { host: 'mac', platform: undefined, arch: undefined, version: undefined },
   })
+})
+
+test('poll HTTP envelope has an exact, strictly typed field allowlist', () => {
+  expect(parsePollBody({ protocolVersion: 4, recoveryComplete: true })).not.toBeNull()
+  expect(parsePollBody({ protocolVersion: 4, recoveryComplete: true, unknown: true })).toBeNull()
+  expect(parsePollBody({ host: 42 })).toBeNull()
+  expect(parsePollBody({ platform: null })).toBeNull()
+  expect(parsePollBody({ arch: ['arm64'] })).toBeNull()
+  expect(parsePollBody({ version: { value: '2.4.0' } })).toBeNull()
+  expect(parsePollBody({ host: 'mac\0forged' })).toBeNull()
+  expect(parsePollBody({ host: 'h'.repeat(POLL_INFO_TEXT_CAP + 1) })).toBeNull()
+  expect(parsePollBody({ version: 'v'.repeat(POLL_VERSION_CAP + 1) })).toBeNull()
+  expect(parsePollBody([])).toBeNull()
+  expect(parsePollBody(null)).toBeNull()
+})
+
+test.each([
+  ['invalid JSON', 'not json'],
+  ['an unknown field', JSON.stringify({ protocolVersion: 4, unknown: true })],
+  ['a non-string host', JSON.stringify({ protocolVersion: 4, host: 42 })],
+  ['a NUL-bearing platform', JSON.stringify({ protocolVersion: 4, platform: 'darwin\0x' })],
+  ['an over-cap version', JSON.stringify({ protocolVersion: 4, version: 'v'.repeat(POLL_VERSION_CAP + 1) })],
+])('poll route rejects %s before boot', async (_label, body) => {
+  const h = handler(PollRoute, 'POST')
+  const res = await h({ request: new Request('http://localhost:3000/api/machine/poll', {
+    method: 'POST',
+    headers: { authorization: 'Bearer dev-token', 'content-type': 'application/json' },
+    body,
+  }) })
+  expect(res.status).toBe(400)
+})
+
+test.each([
+  ['an unknown top-level field', '{"loopId":"loop-test","manifest":[],"blobs":[]}'],
+  ['a missing manifest', '{"loopId":"loop-test"}'],
+  ['a non-array manifest', '{"loopId":"loop-test","manifest":{}}'],
+  ['an item with missing exact fields', '{"loopId":"loop-test","manifest":[{"path":"report.md","hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1]}]}'],
+])('sync route rejects %s with 400 before boot', async (_label, body) => {
+  const h = handler(SyncRoute, 'POST')
+  const res = await h({ request: new Request('http://localhost:3000/api/machine/sync', {
+    method: 'POST',
+    headers: { authorization: 'Bearer dev-token', 'content-type': 'application/json' },
+    body,
+  }) })
+  expect(res.status).toBe(400)
+})
+
+test('sync route enforces its dedicated manifest body cap before boot', async () => {
+  const h = handler(SyncRoute, 'POST')
+  const res = await h({ request: new Request('http://localhost:3000/api/machine/sync', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer dev-token',
+      'content-type': 'application/json',
+      'content-length': String(SYNC_BODY_CAP + 1),
+    },
+    body: '{}',
+  }) })
+  expect(res.status).toBe(413)
+})
+
+test('CLI body parser accepts only the exact argv envelope', () => {
+  expect(parseCliBody({ argv: [] })).toEqual({ argv: [] })
+  expect(parseCliBody({ argv: ['loops', '--json'] })).toEqual({ argv: ['loops', '--json'] })
+})
+
+test.each([
+  ['invalid JSON', 'not json'],
+  ['an array', '[]'],
+  ['null', 'null'],
+  ['a missing argv field', '{}'],
+  ['a non-array argv', '{"argv":"loops"}'],
+  ['a non-string argv entry', '{"argv":["loops",1]}'],
+  ['an unknown field', '{"argv":[],"unknown":true}'],
+])('CLI route rejects %s with 400 before boot', async (_label, body) => {
+  const h = handler(CliRoute, 'POST')
+  const res = await h({ request: new Request('http://localhost:3000/api/machine/cli', {
+    method: 'POST',
+    headers: { authorization: 'Bearer dev-token', 'content-type': 'application/json' },
+    body,
+  }) })
+  expect(res.status).toBe(400)
 })
 
 describe('machine routes reject an oversized JSON body with 413', () => {
   test.each([
     ['/api/machine/poll', handler(PollRoute, 'POST')],
     ['/machine/report', handler(ReportRoute, 'POST')],
-    ['/agent-api/loop', handler(AgentApiRoute, 'POST')],
-    ['/api/machine/loop', handler(LoopRoute, 'POST')],
+    ['/api/machine/cli', handler(CliRoute, 'POST')],
   ])('%s', async (url, h) => {
     const res = await h({ request: oversized(url) })
-    expect(res.status).toBe(413)
-  })
-
-  test('/api/machine/loop PATCH', async () => {
-    const res = await handler(LoopRoute, 'PATCH')({ request: oversized('/api/machine/loop', 'PATCH') })
     expect(res.status).toBe(413)
   })
 })

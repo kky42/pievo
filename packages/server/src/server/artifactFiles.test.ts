@@ -1,5 +1,5 @@
 /**
- * Phase 2 — web artifact reads. Drives the booted local blob store
+ * Web artifact reads. Drives the booted local blob store
  * (no R2/creds) through `getArtifactSync()` so the read helpers resolve the same
  * bytes the sync wrote. Covers the list/text/binary/oversize/not-found server-fn
  * core, the download route's byte resolver (path-safety + 404s), and the shared
@@ -11,9 +11,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 
+import { testStore, type TestStore } from "../../test/store.js";
+
 let tmp: string;
 let db: typeof import("../db/index.js");
-let store: typeof import("../db/store.js");
+let store: TestStore;
 let boot: typeof import("./boot.js");
 let tokens: typeof import("../gateway/tokens.js");
 let artifacts: typeof import("./artifactFiles.js");
@@ -27,7 +29,7 @@ beforeAll(async () => {
   process.env.PIEVO_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();
-  store = await import("../db/store.js");
+  store = testStore(await import("../db/store.js"));
   boot = await import("./boot.js");
   tokens = await import("../gateway/tokens.js");
   artifacts = await import("./artifactFiles.js");
@@ -49,18 +51,21 @@ async function seed() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = await store.createLoop({ userId: "u1", teamId: "team-u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
+  const loop = await store.createLoop({ workdir: "/work",
+    userId: "u1", teamId: "team-u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true,
+    artifacts: ["z.md", "a/b.txt", "logo.png", "big.bin", "keep.md", "data/raw.json", "huge.bin"],
+  });
   return { token, machineId, loop };
 }
 
-/** Sync one inline file (text or binary bytes) and return its hash. */
+/** Sync one exact file through manifest negotiation and raw blob PUT. */
 async function syncFile(token: string, loopId: string, p: string, bytes: Buffer, binary = false) {
   const hash = sha256(bytes);
   await art.sync(token, {
     loopId,
-    manifest: [{ path: p, hash, size: bytes.length, binary }],
-    blobs: [{ hash, encoding: "base64", data: bytes.toString("base64") }],
+    manifest: [{ path: p, hash, size: bytes.length, binary, oversize: false }],
   });
+  expect((await art.putBlob(token, hash, bytes)).status).toBe(200);
   return hash;
 }
 
@@ -72,14 +77,12 @@ test("listLoopArtifacts returns path-sorted summaries; readLoopArtifact decodes 
   await art.sync(token, {
     loopId: loop.id,
     manifest: [
-      { path: "z.md", hash: sha256(z), size: z.length },
-      { path: "a/b.txt", hash: sha256(b), size: b.length },
-    ],
-    blobs: [
-      { hash: sha256(z), encoding: "base64", data: z.toString("base64") },
-      { hash: sha256(b), encoding: "base64", data: b.toString("base64") },
+      { path: "z.md", hash: sha256(z), size: z.length, binary: false, oversize: false },
+      { path: "a/b.txt", hash: sha256(b), size: b.length, binary: false, oversize: false },
     ],
   });
+  expect((await art.putBlob(token, sha256(z), z)).status).toBe(200);
+  expect((await art.putBlob(token, sha256(b), b)).status).toBe(200);
 
   const list = await artifacts.listLoopArtifacts(loop.id);
   expect(list.map((f) => f.path)).toEqual(["a/b.txt", "z.md"]); // path-sorted
@@ -101,7 +104,7 @@ test("readLoopArtifact marks oversize (metadata-only) files; no bytes are read",
   const { token, loop } = await seed();
   await art.sync(token, {
     loopId: loop.id,
-    manifest: [{ path: "big.bin", hash: sha256("x"), size: 20 * 1024 * 1024, oversize: true }],
+    manifest: [{ path: "big.bin", hash: null, size: 20 * 1024 * 1024, binary: false, oversize: true }],
   });
   const content = await artifacts.readLoopArtifact(loop.id, "big.bin");
   expect(content).toEqual({ binary: true, size: 20 * 1024 * 1024, oversize: true });
@@ -135,9 +138,12 @@ test("readLoopArtifactBytes: path-safe (400), oversize/missing (404), valid byte
   // Oversize has no stored bytes → 404.
   await art.sync(token, {
     loopId: loop.id,
-    manifest: [{ path: "data/raw.json", hash: sha256(bytes), size: bytes.length }, { path: "huge.bin", hash: sha256("h"), size: 20 * 1024 * 1024, oversize: true }],
-    blobs: [{ hash: sha256(bytes), encoding: "base64", data: bytes.toString("base64") }],
+    manifest: [
+      { path: "data/raw.json", hash: sha256(bytes), size: bytes.length, binary: false, oversize: false },
+      { path: "huge.bin", hash: null, size: 20 * 1024 * 1024, binary: false, oversize: true },
+    ],
   });
+  expect((await art.putBlob(token, sha256(bytes), bytes)).status).toBe(200);
   expect((await artifacts.readLoopArtifactBytes(loop.id, "huge.bin")).status).toBe(404);
   expect((await artifacts.readLoopArtifactBytes(loop.id, "ghost.md")).status).toBe(404);
 });

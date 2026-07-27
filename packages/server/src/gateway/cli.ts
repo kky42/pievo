@@ -5,29 +5,24 @@
  * (`{ status, body }` results):
  *
  *   POST /api/machine/cli  (Bearer device OR run credential) → unified dispatch
- *   POST /agent-api/loop   (Bearer run token)                → the `pievo` shim's verbs
  *
- * The verb router keys authority on CREDENTIAL TYPE first (`dk_` device prefix
- * vs run-lease lookup, bare-UUID back-compat) and reuses the core gateway
+ * The verb router keys authority on credential type first (`dk_` device prefix
+ * vs `rk_` run lease) and reuses the core gateway
  * methods (`createLoop`/`editLoop`) through the injected `MachineGateway`,
- * plus the credential-neutral history module, so floors/allowControl and
- * flat-404 scoping flow through unchanged. The agent-api verb dispatch is a
- * compact port of c0's control.ts: report/show + the allowControl schedule
- * mutations, plus set-ui/schema gated to the evolution pass (the
- * evolve run-token carries the canSet* caps).
+ * plus the credential-neutral history module. Run credentials expose only the
+ * exactly-once report callback.
  */
 import { createHash } from "node:crypto";
 import path from "node:path";
 
 import * as store from "../db/store.js";
-import type { Loop, MetricField, NewLoop, NewRun, NotifyPolicy, Run, RunMetrics, RunRole, RunStatus } from "../db/schema.js";
+import type { Loop, NewRun, Run } from "../db/schema.js";
 import { machinePresence, type MachinePresence } from "../lib/machinePresence.js";
 import { logger } from "../logger.js";
-import { selfCronFloorMinutes, selfRescheduleFloorMinutes } from "../env.js";
-import { machineIdFromToken, resolveLease, type RunLease } from "./tokens.js";
-import { DAEMON_PROTOCOL_VERSION } from "./compat.js";
+import { resolveLease, type RunLease } from "./tokens.js";
+import { authenticateDeviceToken } from "./deviceAuth.js";
+import { DAEMON_PROTOCOL_VERSION } from "./protocol.js";
 import {
-  ABSENT,
   codeForStatus,
   detailBlock,
   doc,
@@ -44,23 +39,17 @@ import {
   EDITABLE_LOOP_FIELDS,
   LOG_MESSAGE_CELL_CAP,
   LOG_RUNS_DEFAULT,
-  MAX_NEXT_MS,
   MESSAGE_CAP,
   fmtTime,
   fmtTimeZoned,
-  invalidTimezoneError,
   nextFires,
-  parseWhen,
-  runMetricsToken,
   runResultToken,
-  validCadence,
-  validTimezone,
   type Applied,
   type MachineGateway,
 } from "./index.js";
-import { validateSchema, validateSteerInstruction, validateUi } from "./validate.js";
+import { canonicalLoopEnvelope, scheduleFromLoop } from "./loopConfig.js";
 import { readLoopHistory } from "./history.js";
-import { nowIso, stripNul, type HttpResult } from "./http.js";
+import { stripNul, type HttpResult } from "./http.js";
 
 export interface CliGatewayDeps {
   pauseLoopState?: typeof store.pauseLoopState;
@@ -86,38 +75,16 @@ export class CliGateway {
     this.destructiveLog = deps.destructiveLog ?? ((event) => cliLog.warn(event, "force-delete: destructive server authority removal"));
   }
 
-  // ---- POST /agent-api/loop ----
-
-  async agentApi(runToken: string, argv: string[]): Promise<HttpResult> {
-    const lease = await resolveLease(runToken);
-    if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
-    // A reconciled lease accepts only its ONE final report/enrichment — never
-    // further agent-api mutations, whether or not it still blocks scheduling.
-    if (lease.state === "terminal-grace" || lease.state === "reconciliation-only") {
-      return { status: 409, body: { text: errorBlock(TERMINAL_GRACE_MSG, "CONFLICT"), exitCode: 1 } };
-    }
-    const out = await this.dispatch(lease, createHash("sha256").update(runToken).digest("hex"), argv);
-    return { status: out.code, body: { text: out.text, exitCode: out.code === 200 ? 0 : 1 } };
-  }
-
   // ---- POST /api/machine/cli — one CLI dispatch, keyed by credential ----
 
   /**
    * The unified CLI endpoint. It is a ROUTER in front of the gateway logic that
-   * already exists — never a rewrite — that keys authority on the CREDENTIAL TYPE
-   * first, then routes to the same methods the legacy endpoints call:
+   * already exists — never a rewrite — that keys authority on the credential type:
    *   · DEVICE credential (`dk_`-prefixed) → owner authority over any loop bound to
    *     the machine: `new`→createLoop, `loops`→listLoops, `edit`→editLoop,
-   *     `steer`→requestSteer, `log`→readLoopHistory, `show`→describe. `report` is RUN-only (403).
-   *   · RUN credential (an `rk_`-prefixed run lease — or a bare-UUID token from a
-   *     pre-Batch-6 mint over a deploy) → the least-privilege per-run `dispatch()`
-   *     verbs, PLUS a read branch (`log`/`show`) scoped strictly to the lease's OWN
-   *     loop — this closes the in-run `pievo log` 400 seam. Owner-only verbs
-   *     (`new`/`edit`/`loops`) are 403 for a run credential.
-   * The branch keys on the `dk_` device prefix, NOT an `rk_` run prefix, so a
-   * bare-UUID run token still routes to the run path (it just isn't a device token).
-   * Floors, `allowControl`, and the shared content validators all flow
-   * through the reused `dispatch`/`createLoop`/`editLoop` paths unchanged.
+   *     `log`→readLoopHistory, `show`→describe. `report` is RUN-only (403).
+   *   · RUN credential (`rk_` run lease) → report and report help only.
+   *     Every owner verb is rejected.
    */
   async cli(token: string, argv: string[]): Promise<HttpResult> {
     const res = token.startsWith("dk_") ? await this.deviceCli(token, argv) : await this.runCli(token, argv);
@@ -126,14 +93,16 @@ export class CliGateway {
 
   /** DEVICE-credential branch of the unified CLI. */
   private async deviceCli(deviceToken: string, argv: string[]): Promise<HttpResult> {
-    const machineId = machineIdFromToken(deviceToken);
+    const auth = await authenticateDeviceToken(deviceToken, { allowUnknown: true });
+    if (!auth.ok) return auth.response;
+    const { machineId, machine } = auth;
     const verb = argv[0] ?? "";
     // The content-first home (P8): bare `pievo` posts `["home"]`. It renders a
     // DEFINITIVE state for an unregistered machine ("not connected — run `pievo
     // daemon start`") rather than a 401, so the ambient dashboard is never an error/empty —
     // handled BEFORE the unknown-machine guard the other verbs sit behind.
     if (verb === "home") return { status: 200, body: { ok: true, text: await this.homeDevice(machineId, parseFlags(argv.slice(1))) } };
-    if (!(await store.getMachine(machineId))) return { status: 401, body: { error: "unknown machine (token not registered)" } };
+    if (!machine) return { status: 401, body: { error: "unknown machine (token not registered)" } };
     const flags = parseFlags(argv.slice(1));
     const loopArg = typeof flags["loop"] === "string" ? (flags["loop"] as string) : typeof flags["_"] === "string" ? (flags["_"] as string) : "";
 
@@ -175,17 +144,6 @@ export class CliGateway {
         if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
         return this.gateway.editLoop(deviceToken, loopArg || undefined, parsed.value as Record<string, unknown>, flags["dry-run"] === true);
       }
-      case "steer": {
-        const loop = await this.ownedLoop(machineId, loopArg);
-        if (!loop) return { status: 404, body: { error: "no such loop on this machine" } };
-        const unknown = Object.keys(flags).filter((key) => !["_", "loop", "message", "help"].includes(key));
-        if (unknown.length) return { status: 400, body: { error: `pievo: unknown flag --${unknown[0]} (steer takes --message or --message-file)` } };
-        const instruction = validateSteerInstruction(flags["message"]);
-        if (!instruction.ok) return { status: 400, body: { error: `pievo: ${instruction.detail}` } };
-        const queued = await this.gateway.scheduler.requestSteer(loop.id, instruction.value);
-        if (!("run" in queued)) return { status: 409, body: { error: queued.reason } };
-        return { status: 200, body: { text: queued.state === "coalesced" ? `steer already queued; updated instruction (${queued.run.id})` : `steer queued (${queued.run.id})` } };
-      }
       case "log": {
         const loop = await this.ownedLoop(machineId, loopArg);
         if (!loop) return { status: 404, body: { error: "no such loop on this machine" } };
@@ -208,7 +166,7 @@ export class CliGateway {
       case "report":
         return { status: 403, body: { error: "pievo: report is a run-only verb; the owner edits via edit" } };
       default:
-        return { status: 400, body: { error: `pievo: unknown command "${verb}" for the device credential (try: new, loops, pause, start, stop, delete, run stop, edit, steer, log, show)` } };
+        return { status: 400, body: { error: `pievo: unknown command "${verb}" for the device credential (try: new, loops, pause, start, stop, delete, run stop, edit, log, show)` } };
     }
   }
 
@@ -302,465 +260,101 @@ export class CliGateway {
     return { status: 200, body: { text: `run already finished: ${runResultToken(stopped)}` } };
   }
 
-  /** RUN-credential branch of the unified CLI: the existing per-run `dispatch()`
-   *  verbs, plus the read branch (`log`/`show`) scoped to the lease's own loop. */
+  /** RUN-credential branch of the unified CLI: report and its help only. */
   private async runCli(runToken: string, argv: string[]): Promise<HttpResult> {
     const lease = await resolveLease(runToken);
     if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
     // Finished or sweep-reclaimed authority accepts only the final report, never
-    // further CLI commands. Same rule agentApi enforces.
+    // further CLI commands.
     if (lease.state === "terminal-grace" || lease.state === "reconciliation-only") {
       return { status: 409, body: { text: errorBlock(TERMINAL_GRACE_MSG, "CONFLICT"), exitCode: 1 } };
     }
     const verb = argv[0] ?? "";
     const flags = parseFlags(argv.slice(1));
-
-    // Owner-only verbs are never reachable with a run credential (least-privilege):
-    // a run has no create/edit/cross-loop-list need. Explicit 403 so
-    // the denial is legible (not a generic "unknown command").
     if (DEVICE_ONLY_VERBS.has(verb)) {
-      return { status: 403, body: { text: errorBlock(`"${verb}" needs the device credential (owner authority); a run may only act on its own loop`, "FORBIDDEN"), exitCode: 1 } };
+      return { status: 403, body: { text: errorBlock(`"${verb}" needs the device credential (owner authority); a run may only report`, "FORBIDDEN"), exitCode: 1 } };
     }
-
-    // Loop-arg fence: a run may only target its OWN loop. An explicit `--loop` (any
-    // verb) or a positional loop id (only `log`/`show` take one) that names another
-    // loop is a hard 403 — never a silent retarget onto the run's own loop.
-    const targeted = typeof flags["loop"] === "string" ? (flags["loop"] as string) : (verb === "log" || verb === "show") && typeof flags["_"] === "string" ? (flags["_"] as string) : undefined;
-    if (targeted !== undefined && targeted !== lease.loopId) {
-      return { status: 403, body: { text: errorBlock("a run may only act on its own loop", "FORBIDDEN"), exitCode: 1 } };
+    if (flags.help === true && verb === "report") {
+      return { status: 200, body: { text: verbHelpText("report", lease)!, exitCode: 0 } };
     }
-
-    // Per-verb `--help` (P10), role-aware from the lease caps. Covers the read verbs
-    // (`log`/`show`) that runCli handles before/around `dispatch` AND the dispatch
-    // verbs, so `<verb> --help` is uniform on the run path. An owner-only verb was
-    // already 403'd above; an unknown verb has no spec → falls through to `dispatch`
-    // (unknown-command 400).
-    if (flags["help"] === true) {
-      const h = verbHelpText(verb, lease);
-      if (h) return { status: 200, body: { text: h, exitCode: 0 } };
+    if (verb !== "report" && verb !== "help" && verb !== "--help" && verb !== "-h" && verb !== "") {
+      return { status: 403, body: { text: errorBlock("run credentials authorize only pievo report", "FORBIDDEN"), exitCode: 1 } };
     }
-
-    // Content-first home (P8), in-run: bare `pievo` inside a run posts `["home"]`
-    // and gets the run's OWN loop context (identity + role + goal + recent runs),
-    // scoped strictly to the lease's loop (no cross-loop leak).
-    if (verb === "home") {
-      return { status: 200, body: { text: await this.homeRun(lease), exitCode: 0 } };
-    }
-
-    // Read branch — the seam fix. `log` gains a run-credential path (it has no case
-    // in `dispatch`, so today it 400s in-run); `show` TOON stays in `dispatch`
-    // (already scoped to lease.loopId with the run's caps), but `show --json` needs a
-    // structured body (`dispatch` returns text-only), so it is served here.
-    if (verb === "log") {
-      const loop = await store.getLoop(lease.loopId);
-      if (!loop || loop.machineId !== lease.machineId) return { status: 404, body: { error: "no such loop on this machine" } };
-      return readLoopHistory(loop, flags);
-    }
-    if (verb === "show" && flags["json"] === true) {
-      const loop = await store.getLoop(lease.loopId);
-      if (!loop) return { status: 404, body: { text: errorBlock("loop not found", "NOT_FOUND"), exitCode: 1 } };
-      // The full editable envelope — identical shape to the device `show --json`
-      // (the run's effective selfSchedule line is TOON-only, not in the
-      // read/write envelope). Scoped to the run's own loop (fenced above).
-      const env = loopEnvelope(loop);
-      return { status: 200, body: { ok: true, loop: env, text: JSON.stringify(env, null, 2), exitCode: 0 } };
-    }
-
     const out = await this.dispatch(lease, createHash("sha256").update(runToken).digest("hex"), argv);
     return { status: out.code, body: { text: out.text, exitCode: out.code === 200 ? 0 : 1 } };
   }
 
-  // ---- agent-api verb dispatch (compact port of control.ts) ----
+  // ---- report-only agent callback ----
 
   private async dispatch(lease: RunLease, leaseTokenHash: string, argv: string[]): Promise<{ code: number; text: string }> {
     const verb = argv[0];
     const flags = parseFlags(argv.slice(1));
-    const str = (k: string) => (typeof flags[k] === "string" ? (flags[k] as string) : undefined);
-
-    // Per-verb `--help` (P10): a concrete verb carrying `--help` gets that verb's
-    // syntax + flags + templates, role-aware from the lease caps. (The unified
-    // `runCli` intercepts this before dispatch; this branch covers the legacy
-    // `/agent-api/loop` transport, which reaches `dispatch` directly.)
-    if (typeof verb === "string" && verb && flags["help"] === true) {
-      const h = verbHelpText(verb, lease);
-      if (h) return { code: 200, text: h };
+    const str = (key: string) => typeof flags[key] === "string" ? flags[key] as string : undefined;
+    if (verb === undefined || verb === "" || verb === "-h" || verb === "--help" || verb === "help") {
+      return { code: 200, text: this.helpText(lease) };
     }
-
-    switch (verb) {
-      case undefined:
-      case "":
-      case "-h":
-      case "--help":
-      case "help":
-        return { code: 200, text: this.helpText(lease) };
-      case "report": {
-        const rawStatus = str("status");
-        if (!isStatus(rawStatus)) {
-          return derr(400, `status must be kept|no-change|blocked${rawStatus === undefined ? "" : ` (got "${rawStatus}")`}`, "VALIDATION_ERROR");
-        }
-        const message = str("message")?.trim();
-        if (!message) return derr(400, "report requires a non-empty --message", "VALIDATION_ERROR");
-
-        const loop = await store.getLoop(lease.loopId);
-        if (!loop) return derr(404, "loop not found", "NOT_FOUND");
-        const rawMetrics = str("metrics") ?? str("metrics-content");
-        let metrics: RunMetrics | undefined;
-        if (lease.role === "exec" && (loop.metricSchema?.length ?? 0) > 0) {
-          if (rawMetrics === undefined) return derr(400, "exec report requires --metrics for every declared metric", "VALIDATION_ERROR");
-          const validated = validateMetrics(rawMetrics, loop.metricSchema!);
-          if (!validated.ok) return derr(400, validated.error, "VALIDATION_ERROR");
-          metrics = validated.value;
-        } else if (rawMetrics !== undefined) {
-          const reason = lease.role === "exec"
-            ? "this loop has no metric schema; omit --metrics"
-            : `${lease.role} reports must not include --metrics`;
-          return derr(400, reason, "VALIDATION_ERROR");
-        }
-        const applied = await this.applyAuthorizedMutation(
-          lease,
-          leaseTokenHash,
-          "always",
-          "report",
-          stringifyFlags(flags),
-          {
-            runPatch: {
-              status: rawStatus,
-              message: message.slice(0, MESSAGE_CAP),
-              ...(metrics !== undefined ? { metrics } : {}),
-            },
-          },
-          "reported",
-        );
-        return applied.ok
-          ? { code: 200, text: renderReportedText(rawStatus, metrics, true) }
-          : derr(applied.status ?? 409, applied.detail ?? "this run is no longer active", applied.code);
-      }
-      case "show":
-        return {
-          code: 200,
-          text: await this.describe(lease.loopId, { allowControl: lease.allowControl, full: flags["full"] === true }),
-        };
-      case "log": {
-        // The run's OWN-loop history. Batch 4 wired this into dispatch so the help
-        // that advertises `log` is truthful on BOTH the unified `/api/machine/cli`
-        // (runCli) AND the legacy `/agent-api/loop` transport (which reaches dispatch
-        // directly). Scoped to the lease's own loop/machine — dispatch never reads a
-        // loop id from flags, so a run can never target another loop (the loop-fence
-        // lives in runCli for the positional-arg case).
-        const loop = await store.getLoop(lease.loopId);
-        if (!loop || loop.machineId !== lease.machineId) return derr(404, "loop not found", "NOT_FOUND");
-        const res = await readLoopHistory(loop, flags);
-        const body = res.body as { text?: string; error?: string };
-        return res.status >= 400
-          ? derr(res.status, body.error ?? "history query failed")
-          : { code: res.status, text: body.text ?? "" };
-      }
-      case "set-ui": {
-        if (!lease.canSetUi) return derr(403, "only the evolution or steer pass may set the UI", "FORBIDDEN");
-        const html = str("body") ?? str("file-content");
-        if (html === undefined) return derr(400, "set-ui needs --file <path> (shim inlines it)", "VALIDATION_ERROR");
-        const r = await this.applySetUi(lease, leaseTokenHash, html);
-        return r.ok ? { code: 200, text: r.detail ?? "ui updated" } : derr(r.status ?? 400, r.detail ?? "rejected", r.code ?? "VALIDATION_ERROR");
-      }
-      case "set-schema": {
-        if (!lease.canSetSchema) return derr(403, "only the evolution or steer pass may set the schema", "FORBIDDEN");
-        const json = str("body") ?? str("file-content");
-        if (json === undefined) return derr(400, "set-schema needs --file <path> (a JSON array of {key,label,unit})", "VALIDATION_ERROR");
-        const r = await this.applySetSchema(lease, leaseTokenHash, json);
-        return r.ok ? { code: 200, text: r.detail ?? "schema updated" } : derr(r.status ?? 400, r.detail ?? "rejected", r.code ?? "VALIDATION_ERROR");
-      }
+    if (verb !== "report") return derr(403, "run credentials authorize only pievo report", "FORBIDDEN");
+    if (flags.help === true) return { code: 200, text: verbHelpText("report", lease)! };
+    const rawStatus = str("status");
+    const status = reportStatus(rawStatus);
+    if (!status) {
+      return derr(400, `status must be keep|no-change|block${rawStatus === undefined ? "" : ` (got "${rawStatus}")`}`, "VALIDATION_ERROR");
     }
-
-    if (MUTATION_VERBS.has(verb ?? "")) {
-      if (!lease.allowControl) return derr(403, "this loop may not change its own schedule (allowControl is off)", "FORBIDDEN");
-      let r = await this.applyMutation(lease, leaseTokenHash, verb!, flags, str);
-      if (!r.ok && r.status === undefined) {
-        // Preserve rejected-attempt audit without reopening the TOCTOU: the audit
-        // append itself uses the same active-lease/running-run transaction seam.
-        r = await this.applyAuthorizedMutation(
-          lease,
-          leaseTokenHash,
-          "control",
-          verb!,
-          stringifyFlags(flags),
-          {},
-          r.detail ?? "rejected",
-          "rejected",
-        );
-      }
-      return r.ok ? { code: 200, text: r.detail ?? `${verb} applied` } : derr(r.status ?? 400, r.detail ?? "rejected", r.code ?? "VALIDATION_ERROR");
-    }
-    return derr(400, `unknown command "${verb ?? ""}" (try: pievo help)`, "VALIDATION_ERROR");
+    const message = str("message")?.trim();
+    if (!message) return derr(400, "report requires a non-empty --message", "VALIDATION_ERROR");
+    const acceptedFlags = ["status", "message", "help"];
+    const unknown = Object.keys(flags).filter((key) => !acceptedFlags.includes(key));
+    if (unknown.length) return derr(400, `report does not accept --${unknown[0]}`, "VALIDATION_ERROR");
+    const applied = await this.applyReportMutation(
+      lease,
+      leaseTokenHash,
+      status,
+      message.slice(0, MESSAGE_CAP),
+    );
+    return applied.ok
+      ? { code: 200, text: renderReportedText(status, true) }
+      : derr(applied.status ?? 409, applied.detail ?? "this run is no longer active", applied.code);
   }
 
-  /** Usage for `pievo help` / `--help` / a bare invocation, rendered as the §4.9
-   *  axi TOON: grouped verbs with an availability tag reflecting THIS lease's caps
-   *  (always / dashboard-gate / schedule), then a trailing `help[]`. Still
-   *  role-aware — the tags flip with the lease's role + caps, so the agent never
-   *  wastes a turn probing a verb it'll be 403'd on. */
-  private helpText(lease: RunLease): string {
-    const structural = lease.canSetUi ? "available to this run" : `evolve/steer pass only — this run is "${lease.role}"`;
-    const control = lease.allowControl ? "available to this run" : "needs allowControl (off for this loop)";
-
-    // The `always` group is a typed list; indent every line two spaces to nest it
-    // under the `verbs:` top key (matching the reference tool's nested shape).
-    const always = indent(
-      listBlock("always", ["verb", "syntax"], [
-        ["report", "--status kept|no-change|blocked --message <s> [--metrics '{\"k\":n|null}' | --metrics-file <p>]"],
-        ["show", "print this loop's config + recent metrics"],
-        ["log", "recent run survey for this loop"],
-      ]),
-    );
-    // The schedule group is a typed list whose HEADER carries the availability tag
-    // (a list header with a trailing tag, per §4.9). Build the header by hand so the
-    // tag rides after the `{…}:` and indent the whole block under `verbs:`.
-    const scheduleRows: Scalar[][] = [
-      ["reschedule", "--run-at <30m|2h|ISO>   one extra run soon, then resume cadence"],
-      ["set-cron / set-schedule", '"<cron>" / cron|continuous [--delay-minutes N]'],
-      ["pause/resume", "toggle this loop"],
-      ["notify", "always|auto|never · set-name/-tz/-model"],
-    ];
-    const schedule = indent(
-      [
-        `schedule[${scheduleRows.length}]{verb,syntax}: ${control}`,
-        ...scheduleRows.map((r) => `  ${r.map(scalar).join(",")}`),
-      ].join("\n"),
-    );
+  /** The complete run-token command surface: report plus help for report. */
+  private helpText(_lease: RunLease): string {
     return doc(
-      "verbs:",
-      always,
-      `  dashboard: ${structural}`,
-      schedule,
+      listBlock("verbs", ["verb", "syntax"], [
+        ["report", "--status keep|no-change|block --message <summary>"],
+      ]),
       helpBlock([
-        "Run `pievo show` to read the current config before changing it",
-        "Run `pievo report --status no-change --message \"<why no result was kept>\"` to close this run",
+        "Call exactly one pievo report before finishing",
+        "No other command is accepted from a run credential",
       ]),
     );
   }
 
-  private async applyAuthorizedMutation(
+  private async applyReportMutation(
     lease: RunLease,
     leaseTokenHash: string,
-    capability: "always" | "control" | "set-ui" | "set-schema",
-    command: string,
-    args: Record<string, string>,
-    patch: {
-      loopPatch?: Partial<NewLoop>;
-      runPatch?: Partial<NewRun>;
-      constraints?: { minCadenceMinutes?: number; minCronMinutes?: number; minNextRunLeadMinutes?: number; maxNextRunLeadMs?: number };
-    },
-    detail: string,
-    auditResult: "ok" | "rejected" = "ok",
-  ): Promise<Applied & { loop?: Loop }> {
-    const at = nowIso();
-    const result = await store.mutateForActiveRun({
+    status: "keep" | "no-change" | "block",
+    message: string,
+  ): Promise<Applied> {
+    const result = await store.recordRunReportOnce({
       loopId: lease.loopId,
       runId: lease.runId,
       leaseTokenHash,
-      capability,
-      ...patch,
-      audit: { ts: at, command, args, result: auditResult, detail },
+      status,
+      message,
     });
-    if (result.state === "applied") return { ok: auditResult === "ok", detail, loop: result.loop };
-    if (result.state === "constraint-failed") return { ok: false, detail: result.reason, code: "VALIDATION_ERROR", status: 400 };
-    if (result.state === "forbidden") return { ok: false, detail: "this run is not authorized for that mutation", code: "FORBIDDEN", status: 403 };
+    if (result.state === "applied") return { ok: true, detail: "reported" };
     if (result.state === "missing-loop") return { ok: false, detail: "loop not found", code: "NOT_FOUND", status: 404 };
+    if (result.state === "already-reported") return { ok: false, detail: "this run already reported", code: "CONFLICT", status: 409 };
     return { ok: false, detail: "this run is no longer active", code: "CONFLICT", status: 409 };
   }
 
-  private async applyMutation(
-    lease: RunLease,
-    leaseTokenHash: string,
-    verb: string,
-    flags: Flags,
-    str: (k: string) => string | undefined,
-  ): Promise<Applied> {
-    const loopId = lease.loopId;
-    switch (verb) {
-      case "reschedule": {
-        // F4: `--run-at` is canonical (aligns with the `runAt` edit key + the help
-        // text); `--next` is kept as a working back-compat alias so existing
-        // prompts/scripts don't break. Both drive the same pinned one-shot next fire.
-        const raw = str("run-at") ?? str("next");
-        const when = raw ? parseWhen(raw) : undefined;
-        if (!when) return { ok: false, detail: `reschedule needs --run-at <30m|2h|ISO>` };
-        if (Date.parse(when) > Date.now() + MAX_NEXT_MS) return { ok: false, detail: "too far in the future (>30d)" };
-        // Self-schedule floor (RUN path only; the owner's edit path is unlimited): a
-        // run may not schedule itself sooner than the reschedule floor.
-        const floorMin = selfRescheduleFloorMinutes();
-        if (Date.parse(when) - Date.now() < floorMin * 60_000) {
-          return { ok: false, detail: `a run can't reschedule sooner than ${floorMin} min out — the owner can set any time via edit` };
-        }
-        const detail = `next run at ${new Date(when).toLocaleString()}`;
-        const result = await this.applyAuthorizedMutation(
-          lease,
-          leaseTokenHash,
-          "control",
-          verb,
-          stringifyFlags(flags),
-          {
-            loopPatch: { nextRunAt: when },
-            constraints: {
-              minNextRunLeadMinutes: floorMin,
-              maxNextRunLeadMs: MAX_NEXT_MS,
-            },
-          },
-          detail,
-        );
-        if (result.loop) this.gateway.scheduler.addLoop(result.loop);
-        return result;
-      }
-      case "set-schedule": {
-        const mode = str("_") ?? str("mode");
-        if (mode !== "cron" && mode !== "continuous") {
-          return { ok: false, detail: "set-schedule needs cron|continuous [--delay-minutes N]" };
-        }
-        const rawDelay = str("delay-minutes");
-        const delay = rawDelay === undefined ? undefined : Number(rawDelay);
-        if (delay !== undefined && (!Number.isInteger(delay) || delay < 1)) {
-          return { ok: false, detail: "delay-minutes must be an integer >= 1" };
-        }
-        const current = await store.getLoop(loopId);
-        if (!current) return { ok: false, detail: "loop not found" };
-        const floorMin = selfCronFloorMinutes();
-        if (mode === "continuous") {
-          const effectiveDelay = delay ?? current.continuousDelayMinutes;
-          if (effectiveDelay < floorMin) {
-            return {
-              ok: false,
-              detail: `a run can't schedule more often than every ${floorMin} min (continuous delay is ${effectiveDelay} min) - the owner can set any cadence via edit`,
-            };
-          }
-        } else {
-          const interval = cronIntervalMs(current.cron, current.timezone);
-          if (interval !== null && interval < floorMin * 60_000) {
-            return {
-              ok: false,
-              detail: `a run can't schedule more often than every ${floorMin} min (the retained cron fires every ~${Math.round(interval / 60_000)} min) - the owner can set any cadence via edit`,
-            };
-          }
-        }
-        const detail = mode === "continuous"
-          ? `schedule set to continuous (${delay ?? current.continuousDelayMinutes} min after exec terminal)`
-          : "schedule set to cron (retained cron restored)";
-        const result = await this.applyAuthorizedMutation(
-          lease,
-          leaseTokenHash,
-          "control",
-          verb,
-          stringifyFlags(flags),
-          {
-            loopPatch: { scheduleMode: mode, ...(delay !== undefined ? { continuousDelayMinutes: delay } : {}) },
-            constraints: { minCadenceMinutes: floorMin },
-          },
-          detail,
-        );
-        if (result.loop) this.gateway.scheduler.addLoop(result.loop);
-        return result;
-      }
-      case "set-cron": {
-        const cron = str("_") ?? str("cron");
-        if (!cron) return { ok: false, detail: 'set-cron needs the expression, e.g. set-cron "*/30 * * * *"' };
-        const tz = (await store.getLoop(loopId))?.timezone;
-        const c = validCadence(cron, tz);
-        if (!c.ok) return c;
-        // Self-schedule floor (RUN path only; owner's edit path is unlimited): a run
-        // may not set a cron whose adjacent fires (probed in the loop's tz, like
-        // validCadence) are closer than the cron floor.
-        const floorMin = selfCronFloorMinutes();
-        const interval = cronIntervalMs(cron, tz);
-        if (interval !== null && interval < floorMin * 60_000) {
-          return {
-            ok: false,
-            detail: `a run can't schedule more often than every ${floorMin} min (that cron fires every ~${Math.round(interval / 60_000)} min) — the owner can set any cadence via edit`,
-          };
-        }
-        const detail = `cron set to "${cron}"`;
-        const result = await this.applyAuthorizedMutation(
-          lease,
-          leaseTokenHash,
-          "control",
-          verb,
-          stringifyFlags(flags),
-          { loopPatch: { cron }, constraints: { minCronMinutes: floorMin } },
-          detail,
-        );
-        if (result.loop) this.gateway.scheduler.addLoop(result.loop);
-        return result;
-      }
-      case "pause":
-      case "resume": {
-        const enabled = verb === "resume";
-        const detail = enabled ? "resumed" : "paused";
-        const result = await this.applyAuthorizedMutation(lease, leaseTokenHash, "control", verb, stringifyFlags(flags), { loopPatch: { enabled } }, detail);
-        if (result.loop) {
-          if (enabled) this.gateway.scheduler.addLoop(result.loop);
-          else this.gateway.scheduler.removeLoop(loopId);
-        }
-        return result;
-      }
-      case "notify": {
-        const v = (str("_") ?? str("notify")) as NotifyPolicy | undefined;
-        if (v !== "always" && v !== "auto" && v !== "never") return { ok: false, detail: "notify needs always|auto|never" };
-        const detail = `notify set to ${v}`;
-        return this.applyAuthorizedMutation(lease, leaseTokenHash, "control", verb, stringifyFlags(flags), { loopPatch: { notify: v } }, detail);
-      }
-      case "set-name": {
-        const name = (str("_") ?? str("name"))?.trim() || null;
-        const detail = name ? `name set to "${name}"` : "name cleared";
-        return this.applyAuthorizedMutation(lease, leaseTokenHash, "control", verb, stringifyFlags(flags), { loopPatch: { name } }, detail);
-      }
-      case "set-tz": {
-        const tz = (str("_") ?? str("tz") ?? str("timezone"))?.trim() || null;
-        if (tz && !validTimezone(tz)) return { ok: false, detail: invalidTimezoneError(tz) };
-        const detail = tz ? `timezone set to ${tz}` : "timezone cleared (server-local)";
-        const result = await this.applyAuthorizedMutation(lease, leaseTokenHash, "control", verb, stringifyFlags(flags), { loopPatch: { timezone: tz } }, detail);
-        if (result.loop) this.gateway.scheduler.addLoop(result.loop); // tz changes the cron's interpretation
-        return result;
-      }
-      case "set-model": {
-        const model = (str("_") ?? str("model"))?.trim() || null;
-        const detail = model ? `model set to ${model}` : "model cleared";
-        return this.applyAuthorizedMutation(lease, leaseTokenHash, "control", verb, stringifyFlags(flags), { loopPatch: { model } }, detail);
-      }
-      default:
-        return { ok: false, detail: `unhandled verb ${verb}` };
-    }
-  }
-
-  // The set-* apply paths reuse the SAME `validate.ts` validators the owner
-  // device-token createLoop/editLoop path imports, so the two surfaces validate
-  // identically and can't drift (the anti-drift invariant lives in validate.ts).
-
-  private async applySetUi(lease: RunLease, leaseTokenHash: string, html: string): Promise<Applied> {
-    const v = validateUi(html);
-    if (!v.ok) return this.applyAuthorizedMutation(lease, leaseTokenHash, "set-ui", "set-ui", { bytes: String(html.length) }, {}, v.detail, "rejected");
-    const detail = v.value ? `ui updated (${v.value.length} bytes)` : "ui cleared";
-    return this.applyAuthorizedMutation(lease, leaseTokenHash, "set-ui", "set-ui", { bytes: String(html.length) }, { loopPatch: { ui: v.value } }, detail);
-  }
-
-  private async applySetSchema(lease: RunLease, leaseTokenHash: string, json: string): Promise<Applied> {
-    const v = await validateSchema(lease.loopId, json);
-    if (!v.ok) return this.applyAuthorizedMutation(lease, leaseTokenHash, "set-schema", "set-schema", { bytes: String(json.length) }, {}, v.detail, "rejected");
-    const detail = `schema set (${v.value.map((f) => f.key).join(", ")})`;
-    return this.applyAuthorizedMutation(lease, leaseTokenHash, "set-schema", "set-schema", { bytes: String(json.length) }, { loopPatch: { metricSchema: v.value } }, detail);
-  }
-
-  // The full editable envelope (F1/F6, §4.1 batch 2): every EDITABLE_LOOP_FIELDS key
-  // keyed EXACTLY as `edit --json` accepts, PLUS the read-only derived aggregates
-  // (nextFire/classification/runs). Large content (ui) shows a presence+size
-  // hint by default and inlines under `--full`; metricSchema renders structurally.
-  //
-  // `opts.allowControl` is a RUN caller's EFFECTIVE scheduling capability; when
-  // present the run adds `selfSchedule` and run-appropriate help. A device caller gets the
-  // owner-facing help (edit/log). `--json` is emitted by the callers, not here.
-  private async describe(loopId: string, opts: { allowControl?: boolean; full?: boolean } = {}): Promise<string> {
+  // Device-owner show uses the same canonical editable envelope as edit.
+  // `--json` is emitted by the callers, not here.
+  private async describe(loopId: string, opts: { full?: boolean } = {}): Promise<string> {
     const loop = await store.getLoop(loopId);
     if (!loop) return "loop not found";
-    // The most recent exec run (newest-first) anchors the `runs:` tally's last result.
     const recent = (await store.listRuns(loop.id, LOG_RUNS_DEFAULT)).slice().reverse();
-    const lastExec = recent.find((r) => r.role === "exec") ?? null;
-    return renderShowText(loop, loopEnvelope(loop), await store.countRuns(loop.id), lastExec, opts);
+    return renderShowText(loop, loopEnvelope(loop), await store.countRuns(loop.id), recent[0] ?? null, opts);
   }
 
   /**
@@ -784,40 +378,30 @@ export class CliGateway {
     const loops = await store.loopsForMachine(machineId);
     const scoped = scopeLoopsByCwd(loops, ctx.cwd, ctx.home);
     const here: HomeLoop[] = await Promise.all(
-      scoped.here.map(async (l) => ({
-        id: l.id,
-        name: l.name ?? l.id,
-        cron: l.scheduleMode === "continuous" ? `continuous +${l.continuousDelayMinutes}m` : l.cron,
-        enabled: l.enabled,
-        nextFire: l.enabled && l.scheduleMode === "cron" ? (nextFires(l.cron, l.timezone, 1)[0] ?? null) : null,
-        lastResult: await (async () => {
-          const last = await store.lastExecRun(l.id);
-          return last ? runResultToken(last) : null;
-        })(),
-      })),
+      scoped.here.map(async (l) => {
+        const schedule = scheduleFromLoop(l);
+        return {
+          id: l.id,
+          name: l.name,
+          cron: schedule.mode === "continuous" ? `continuous +${schedule.delayMinutes}m` : schedule.cron,
+          enabled: l.enabled,
+          nextFire: l.enabled && schedule.mode === "cron" ? (nextFires(schedule.cron, schedule.timezone, 1)[0] ?? null) : null,
+          lastResult: await (async () => {
+            const last = await store.lastRun(l.id);
+            return last ? runResultToken(last) : null;
+          })(),
+        };
+      }),
     );
     return renderHomeText(ctx, presence, here, scoped.elsewhere, await recentMachineRuns(loops, 3));
   }
 
-  /** `pievo` (bare) inside a run — the RUN credential's own-loop home (§5.1). */
-  private async homeRun(lease: RunLease): Promise<string> {
-    const loop = await store.getLoop(lease.loopId);
-    if (!loop) return errorBlock("loop not found", "NOT_FOUND");
-    const recent = (await store.listRuns(loop.id, 2)).slice().reverse().map((r) => ({
-      ts: r.ts,
-      result: runResultToken(r),
-      message: r.message ?? null,
-    }));
-    return renderRunHomeText(loop.name ?? loop.id, loop.id, lease.role, loop.goal ?? null, recent);
-  }
 
 }
 
-// ---- helpers (ported from control.ts) ----
+// ---- helpers ----
 
 type Flags = Record<string, string | boolean>;
-
-const MUTATION_VERBS = new Set(["reschedule", "set-cron", "set-schedule", "pause", "resume", "notify", "set-name", "set-tz", "set-model"]);
 
 /** Shared refusal for terminal-report-only grace after reclaim. */
 const TERMINAL_GRACE_MSG =
@@ -826,7 +410,7 @@ const TERMINAL_GRACE_MSG =
 /** Verbs that require OWNER (device) authority — a run credential is 403'd on these
  *  in the unified `cli` dispatch (§4.1). `report` is the mirror image
  *  (run-only, 403 for a device credential) and are handled inline in `deviceCli`. */
-const DEVICE_ONLY_VERBS = new Set(["new", "edit", "steer", "loops", "start", "stop", "delete", "run"]);
+const DEVICE_ONLY_VERBS = new Set(["new", "edit", "loops", "start", "stop", "delete", "run"]);
 
 const PAUSED_FINISHING = "loop paused; current run is finishing";
 const STOP_UPGRADE_REQUIRED = "Daemon upgrade required to stop a running process. Run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.";
@@ -867,23 +451,16 @@ function derr(code: number, message: string, slug?: string): { code: number; tex
   return { code, text: errorBlock(message, slug ?? codeForStatus(code)) };
 }
 
-/** The ONLY structured keys a `/api/machine/cli` body carries after Batch 7. The daemon
- *  is a pure text sink — it renders `text` (+ exits `exitCode`) for every verb — so the
- *  transitional "superset" render fields (`ok`/`id`/`loop`/`changes`/`config`/… that let
- *  a pre-0.12 daemon render structured, design §3) are RETIRED at this boundary. Two
- *  structured channels survive because the current daemon reads them as DATA, not to
- *  render:
+/** The structured keys a `/api/machine/cli` body may carry. The daemon renders
+ * `text` and exits with `exitCode`; two structured channels remain because the
+ * current daemon reads them as data:
  *   - `loops`: the daemon resolves cwd→loop CLIENT-side (`log`/`show`/`home`) from this
  *     list — the server's `log`/`show` dispatch needs an explicit id (design §3).
- *   - `runs`: the `log --json` normalized-data escape hatch.
- *  The LEGACY endpoints (`/api/machine/loop|log`, `/agent-api/loop`) do NOT pass through
- *  `finalizeCli`, so their full structured bodies are unchanged (a pre-0.12 daemon on the
- *  postCli 404-fallback still renders — retired separately, its own upgrade-window gate). */
+ *   - `runs`: the `log --json` normalized-data escape hatch. */
 const CLI_RETAINED_KEYS = new Set(["text", "exitCode", "loops", "runs"]);
 
-/** Finalize a `/api/machine/cli` body: ensure it carries `text` + `exitCode` (P1/P6) and
- *  strip every non-retained structured field (Batch 7 — retire the superset scaffolding).
- *  A structured `{error}` (createLoop/editLoop validation, the deviceCli denials) is first
+/** Finalize a `/api/machine/cli` body with `text` + `exitCode` and only the
+ *  structured fields used by the daemon. A structured `{error}` is first
  *  rendered to `error:`/`code:` TOON so the daemon prints it to stdout. */
 function finalizeCli(res: HttpResult): HttpResult {
   const b = res.body;
@@ -895,9 +472,8 @@ function finalizeCli(res: HttpResult): HttpResult {
     if (typeof body.exitCode !== "number") {
       body.exitCode = res.status >= 200 && res.status < 300 ? 0 : 1;
     }
-    // Drop the retired render-only fields, but only once a `text` render exists (every
-    // cli path either renders `text` or set `error` above → text is now present; the
-    // guard is defensive so a hypothetical text-less body is never silently blanked).
+    // Every CLI path renders text or sets error above. Keep the guard so a malformed
+    // text-less body is not silently blanked.
     if (typeof body.text === "string") {
       for (const k of Object.keys(body)) if (!CLI_RETAINED_KEYS.has(k)) delete body[k];
     }
@@ -906,145 +482,46 @@ function finalizeCli(res: HttpResult): HttpResult {
 }
 
 /** `pievo report` — the compact run-status confirmation (§4.6). */
-function renderReportedText(status: string | undefined, metrics: RunMetrics | undefined, hasMessage: boolean): string {
+function renderReportedText(status: string | undefined, hasMessage: boolean): string {
   const parts: string[] = [];
   if (status) parts.push(`status=${status}`);
-  const metricToken = runMetricsToken(metrics);
-  if (metricToken) parts.push(`metrics ${metricToken}`);
   if (hasMessage) parts.push("message recorded");
   return `reported: ${parts.length ? parts.join(" · ") : "recorded"}`;
 }
 
-/** Indent every line of a rendered TOON block two spaces, so a typed list/detail
- *  nests under a parent top key (e.g. the `always[]`/`schedule[]` groups under
- *  `verbs:` in the in-run help). */
-function indent(block: string): string {
-  return block
-    .split("\n")
-    .map((l) => "  " + l)
-    .join("\n");
-}
-
 // ---- per-verb `--help` (P10) --------------------------------------------------
-// `<verb> --help` prints that verb's syntax + a one-line summary + concrete `help[]`
-// templates. Rendered server-side so it is ROLE-AWARE for a run credential (the lease
-// caps decide the availability line) and full for a device credential (owner
-// authority, no availability caveats). Two maps because the run + owner verb surfaces
-// barely overlap (`show`/`log` differ by scope); a verb absent from the relevant map
-// has no `--help` and falls through to the caller's unknown-command handling.
+// `<verb> --help` prints syntax, a summary, and concrete examples. Run credentials
+// expose report help only; device credentials receive the owner command surface. A
+// verb absent from the relevant map falls through to unknown-command handling.
 
 interface VerbHelpSpec {
   syntax: string;
   summary: string;
   help: string[];
-  /** Availability line for a RUN lease (role-aware); omitted ⇒ no availability line. */
+  /** Availability line for a RUN lease; omitted for owner verbs. */
   avail?: (lease: RunLease) => string;
 }
-
-/** Availability of a schedule/control mutation for a run: gated by `allowControl`. */
-const controlAvail = (l: RunLease): string => (l.allowControl ? "available to this run" : "needs allowControl (off for this loop)");
-/** Availability of a structural (set-ui/schema) verb: evolve/steer pass only. */
-const gateAvail = (has: (l: RunLease) => boolean | undefined) => (l: RunLease): string =>
-  has(l) ? "available to this run (evolve/steer pass)" : `evolve/steer pass only — this run is "${l.role}"`;
-const alwaysAvail = (): string => "always available";
 
 /** RUN-credential verb help (in-run `rk_` lease). */
 const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
   report: {
-    syntax: "report --status kept|no-change|blocked --message <text> [--metrics '<json>' | --metrics-file <path>]",
-    summary: "record this run's required status and message, plus exact schema metrics for metric-enabled exec runs",
-    avail: alwaysAvail,
+    syntax: "report --status keep|no-change|block --message <text>",
+    summary: "record this run's required status and non-empty summary",
+    avail: () => "always available",
     help: [
-      'Run `pievo report --status no-change --message "no actionable result"` to close this run with no kept result',
-      'Run `pievo report --status kept --message "reduced drift" --metrics \'{"drift":3,"skipped":null}\'` to record metrics',
+      'Run `pievo report --status no-change --message "no actionable change"` to close this run',
+      'Run `pievo report --status keep --message "completed the requested work"` to retain a result',
     ],
   },
-  show: {
-    syntax: "show [--full] [--json]",
-    summary: "print this loop's current config + recent runs",
-    avail: alwaysAvail,
-    help: ["Run `pievo show --full` to include full dashboard content", "Run `pievo show --json` for the editable JSON envelope"],
-  },
-  log: {
-    syntax: "log [--limit 1..20] [--after N --through N | --since ISO --until ISO] [--role exec|evolve|steer] [--status kept|no-change|blocked] [--phase done|error|canceled] [--summary | --run <index|UUID> [--diff]] [--json]",
-    summary: "indexed terminal history, bounded aggregates, or one detailed run for this loop",
-    avail: alwaysAvail,
-    help: ["Run `pievo log --summary --json` for aggregate history", "Run `pievo log --run 12 --diff` for bounded run detail and artifact diff"],
-  },
-  reschedule: {
-    syntax: "reschedule --run-at <30m|2h|ISO>",
-    summary: "run once more soon, then resume the cadence (floor applies; --next is an alias)",
-    avail: controlAvail,
-    help: ["Run `pievo reschedule --run-at 2h` to run again in two hours"],
-  },
-  "set-cron": {
-    syntax: 'set-cron "<Croner expression>"',
-    summary: "change the retained cron expression (minimum interval and run floor apply)",
-    avail: controlAvail,
-    help: ['Run `pievo set-cron "0 7 * * 1"` to change the cron cadence'],
-  },
-  "set-schedule": {
-    syntax: "set-schedule cron|continuous [--delay-minutes <N>]",
-    summary: "switch cadence mode; continuous runs N minutes after each exec terminal",
-    avail: controlAvail,
-    help: ["Run `pievo set-schedule continuous --delay-minutes 5` to run continuously"],
-  },
-  "set-ui": {
-    syntax: "set-ui --file <path>",
-    summary: "replace the dashboard HTML (the shim inlines the file)",
-    avail: gateAvail((l) => l.canSetUi),
-    help: ["Run `pievo set-ui --file dashboard.html` to replace the dashboard"],
-  },
-  "set-schema": {
-    syntax: "set-schema --file <path>",
-    summary: "declare metrics — a JSON array of {key, label?, unit?}",
-    avail: gateAvail((l) => l.canSetSchema),
-    help: ["Run `pievo set-schema --file schema.json` to declare the loop's metrics"],
-  },
-  pause: {
-    syntax: "pause",
-    summary: "pause this loop (enabled=false)",
-    avail: controlAvail,
-    help: ["Run `pievo resume` to re-enable it"],
-  },
-  resume: {
-    syntax: "resume",
-    summary: "resume this loop (enabled=true)",
-    avail: controlAvail,
-    help: ["Run `pievo pause` to pause it again"],
-  },
-  notify: {
-    syntax: "notify always|auto|never",
-    summary: "set this loop's failure/success notification policy",
-    avail: controlAvail,
-    help: ["Run `pievo notify auto` to notify only on meaningful changes"],
-  },
-  "set-name": {
-    syntax: 'set-name "<name>"',
-    summary: "rename this loop; pass an empty string to clear the name",
-    avail: controlAvail,
-    help: ['Run `pievo set-name "Docs Sweep"` to rename the loop'],
-  },
-  "set-tz": {
-    syntax: "set-tz <IANA zone>",
-    summary: "set the loop's timezone (the cron fires in it); pass an empty string to clear it",
-    avail: controlAvail,
-    help: ["Run `pievo set-tz America/Los_Angeles` to change the timezone"],
-  },
-  "set-model": {
-    syntax: "set-model <model>",
-    summary: "pin the coding-agent model for this loop; pass an empty string to clear it",
-    avail: controlAvail,
-    help: ["Run `pievo set-model claude-opus-4-8` to pin the model"],
-  },
 };
+
 /** DEVICE-credential verb help (owner `dk_` device token). */
 const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
   new: {
-    syntax: "new --json '<config>' [--dry-run] [--connect-key <dk_…>] [--server-url <url>] [--tz <IANA>] [--agent claude-code|codex]",
-    summary: `create a loop (keys: ${[...EDITABLE_LOOP_FIELDS].join(", ")}; cron + taskFile required)`,
+    syntax: "new --json '<config>' [--dry-run] [--connect-key <dk_…>] [--server-url <url>]",
+    summary: `create a loop from the canonical envelope (keys: ${[...EDITABLE_LOOP_FIELDS].join(", ")}; agent required)`,
     help: [
-      "Run `pievo new --json '{\"cron\":\"0 8 * * *\",\"taskFile\":\"<path>\"}'` to create a loop",
+      "Run `pievo new --json '{\"name\":\"Daily check\",\"schedule\":{\"mode\":\"cron\",\"cron\":\"0 8 * * *\",\"timezone\":\"UTC\",\"overlap\":\"skip\"},\"workdir\":\"<path>\",\"agent\":\"claude-code\",\"prompt\":\"Check the project.\",\"statusDefinitions\":{\"keep\":\"result retained\",\"noChange\":\"nothing changed\",\"block\":\"owner input required\"}}'` to create a loop",
       "Run `pievo new --json '{...}' --dry-run` to validate without creating",
     ],
   },
@@ -1054,17 +531,12 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
     help: ["Run `pievo show <id>` to see a loop's full config", "Run `pievo log <id>` to see a loop's recent runs"],
   },
   edit: {
-    syntax: "edit <id> [--json '<patch>'] [--ui-file <path>] [--schema-file <path.json>] [--dry-run]",
-    summary: `change a loop's config using at least one patch/file input (keys: ${[...EDITABLE_LOOP_FIELDS].join(", ")})`,
+    syntax: "edit <id> --json '<patch>' [--dry-run]",
+    summary: `change a loop's config using one JSON patch (keys: ${[...EDITABLE_LOOP_FIELDS].join(", ")})`,
     help: [
-      "Run `pievo edit <id> --json '{\"cron\":\"0 7 * * 1\"}'` to change the schedule",
+      "Run `pievo edit <id> --json '{\"schedule\":{\"mode\":\"continuous\",\"delayMinutes\":5}}'` to change the schedule",
       "Run `pievo edit <id> --json '{...}' --dry-run` to preview the change",
     ],
-  },
-  steer: {
-    syntax: "steer <id> --message <text> | --message-file <path>",
-    summary: "queue one owner steer pass; a pending steer is updated with the latest instruction",
-    help: ["Run `pievo steer <id> --message \"change the schedule to weekdays at 9am\"`"],
   },
   show: {
     syntax: "show [<id|unique-name>] [--full] [--json]",
@@ -1097,14 +569,14 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
     help: ["A running run remains running until the daemon confirms cancellation"],
   },
   log: {
-    syntax: "log [<id>] [--limit 1..20] [--after N --through N | --since ISO --until ISO] [--role exec|evolve|steer] [--status kept|no-change|blocked] [--phase done|error|canceled] [--summary | --run <index|UUID> [--diff]] [--json]",
-    summary: "indexed terminal history, bounded aggregates, or one detailed run",
-    help: ["Run `pievo log <id> --summary --json` for aggregate history", "Run `pievo log <id> --run 12 --diff` for bounded run detail and artifact diff"],
+    syntax: "log [<id>] [--limit 1..20] [--since ISO] [--until ISO] [--status keep|no-change|block] [--phase done|error|canceled] [--run <index|UUID> [--diff]] [--json]",
+    summary: "bounded terminal history or one detailed run",
+    help: ["Run `pievo log <id> --json` for structured history", "Run `pievo log <id> --run 12 --diff` for bounded run detail and artifact diff"],
   },
 };
 
-/** Render a verb's `--help` (P10). A run lease ⇒ role-aware (availability line from
- *  the caps); no lease ⇒ the device (owner) surface. Returns undefined for a verb
+/** Render a verb's `--help` (P10). A run lease selects the report-only help;
+ *  no lease means the device (owner) surface. Returns undefined for a verb
  *  with no help spec, so the caller falls back to its unknown-command handling. */
 function verbHelpText(verb: string, lease?: RunLease): string | undefined {
   const spec = lease ? RUN_VERB_HELP[verb] : DEVICE_VERB_HELP[verb];
@@ -1118,114 +590,61 @@ function verbHelpText(verb: string, lease?: RunLease): string | undefined {
   );
 }
 
-/**
- * The full editable envelope keyed EXACTLY as `edit --json` accepts (read/write
- * identity, F6/§4.1 batch 2): `id` + every EDITABLE_LOOP_FIELDS key with its raw
- * stored value (full bodies, no truncation). `show --json` emits this verbatim;
- * dropping `id` yields a no-op `edit` patch (pinned by the roundtrip test). The
- * pinned next-run OVERRIDE is keyed `runAt` (matching the edit key; the DB column
- * stays `nextRunAt`), NOT the derived read-only `nextFire` aggregate.
- */
+/** The canonical editable config emitted by `show --json`. */
 function loopEnvelope(loop: Loop): Record<string, unknown> {
-  return {
-    id: loop.id,
-    name: loop.name ?? null,
-    cron: loop.cron,
-    scheduleMode: loop.scheduleMode,
-    continuousDelayMinutes: loop.continuousDelayMinutes,
-    timezone: loop.timezone ?? null,
-    notify: loop.notify,
-    model: loop.model ?? null,
-    reasoningEffort: loop.reasoningEffort ?? null,
-    agent: loop.agent,
-    allowControl: loop.allowControl,
-    taskFile: loop.taskFile ?? null,
-    enabled: loop.enabled,
-    runAt: loop.nextRunAt ?? null,
-    goal: loop.goal ?? null,
-    ui: loop.ui ?? null,
-    metricSchema: loop.metricSchema ?? null,
-  };
+  return { ...canonicalLoopEnvelope(loop) };
 }
 
-/** Render a large content field (ui) for the `show` detail block: `absent`
- *  when unset, the full body (scalar-quoted) under `--full`, else a presence + size
- *  hint (P3 / feedback #2 — never a char-clipped body). */
+/** Render a large prompt in full or as a compact presence hint. */
 function contentField(value: string | null, full: boolean): Scalar | { raw: string } {
   if (value == null) return "absent";
   if (full) return value; // scalar() quotes the full body (newlines escaped to one line)
   return { raw: `present, ${value.length} bytes — use --full to see` };
 }
 
-/** Render the metric schema STRUCTURALLY (not char-clipped): the header
- *  `metricSchema[N]{key,label,unit}:` plus one `key,label,unit` triple per field,
- *  joined by ` · `. Absent → the bare `absent` token. */
-function schemaField(schema: MetricField[] | null): { key: string; value: Scalar | { raw: string } } {
-  if (!schema || !schema.length) return { key: "metricSchema", value: "absent" };
-  const rows = schema.map((f) => [f.key, f.label ?? ABSENT, f.unit ?? ABSENT].join(",")).join(" · ");
-  return { key: `metricSchema[${schema.length}]{key,label,unit}`, value: { raw: rows } };
-}
-
-/** The next cadence fire (the derived read-only aggregate), formatted in the loop's
- *  OWN timezone with a short zone name (`2026-07-13 06:00:00 PDT`) — matching how the
- *  scheduler arms it. Distinct from the writable `runAt` override (F4). */
+/** The next cadence fire, formatted in the loop's timezone. */
 function nextFireDisplay(loop: Loop): string {
-  if (loop.scheduleMode === "continuous") return `after exec terminal + ${loop.continuousDelayMinutes}m`;
-  const iso = nextFires(loop.cron, loop.timezone, 1)[0];
+  const schedule = scheduleFromLoop(loop);
+  if (schedule.mode === "continuous") return `after exec terminal + ${schedule.delayMinutes}m`;
+  const iso = nextFires(schedule.cron, schedule.timezone, 1)[0];
   if (!iso) return "(never)";
-  return fmtTimeZoned(iso, loop.timezone, { seconds: true });
+  return fmtTimeZoned(iso, schedule.timezone, { seconds: true });
 }
 
 /**
  * `pievo show` — the full editable envelope TOON (F1/F6, feedback #1/#2, §4.1).
  * The `loop:` block keys are EXACTLY `edit --json`'s keys (read/write identity),
- * then the read-only derived aggregates (`nextFire`/`lifecycle`/`runs`). A run
- * caller adds the effective `selfSchedule` line + run-appropriate help.
+ * then the read-only derived aggregates (`nextFire`/`lifecycle`/`runs`).
  */
 function renderShowText(
   loop: Loop,
   env: Record<string, unknown>,
   totalRuns: number,
-  lastExec: Pick<Run, "phase" | "status" | "ts" | "error" | "reportIncident"> | null,
-  opts: { allowControl?: boolean; full?: boolean } = {},
+  lastRun: Pick<Run, "phase" | "status" | "ts" | "error" | "reportIncident"> | null,
+  opts: { full?: boolean } = {},
 ): string {
   const full = opts.full === true;
-  const schema = schemaField(loop.metricSchema ?? null);
   const block = detailBlock("loop", [
     ["id", env.id as Scalar],
     ["name", env.name as Scalar],
-    ["cron", env.cron as Scalar],
-    ["scheduleMode", env.scheduleMode as Scalar],
-    ["continuousDelayMinutes", env.continuousDelayMinutes as Scalar],
-    ["timezone", env.timezone as Scalar],
-    ["notify", env.notify as Scalar],
+    ["schedule", { raw: JSON.stringify(env.schedule) }],
+    ["workdir", env.workdir as Scalar],
+    ["agent", env.agent as Scalar],
     ["model", env.model == null ? { raw: "default" } : env.model as Scalar],
     ["reasoningEffort", env.reasoningEffort == null ? { raw: "default" } : env.reasoningEffort as Scalar],
-    ["agent", env.agent as Scalar],
-    ["allowControl", env.allowControl as Scalar],
-    ["taskFile", env.taskFile as Scalar],
+    ["prompt", contentField(loop.prompt, full)],
+    ["statusDefinitions", { raw: JSON.stringify(env.statusDefinitions) }],
+    ["artifacts", { raw: JSON.stringify(env.artifacts) }],
     ["enabled", env.enabled as Scalar],
-    ["runAt", env.runAt as Scalar],
-    // Optional standing objective; it never changes lifecycle.
-    ["goal", env.goal as Scalar],
-    ["ui", contentField(loop.ui ?? null, full)],
-    [schema.key, schema.value],
   ]);
-  const runsTally = lastExec
-    ? `${totalRuns} total · last exec ${runResultToken(lastExec)} ${fmtTime(lastExec.ts)}`
+  const runsTally = lastRun
+    ? `${totalRuns} total · last ${runResultToken(lastRun)} ${fmtTime(lastRun.ts)}`
     : `${totalRuns} total`;
-  const isRun = opts.allowControl !== undefined;
-  const help = isRun
-    ? [
-        "Run `pievo reschedule --run-at 2h` to run again sooner (then resume cadence)",
-        `Run \`pievo set-cron "${loop.cron}"\` to change the cadence (floors apply)`,
-        'Run `pievo report --status kept --message "<one-line result>"` to record this run',
-      ]
-    : [
-        `Run \`pievo show ${loop.id} --full\` to see the complete ui body`,
-        `Run \`pievo edit ${loop.id} --json '{"cron":"0 7 * * 1"}'\` to change the schedule`,
-        `Run \`pievo log ${loop.id}\` to see recent run results`,
-      ];
+  const help = [
+    `Run \`pievo show ${loop.id} --full\` to see the complete prompt`,
+    `Run \`pievo edit ${loop.id} --json '{"schedule":{"mode":"continuous","delayMinutes":5}}'\` to change the schedule`,
+    `Run \`pievo log ${loop.id}\` to see recent run results`,
+  ];
   return doc(
     block,
     kvLine("nextFire", nextFireDisplay(loop)),
@@ -1235,23 +654,21 @@ function renderShowText(
       ? kvLine("pauseCause", loop.pauseCause?.kind === "failure-streak"
           ? `failure-streak (run ${loop.pauseCause.runId}, count ${loop.pauseCause.count})`
           : loop.pauseCause?.kind === "blocked"
-            ? `blocked (run ${loop.pauseCause.runId}, role ${loop.pauseCause.role})`
+            ? `blocked (run ${loop.pauseCause.runId})`
             : loop.pauseCause?.kind === "owner" ? "owner" : "unknown")
       : null,
-    lastExec?.reportIncident
-      ? kvLine("reportIncident", `${lastExec.reportIncident.code} · ${lastExec.reportIncident.faultDomain} · ${lastExec.reportIncident.reason}`)
+    lastRun?.reportIncident
+      ? kvLine("reportIncident", `${lastRun.reportIncident.code} · ${lastRun.reportIncident.faultDomain} · ${lastRun.reportIncident.reason}`)
       : null,
-    // Effective run scheduling capability.
-    opts.allowControl !== undefined ? kvLine("selfSchedule", opts.allowControl ? "allowed" : "off") : null,
     helpBlock(help),
   );
 }
 
 // ---- content-first home (P8/§5.1) --------------------------------------------
-// Bare `pievo` renders a live machine dashboard (device) or the run's own-loop
-// context (run). The server owns the whole TOON render (text-sink); the daemon
-// passes the local facts it alone knows (`--bin`/`--pid`/`--server`/`--cwd`/`--home`)
-// as context flags. Everything below is pure so it's exercised in the verb tests.
+// Bare `pievo` renders a live machine dashboard for a device credential. The
+// server owns the TOON render; the daemon passes local facts it alone knows
+// (`--bin`/`--pid`/`--server`/`--cwd`/`--home`) as context flags. Everything
+// below is pure so it is exercised in verb tests.
 
 /** The daemon-supplied local context for the device home header + cwd scoping. */
 interface HomeContext {
@@ -1282,17 +699,9 @@ function expandHome(p: string, home: string | null): string {
   return home && p.startsWith("~/") ? path.join(home, p.slice(2)) : p;
 }
 
-/** A loop's folder on the daemon machine — mirrors the daemon's `resolveLoopDir`
- *  (dirname(taskFile) → workdir), minus the scratch fallback (which never matches a
- *  real cwd). Returns null when neither path is known (⇒ never "here"). */
-function scopeLoopDir(workdir: string | null, taskFile: string | null, home: string | null): string | null {
-  if (taskFile) {
-    const tf = expandHome(taskFile, home);
-    if (path.isAbsolute(tf)) return path.dirname(path.resolve(tf));
-    if (workdir) return path.dirname(path.resolve(expandHome(workdir, home), tf));
-  }
-  if (workdir) return path.resolve(expandHome(workdir, home));
-  return null;
+/** A loop's folder on the daemon machine is its configured workdir. */
+function scopeLoopDir(workdir: string, home: string | null): string {
+  return path.resolve(expandHome(workdir, home));
 }
 
 /**
@@ -1309,8 +718,8 @@ export function scopeLoopsByCwd(
   if (!cwd) return { here: loops, elsewhere: 0 };
   const here = path.resolve(cwd);
   const matched = loops.filter((l) => {
-    const dir = scopeLoopDir(l.workdir ?? null, l.taskFile ?? null, home);
-    return dir !== null && (here === dir || here.startsWith(dir + path.sep));
+    const dir = scopeLoopDir(l.workdir, home);
+    return here === dir || here.startsWith(dir + path.sep);
   });
   if (matched.length === 0) return { here: loops, elsewhere: 0 };
   return { here: matched, elsewhere: loops.length - matched.length };
@@ -1322,7 +731,7 @@ async function recentMachineRuns(loops: Loop[], n: number): Promise<Array<{ ts: 
   const rows: Array<{ ts: string; loop: string; result: string }> = [];
   for (const l of loops) {
     for (const r of await store.listRuns(l.id, n)) {
-      rows.push({ ts: r.ts, loop: l.name ?? l.id, result: runResultToken(r) });
+      rows.push({ ts: r.ts, loop: l.name, result: runResultToken(r) });
     }
   }
   rows.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
@@ -1389,65 +798,13 @@ function renderHomeText(
   );
 }
 
-/** The run-credential home (§5.1): the run's own loop identity + role + goal, its
- *  recent runs, and run-appropriate help — scoped to the lease's loop. */
-function renderRunHomeText(
-  name: string,
-  loopId: string,
-  role: RunRole,
-  goal: string | null,
-  recent: Array<{ ts: string; result: string; message: string | null }>,
-): string {
-  const recentBlock = recent.length
-    ? listBlock(
-        "recent",
-        ["ts", "result", "message"],
-        recent.map((r) => [fmtTime(r.ts), r.result, r.message ? truncate(r.message, LOG_MESSAGE_CELL_CAP, "use --full").value : null]),
-      )
-    : emptyList("recent");
-  return doc(
-    `loop: ${scalar(name)} (${loopId}) · role ${role} · goal ${goal != null ? scalar(goal) : "none"}`,
-    recentBlock,
-    helpBlock([
-      "Run `pievo show` for the full config, `pievo log` for the run survey",
-      "Run `pievo report --status no-change --message \"No useful change was found.\"` to close this run, then summarize in your final response",
-    ]),
-  );
-}
-
-function isStatus(s: string | undefined): s is RunStatus {
-  return s === "kept" || s === "no-change" || s === "blocked";
-}
-
-function validateMetrics(
-  raw: string,
-  schema: MetricField[],
-): { ok: true; value: RunMetrics } | { ok: false; error: string } {
-  let obj: unknown;
-  try {
-    obj = JSON.parse(raw);
-  } catch {
-    return { ok: false, error: "--metrics must be a JSON object, e.g. --metrics '{\"mrr\":9160}'" };
-  }
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { ok: false, error: "--metrics must be a JSON object" };
-  const allowed = new Set(schema.map((f) => f.key));
-  const out: RunMetrics = {};
-  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
-    if (!allowed.has(k)) return { ok: false, error: `--metrics has unknown key "${k}". Allowed: ${[...allowed].join(", ")}` };
-    if (typeof v === "number" && Number.isFinite(v)) out[stripNul(k)] = v;
-    else if (v === null) out[stripNul(k)] = null;
-    else return { ok: false, error: `--metrics.${k} must be a finite number or null` };
-  }
-  const missing = schema.map((field) => field.key).filter((key) => !(key in out));
-  if (missing.length) return { ok: false, error: `--metrics is missing declared key(s): ${missing.join(", ")}` };
-  return { ok: true, value: out };
+function reportStatus(s: string | undefined): "keep" | "no-change" | "block" | undefined {
+  return s === "keep" || s === "no-change" || s === "block" ? s : undefined;
 }
 
 /** Tiny flag parser: `--k v` pairs, bare `--flag` → true, first positional under `_`.
- *  Every key/value is NUL-stripped HERE - flags are wire input by definition, and
- *  several dispatch verbs (`set-name`, metrics
- *  values) write flag strings straight into pg text/jsonb columns, which REJECT
- *  NUL (SQLite tolerated it). One chokepoint covers every verb at once. */
+ *  Every key/value is NUL-stripped at this wire boundary before validation or
+ *  persistence because Postgres text rejects NUL. */
 function parseFlags(args: string[]): Flags {
   const out: Flags = {};
   for (let i = 0; i < args.length; i++) {
@@ -1466,15 +823,4 @@ function parseFlags(args: string[]): Flags {
     }
   }
   return out;
-}
-
-/** Milliseconds between a cron's next two fires, probed IN the loop's timezone
- *  (fire times shift with it) — the self-schedule cron floor's adjacent-interval
- *  check. Null when the expression can't fire twice / is invalid (the caller has
- *  already run validCadence, so null here just skips the floor). Built on the
- *  shared `nextFires` probe (index.ts) - one Cron-probing discipline, no fork. */
-function cronIntervalMs(cron: string, timezone?: string | null): number | null {
-  const [a, b] = nextFires(cron, timezone, 2);
-  if (!a || !b) return null;
-  return Date.parse(b) - Date.parse(a);
 }

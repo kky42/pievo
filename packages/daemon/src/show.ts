@@ -12,8 +12,8 @@
  */
 import path from "node:path";
 
-import type { CliResponse, LegacyFallback, PostCliDeps } from "./cli-client.js";
-import { postCli, printTextOrTooOld } from "./cli-client.js";
+import type { PostCliDeps } from "./cli-client.js";
+import { postCli, printCliResponse } from "./cli-client.js";
 import { type LoopRow, renderResolveError, resolveLoopId } from "./log.js";
 
 export type ShowDeps = {
@@ -70,18 +70,14 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
 
   const { positional, json, full, unknown } = parseArgs(argv);
   if (unknown.length) return err(`pievo: unknown flag --${unknown[0]} — try \`pievo show --help\`\n`), 2;
+  if (positional.length > 1) return err("pievo: usage: pievo show [<loop>] [--json] [--full]\n"), 2;
   const notConnected = () =>
     err("pievo: this machine isn't connected yet — run `pievo daemon start`\n");
 
   // 1. List the machine's loops so the target can be resolved (client-side — the
   //    server's `show` needs an explicit id, just like `log`).
-  const legacyLoops: LegacyFallback = async ({ server, token, fetchImpl }): Promise<CliResponse> => {
-    const res = await fetchImpl(`${server}/api/machine/loop`, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
-    return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
-  };
-  const listed = await postCli(["loops"], legacyLoops, cliDeps);
+  const listed = await postCli(["loops"], cliDeps);
   if (listed.kind === "not-configured") return notConnected(), 2;
-  if (listed.kind === "read-error") return err(`pievo: cannot read ${listed.path}\n`), 1;
   if (listed.kind === "network-error") return err(`pievo: ${listed.message}\n`), 1;
   const listData = listed.body as { loops?: LoopRow[]; error?: string };
   if (listed.status >= 400 || !listData.loops) {
@@ -91,17 +87,10 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
   const resolved = resolveLoopId(listData.loops, positional[0], path.resolve(cwd()));
   if ("error" in resolved) return renderResolveError(resolved, out, err);
 
-  // 2. Forward `show <id> [--json] [--full]` — the server renders the envelope TOON
-  //    (or the JSON envelope under --json). Old server (no /api/machine/cli): there is
-  //    no device `show`, so degrade with a clear line.
+  // 2. Forward `show <id> [--json] [--full]`; the server renders the result.
   const showArgv = ["show", resolved.id, ...(json ? ["--json"] : []), ...(full ? ["--full"] : [])];
-  const legacyShow: LegacyFallback = async () => ({ status: 501, body: { error: "show needs a newer server — upgrade the Pievo server" } });
-  const got = await postCli(showArgv, legacyShow, cliDeps);
+  const got = await postCli(showArgv, cliDeps);
   if (got.kind === "not-configured") return notConnected(), 2;
-  if (got.kind === "read-error") return err(`pievo: cannot read ${got.path}\n`), 1;
   if (got.kind === "network-error") return err(`pievo: ${got.message}\n`), 1;
-  // Text-sink: the server renders the envelope TOON (or the JSON envelope under
-  // `--json`); we just print it. A too-old server (no device `show`, no `text`) → a
-  // definitive SERVER_TOO_OLD error.
-  return printTextOrTooOld(got.body, got.status, out);
+  return printCliResponse(got.body, got.status, out);
 }

@@ -14,6 +14,7 @@ function capture(extra: DaemonControlDeps = {}): DaemonControlDeps & { stdout: (
   return {
     out: (s) => { out += s; },
     err: (s) => { err += s; },
+    startTime: () => "test-start",
     stdout: () => out,
     stderr: () => err,
     ...extra,
@@ -30,7 +31,7 @@ describe("runDaemonStatus", () => {
   });
 
   test("daemon running → reports pid", async () => {
-    const cap = capture({ readPid: () => ({ pid: 4242 }), alive: () => true, server: "", token: undefined });
+    const cap = capture({ readPid: () => ({ pid: 4242, startTime: "test-start" }), alive: () => true, server: "", token: undefined });
     const code = await runDaemonStatus([], cap);
     expect(code).toBe(0);
     expect(cap.stdout()).toContain("running (pid 4242)");
@@ -47,7 +48,7 @@ describe("runDaemonStatus", () => {
   test("stale pidfile (pid dead) → not running, clears the stale file", async () => {
     let cleared = false;
     const cap = capture({
-      readPid: () => ({ pid: 999 }),
+      readPid: () => ({ pid: 999, startTime: "test-start" }),
       alive: () => false,
       clearPid: () => { cleared = true; },
       server: "",
@@ -73,7 +74,7 @@ describe("runDaemonStatus", () => {
     expect(cap.stdout()).toContain("not running");
   });
 
-  test("start-time unavailable at check time → degrades to alive-only, reports running", async () => {
+  test("start-time unavailable at check time leaves process identity uncertain", async () => {
     const cap = capture({
       readPid: () => ({ pid: 4242, startTime: "Mon Jun 30 09:00:00 2026" }),
       alive: () => true,
@@ -82,13 +83,13 @@ describe("runDaemonStatus", () => {
       token: undefined,
     });
     await runDaemonStatus([], cap);
-    expect(cap.stdout()).toContain("running (pid 4242)");
+    expect(cap.stdout()).toContain("not running");
   });
 
   test("server + token present → queries connection, shows online + name", async () => {
     let asked: [string, string] | undefined;
     const cap = capture({
-      readPid: () => ({ pid: 1 }),
+      readPid: () => ({ pid: 1, startTime: "test-start" }),
       alive: () => true,
       server: "https://srv.example",
       token: "dk_secret_abcdef",
@@ -127,27 +128,26 @@ describe("runDaemonStatus", () => {
     expect(cap.stdout()).toContain("no device token");
   });
 
-  test("a poisoned durable report is actionable and visibly blocks work", async () => {
+  test("a durable report with a non-current response remains visibly retryable", async () => {
     const cap = capture({
       readPid: () => undefined, server: "", token: undefined,
-      reportDiagnostics: () => ({ pendingRunIds: ["run-7"], poisonedRunIds: ["run-7"], lastError: "REPORT_CONFLICT: payload differs" }),
+      reportDiagnostics: () => ({ pendingRunIds: ["run-7"], lastError: "unrecognized report acknowledgement (409 REPORT_CONFLICT)" }),
     });
     await runDaemonStatus([], cap);
-    expect(cap.stdout()).toContain("terminal report: needs attention (run-7)");
+    expect(cap.stdout()).toContain("terminal report: saved locally; retrying (run-7)");
     expect(cap.stdout()).toContain("REPORT_CONFLICT");
-    expect(cap.stdout()).toContain("affected loop remains occupied");
   });
 
   test("uses durable local runtime diagnostics for the truthful stages", async () => {
     const cap = capture({
-      readPid: () => ({ pid: 12 }), alive: () => true,
+      readPid: () => ({ pid: 12, startTime: "test-start" }), alive: () => true,
       server: "https://srv.example", token: "dk_x",
       runtimeDiagnostics: () => ({
-        protocolVersion: 3,
+        protocolVersion: 4,
         currentRuns: [{ runId: "run-local", stage: "reporting" }],
         cancelPendingRunIds: ["run-local"],
       }),
-      fetchOnline: async () => ({ online: true, name: "MacBook", daemonProtocol: 3, currentRuns: [{ runId: "run-local", stage: "executing" }] }),
+      fetchOnline: async () => ({ online: true, name: "MacBook", daemonProtocol: 4, currentRuns: [{ runId: "run-local", stage: "executing" }] }),
     });
     await runDaemonStatus([], cap);
     expect(cap.stdout()).toContain("current run: run-local (reporting)");
@@ -157,10 +157,10 @@ describe("runDaemonStatus", () => {
 
   test("surfaces local report persistence failures actionably", async () => {
     const cap = capture({
-      readPid: () => ({ pid: 12 }), alive: () => true,
+      readPid: () => ({ pid: 12, startTime: "test-start" }), alive: () => true,
       server: "", token: undefined,
       runtimeDiagnostics: () => ({
-        protocolVersion: 3,
+        protocolVersion: 4,
         currentRuns: [{ runId: "run-local", stage: "reporting" }],
         persistenceError: "SQLITE_FULL: database or disk is full",
         outboxPath: "/home/me/.pievo/pending-reports.sqlite",
@@ -174,7 +174,7 @@ describe("runDaemonStatus", () => {
 
   test("shows protocol and current runs from the server", async () => {
     const cap = capture({
-      readPid: () => ({ pid: 12 }), alive: () => true,
+      readPid: () => ({ pid: 12, startTime: "test-start" }), alive: () => true,
       server: "https://srv.example", token: "dk_x",
       fetchOnline: async () => ({
         online: true, name: "MacBook", daemonProtocol: 1,
@@ -182,7 +182,7 @@ describe("runDaemonStatus", () => {
       }),
     });
     await runDaemonStatus([], cap);
-    expect(cap.stdout()).toContain("daemon upgrade required: protocol 1 -> 3");
+    expect(cap.stdout()).toContain("daemon upgrade required: protocol 1 -> 4");
     expect(cap.stdout()).toContain("current run: run-9 (executing)");
     expect(cap.stdout()).toContain("cancel pending");
   });
@@ -243,7 +243,7 @@ describe("runDaemonStop", () => {
   test("--force refuses every signal without positive process identity", async () => {
     const signals: NodeJS.Signals[] = [];
     const cap = capture({
-      readPid: () => ({ pid: 4242 }),
+      readPid: () => ({ pid: 4242, startTime: "test-start" }),
       alive: () => true,
       startTime: () => undefined,
       kill: (_pid, signal) => { signals.push(signal); },
@@ -256,7 +256,7 @@ describe("runDaemonStop", () => {
 
   test("rejects unknown stop flags without signaling", async () => {
     let killed = false;
-    const cap = capture({ readPid: () => ({ pid: 4242 }), kill: () => { killed = true; } });
+    const cap = capture({ readPid: () => ({ pid: 4242, startTime: "test-start" }), kill: () => { killed = true; } });
     expect(await runDaemonStop(["--wat"], cap)).toBe(2);
     expect(killed).toBe(false);
     expect(cap.stderr()).toContain("pievo daemon stop [--force]");

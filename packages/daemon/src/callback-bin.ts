@@ -1,12 +1,8 @@
 /**
  * The `pievo` PATH entry that claude calls back through during a run.
  *
- * The old approach wrote a self-contained CJS shim (`SHIM_SOURCE`) into every
- * run's `<workdir>/.pievo/bin/` — a second, byte-for-byte copy of callback.ts'
- * fetch logic, and it polluted each run's workdir. Instead we write ONE tiny
- * wrapper at daemon boot that RE-EXECS this daemon's own CLI, so:
- *   - callback logic lives only in callback.ts (single source of truth), and
- *   - the run's workdir stays clean (nothing is written into it).
+ * Daemon boot writes one tiny wrapper outside project workdirs. It re-executes
+ * this daemon's CLI, keeping callback behavior in `callback.ts`.
  *
  * The wrapper is launch-agnostic: it replays exactly how the daemon was started
  * (`execPath` + `execArgv` + entry script), so the global install,

@@ -60,7 +60,7 @@ async function boot(): Promise<Booted> {
   const abort = new AbortController();
   // Drain the runtime postgres pool on clean shutdown (main.ts aborts on
   // SIGINT/SIGTERM); no-op for the pglite tier. The managed npm launcher awaits
-  // `shutdown`; legacy abort-only callers retain the existing best-effort path.
+  // `shutdown`; abort listeners retain the best-effort signal path.
   let closePromise: Promise<void> | undefined;
   const close = () => closePromise ??= closeClient();
   abort.signal.addEventListener("abort", () => void close(), { once: true });
@@ -79,8 +79,7 @@ async function boot(): Promise<Booted> {
   const blobStore = createBlobStore();
   gateway = new MachineGateway(scheduler, blobStore);
   const artifactSync = new ArtifactSync(blobStore);
-  // CLI verb dispatch (unified /api/machine/cli + legacy /agent-api/loop) over
-  // the same core gateway instance.
+  // Canonical CLI dispatch over the same core gateway instance.
   const cliGateway = new CliGateway(gateway);
 
   await scheduler.start(abort.signal);

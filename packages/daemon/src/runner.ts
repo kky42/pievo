@@ -10,8 +10,7 @@ import { expandTilde } from "./loopdir.js";
 import { effectiveRoots, isWithinRoots } from "./roots.js";
 import { CALLBACK_BIN_DIR } from "./callback-bin.js";
 import { makeTerminalCollector, type TokenUsage } from "./telemetry.js";
-import { flushLoop, markRunActive, markRunDone } from "./watcher.js";
-import { PIEVO_DIR } from "./config.js";
+import { syncArtifacts } from "./artifacts.js";
 import type { CodingAgent } from "./create.js";
 import type { TerminalReport, TerminalResult } from "./report-outbox.js";
 
@@ -21,29 +20,25 @@ export const RUN_CANCEL_REASON = "pievo:run-cancel";
 
 export interface Delivery {
   runId: string;
-  /** Stable 1-based loop history index allocated atomically at claim. */
   runIndex: number;
   runToken: string;
-  role: "exec" | "evolve" | "steer";
   loop: {
     id: string;
     name: string;
-    workdir: string | null;
-    taskFile: string | null;
+    workdir: string;
     model: string | null;
-    /** Absent on older servers; unset delegates to the provider CLI default. */
-    reasoningEffort?: string | null;
-    allowControl: boolean;
-    /** Coding agent to EXECUTE this loop with. Absent on an older server is
-     *  treated as claude-code. The daemon branches spawn + credentials on this
-     *  (`claude-code` | `codex`). */
-    agent?: CodingAgent;
+    /** Null delegates to the provider CLI default. */
+    reasoningEffort: string | null;
+    /** Coding agent to execute this loop with. */
+    agent: CodingAgent;
   };
   /** Server-configured workdir jail — may only NARROW the daemon's local env
    *  PIEVO_ROOTS jail, never widen it (see roots.effectiveRoots). */
-  roots?: string[];
-  systemPrompt: string;
+  roots: string[];
+  /** Server-composed user prompt plus the complete status/report contract. */
   task: string;
+  /** Exact paths relative to workdir; no glob support. */
+  artifacts: string[];
 }
 
 export interface ReportBody {
@@ -52,19 +47,12 @@ export interface ReportBody {
    * failure has no numeric exit and reports null. */
   exitCode: number | null;
   durationMs: number;
-  message?: string;
   sessionId?: string;
   /** Provider-normalized token usage, summed across every subprocess attempt. */
   usage?: TokenUsage;
-  /** Latest content of the loop's authoritative standing-instruction file. */
-  taskFileContent?: string;
   error?: string;
   finalText?: string;
 }
-
-/** Daemon-side cap on the synced task-file body. A pathological oversized Spec
- * is tailed rather than making the terminal report unbounded. */
-const TASKFILE_CAP = 256 * 1024;
 
 const SELF_SCHEDULING_TOOLS = "ScheduleWakeup,CronCreate,CronList,CronDelete";
 
@@ -96,10 +84,8 @@ export function buildAgentSpawn(opts: {
   prompt: string;
   model?: string | null;
   reasoningEffort?: string | null;
-  /** claude-only: the system-prompt file path (falsy ⇒ flag omitted). */
-  sysFile?: string;
 }): AgentSpawn {
-  const { agent, prompt, model, reasoningEffort, sysFile } = opts;
+  const { agent, prompt, model, reasoningEffort } = opts;
   if (agent === "codex") {
     // Codex surface is `codex exec [OPTIONS] [PROMPT]` — never Claude's
     // `-p` / stream-json flags and never a session resume.
@@ -118,21 +104,23 @@ export function buildAgentSpawn(opts: {
       args: ["exec", ...unattended, prompt],
     };
   }
-  const modelArgs = model ? ["--model", model] : [];
-  const reasoningArgs = reasoningEffort ? ["--effort", reasoningEffort] : [];
-  return {
-    bin: process.env.PIEVO_CLAUDE_BIN || "claude",
-    args: [
-      "-p", prompt,
-      "--output-format", "stream-json",
-      "--verbose",
-      "--permission-mode", "bypassPermissions",
-      ...(sysFile ? ["--append-system-prompt-file", sysFile] : []),
-      "--disallowed-tools", SELF_SCHEDULING_TOOLS,
-      ...modelArgs,
-      ...reasoningArgs,
-    ],
-  };
+  if (agent === "claude-code") {
+    const modelArgs = model ? ["--model", model] : [];
+    const reasoningArgs = reasoningEffort ? ["--effort", reasoningEffort] : [];
+    return {
+      bin: process.env.PIEVO_CLAUDE_BIN || "claude",
+      args: [
+        "-p", prompt,
+        "--output-format", "stream-json",
+        "--verbose",
+        "--permission-mode", "bypassPermissions",
+        "--disallowed-tools", SELF_SCHEDULING_TOOLS,
+        ...modelArgs,
+        ...reasoningArgs,
+      ],
+    };
+  }
+  throw new Error(`unsupported coding agent: ${String(agent)}`);
 }
 
 // Bound coding-agent wall-clock runtime to 12 hours by default. Operators may
@@ -146,23 +134,17 @@ export function resolveExecTimeoutMs(value: string | undefined): number {
     : DEFAULT_EXEC_TIMEOUT_MS;
 }
 const TIMEOUT_MS = resolveExecTimeoutMs(process.env.PIEVO_EXEC_TIMEOUT_MS);
-/** Hard cap on the pre-report flush so a slow/hung server can't delay reporting. */
-const FLUSH_TIMEOUT_MS = 2500;
-
-export async function executeDelivery(d: Delivery, serverUrl: string, roots: string[], signal?: AbortSignal): Promise<TerminalReport> {
-  markRunActive(d.loop.id, d.runId);
-  try {
-    return await executeDeliveryImpl(d, serverUrl, roots, signal);
-  } finally {
-    markRunDone(d.loop.id);
-  }
+export async function executeDelivery(
+  d: Delivery,
+  serverUrl: string,
+  roots: string[],
+  signal?: AbortSignal,
+  deviceToken?: string,
+): Promise<TerminalReport> {
+  return executeDeliveryImpl(d, serverUrl, roots, signal, deviceToken);
 }
 
-/** Temporary source compatibility for embedders; reporting is intentionally no
- * longer performed here. */
-export const runDelivery = executeDelivery;
-
-async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], signal?: AbortSignal): Promise<TerminalReport> {
+async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string[], signal?: AbortSignal, deviceToken?: string): Promise<TerminalReport> {
   const start = Date.now();
   const canceled = () => signal?.aborted && signal.reason === RUN_CANCEL_REASON;
   const terminalReport = (body: ReportBody, ok: boolean, forcedResult?: TerminalResult): TerminalReport => ({
@@ -171,25 +153,14 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
     result: forcedResult ?? (ok ? "success" : body.error?.includes("timed out") ? "timeout" : "failure"),
   });
   if (canceled()) return terminalReport({ runId: d.runId, exitCode: null, durationMs: 0, error: "canceled before execution" }, false, "canceled");
-  // Force a final, run-tagged sync of the loop folder right before reporting so
-  // the server's run snapshot (Phase 3) captures end-state even if a late write
-  // slipped the watcher's debounce. Best-effort and bounded: the flush is raced
-  // against a short timeout so a slow/hung server can't stall run reporting (and
-  // the notification it triggers) past FLUSH_TIMEOUT_MS — the reclaim sweep + the
-  // continuous watcher still converge the server's artifact state afterward.
-  const completeRun = async (body: ReportBody, forcedResult?: TerminalResult, okOverride?: boolean): Promise<TerminalReport> => {
-    await Promise.race([
-      flushLoop(d.loop.id).catch(() => {}),
-      new Promise<void>((resolve) => setTimeout(resolve, FLUSH_TIMEOUT_MS)),
-    ]);
-    return terminalReport(body, okOverride ?? body.error === undefined, forcedResult);
-  };
+  const completeRun = (body: ReportBody, forcedResult?: TerminalResult, okOverride?: boolean): TerminalReport =>
+    terminalReport(body, okOverride ?? body.error === undefined, forcedResult);
   // The LOCAL env jail (PIEVO_ROOTS) always applies when set; server-sent
   // roots can only narrow it — a hostile server must not widen the jail.
   const jail = effectiveRoots(roots, d.roots);
   let workdir: string;
   try {
-    workdir = resolveWorkdir(d.loop.workdir, d.loop.id, jail);
+    workdir = resolveWorkdir(d.loop.workdir, jail);
   } catch (err) {
     return completeRun({ runId: d.runId, exitCode: null, durationMs: Date.now() - start, error: msg(err) });
   }
@@ -201,26 +172,10 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
   let finalText: string | undefined;
   let usage: TokenUsage | undefined;
   let exitCode: number | null = null;
-  // System prompt goes in ~/.pievo/runs (passed to claude by absolute path), not
-  // the workdir — keeps the run's cwd clean. Removed in `finally`. Batches 1-2 move
-  // the full run instructions into the first user turn, so `systemPrompt` is now empty
-  // on a current server: skip the sys file + the claude-only `--append-system-prompt-file`
-  // flag entirely (an OLD server still populates it and keeps working — the flag path
-  // is preserved when the string is non-empty).
-  const runsDir = path.join(PIEVO_DIR, "runs");
-  const hasSystemPrompt = d.systemPrompt.trim().length > 0;
-  const sysFile = hasSystemPrompt ? path.join(runsDir, `sys-${d.runId}.md`) : "";
-  // Which coding agent executes this loop. Absent on an older server defaults to
-  // claude-code. Spawn + credential set branch on the agent; agentLabel names the
-  // binary family in failure reasons (claude / codex).
-  const agent: CodingAgent = d.loop.agent ?? "claude-code";
-  const agentLabel = agent === "claude-code" ? "claude" : agent;
+  // Spawn + credential set branch on the explicitly configured agent.
+  const agent: CodingAgent = d.loop.agent;
+  const agentLabel = agent === "claude-code" ? "claude" : agent === "codex" ? "codex" : "unknown agent";
   try {
-    if (hasSystemPrompt) {
-      fs.mkdirSync(runsDir, { recursive: true });
-      fs.writeFileSync(sysFile, d.systemPrompt, "utf8");
-    }
-
     const env: NodeJS.ProcessEnv = {
       ...execEnv(agent),
       // Prepend the home bin dir so `pievo` resolves to our re-exec wrapper.
@@ -237,7 +192,6 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
       prompt: task,
       model: d.loop.model,
       reasoningEffort: d.loop.reasoningEffort,
-      sysFile: hasSystemPrompt ? sysFile : undefined,
     });
 
     if (canceled()) return completeRun({ runId: d.runId, exitCode: null, durationMs: Date.now() - start, error: "canceled before provider spawn" }, "canceled");
@@ -274,8 +228,19 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
     }
   } catch (err) {
     error = `failed to run ${agentLabel}: ${msg(err)}`;
-  } finally {
-    if (sysFile) fs.rmSync(sysFile, { force: true }); // don't let prompt files accumulate
+  }
+
+  // Collection happens only after the provider exits and before the terminal
+  // report enters the durable outbox, so the server snapshots the exact files.
+  if (deviceToken) {
+    await syncArtifacts({
+      loopId: d.loop.id,
+      runId: d.runId,
+      workdir,
+      artifacts: d.artifacts,
+      server: serverUrl,
+      token: deviceToken,
+    });
   }
 
   return completeRun({
@@ -284,7 +249,6 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
     durationMs: Date.now() - start,
     sessionId,
     usage,
-    taskFileContent: readTaskFile(workdir, d.loop.taskFile, roots),
     error,
     // Preserve the provider's final response independently from the required
     // `pievo report --message`. History detail exposes both without treating the
@@ -293,36 +257,10 @@ async function executeDeliveryImpl(d: Delivery, serverUrl: string, roots: string
   }, error === "canceled by server request" ? "canceled" : undefined, ok);
 }
 
-/** Best-effort read of the loop's task file for sync to the server. The path may
- *  be absolute, ~-rooted, or relative to the run's workdir. Never throws — a
- *  missing/unreadable file just syncs nothing (the report must still go out).
- *  taskFile is SERVER-SENT: under a local PIEVO_ROOTS jail a path outside both
- *  the (already-jailed) workdir and the local roots is never read. */
-function readTaskFile(workdir: string, taskFile: string | null, localRoots: string[]): string | undefined {
-  if (!taskFile) return undefined;
-  try {
-    const expanded = expandTilde(taskFile);
-    // resolve() handles both cases (an absolute path is normalized, a relative
-    // one is anchored to the workdir) — unresolved `..` segments must never
-    // survive into the lexical jail check below. The (already-jailed, absolute)
-    // workdir joins the allowed roots so an in-workdir task file always reads.
-    const file = path.resolve(workdir, expanded);
-    if (localRoots.length && !isWithinRoots(file, [workdir, ...localRoots])) return undefined;
-    const raw = fs.readFileSync(file, "utf8");
-    if (raw.length <= TASKFILE_CAP) return raw;
-    return `… (truncated — last ${Math.round(TASKFILE_CAP / 1024)}KB of ${Math.round(raw.length / 1024)}KB)\n\n` + raw.slice(-TASKFILE_CAP);
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveWorkdir(workdir: string | null, loopId: string, roots: string[]): string {
-  if (!workdir) {
-    const scratch = path.join(PIEVO_DIR, "work", loopId);
-    fs.mkdirSync(scratch, { recursive: true });
-    return scratch;
-  }
-  const abs = path.resolve(expandTilde(workdir));
+function resolveWorkdir(workdir: string, roots: string[]): string {
+  const expanded = expandTilde(workdir);
+  if (!path.isAbsolute(expanded)) throw new Error(`workdir must be absolute: ${workdir}`);
+  const abs = path.resolve(expanded);
   if (roots.length && !isWithinRoots(abs, roots)) {
     throw new Error(`workdir ${abs} is outside this machine's allowed roots`);
   }

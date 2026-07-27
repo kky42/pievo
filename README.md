@@ -4,205 +4,257 @@
 
 # Pievo
 
-**Scheduled agent loops. Keep the system under control.**
+**Run a stored coding-agent prompt on a reliable schedule, on your own machine.**
 
-Describe a recurring task once. Pievo runs it on a schedule with **your own machine's coding agent**, and surfaces every result on a shared dashboard and your team's notification channel.
+Pievo is a self-hosted scheduler and status ledger. Its server stores configuration,
+queues runs, and serves the web UI; the `@kky42/pievo` daemon executes Claude Code or
+Codex locally with your credentials and tools.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/kky42/pievo?style=flat)](https://github.com/kky42/pievo/stargazers)
 
-[Source](https://github.com/kky42/pievo) · [npm package (cutover target)](https://www.npmjs.com/package/@kky42/pievo) · [Contributing](CONTRIBUTING.md) · [Architecture](AGENTS.md)
+[Source](https://github.com/kky42/pievo) · [Daemon on npm](https://www.npmjs.com/package/@kky42/pievo) · [Contributing](CONTRIBUTING.md) · [Architecture](AGENTS.md)
 
 </div>
 
-## What is Pievo?
+## What Pievo does
 
-Pievo is infrastructure for **recurring agent work**. You describe a loop—a daily health check, a weekly research digest, or an objective like "keep following up until I pause it." A small daemon on a machine you control runs it on schedule using your local coding agent.
+A loop contains:
 
-The server only schedules, stores, authenticates, and notifies. **It never runs an LLM and never executes your code.** Execution is BYOA: [`@kky42/pievo`](https://www.npmjs.com/package/@kky42/pievo) on *your* machine, with *your* credentials, files, and tools. Artifacts you choose to sync come back as durable content; the rest never leaves the box.
+- one exclusive schedule: cron, or continuous delay after the previous terminal run;
+- one absolute working-directory path and coding agent (`claude-code` or `codex`);
+- a server-stored user prompt;
+- definitions for `keep`, `no-change`, and `block`;
+- optional exact artifact paths relative to the working directory.
 
-A loop may carry an optional standing objective that guides every run. Objectives do not stop scheduling; the owner pauses or deletes the loop.
+At run time, Pievo sends the stored prompt unchanged, then appends only the status
+definitions and this required contract:
 
-Most coding agents can already run on a cron or loop a task themselves. That is the easy 5% - the timer. The real work is the structure that lets you trust it and run reliably. A bare agent loop does not give you:
+```text
+Before finishing, call exactly once:
+pievo report --message "<summary>" --status <keep|no-change|block>
+```
 
-- **Durable structure across runs** - state and logs so it never re-does work and gets smarter over time; a verifier so there is evidence, not vibes; a contract and boundary that decide whether you can safely walk away. A raw cron loop has none of this by default.
-- **Self-improving (evolve)** - a periodic pass that rewrites the loop itself (tighter contract, cheaper trigger, mechanical steps folded into scripts), so it gets sharper and cheaper the longer it runs. A DIY loop stays as dumb as day one.
-- **A team surface, not a terminal** - a shared dashboard, per-team notification channels, and failure alerts. Results show up where your team can see them, instead of scrolling a local terminal.
-- **BYOA + vendor-neutral** - runs on *your* machine with *your* agent and credentials; not locked to one vendor's agent. Switch agents without rebuilding.
-- **A safe, cheap control plane** - the server runs zero LLM and executes zero code; it only schedules, stores, authenticates, and notifies. You are not handing your code or secrets to a SaaS just to get scheduling.
+The daemon starts the selected coding-agent CLI once in the configured directory.
+The server never starts an LLM or executes user code: it schedules, authenticates,
+stores bytes, and computes database and display results. Execution is BYOA—on the
+machine you connected, using its local files, tools, and provider credentials.
 
-## Features
+### Scheduling and outcomes
 
-- **Scheduled agent loops** - cron, continuous, or one-shot work with optional standing objectives.
-- **BYOA execution** - runs on your machine via `@kky42/pievo`; the server is zero-LLM and zero code-exec. Credentials and tools stay local.
-- **Self-improving loops** - evolve passes review run history, sharpen the brief, distill state, and refine the generative dashboard.
-- **- **Teams + notifications** - multi-user dashboard, per-team push channels (Telegram, Feishu, and more), failure alerts.
-- **Synced artifact home** - loop folder in, dashboard out; front-matter products (reports, kanban cards, calendars) render as generative UI.
-- **Templates** - React Doctor, Market Research, Follow-up Tracker, Docs Sweep, Housekeeper, Dependency Triage, Error Sweep.
-- **Self-hostable** - one process, embedded pglite by default for local, Postgres + object store for production; Docker image included.
+- **Cron** requires an IANA timezone and an overlap policy. `skip` consumes an
+  occurrence if the prior run is still open; `queue-one` retains at most one
+  coalesced follow-up.
+- **Continuous** waits the configured number of minutes after a terminal run and
+  never overlaps itself.
+- **Run once** enters the same durable per-loop queue as scheduled work.
+- `keep` and `no-change` continue the schedule. `block` records the result and
+  pauses the loop. Consecutive execution errors also pause it at
+  `PIEVO_FAILURE_AUTOPAUSE_STREAK` (default `3`, `0` disables the breaker).
 
-## Quickstart (connect to an instance)
+Every run retains phase and timing, the agent report, process exit information,
+provider session ID, final assistant text, and normalized token usage. Pievo does not
+store provider event streams and never resumes a provider session.
 
-Pievo has no default hosted server. Start your own instance using the local, Node, or Docker instructions below, then use that instance's exact origin (for local development, `http://127.0.0.1:3000`). The CLI never substitutes a public service URL.
+Configured artifacts are collected after the coding agent exits. Paths are exact—no
+globs—and are checked against lexical and symlink escapes. Missing files do not fail
+the run. Files over 10 MB are metadata-only; smaller files use content-addressed
+storage and per-run snapshots for the web viewer and diffs.
 
-1. **Open your Pievo instance** in a browser.
-2. **Create a loop.** The *New loop* dialog hands you a short **connect snippet** containing that instance's server URL and a one-time connect-key.
-3. **Connect your machine.** Paste the whole snippet into your local coding agent - it connects the machine to that explicit server and builds the loop with you.
+## Quick start
 
-Install the daemon globally. For source development, build it locally and set
-server-side `PIEVO_CLI` to its explicit command instead.
+Pievo has no default hosted service. This path runs the server and daemon on one
+machine; a team may later connect other machines to the same server.
 
-### Daemon cheatsheet
+### Prerequisites
+
+- Node.js `>=22.13`
+- Claude Code or Codex installed and authenticated on the execution machine
+
+> **Local execution is powerful.** The daemon launches the selected coding agent in
+> unattended mode, where it can use the files, commands, and credentials available to
+> that process. Start with a disposable project or a restrictive `PIEVO_ROOTS` jail.
+
+### 1. Start a local server
 
 ```bash
-npm install -g @kky42/pievo@latest
+npm install -g @kky42/pievo-server@latest
+pievo-server start
+```
+
+The server starts detached at <http://127.0.0.1:3000>. By default the published
+launcher uses embedded PGlite and stores the database, local artifact bytes, pid
+record, and log under `~/.pievo`.
+
+```bash
+pievo-server status
+```
+
+### 2. Connect the execution machine and create a loop
+
+1. Open <http://127.0.0.1:3000>.
+2. Select **New Loop**, then copy the generated prompt.
+3. Paste it into Claude Code or Codex in the project you want to schedule.
+
+The pasted flow installs `@kky42/pievo`, connects the local daemon with the one-time
+key, asks you to confirm the prompt, schedule, status meanings, and optional artifact
+paths, validates the configuration, and creates the loop. First success is visible as
+`daemon online` in the local session and the new loop in the web UI. A continuous loop
+is immediately eligible; a cron loop shows its next occurrence. Use **Run once** to
+exercise either schedule immediately.
+
+Useful commands:
+
+```bash
+pievo                    # machine-local home
+pievo loops              # loops bound to this machine
+pievo show <loop> --full # stored configuration
+pievo log <loop>         # bounded run history
+pievo daemon status
 pievo --help
 ```
 
-| Command | What it does |
-| --- | --- |
-| `daemon start [--foreground]` | connect/start detached (default) or attached |
-| `daemon status` / `daemon stop` | inspect or stop the daemon |
-| `daemon restart` | restart the currently installed version |
-| `log` | survey a loop's recent runs (`--json` for structured output) |
-| `new` / `edit` | create or patch a loop (JSON config) |
+Upgrade the daemon explicitly:
 
-Upgrade with `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.
-
----
+```bash
+npm install -g @kky42/pievo@latest
+pievo daemon restart
+```
 
 ## How it works
 
-Pievo is one server process plus one daemon per machine. The server never runs an LLM and never executes your code - it only schedules, stores artifacts, authenticates, and notifies. Execution happens on **your** machine via the [`@kky42/pievo`](https://www.npmjs.com/package/@kky42/pievo) daemon, talking to your local coding agent. Different loops on that machine can run concurrently with no machine-wide cap; each individual loop remains serialized.
-
 ```mermaid
 flowchart LR
-  Server["Pievo server<br/>schedules · stores · auth · notifies<br/>zero LLM · zero code-exec"]
-  Daemon["@kky42/pievo<br/>on your machine"]
-  Agent["Local coding agent"]
-  Server <-->|"HTTP poll"| Daemon
-  Daemon -->|"runs / reports"| Agent
+  UI["Pievo web UI"] --> Server["Pievo server<br/>schedule · queue · auth · storage<br/>zero LLM · zero code execution"]
+  Server <-->|"authenticated HTTP poll/report"| Daemon["@kky42/pievo daemon<br/>your machine"]
+  Daemon -->|"one local process per run"| Agent["Claude Code or Codex"]
+  Daemon -->|"configured files only"| Server
 ```
 
-> **Early-stage note.** Pievo is still an early-stage project. The daemon runs with fairly high permissions on your machine - it executes your coding agent with your credentials - and we are continuously hardening security.
-
-A scheduler tick creates a *pending run*; your bound machine's next poll claims it, runs the agent, and reports the result (which can post to the loop's push channel). Because the agent runs on your machine, your credentials, files, and tools never leave it - the server only stores the bytes your loop chooses to sync back.
-
----
+1. The server keeps recurring schedule facts and pending run rows in Postgres.
+   In-process timers reduce latency, but database facts and daemon polls are
+   authoritative after restarts.
+2. A daemon poll atomically claims at most one ready run and creates a durable,
+   hashed run lease. Different loops may execute concurrently; each loop stays
+   serialized.
+3. The in-run `pievo` credential can only submit the required report. After the
+   provider exits, the daemon collects configured artifacts and commits the exact
+   terminal payload to a local SQLite outbox.
+4. The outbox retries until the server returns a definitive report-ID-bound receipt.
+   Machine sleep and server restarts are reconciled without discarding the saved
+   result or blocking unrelated loops.
+5. The web UI shows lifecycle, machine presence, run history, reports, provider
+   diagnostics, artifacts, and bounded per-run diffs.
 
 ## Run your own server
 
-### Global npm install (local self-host)
+### Published server launcher
 
 ```bash
-npm install -g @kky42/pievo-server
-pievo-server start              # detached; http://127.0.0.1:3000
+npm install -g @kky42/pievo-server@latest
+pievo-server start              # detached
+pievo-server start --foreground # container/supervisor/debugging
 pievo-server status
-pievo-server restart            # uses the currently installed version
+pievo-server restart
 pievo-server stop
 ```
 
-The launcher defaults to embedded pglite and stores its database, local blobs,
-`server.pid`, and detached `server.log` under `~/.pievo`. `start` is idempotent.
-Use `--data-dir`, `--host`, or `--port` (or `PIEVO_DATA_DIR`, `HOST`/`NITRO_HOST`,
-and `PORT`/`NITRO_PORT`) to override those defaults. For `restart`, `--data-dir`
-selects the instance; its recorded host and port are preserved unless bind flags
-or bind environment variables explicitly override them. `pievo-server start
---foreground` is available for Docker, systemd, and debugging. The default host
-is deliberately local-only; before binding to `0.0.0.0`, configure authentication
-and network controls.
+The default bind is deliberately local-only. `--data-dir`, `--host`, and `--port`
+select the instance and bind; equivalent environment variables are
+`PIEVO_DATA_DIR`, `HOST`/`NITRO_HOST`, and `PORT`/`NITRO_PORT`. Restart preserves the
+recorded host and port unless flags or bind environment variables override them.
+Before binding to `0.0.0.0`, configure authentication and network controls.
 
-Upgrade explicitly, then restart onto the newly installed package:
+The launcher verifies pid plus process start time, runs migrations before readiness,
+and records `server.pid` and `server.log` in the data directory. It never updates npm:
 
 ```bash
 npm update -g @kky42/pievo-server
 pievo-server restart
 ```
 
-The launcher runs the packaged migration prestart and Nitro production output;
-it does not use PM2 or the legacy source server.
-
-### Prerequisites for source development
-
-- Node.js >= 22
-- pnpm 8.15 (pinned via the root `packageManager` field; `corepack enable` picks it up automatically)
-
-### Local development
+### Source development
 
 ```bash
 git clone https://github.com/kky42/pievo
 cd pievo
+corepack enable
 pnpm install
-pnpm dev            # http://127.0.0.1:3000
+pnpm dev # http://127.0.0.1:3000
 ```
 
-That is a fully working server out of the box: auth is off (the app runs open), the database is an embedded, file-backed **pglite** Postgres at `~/.pievo/pgdata` (zero external DB - it migrates itself at boot), and artifact bytes persist under `~/.pievo/blobs`. Use the Quickstart above against `http://127.0.0.1:3000` to connect a machine.
+Development defaults to open access, embedded PGlite at `~/.pievo/pgdata`, and local
+artifact bytes at `~/.pievo/blobs`. For development-only environment settings, copy
+[`.env.example`](.env.example) to `packages/server/.env`. Production startup and Docker
+do not load that file; pass real environment variables through the host.
 
-All configuration is env-based. For **local development only**, copy [`.env.example`](.env.example) to `packages/server/.env` and uncomment what you need - vite loads that file for `pnpm dev`. **`pnpm start` and Docker do NOT read `.env`**: in production pass real environment variables instead (Fly secrets, `docker -e` / `--env-file`, or a systemd `Environment=`), never a committed `.env`.
+### Production database and storage
 
-### Production (any Node host)
+Build and run the Nitro server with exactly one process:
 
 ```bash
 pnpm install
-pnpm build          # nitro build → packages/server/.output
-pnpm start          # applies pending DB migrations, then serves on $PORT
+pnpm build
+pnpm start
 ```
 
-For a real deployment, set at minimum:
+Choose one database tier:
 
-- **Database** - either point `DATABASE_URL` at a Postgres (e.g. Supabase; set it to the transaction pooler `:6543`, plus `DIRECT_DATABASE_URL` at the direct `:5432` URL for migrations), or leave both unset and set **`PIEVO_DB=pglite`** plus a persistent `PIEVO_DATA_DIR` - the embedded pglite database lives at `<dir>/pgdata`. The built server treats a missing `DATABASE_URL` as a config error unless `PIEVO_DB=pglite` explicitly opts into the embedded tier (so a lost database secret fails the deploy loudly instead of silently booting an empty ephemeral DB); only `pnpm dev` runs pglite without the opt-in. `pnpm start` applies pending migrations before serving (over the direct URL for the hosted tier; in-process for the pglite tier).
-- `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` + `PIEVO_AUTH_SECRET` (a long random value) + `PIEVO_BASE_URL` + `PIEVO_ALLOWED_LOGINS` - gate sign-in behind GitHub. Leaving these unset runs the app **open, with no auth** - fine locally, not on the public internet.
-- **Artifact bytes** default to the fixed `<PIEVO_DATA_DIR>/blobs`; keep that directory on durable storage. A complete `PIEVO_R2_*` S3-compatible configuration selects R2 (or set `PIEVO_BLOB_STORE=r2` explicitly); partial configuration fails startup. `PIEVO_BLOB_STORE=local` explicitly overrides R2 variables. `PIEVO_BLOB_STORE=memory` is an explicit opt-in even under the production launcher, but startup emits a loud warning because every artifact byte is lost on restart. Memory is never a fallback.
+- **External Postgres:** set `DATABASE_URL`. For a Supabase transaction pooler
+  (`:6543`), also set `DIRECT_DATABASE_URL` to the direct/session (`:5432`) URL;
+  migrations refuse to run through the transaction pooler.
+- **Embedded PGlite:** leave `DATABASE_URL` unset, set `PIEVO_DB=pglite`, and place
+  `PIEVO_DATA_DIR` on durable storage. Production fails closed without this explicit
+  opt-in so a lost database secret cannot silently create an empty database.
 
-> **Exposing a server publicly? Set the auth vars.** With `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` / `PIEVO_AUTH_SECRET` / `PIEVO_BASE_URL` / `PIEVO_ALLOWED_LOGINS` unset the app runs **open, with no sign-in** - anyone who can reach it is in. This applies equally to a bare Node host and the Docker image below.
+Artifact bytes default to `<PIEVO_DATA_DIR>/blobs`. A complete `PIEVO_R2_*`
+configuration selects R2; `PIEVO_BLOB_STORE=local|r2|memory` can select explicitly.
+`memory` is an acknowledged data-loss mode and loses all artifact bytes at restart.
+The database stores artifact metadata even when bytes use local or R2 storage.
 
-> **Run exactly one server process.** The in-process scheduler owns the cron loop; two processes against the same DB would double-fire every run.
+> **Backups:** stop an embedded-PGlite server before copying its live `pgdata`
+> directory, and back up local `blobs` with it. Use external Postgres for online
+> database backup facilities.
 
-> **Backing up the embedded pglite tier.** `<PIEVO_DATA_DIR>/pgdata` is a LIVE Postgres data directory. Stop the server before copying it - a hot copy of a running data dir is not crash-consistent. Back up `<PIEVO_DATA_DIR>/blobs` with it unless artifact bytes live in R2. If you need real, online database backups, use an external Postgres instead (`DATABASE_URL`/Supabase gives you point-in-time backups).
+### Authentication and teams
 
-### Optional Fly examples
+GitHub authentication is enabled only when both `GITHUB_CLIENT_ID` and
+`GITHUB_CLIENT_SECRET` are set. Then `PIEVO_AUTH_SECRET` is mandatory; also set the
+public `PIEVO_BASE_URL`. `PIEVO_ALLOWED_LOGINS` accepts exact emails or domain
+wildcards. An empty allowlist permits any GitHub user to sign in.
 
-This repository has no configured Fly app, origin, region, or volume, and nothing
-deploys automatically. `fly.toml` is a reusable embedded-PGlite example (create a
-volume and replace its placeholder source); `fly.prod.toml` is a stateless external
-Postgres/object-store example. The two deploy workflows are manual-only and fail
-before running `flyctl` unless the corresponding explicit GitHub configuration exists:
+> With GitHub credentials unset, Pievo is an open shared workspace. Do not expose that
+> mode to an untrusted network.
 
-- `deploy.yml`: `FLY_API_TOKEN`, `PIEVO_FLY_APP`, and `PIEVO_FLY_ORIGIN`.
-- `deploy-prod.yml`: `FLY_API_TOKEN_PROD`, `PIEVO_PROD_FLY_APP`, and `PIEVO_PROD_URL`.
+Authenticated users receive personal teams and may belong to additional teams. Loop
+and artifact reads are membership-scoped; machine device tokens remain visible only
+to the machine owner.
 
 ### Docker
 
-The included [`Dockerfile`](Dockerfile) builds the server. Persist `/data` for the default local artifact store; the embedded pglite database also lives there when `PIEVO_DB=pglite`. A `DATABASE_URL` deployment is stateless only when `PIEVO_R2_*` is configured. (The pglite opt-in is deliberate: without it a container that LOST its `DATABASE_URL` would silently boot an empty ephemeral database - instead it refuses to start.)
-
 ```bash
 docker build -t pievo .
-# Embedded pglite + local artifacts (persist both on one volume):
+# Embedded database and local artifacts: persist /data.
 docker run -p 3000:3000 -e PIEVO_DB=pglite -v pievo-data:/data pievo
-# External Postgres + local artifacts (still persist /data):
+# External Postgres; local artifact bytes still require /data.
 docker run -p 3000:3000 -e DATABASE_URL=... -e DIRECT_DATABASE_URL=... -v pievo-data:/data pievo
-# External Postgres + R2 is stateless and needs no volume.
 ```
 
-Pass configuration with `-e KEY=value` or `--env-file` (same variables as [`.env.example`](.env.example)).
-
----
+External Postgres plus R2 needs no local data volume. [`fly.toml`](fly.toml) and
+[`fly.prod.toml`](fly.prod.toml) are reusable single-process examples; this repository
+owns no Fly app or origin and its deployment workflows are manual-only.
 
 ## Development
 
 ```bash
-pnpm dev            # server on http://127.0.0.1:3000
-pnpm -r test        # all tests
-pnpm -r typecheck   # both packages
+pnpm -r test
+pnpm -r typecheck
 ```
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contributor guide (migrations, releases, PR flow) and [`AGENTS.md`](AGENTS.md) for architecture notes.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contributor and release procedures, and
+[`AGENTS.md`](AGENTS.md) for architecture invariants and sharp edges.
 
 ## License
 
-[MIT](LICENSE) - every package is MIT:
-
-- The machine-side daemon [`@kky42/pievo`](packages/daemon) is [MIT](packages/daemon/LICENSE).
-- The platform server [`@kky42/pievo-server`](packages/server) is [MIT](packages/server/LICENSE).
-
-© 2026 Superdesign. Contributions are accepted under the MIT license (inbound=outbound) - no CLA, no sign-off required.
+[MIT](LICENSE). Both [`@kky42/pievo`](packages/daemon/LICENSE) and
+[`@kky42/pievo-server`](packages/server/LICENSE) are MIT licensed.

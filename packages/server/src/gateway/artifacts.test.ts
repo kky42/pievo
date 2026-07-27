@@ -12,11 +12,13 @@ test("safeRelPath rejects a NUL-carrying path", () => {
   expect(safeRelPath("dir/\u0000/file.md")).toBeNull();
 });
 
-test("safeRelPath keeps its existing normalize/reject contract", () => {
+test("safeRelPath preserves exact literal paths and rejects aliases", () => {
   expect(safeRelPath("notes/report.md")).toBe("notes/report.md");
-  expect(safeRelPath("./notes//report.md")).toBe("notes/report.md");
-  expect(safeRelPath("dir\\win\\file.md")).toBe("dir/win/file.md");
-  expect(safeRelPath("/etc/passwd")).toBeNull(); // absolute
-  expect(safeRelPath("../escape.md")).toBeNull(); // traversal
-  expect(safeRelPath("   ")).toBeNull(); // empty
+  expect(safeRelPath(" report.md ")).toBe(" report.md ");
+  expect(safeRelPath("reports/*.md")).toBe("reports/*.md");
+  expect(safeRelPath("dir\\win\\file.md")).toBe("dir\\win\\file.md");
+  expect(safeRelPath("x".repeat(5000))).toBe("x".repeat(5000));
+  expect(safeRelPath("./notes//report.md")).toBeNull();
+  expect(safeRelPath("/etc/passwd")).toBeNull();
+  expect(safeRelPath("../escape.md")).toBeNull();
 });

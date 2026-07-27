@@ -38,11 +38,13 @@ pnpm dev          # server on http://127.0.0.1:3000 (UI + scheduler + machine ro
 Copy `.env.example` to `packages/server/.env` if you need to configure auth,
 the artifact blob store, or other options. The app runs open (no auth) by default.
 
-> Changed `packages/server/src/db/schema.ts`? Hand-author and review the
-> forward-only migration SQL under `packages/server/drizzle/`, and append its
-> entry to `drizzle/meta/_journal.json`. Drizzle schema snapshots are local
-> generation cache and are not committed. Then restart local dev so embedded
-> PGlite applies the migration in-process:
+> The fresh-deployment schema for this release is squashed into the single
+> reviewed `packages/server/drizzle/0000_baseline.sql`; removed product schemas
+> and their migrations are not retained. Until this baseline is published, keep
+> it, `src/db/schema.ts`, and `drizzle/meta/_journal.json` in lockstep. After the
+> baseline is published, every schema change must add a new forward-only migration.
+> Drizzle snapshots are local generation cache and are not committed. Restart
+> local dev after a schema change so embedded PGlite applies the migration set:
 > ```bash
 > pnpm dev
 > ```
@@ -75,9 +77,9 @@ Please keep tests and `typecheck` green before opening a PR.
   `packages/server/package.json`; the workflow runs workspace typecheck/tests, a
   strict publish build, and packed-tarball assertions before publishing. The package
   must retain its repository provenance metadata and include `.output`, public assets,
-  pglite runtime assets, and both source/bundled migrations. Server
+  pglite runtime assets, and the source/bundled baseline migration. Server
   deployment remains separate: no target is configured, and both Fly workflows are
-  manual-only examples. Migrations remain forward-only.
+  manual-only examples. Schema changes after the baseline release remain forward-only.
 - **Daemon** (`@kky42/pievo`) — publishes to npm on a `vX.Y.Z` git tag
   (`.github/workflows/publish-daemon.yml`, via npm OIDC trusted publishing). The
   tag must match `packages/daemon/package.json`. Public snippets install globally with

@@ -1,11 +1,4 @@
-/**
- * The path-safe /api/skill/references/<file> fallback route. Exercises the GET
- * handler directly (vitest resolves the `?raw` skill imports the same way the
- * nitro build does) — the five exact reference names serve their bundled bytes
- * as markdown, and everything else (unknown name, nested path, traversal) is a
- * clean JSON 404. This is the prod behavior; the Vite dev static layer swallows
- * `.md` paths before the route runs, so it can only be observed off the dev server.
- */
+/** The static fallback serves exactly the three installable owner references. */
 import { describe, expect, test } from 'vitest'
 
 import { Route } from './api.skill.references.$'
@@ -17,196 +10,68 @@ const GET = (Route as any).options.server.handlers.GET as (ctx: {
 const call = (pathname: string) =>
   GET({ request: new Request(`http://localhost:3000${pathname}`) })
 
-// Prose in the reference docs is hard-wrapped, so a phrase can straddle a newline +
-// indent. Collapse all whitespace runs to a single space before substring-matching.
 const flat = (s: string) => s.replace(/\s+/g, ' ')
 
+const publicReferences = ['connect.md', 'create.md', 'update.md']
+
 describe('/api/skill/references/$', () => {
-  for (const name of ['create.md', 'update.md', 'evolve.md', 'dashboard.md', 'run.md']) {
+  for (const name of publicReferences) {
     test(`serves ${name} as markdown`, async () => {
       const res = await call(`/api/skill/references/${name}`)
       expect(res.status).toBe(200)
       expect(res.headers.get('content-type')).toBe('text/markdown; charset=utf-8')
-      const body = await res.text()
-      expect(body.length).toBeGreaterThan(100)
+      expect((await res.text()).length).toBeGreaterThan(100)
     })
   }
 
-  test('serves the real create.md body (the create flow)', async () => {
-    const body = await (await call('/api/skill/references/create.md')).text()
-    expect(body).toContain('pievo new')
-  })
-
-  test('update.md gives evidence-first terminal-report diagnostics', async () => {
-    const body = flat(await (await call('/api/skill/references/update.md')).text())
-    expect(body).toContain('<pievo-cli> show')
-    expect(body).toContain('<pievo-cli> log')
+  test('connect.md owns machine enrollment', async () => {
+    const body = flat(await (await call('/api/skill/references/connect.md')).text())
     expect(body).toContain('npm install -g @kky42/pievo@latest')
-    expect(body).toContain('pievo daemon restart')
-    expect(body).toContain('diagnostics point to a config problem')
+    expect(body).toContain('daemon start --server-url <server-url> --connect-key <connect-key>')
+    expect(body).toContain('daemon already running')
   })
 
-  test('create.md carries the §2 propose → confirm → build guidance', async () => {
+  test('create.md documents the minimal canonical config and confirmation flow', async () => {
     const body = flat(await (await call('/api/skill/references/create.md')).text())
-    // The new constraint: never silently guess cadence/output — propose, confirm, then build.
-    expect(body).toContain('2 · Settle cadence, output')
-    expect(body).toContain('propose → confirm → build')
-    expect(body).toContain('Never silently guess')
-    // The parameters the agent must settle before `pievo new`.
-    expect(body).toContain('Cadence.')
-    expect(body).toContain('Per-run output.')
-    expect(body).toContain('Standing objective — when useful')
-    // Concrete proposed defaults the guidance offers as examples.
-    expect(body).toContain('every day at 9am your time')
-    expect(body).toContain('every hour')
-    expect(body).toContain('a short markdown summary in `report.md`')
-  })
-
-  test('create.md §1 owns decide-what-to-build (moved from bootstrap in batch 3)', async () => {
-    const body = flat(await (await call('/api/skill/references/create.md')).text())
-    // Session already has a task → turn THAT into the loop; empty session → brainstorm
-    // loops FOR THIS project and let the user pick. This fork used to live in bootstrap.
-    expect(body).toContain('already did a clear task')
-    expect(body).toContain("There's no task yet")
-    expect(body).toContain('useful FOR IT')
-  })
-
-  test('create.md creates authoritative README plus bounded COOKBOOK siblings', async () => {
-    const body = flat(await (await call('/api/skill/references/create.md')).text())
-    expect(body).toContain('README.md and COOKBOOK.md')
-    expect(body).toContain('one required section')
-    expect(body).toContain('mode: maintenance|optimization|mixed')
-    expect(body).toContain('# Cookbook Consolidated through: #0 ## Knowledge ## Timeline')
-    expect(body).toContain('is not a config field')
-  })
-
-  test('create.md drops the removed `task` field + tmp.json ritual, uses inline --json', async () => {
-    const body = flat(await (await call('/api/skill/references/create.md')).text())
-    // Batch 2 removed the `task` column and the loop.tmp.json config file; create.md
-    // now authors an inline config passed to `pievo new --json` and previews with --dry-run.
-    expect(body).not.toContain('loop.tmp.json')
-    expect(body).not.toContain('--config')
-    expect(body).toContain('pievo new --json')
+    expect(body).toContain('The stored `prompt` is sent unchanged')
+    expect(body).toContain('"schedule": { "mode": "cron"')
+    expect(body).toContain('"overlap": "skip"')
+    expect(body).toContain('"statusDefinitions": {')
+    expect(body).toContain('"keep"')
+    expect(body).toContain('"noChange"')
+    expect(body).toContain('"block"')
+    expect(body).toContain('exact paths relative to `workdir`')
+    expect(body).toContain('new --json')
     expect(body).toContain('--dry-run')
+    expect(body).toContain('--connect-key <connect-key>')
+    expect(body).not.toContain('--agent')
   })
 
-  test('create.md carries the optional Dashboard-at-create step (author ui now when the shape is known)', async () => {
-    const body = flat(await (await call('/api/skill/references/create.md')).text())
-    // The follow-up round: when the product shape is already known (template-driven
-    // loops), author the initial `ui` in the create config instead of deferring to an
-    // evolve pass — and cross-reference dashboard.md rather than duplicating it.
-    expect(body).toContain('Dashboard at create')
-    expect(body).toContain('day-one dashboard')
-    expect(body).toContain('dashboard.md')
-    expect(body).toContain('verify it with `--dry-run`')
-    // `ui` is now a documented (optional) config field.
-    expect(body).toContain('`ui` is optional')
+  test('update.md documents only canonical editable fields', async () => {
+    const body = flat(await (await call('/api/skill/references/update.md')).text())
+    for (const field of ['name', 'schedule', 'workdir', 'agent', 'model', 'reasoningEffort', 'prompt', 'statusDefinitions', 'artifacts', 'enabled']) {
+      expect(body).toContain(`\`${field}\``)
+    }
+    expect(body).toContain('complete exclusive shape')
+    expect(body).toContain('edit <loop-id> --json')
+    expect(body).toContain('use `<pievo-cli> --help`')
   })
 
-  test('run.md carries the public README/Cookbook runtime protocol', async () => {
-    const body = flat(await (await call('/api/skill/references/run.md')).text())
-    expect(body).toContain('one required `## Spec` section')
-    expect(body).toContain('# Cookbook')
-    expect(body).toContain('Consolidated through: #0')
-    expect(body).toContain('## Knowledge')
-    expect(body).toContain('## Timeline')
-    expect(body).toContain('only evolve and steer decision boundaries')
-    expect(body).toContain('pievo log --summary --after N --json')
-    expect(body).toContain('pievo log --run <index> --json')
-    expect(body).toContain('surfaces only what is new or changed')
-    expect(body).toContain('pievo report --status no-change --message')
-    expect(body).toContain('every exec run includes `--metrics`')
-    expect(body).toContain('meeting it does not stop the loop')
-    expect(body).not.toContain('pievo finish')
-    // The schedule levers with `pievo show` first, and the run-path cadence floors.
-    expect(body).toContain('pievo show')
-    expect(body).toContain('pievo reschedule')
-    expect(body).toContain('pievo set-cron')
-    expect(body).toContain('cadence floors')
-    // Front-matter product conventions (type/title/date).
-    expect(body).toContain('front-matter')
-    expect(body).toContain('type: report')
-  })
-
-  test('run.md schedule levers name --run-at canonical + --next alias (batch 5, F4)', async () => {
-    const body = flat(await (await call('/api/skill/references/run.md')).text())
-    // The reschedule lever documents the canonical flag and keeps the back-compat alias.
-    expect(body).toContain('pievo reschedule --run-at')
-    expect(body).toContain('`--run-at` is canonical; `--next` is accepted as a back-compat alias')
-    // The run-facing effective-capability keys are the shipped camelCase TOON keys,
-    // not the retired kebab display names.
-    expect(body).toContain('selfSchedule: allowed|off')
-    expect(body).not.toContain('self-schedule: allowed')
-    expect(body).not.toContain('self-finish: allowed')
-  })
-
-  test('evolve.md teaches progressive indexed history and reviewed cursor discipline', async () => {
-    const body = flat(await (await call('/api/skill/references/evolve.md')).text())
-    expect(body).toContain('pievo log --summary --after N --json')
-    expect(body).toContain('pievo log --after N --role exec --limit 20 --json')
-    expect(body).toContain('pievo log --run <index> --json')
-    expect(body).toContain('summary.through')
-    expect(body).toContain('Maintenance `no-change` can mean')
-    expect(body).toContain('Optimization `no-change` can be useful negative evidence')
-    expect(body).toContain('Execution workspace (cwd)')
-    expect(body).toContain('Loop content home')
-    expect(body).toContain('a diff does not replace inspecting the current live files')
-    expect(body).toContain('dashboard.md')
-    expect(body).toContain('pievo set-ui --file')
-  })
-
-  test('dashboard.md owns the concise chart and artifact grammar', async () => {
-    const body = flat(await (await call('/api/skill/references/dashboard.md')).text())
-    expect(body).toContain('latest 100 successful **exec** runs')
-    expect(body).toContain('<loop-chart type="line"')
-    expect(body).toContain('<loop-chart type="scatter"')
-    expect(body).toContain('<loop-chart type="progress"')
-    expect(body).toContain('Pievo applies no keep threshold')
-    expect(body).toContain('y-domain="auto"')
-    expect(body).toContain('<loop-embed file="latest.md"></loop-embed>')
-    expect(body).toContain('<loop-calendar match="reports/*.md"></loop-calendar>')
-    expect(body).toContain('<loop-kanban columns="open,merged"')
-    expect(body).toContain('old chart-only `series="…"` form is unsupported')
-  })
-
-  test('run.md is dual-audience (in-run enrichment + owner-readable), not steer-run mechanics', async () => {
-    const body = flat(await (await call('/api/skill/references/run.md')).text())
-    // Explicitly addresses both the in-run agent and the owner reading the skill.
-    expect(body).toContain('Two audiences')
-    // The prompt's inline CORE stays authoritative; the skill is enrichment.
-    expect(body).toContain('your prompt wins')
-    expect(body).toContain('Execution workspace (cwd)')
-    expect(body).toContain('Loop content home')
-    expect(body).toContain('the diff is not a live file listing')
-    // OQ1 scope guard: the steer-run CORE stays server-internal — no set-*/steer-run
-    // verb mechanics leak into the public run protocol.
-    expect(body).not.toContain('set-ui')
-    expect(body).not.toContain('set-schema')
-  })
-
-  test('unknown name → 404 json', async () => {
-    const res = await call('/api/skill/references/nope.md')
-    expect(res.status).toBe(404)
-    expect(await res.json()).toEqual({ error: 'not found' })
-  })
-
-  test('internal run prompts are NOT served (public surface = create/update/evolve only)', async () => {
-    // exec-core.md / steer.md live under skill/run/ — internal run-dispatch only. They
-    // must never leak through the public references route (or the npm bundle).
-    for (const name of ['exec-core.md', 'steer.md', 'edit.md', 'control-on.md', 'control-off.md']) {
+  test('removed public and internal prompt names are not served', async () => {
+    for (const name of ['nope.md', 'nested/path.md']) {
       const res = await call(`/api/skill/references/${name}`)
       expect(res.status).toBe(404)
+      expect(await res.json()).toEqual({ error: 'not found' })
     }
   })
 
-  test('path traversal is refused (not in the static map)', async () => {
-    for (const p of [
+  test('path traversal and nested paths are refused', async () => {
+    for (const path of [
       '/api/skill/references/..%2f..%2fpackage.json',
       '/api/skill/references/sub/create.md',
       '/api/skill/references/create.md/extra',
     ]) {
-      const res = await call(p)
-      expect(res.status).toBe(404)
+      expect((await call(path)).status).toBe(404)
     }
   })
 })

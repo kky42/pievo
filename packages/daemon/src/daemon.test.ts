@@ -55,20 +55,19 @@ describe("runDaemon", () => {
 });
 
 describe("poll transport helpers", () => {
-  test("buildPollBody: protocol v3 reports all active runs", async () => {
+  test("buildPollBody: protocol v4 reports all active runs", async () => {
     const { buildPollBody } = await import("./daemon.js");
     const info = { host: "mac", platform: "darwin" };
-    expect(buildPollBody(info, [], undefined, "daemon-1")).toEqual({ protocolVersion: 3, host: "mac", platform: "darwin", daemonInstanceId: "daemon-1", recoveryComplete: true, currentRuns: [] });
-    expect(buildPollBody(info, [{ runId: "r1", stage: "reporting" }, { runId: "r2", stage: "executing" }], "d1", "daemon-1")).toEqual({
-      protocolVersion: 3, host: "mac", platform: "darwin", daemonInstanceId: "daemon-1", recoveryComplete: true,
+    expect(buildPollBody(info, [], "daemon-1")).toEqual({ protocolVersion: 4, host: "mac", platform: "darwin", daemonInstanceId: "daemon-1", recoveryComplete: true, currentRuns: [] });
+    expect(buildPollBody(info, [{ runId: "r1", stage: "reporting" }, { runId: "r2", stage: "executing" }], "daemon-1")).toEqual({
+      protocolVersion: 4, host: "mac", platform: "darwin", daemonInstanceId: "daemon-1", recoveryComplete: true,
       currentRuns: [{ runId: "r1", stage: "reporting" }, { runId: "r2", stage: "executing" }],
-      watchDigest: "d1",
     });
   });
 
   test("nextPollDelayMs: a held long-poll re-polls immediately; a fast answer keeps the cadence", async () => {
     const { nextPollDelayMs } = await import("./daemon.js");
-    // Old server / short mode: instant answer ⇒ sleep out the remaining interval.
+    // An instant poll answer sleeps out the remaining interval.
     expect(nextPollDelayMs(200, 3000)).toBe(2800);
     // Server-held long-poll consumed the interval ⇒ only the small breather.
     expect(nextPollDelayMs(20_000, 3000)).toBe(250);

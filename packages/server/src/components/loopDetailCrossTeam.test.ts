@@ -3,7 +3,7 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LoopDetailView } from './LoopDetailView'
-import type { JobDetail } from '../types'
+import type { LoopDetail } from '../types'
 
 /**
  * End-to-end render guard for the cross-team-link fix (fm/team-url-design).
@@ -16,28 +16,22 @@ import type { JobDetail } from '../types'
  * banner/button — it must NOT silently switch the active team. When the loop IS
  * the active team (or no team context), neither the chip nor the banner shows.
  *
- * getJobDetail carries `team = {id, name, isActive}`; these tests render the real
+ * getLoopDetail carries `team = {id, name, isActive}`; these tests render the real
  * LoopDetailView against each shape and assert the end-user surface.
  */
 
-const h = vi.hoisted(() => ({ detail: null as JobDetail | null }))
+const h = vi.hoisted(() => ({ detail: null as LoopDetail | null }))
 
 vi.mock('../server/loopApi', () => ({
-  getJobDetail: vi.fn(async () => h.detail),
+  getLoopDetail: vi.fn(async () => h.detail),
   loadOlderRuns: vi.fn(async () => []),
-  deleteJob: vi.fn(async () => ({})),
-  forceDeleteJob: vi.fn(async () => ({})),
-  pauseJob: vi.fn(async () => ({})),
-  startJob: vi.fn(async () => ({})),
-  stopJob: vi.fn(async () => ({})),
-  evolveJob: vi.fn(async () => ({})),
-  patchJob: vi.fn(async () => ({})),
-  requestSteer: vi.fn(async () => ({})),
-  runJob: vi.fn(async () => ({})),
-}))
-
-vi.mock('../server/notifyFns', () => ({
-  listChannels: vi.fn(async () => []),
+  deleteLoop: vi.fn(async () => ({})),
+  forceDeleteLoop: vi.fn(async () => ({})),
+  pauseLoop: vi.fn(async () => ({})),
+  startLoop: vi.fn(async () => ({})),
+  stopLoop: vi.fn(async () => ({})),
+  patchLoop: vi.fn(async () => ({})),
+  runLoop: vi.fn(async () => ({})),
 }))
 
 // The page renders TanStack <Link>s + useNavigate; outside a router they throw.
@@ -47,36 +41,29 @@ vi.mock('@tanstack/react-router', () => ({
 }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const detailWithTeam = (team: JobDetail['team']): JobDetail =>
+const detailWithTeam = (team: LoopDetail['team']): LoopDetail =>
   ({
-    job: {
-      id: 'l1',
-      cron: '0 6 * * *',
-      taskFile: '/tmp/react-doctor/README.md',
-      exec: { executor: 'claude', workdir: '/tmp/react-doctor' },
-      agent: 'claude-code',
+    loop: {
+      id: 'l1', name: 'Daily react-doctor triage',
+      schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' },
+      workdir: '/tmp/react-doctor', agent: 'claude-code', model: null, reasoningEffort: null,
+      prompt: 'Run react doctor.', statusDefinitions: { keep: 'fixed', noChange: 'clean', block: 'needs owner' }, artifacts: [], enabled: true,
     },
     summary: {
-      id: 'l1',
-      name: 'Daily react-doctor triage',
-      cron: '0 6 * * *',
-      kind: 'open',
+      id: 'l1', name: 'Daily react-doctor triage',
+      schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' },
+      workdir: '/tmp/react-doctor', agent: 'claude-code', model: null, reasoningEffort: null,
       enabled: true,
-      notify: 'auto',
       nextRun: '2026-07-08T13:00:00.000Z',
       running: false,
       lastRunTs: null,
-      graduation: null,
-      goal: null,
       runs: [],
       runCount: 0,
     },
-    taskFileContent: null,
-    taskFileSyncedAt: null,
-    machine: { id: 'm1', name: 'repro-box', online: true, presence: 'online', lastSeen: null, daemonProtocol: 3 },
+    machine: { id: 'm1', name: 'repro-box', online: true, presence: 'online', lastSeen: null, daemonProtocol: 4 },
     team,
     runs: [],
-  }) as unknown as JobDetail
+  }) as unknown as LoopDetail
 
 let host: HTMLDivElement | null = null
 let root: Root | null = null

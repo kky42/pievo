@@ -24,13 +24,9 @@ import { requestScope, type RequestScope } from '../auth.js'
 import { machineIdFromToken, mintDeviceToken, rememberConnectKey, sha256 } from '../gateway/tokens.js'
 import { machineInScope, tokenVisibleTo } from './machineScope.js'
 import { latestDaemonVersion } from './daemonVersion.js'
-import { MIN_DAEMON_VERSION, daemonNeedsUpdate } from '../gateway/compat.js'
+import { MIN_DAEMON_VERSION, daemonNeedsUpdate } from '../gateway/protocol.js'
 import { ensureServer } from './boot.js'
 import type { MachineSummary } from '../types'
-
-// The pure scoping decisions live in machineScope.ts (framework/DB-free, unit-
-// tested there); re-export for existing importers.
-export { machineInScope, tokenVisibleTo }
 
 /** Ids of the machines membership-visible in the scope's active team (the same
  *  set listMachines serves). Empty when the scope needs no team check (open

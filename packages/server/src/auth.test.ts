@@ -4,7 +4,7 @@ import path from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
- * `requestScope`'s explicit-team resolution (Phase 2 of the team-URL work). The
+ * `requestScope`'s explicit-team resolution. The
  * `/t/<teamId>` route hands requestScope an EXPLICIT team that must take precedence
  * over the last-used cookie yet still be membership-validated — never trusted blind.
  * A rejected explicit team falls through to the personal team exactly like a stale

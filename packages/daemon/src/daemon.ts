@@ -1,4 +1,4 @@
-/** Protocol-v3 concurrent per-loop daemon runtime. */
+/** Protocol-v4 concurrent per-loop daemon runtime. */
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -9,10 +9,10 @@ import { executeDelivery, RUN_CANCEL_REASON, type Delivery } from "./runner.js";
 import { PendingReportOutbox, sendTerminalReport, type PersistedReport, type ReportAck, type TerminalReport } from "./report-outbox.js";
 import { DEVICE_FILE, PIEVO_DIR, SERVER_FILE, persist, readStored } from "./config.js";
 import { ensureCallbackBin } from "./callback-bin.js";
-import { WatchManager, type WatchSpec } from "./watcher.js";
 import { writePidFile, clearPidFile, verifiedRunningPid } from "./pidfile.js";
 import { daemonVersion } from "./version.js";
 import { writeRuntimeDiagnostics } from "./runtime-diagnostics.js";
+import { parsePollResponse } from "./poll-protocol.js";
 
 const POLL_MS = Number(process.env.PIEVO_POLL_MS || 3000);
 const POLL_TIMEOUT_MS = 30_000;
@@ -46,11 +46,7 @@ export class ConcurrentRuntime {
     private readonly sendReport: SendReport = (serverUrl, report, signal) => sendTerminalReport(serverUrl, report, undefined, signal),
   ) {
     for (const pending of outbox.all()) {
-      // A report the server durably rejected cannot be recovered by retrying and
-      // must not keep its loop fenced forever after daemon restart.
-      if (!pending.lastError?.startsWith("REPORT_")) {
-        this.active.set(pending.runId, { stage: "reporting", abortController: new AbortController(), cancelRequested: false });
-      }
+      this.active.set(pending.runId, { stage: "reporting", abortController: new AbortController(), cancelRequested: false });
     }
     this.emitState();
   }
@@ -158,18 +154,13 @@ export class ConcurrentRuntime {
 
   async sendPending(serverUrl: string, force = false): Promise<void> {
     if (this.reportDrain) return this.reportDrain;
-    const pending = force
-      ? this.outbox.all().filter((row) => !row.lastError?.startsWith("REPORT_"))
-      : this.outbox.ready();
+    const pending = force ? this.outbox.all() : this.outbox.ready();
     const drain = (async () => {
       for (const report of pending) {
         const ack = await this.sendReport(serverUrl, report, this.reportAbort.signal);
         if (this.reportAbort.signal.aborted) break;
         this.outbox.applyAck(ack);
-        if (!this.outbox.get(report.reportId) || ack.kind === "conflict" || ack.kind === "invalid") this.active.delete(report.runId);
-        if (ack.kind === "conflict" || ack.kind === "invalid") {
-          logger.error({ runId: report.runId }, `${ack.kind === "conflict" ? "REPORT_CONFLICT" : "REPORT_INVALID"}: terminal report needs attention`);
-        }
+        if (!this.outbox.get(report.reportId)) this.active.delete(report.runId);
         this.emitState();
       }
     })();
@@ -190,10 +181,9 @@ function flag(args: string[], name: string): string | undefined {
 export function buildPollBody(
   info: Record<string, unknown>,
   currentRuns: CurrentRun[],
-  watchDigest: string | undefined,
   daemonInstanceId: string,
 ): Record<string, unknown> {
-  return { protocolVersion: 3, ...info, daemonInstanceId, recoveryComplete: true, currentRuns, ...(watchDigest ? { watchDigest } : {}) };
+  return { protocolVersion: 4, ...info, daemonInstanceId, recoveryComplete: true, currentRuns };
 }
 
 export function nextPollDelayMs(elapsedMs: number, pollMs = POLL_MS): number {
@@ -226,7 +216,7 @@ export async function runDaemon(args: string[] = []): Promise<number> {
   const persistRuntime = () => {
     try {
       writeRuntimeDiagnostics(runtimeStatusFile, {
-        protocolVersion: 3,
+        protocolVersion: 4,
         currentRuns: runtimeState.currentRuns,
         ...(runtimeState.cancelPendingRunIds.length ? { cancelPendingRunIds: runtimeState.cancelPendingRunIds } : {}),
         ...(runtimeState.persistenceError ? { persistenceError: runtimeState.persistenceError } : {}),
@@ -236,13 +226,14 @@ export async function runDaemon(args: string[] = []): Promise<number> {
       logger.warn({ err: err instanceof Error ? err.message : String(err) }, "could not persist runtime diagnostics");
     }
   };
-  const runtime = new ConcurrentRuntime(outbox, executeDelivery, (state) => { runtimeState = state; persistRuntime(); });
+  const runtime = new ConcurrentRuntime(
+    outbox,
+    (delivery, serverUrl, allowedRoots, signal) => executeDelivery(delivery, serverUrl, allowedRoots, signal, token),
+    (state) => { runtimeState = state; persistRuntime(); },
+  );
   const onShutdown = () => { stopping = true; pollAbort.abort(SHUTDOWN_REASON); runtime.shutdown(); };
   for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, onShutdown);
-  const watchManager = new WatchManager(server, token, roots);
-  let watchDigest: string | undefined;
-
-  logger.info({ server, protocolVersion: 3 }, "polling for deliveries");
+  logger.info({ server, protocolVersion: 4 }, "polling for deliveries");
   // Start replay immediately, but never let a slow report transport stall
   // heartbeats, cancellation, or delivery for unrelated loops.
   void runtime.sendPending(server, true).catch((err) => logger.error({ err }, "report replay failed"));
@@ -252,20 +243,15 @@ export async function runDaemon(args: string[] = []): Promise<number> {
     try {
       const res = await boundedFetch(`${server}/api/machine/poll`, {
         method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(buildPollBody(info, runtime.currentRuns(), watchDigest, daemonInstanceId)),
+        body: JSON.stringify(buildPollBody(info, runtime.currentRuns(), daemonInstanceId)),
       }, POLL_TIMEOUT_MS, pollAbort.signal);
-      if (res.status === 426) logger.error("daemon protocol rejected; run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart` (protocol 3 required)");
+      if (res.status === 426) logger.error("daemon protocol rejected; run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart` (protocol 4 required)");
       else if (!res.ok) logger.warn({ status: res.status, statusText: res.statusText }, "poll non-ok");
       else {
-        const data = await res.json() as {
-          delivery?: Delivery | null;
-          cancelRunIds?: string[];
-          needsUpdate?: { current: string | null; required: string; command: string };
-          watch?: WatchSpec[]; watchDigest?: string;
-        };
-        if (Array.isArray(data.watch)) watchManager.reconcile(data.watch);
-        if (typeof data.watchDigest === "string") watchDigest = data.watchDigest;
-        for (const runId of Array.isArray(data.cancelRunIds) ? data.cancelRunIds : []) runtime.cancel(runId);
+        const decoded = parsePollResponse(await res.json());
+        if (!decoded.ok) throw new Error(`invalid poll response; no work was started and polling will retry: ${decoded.error}`);
+        const data = decoded.value;
+        for (const runId of data.cancelRunIds) runtime.cancel(runId);
         persistRuntime();
         const needsUpdateKey = data.needsUpdate ? `${data.needsUpdate.current ?? "unknown"}->${data.needsUpdate.required}` : undefined;
         if (data.needsUpdate && needsUpdateKey !== lastNeedsUpdateKey) logger.error(data.needsUpdate, "daemon update required by server; no new work will start");
@@ -287,7 +273,6 @@ export async function runDaemon(args: string[] = []): Promise<number> {
   // or exit while that persistence boundary is still in flight.
   await runtime.waitForPersistence();
   await runtime.waitForReportStop();
-  await watchManager.closeAll();
   outbox.close();
   for (const sig of ["SIGINT", "SIGTERM"] as const) process.off(sig, onShutdown);
   clearPidFile(process.pid);

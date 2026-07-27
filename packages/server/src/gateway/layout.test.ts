@@ -32,9 +32,15 @@ test("cli.ts and sync.ts do not import each other", () => {
   expect(importsOf(read("sync.ts"))).not.toContain("./cli.js");
 });
 
-test("both write surfaces import the one validators module (anti-drift)", () => {
-  expect(importsOf(read("index.ts"))).toContain("./validate.js");
-  expect(importsOf(read("cli.ts"))).toContain("./validate.js");
+test("all device gateway modules reuse the full-token-hash auth helper", () => {
+  for (const module of ["index.ts", "cli.ts", "sync.ts"]) {
+    expect(importsOf(read(module))).toContain("./deviceAuth.js");
+  }
+});
+
+test("gateway create/edit use the canonical loop config validator", () => {
+  expect(importsOf(read("index.ts"))).toContain("./loopConfig.js");
+  expect(importsOf(read("cli.ts"))).toContain("./loopConfig.js");
 });
 
 test("http.ts is a leaf module (no gateway-internal imports)", () => {

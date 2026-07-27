@@ -1,7 +1,7 @@
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 
 import { db } from "../db/index.js";
-import { runs, type Loop, type Run, type RunRole, type RunUsage } from "../db/schema.js";
+import { runs, type Loop, type Run, type RunUsage } from "../db/schema.js";
 import * as store from "../db/store.js";
 import { computeRunDiff } from "../server/runDiff.js";
 import { detailBlock, doc, emptyList, helpBlock, listBlock, scalar, truncate } from "./toon.js";
@@ -13,41 +13,25 @@ export const HISTORY_DETAIL_TEXT_CAP = 32 * 1024;
 export const HISTORY_DIFF_TEXT_CAP = 96 * 1024;
 export const HISTORY_DIFF_FILES_MAX = 100;
 export const HISTORY_DIFF_INPUT_BYTES_MAX = 2 * 1024 * 1024;
-/** Aggregate work cap. Summary intentionally fails instead of silently sampling. */
-export const HISTORY_SUMMARY_ROWS_MAX = 5_000;
-export const HISTORY_METRIC_KEYS_MAX = 100;
-export const HISTORY_PROFILE_KEYS_MAX = 50;
-export const HISTORY_CONTROL_ACTIONS_MAX = 50;
-export const HISTORY_CONTROL_ARGS_CAP = 8 * 1024;
 export const HISTORY_JSON_TEXT_CAP = 512 * 1024;
 
 const TERMINAL_PHASES = ["done", "error", "canceled"] as const;
-const ROLES = ["exec", "evolve", "steer"] as const;
-const STATUSES = ["kept", "no-change", "blocked"] as const;
-const LOG_FLAGS = new Set(["_", "loop", "help", "summary", "run", "diff", "after", "through", "since", "until", "role", "status", "phase", "limit", "json"]);
+const STATUSES = ["keep", "no-change", "block"] as const;
+const LOG_FLAGS = new Set(["_", "loop", "help", "run", "diff", "since", "until", "status", "phase", "limit", "json"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Flags = Record<string, string | boolean | undefined>;
-type HistoryMode = "list" | "summary" | "detail";
-
-interface WindowSpec {
-  after?: number;
-  through?: number;
-  since?: string;
-  until?: string;
-}
-
-interface HistoryQuery extends WindowSpec {
-  mode: HistoryMode;
+type HistoryQuery = {
+  mode: "list" | "detail";
   json: boolean;
   diff: boolean;
   run?: number | string;
-  role?: RunRole;
-  status?: "kept" | "no-change" | "blocked";
+  since?: string;
+  until?: string;
+  status?: "keep" | "no-change" | "block";
   phase?: "done" | "error" | "canceled";
   limit: number;
-}
-
+};
 type Parsed = { ok: true; value: HistoryQuery } | { ok: false; error: string };
 
 function bool(v: unknown): boolean {
@@ -64,15 +48,6 @@ function positiveInt(name: string, value: unknown, max?: number): number | undef
   return n;
 }
 
-/** Exclusive history cursors admit zero so a fresh Cookbook's `#0` means
- * "nothing consolidated yet" without a separate first-run command form. */
-function historyCursor(value: unknown): number | undefined | string {
-  if (value === undefined) return undefined;
-  if (typeof value !== "string" || !/^\d+$/.test(value)) return "--after must be a non-negative integer";
-  const n = Number(value);
-  return Number.isSafeInteger(n) ? n : "--after must be a non-negative safe integer";
-}
-
 function iso(name: string, value: unknown): string | undefined | { error: string } {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(value) || !Number.isFinite(Date.parse(value))) {
@@ -81,62 +56,38 @@ function iso(name: string, value: unknown): string | undefined | { error: string
   return new Date(value).toISOString();
 }
 
-/** Parse the complete server-owned history grammar. Both credential paths call
- * this before the same query/render implementation. */
 export function parseHistoryFlags(flags: Flags): Parsed {
   const unknown = Object.keys(flags).filter((key) => !LOG_FLAGS.has(key));
   if (unknown.length) return { ok: false, error: `pievo: unknown flag --${unknown[0]} for log` };
 
-  const after = historyCursor(flags.after);
-  if (typeof after === "string") return { ok: false, error: after };
-  const through = positiveInt("through", flags.through);
-  if (typeof through === "string") return { ok: false, error: through };
   const limit = positiveInt("limit", flags.limit, HISTORY_LIMIT_MAX);
   if (typeof limit === "string") return { ok: false, error: limit };
   const since = iso("since", flags.since);
   if (since && typeof since === "object") return { ok: false, error: since.error };
   const until = iso("until", flags.until);
   if (until && typeof until === "object") return { ok: false, error: until.error };
-  if ((after !== undefined || through !== undefined) && (since !== undefined || until !== undefined)) {
-    return { ok: false, error: "index windows (--after/--through) cannot be mixed with time windows (--since/--until)" };
-  }
-  if (after !== undefined && through !== undefined && after >= through) {
-    return { ok: false, error: "--after must be less than --through" };
-  }
-  if (since !== undefined && until !== undefined && since > until) {
-    return { ok: false, error: "--since must not be after --until" };
-  }
+  if (since !== undefined && until !== undefined && since > until) return { ok: false, error: "--since must not be after --until" };
 
-  const role = flags.role;
-  if (role !== undefined && (typeof role !== "string" || !(ROLES as readonly string[]).includes(role))) {
-    return { ok: false, error: "--role must be exec|evolve|steer" };
-  }
   const status = flags.status;
   if (status !== undefined && (typeof status !== "string" || !(STATUSES as readonly string[]).includes(status))) {
-    return { ok: false, error: "--status must be kept|no-change|blocked" };
+    return { ok: false, error: "--status must be keep|no-change|block" };
   }
   const phase = flags.phase;
   if (phase !== undefined && (typeof phase !== "string" || !(TERMINAL_PHASES as readonly string[]).includes(phase))) {
     return { ok: false, error: "--phase must be done|error|canceled" };
   }
 
-  const summary = bool(flags.summary);
   const runRaw = flags.run;
-  if (summary && runRaw !== undefined) return { ok: false, error: "--summary and --run are mutually exclusive" };
   if (bool(flags.diff) && runRaw === undefined) return { ok: false, error: "--diff requires --run" };
-  if (summary && (role !== undefined || status !== undefined || phase !== undefined || flags.limit !== undefined)) {
-    return { ok: false, error: "--summary accepts windows only, not list filters or --limit" };
+  if (runRaw !== undefined && (since !== undefined || until !== undefined || status !== undefined || phase !== undefined || flags.limit !== undefined)) {
+    return { ok: false, error: "--run cannot be combined with time windows, list filters, or --limit" };
   }
-  if (runRaw !== undefined && (after !== undefined || through !== undefined || since !== undefined || until !== undefined || role !== undefined || status !== undefined || phase !== undefined || flags.limit !== undefined)) {
-    return { ok: false, error: "--run cannot be combined with windows, list filters, or --limit" };
-  }
-
   let run: number | string | undefined;
   if (runRaw !== undefined) {
     if (typeof runRaw !== "string") return { ok: false, error: "--run needs a run index or full UUID" };
     if (/^\d+$/.test(runRaw)) {
       const parsed = positiveInt("run", runRaw);
-      if (typeof parsed === "string" || parsed === undefined) return { ok: false, error: typeof parsed === "string" ? parsed : "--run needs a run index" };
+      if (typeof parsed !== "number") return { ok: false, error: typeof parsed === "string" ? parsed : "--run needs a run index" };
       run = parsed;
     } else if (UUID.test(runRaw)) run = runRaw;
     else return { ok: false, error: "--run needs a positive run index or full UUID" };
@@ -145,15 +96,12 @@ export function parseHistoryFlags(flags: Flags): Parsed {
   return {
     ok: true,
     value: {
-      mode: summary ? "summary" : run !== undefined ? "detail" : "list",
+      mode: run === undefined ? "list" : "detail",
       json: bool(flags.json),
       diff: bool(flags.diff),
       ...(run !== undefined ? { run } : {}),
-      ...(after !== undefined ? { after } : {}),
-      ...(through !== undefined ? { through } : {}),
       ...(since !== undefined ? { since } : {}),
       ...(until !== undefined ? { until } : {}),
-      ...(role !== undefined ? { role: role as RunRole } : {}),
       ...(status !== undefined ? { status: status as HistoryQuery["status"] } : {}),
       ...(phase !== undefined ? { phase: phase as HistoryQuery["phase"] } : {}),
       limit: limit ?? 10,
@@ -161,76 +109,29 @@ export function parseHistoryFlags(flags: Flags): Parsed {
   };
 }
 
-function windowConditions(loopId: string, q: WindowSpec) {
-  return [
-    eq(runs.loopId, loopId),
-    isNotNull(runs.runIndex),
-    inArray(runs.phase, [...TERMINAL_PHASES]),
-    q.after !== undefined ? gt(runs.runIndex, q.after) : undefined,
-    q.through !== undefined ? lte(runs.runIndex, q.through) : undefined,
-    q.since !== undefined ? gte(runs.ts, q.since) : undefined,
-    q.until !== undefined ? lte(runs.ts, q.until) : undefined,
-  ];
-}
-
-/** Terminal evidence after an indexed open row is observable but not safe to
- * consolidate. This correlated condition keeps cursors before the first gap. */
-function beforeLowestIndexedOpen(loopId: string) {
-  return lt(runs.runIndex, sql<number>`coalesce((
-    select min(open_run.run_index)
-    from runs as open_run
-    where open_run.loop_id = ${loopId}
-      and open_run.run_index is not null
-      and open_run.phase in ('pending', 'running')
-  ), 2147483648)`);
-}
-
-async function selectedThrough(loopId: string, q: WindowSpec): Promise<number | null> {
-  const row = (await db.select({ n: sql<number | null>`max(${runs.runIndex})` }).from(runs)
-    .where(and(...windowConditions(loopId, q), beforeLowestIndexedOpen(loopId))))[0];
-  return row?.n == null ? null : Number(row.n);
-}
-
-/** Agent-facing history intentionally exposes one provider-neutral total while
- * retaining the full usage breakdown in storage for diagnostics. Older runs may
- * have only one side of the telemetry; absent sides contribute zero, while a run
- * with neither input nor output remains unknown. */
 function totalTokenUsage(usage: RunUsage | null): number | null {
   if (!usage || (usage.inputTokens === undefined && usage.outputTokens === undefined)) return null;
   return (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
-}
-
-function compactMetrics(metrics: Record<string, unknown> | null): string | null {
-  if (!metrics) return null;
-  const entries = Object.entries(metrics).sort(([a], [b]) => a.localeCompare(b)).slice(0, HISTORY_METRIC_KEYS_MAX);
-  if (!entries.length) return null;
-  return truncate(entries.map(([key, value]) => `${key}=${String(value)}`).join(";"), 2_000, "use --run for detail").value;
 }
 
 function fmt(iso: string): string {
   return iso.replace("T", " ").replace(".000Z", "Z");
 }
 
-function boundedText(value: string | null, cap = HISTORY_DETAIL_TEXT_CAP): { value: string | null; truncated: boolean; totalChars: number } {
-  if (value == null) return { value: null, truncated: false, totalChars: 0 };
-  return { value: value.slice(0, cap), truncated: value.length > cap, totalChars: value.length };
+function boundedText(value: string | null, cap = HISTORY_DETAIL_TEXT_CAP): { value: string | null; truncated: boolean } {
+  if (value == null) return { value: null, truncated: false };
+  return { value: value.slice(0, cap), truncated: value.length > cap };
 }
 
 function normalizedListRun(run: Run) {
-  const ownerSteerText = run.role === "steer" && run.requestedBy === "owner" ? run.requestText : null;
-  const requestText = boundedText(ownerSteerText ?? null, HISTORY_MESSAGE_CAP);
   const message = boundedText(run.message ?? null, HISTORY_MESSAGE_CAP);
   return {
     runIndex: run.runIndex!,
     terminalAt: run.ts,
-    role: run.role,
-    requestText: requestText.value,
-    requestTextTruncated: requestText.truncated,
     phase: run.phase,
     status: run.status ?? null,
     durationMs: run.durationMs ?? null,
     tokenUsage: totalTokenUsage(run.usage ?? null),
-    metrics: run.metrics ?? null,
     message: message.value,
     messageTruncated: message.truncated,
     finalTextAvailable: !!run.finalText?.trim(),
@@ -242,7 +143,7 @@ function jsonText(value: unknown): string | undefined {
   return Buffer.byteLength(text, "utf8") <= HISTORY_JSON_TEXT_CAP ? text : undefined;
 }
 
-function response(_value: unknown, text: string, channel: Record<string, unknown> = {}): HttpResult {
+function response(text: string, channel: Record<string, unknown> = {}): HttpResult {
   const body = { ...channel, text };
   if (Buffer.byteLength(JSON.stringify(body), "utf8") > HISTORY_JSON_TEXT_CAP) {
     return { status: 413, body: { error: `history response exceeds ${HISTORY_JSON_TEXT_CAP} bytes; narrow the window` } };
@@ -252,196 +153,37 @@ function response(_value: unknown, text: string, channel: Record<string, unknown
 
 async function listHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
   const conditions = [
-    ...windowConditions(loop.id, q),
-    q.role ? eq(runs.role, q.role) : undefined,
+    eq(runs.loopId, loop.id),
+    isNotNull(runs.runIndex),
+    inArray(runs.phase, [...TERMINAL_PHASES]),
+    q.since ? gte(runs.ts, q.since) : undefined,
+    q.until ? lte(runs.ts, q.until) : undefined,
     q.status ? eq(runs.status, q.status) : undefined,
     q.phase ? eq(runs.phase, q.phase) : undefined,
   ];
-  const [rows, counted, through] = await Promise.all([
+  const [rows, counted] = await Promise.all([
     db.select().from(runs).where(and(...conditions)).orderBy(desc(runs.runIndex)).limit(q.limit),
     db.select({ n: sql<number>`count(*)` }).from(runs).where(and(...conditions)),
-    selectedThrough(loop.id, q),
   ]);
   const normalized = rows.map(normalizedListRun);
-  const data = { through, count: normalized.length, total: Number(counted[0]?.n ?? 0), runs: normalized };
+  const data = { count: normalized.length, total: Number(counted[0]?.n ?? 0), runs: normalized };
   if (q.json) {
     const text = jsonText(data);
-    return text ? response(data, text) : { status: 413, body: { error: "history JSON exceeds the response cap; lower --limit" } };
+    return text ? response(text) : { status: 413, body: { error: "history JSON exceeds the response cap; lower --limit" } };
   }
   const table = rows.length
-    ? listBlock("runs", ["index", "terminal", "role", "requestText", "phase", "status", "durationMs", "tokenUsage", "metrics", "message", "finalTextAvailable"], rows.map((run) => [
-        run.runIndex!, fmt(run.ts), run.role,
-        run.role === "steer" && run.requestedBy === "owner" && run.requestText
-          ? truncate(run.requestText, HISTORY_MESSAGE_CAP, "use --run for detail").value : null,
-        run.phase, run.status ?? null, run.durationMs ?? null, totalTokenUsage(run.usage ?? null),
-        compactMetrics(run.metrics ?? null),
+    ? listBlock("runs", ["index", "terminal", "phase", "status", "durationMs", "tokenUsage", "message", "finalTextAvailable"], rows.map((run) => [
+        run.runIndex!, fmt(run.ts), run.phase, run.status ?? null, run.durationMs ?? null, totalTokenUsage(run.usage ?? null),
         run.message ? truncate(run.message, HISTORY_MESSAGE_CAP, "use --run for detail").value : null,
         !!run.finalText?.trim(),
       ]))
     : emptyList("runs");
-  return response(data, doc(
-    `loop: ${scalar(loop.name ?? loop.id)} (${loop.id})`,
-    `through: ${scalar(through)}`,
+  return response(doc(
+    `loop: ${scalar(loop.name)} (${loop.id})`,
     `count: ${rows.length} of ${Number(counted[0]?.n ?? 0)} matching`,
     table,
-    helpBlock(["Use `pievo log --summary` for aggregates", "Use `pievo log --run <index>` for one run"]),
+    helpBlock(["Use `pievo log --run <index>` for one run"]),
   ));
-}
-
-type SummaryRun = Pick<Run,
-  "runIndex" | "ts" | "role" | "phase" | "status" | "durationMs" | "usage" |
-  "metrics" | "agent" | "model" | "reasoningEffort"
->;
-
-const SUMMARY_COLUMNS = {
-  runIndex: runs.runIndex,
-  ts: runs.ts,
-  role: runs.role,
-  phase: runs.phase,
-  status: runs.status,
-  durationMs: runs.durationMs,
-  usage: runs.usage,
-  metrics: runs.metrics,
-  agent: runs.agent,
-  model: runs.model,
-  reasoningEffort: runs.reasoningEffort,
-};
-
-type NumberStat = { total: number; average: number; samples: number };
-function numberStat(values: number[]): NumberStat | null {
-  if (!values.length) return null;
-  const total = values.reduce((sum, value) => sum + value, 0);
-  return { total, average: total / values.length, samples: values.length };
-}
-
-function tokenUsageStat(rows: SummaryRun[]): NumberStat | null {
-  return numberStat(rows.flatMap((run) => {
-    const total = totalTokenUsage(run.usage ?? null);
-    return total === null ? [] : [total];
-  }));
-}
-
-function durationStat(rows: SummaryRun[]): NumberStat | null {
-  return numberStat(rows.flatMap((run) => typeof run.durationMs === "number" ? [run.durationMs] : []));
-}
-
-function countBy<T extends string>(values: T[]): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const value of values) out[value] = (out[value] ?? 0) + 1;
-  return out;
-}
-
-function boundedCounts(counts: Record<string, number>) {
-  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const kept = entries.slice(0, HISTORY_PROFILE_KEYS_MAX);
-  return {
-    counts: Object.fromEntries(kept),
-    other: entries.slice(HISTORY_PROFILE_KEYS_MAX).reduce((sum, [, n]) => sum + n, 0),
-    truncated: entries.length > HISTORY_PROFILE_KEYS_MAX,
-  };
-}
-
-function profileKey(value: string | null): string {
-  return (value ?? "default").slice(0, 128);
-}
-
-async function summaryHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
-  const [selectedCount, openNow] = await Promise.all([
-    db.select({ n: sql<number>`count(*)` }).from(runs)
-      .where(and(...windowConditions(loop.id, q), beforeLowestIndexedOpen(loop.id))),
-    db.select({ n: sql<number>`count(*)` }).from(runs).where(and(eq(runs.loopId, loop.id), inArray(runs.phase, ["pending", "running"]))),
-  ]);
-  if (Number(selectedCount[0]?.n ?? 0) > HISTORY_SUMMARY_ROWS_MAX) {
-    return { status: 413, body: { error: `history summary includes more than ${HISTORY_SUMMARY_ROWS_MAX} runs; narrow it with --after or --since` } };
-  }
-  // Do not materialize potentially large metrics JSON until the cheap row-count
-  // preflight proves the requested aggregate is within its work budget.
-  const rows: SummaryRun[] = await db.select(SUMMARY_COLUMNS).from(runs)
-    .where(and(...windowConditions(loop.id, q), beforeLowestIndexedOpen(loop.id)))
-    .orderBy(asc(runs.runIndex))
-    .limit(HISTORY_SUMMARY_ROWS_MAX + 1);
-  if (rows.length > HISTORY_SUMMARY_ROWS_MAX) {
-    return { status: 413, body: { error: `history summary includes more than ${HISTORY_SUMMARY_ROWS_MAX} runs; narrow it with --after or --since` } };
-  }
-  const through = rows.at(-1)?.runIndex ?? null;
-  const byRole = Object.fromEntries(ROLES.map((role) => [role, rows.filter((run) => run.role === role).length]));
-  const phases = Object.fromEntries(TERMINAL_PHASES.map((phase) => [phase, rows.filter((run) => run.phase === phase).length]));
-  const reportedStatusByRole = Object.fromEntries(ROLES.map((role) => [role, Object.fromEntries(STATUSES.map((status) => [status, rows.filter((run) => run.role === role && run.status === status).length]))]));
-  const latestTerminalIndexByRole = Object.fromEntries(ROLES.map((role) => [role, rows.filter((run) => run.role === role).at(-1)?.runIndex ?? null]));
-  let execNoChangeStreak = 0;
-  for (const run of rows.slice().reverse()) {
-    if (run.role !== "exec") continue;
-    if (run.status !== "no-change") break;
-    execNoChangeStreak++;
-  }
-
-  const metricKeys = [...new Set(rows.flatMap((run) => Object.keys(run.metrics ?? {})))].sort();
-  const keptMetricKeys = metricKeys.slice(0, HISTORY_METRIC_KEYS_MAX);
-  const metrics = Object.fromEntries(keptMetricKeys.map((key) => {
-    const samples = rows.flatMap((run) => {
-      const value = run.metrics?.[key];
-      return typeof value === "number" && Number.isFinite(value) ? [{ runIndex: run.runIndex!, value }] : [];
-    });
-    const values = samples.map((sample) => sample.value);
-    const total = values.reduce((sum, value) => sum + value, 0);
-    return [key, {
-      samples: values.length,
-      first: samples[0] ?? null,
-      latest: samples.at(-1) ?? null,
-      min: values.length ? Math.min(...values) : null,
-      max: values.length ? Math.max(...values) : null,
-      average: values.length ? total / values.length : null,
-    }];
-  }));
-
-  const executed = rows.filter((run) => run.agent != null);
-  const summary = {
-    loop: { id: loop.id, name: loop.name ?? loop.id, createdAt: loop.createdAt, goal: loop.goal ?? null },
-    window: { after: q.after ?? null, through: q.through ?? null, since: q.since ?? null, until: q.until ?? null },
-    through,
-    firstTerminal: rows[0] ? { runIndex: rows[0].runIndex!, at: rows[0].ts } : null,
-    lastTerminal: rows.at(-1) ? { runIndex: rows.at(-1)!.runIndex!, at: rows.at(-1)!.ts } : null,
-    total: rows.length,
-    byRole,
-    phases,
-    reportedStatusByRole,
-    openNow: Number(openNow[0]?.n ?? 0),
-    execNoChangeStreak,
-    duration: {
-      overall: durationStat(rows),
-      byRole: Object.fromEntries(ROLES.map((role) => [role, durationStat(rows.filter((run) => run.role === role))])),
-      execByStatus: Object.fromEntries(["kept", "no-change"].map((status) => [status, durationStat(rows.filter((run) => run.role === "exec" && run.status === status))])),
-    },
-    tokenUsage: {
-      overall: tokenUsageStat(rows),
-      byRole: Object.fromEntries(ROLES.map((role) => [role, tokenUsageStat(rows.filter((run) => run.role === role))])),
-      execByStatus: Object.fromEntries(["kept", "no-change"].map((status) => [status, tokenUsageStat(rows.filter((run) => run.role === "exec" && run.status === status))])),
-    },
-    metrics: { values: metrics, totalKeys: metricKeys.length, truncated: metricKeys.length > keptMetricKeys.length },
-    executionProfiles: {
-      samples: executed.length,
-      agent: boundedCounts(countBy(executed.map((run) => run.agent!))),
-      model: boundedCounts(countBy(executed.map((run) => profileKey(run.model ?? null)))),
-      reasoningEffort: boundedCounts(countBy(executed.map((run) => profileKey(run.reasoningEffort ?? null)))),
-    },
-    latestTerminalIndexByRole,
-  };
-  const json = jsonText(summary);
-  if (!json) return { status: 413, body: { error: "history summary exceeds the response cap; narrow the window" } };
-  if (q.json) return response(summary, json, { summary });
-  const text = detailBlock("summary", [
-    ["loop", `${loop.name ?? loop.id} (${loop.id})`],
-    ["createdAt", loop.createdAt], ["goal", loop.goal ?? null], ["through", through],
-    ["firstTerminal", summary.firstTerminal ? `${summary.firstTerminal.runIndex}@${summary.firstTerminal.at}` : null],
-    ["lastTerminal", summary.lastTerminal ? `${summary.lastTerminal.runIndex}@${summary.lastTerminal.at}` : null],
-    ["total", summary.total], ["openNow", summary.openNow], ["execNoChangeStreak", execNoChangeStreak],
-    ["byRole", { raw: JSON.stringify(byRole) }], ["phases", { raw: JSON.stringify(phases) }],
-    ["reportedStatusByRole", { raw: JSON.stringify(reportedStatusByRole) }],
-    ["duration", { raw: JSON.stringify(summary.duration) }], ["tokenUsage", { raw: JSON.stringify(summary.tokenUsage) }],
-    ["metrics", { raw: JSON.stringify(summary.metrics) }], ["executionProfiles", { raw: JSON.stringify(summary.executionProfiles) }],
-    ["latestTerminalIndexByRole", { raw: JSON.stringify(latestTerminalIndexByRole) }],
-  ]);
-  return response(summary, text, { summary });
 }
 
 async function boundedDiff(runId: string) {
@@ -468,62 +210,40 @@ async function detailHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
   const run = (await db.select().from(runs).where(and(eq(runs.loopId, loop.id), selector)).limit(1))[0];
   if (!run) return { status: 404, body: { error: "no such run in this loop" } };
   const snapshot = await store.getRunSnapshot(run.id);
-  const ownerSteerText = run.role === "steer" && run.requestedBy === "owner" ? run.requestText : null;
-  const requestText = boundedText(ownerSteerText ?? null);
   const message = boundedText(run.message ?? null);
   const error = boundedText(run.error ?? null);
   const finalText = boundedText(run.finalText ?? null);
-  const control = (run.control ?? []).slice(0, HISTORY_CONTROL_ACTIONS_MAX).map((action) => ({
-    ...action,
-    args: boundedText(JSON.stringify(action.args), HISTORY_CONTROL_ARGS_CAP),
-  }));
   const detail = {
     runIndex: run.runIndex ?? null,
     terminalAt: TERMINAL_PHASES.includes(run.phase as typeof TERMINAL_PHASES[number]) ? run.ts : null,
-    role: run.role,
-    requestText: requestText.value,
-    requestTextTruncated: requestText.truncated,
     phase: run.phase,
     status: run.status ?? null,
     durationMs: run.durationMs ?? null,
     tokenUsage: totalTokenUsage(run.usage ?? null),
-    metrics: run.metrics ?? null,
     message: message.value,
     messageTruncated: message.truncated,
     error: error.value,
     errorTruncated: error.truncated,
     finalText: finalText.value,
     finalTextTruncated: finalText.truncated,
-    control,
-    controlTruncated: (run.control?.length ?? 0) > HISTORY_CONTROL_ACTIONS_MAX,
     diffAvailable: !!snapshot,
     diff: q.diff ? await boundedDiff(run.id) : { included: false, available: !!snapshot },
   };
   const json = jsonText(detail);
   if (!json) return { status: 413, body: { error: "run detail exceeds the response cap" } };
-  if (q.json) return response(detail, json);
-  const text = detailBlock("run", [
-    ["index", detail.runIndex], ["terminalAt", detail.terminalAt], ["role", detail.role],
-    ["requestText", detail.requestText], ["requestTextTruncated", detail.requestTextTruncated],
-    ["phase", detail.phase], ["status", detail.status], ["durationMs", detail.durationMs],
-    ["tokenUsage", detail.tokenUsage], ["metrics", { raw: JSON.stringify(detail.metrics) }],
-    ["message", detail.message], ["messageTruncated", detail.messageTruncated],
-    ["error", detail.error], ["errorTruncated", detail.errorTruncated],
+  if (q.json) return response(json);
+  return response(detailBlock("run", [
+    ["index", detail.runIndex], ["terminalAt", detail.terminalAt], ["phase", detail.phase], ["status", detail.status],
+    ["durationMs", detail.durationMs], ["tokenUsage", detail.tokenUsage], ["message", detail.message],
+    ["messageTruncated", detail.messageTruncated], ["error", detail.error], ["errorTruncated", detail.errorTruncated],
     ["finalText", detail.finalText], ["finalTextTruncated", detail.finalTextTruncated],
-    ["control", { raw: JSON.stringify(detail.control) }], ["controlTruncated", detail.controlTruncated],
     ["diffAvailable", detail.diffAvailable], ["diff", { raw: JSON.stringify(detail.diff) }],
-  ]);
-  return response(detail, text);
+  ]));
 }
 
-/** Deep history seam. The caller supplies one already-authorized loop; parsing,
- * window semantics, aggregation, detail/diff caps, and rendering stay local. */
+/** Authorized owner history: bounded ordinary terminal list or one run detail. */
 export async function readLoopHistory(loop: Loop, flags: Flags): Promise<HttpResult> {
   const parsed = parseHistoryFlags(flags);
   if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
-  switch (parsed.value.mode) {
-    case "summary": return summaryHistory(loop, parsed.value);
-    case "detail": return detailHistory(loop, parsed.value);
-    case "list": return listHistory(loop, parsed.value);
-  }
+  return parsed.value.mode === "detail" ? detailHistory(loop, parsed.value) : listHistory(loop, parsed.value);
 }

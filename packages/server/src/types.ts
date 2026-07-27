@@ -1,24 +1,12 @@
-/**
- * Shapes returned by the c0 daemon's loopback API (src/scheduler/api.ts).
- * Kept in sync with `summary()` / `detail()` there. The daemon stays the source
- * of truth; the web app never owns job state, it only renders + proxies writes.
- */
-
-/** JSON-serializable value — server fn returns must be serializable (no `unknown`). */
-export type Json = string | number | boolean | null | { [k: string]: Json } | Json[]
-
-/** The indexed front-matter subset of a loop product (all fields optional). See
- *  `server/frontmatter.ts` for the parsing convention. */
-export type { ArtifactMeta } from './server/frontmatter'
+/** Client-safe domain and API shapes shared by the Pievo server and web UI. */
 
 import type { MachinePresence } from './lib/machinePresence'
 export type { MachinePresence } from './lib/machinePresence'
-import type { ArtifactMeta } from './server/frontmatter'
 
 /** The coding agent a loop is bound to AND executed with (BYOA on the owner's
  *  machine): `claude-code` → Claude Code, `codex` → `codex exec`.
- *  Non-Claude agents may still have thinner daemon telemetry until a stream
- *  adapter lands; execution itself is real for every value.
+ *  Non-Claude agents may still have thinner daemon telemetry until stream
+ *  integration lands; execution itself is real for every value.
  *
  *  Runtime SINGLE SOURCE (anti-drift): every server consumer DERIVES from this
  *  array — the `CodingAgent` type here, the `db/schema.ts` `CodingAgent` type AND
@@ -30,15 +18,13 @@ export const CODING_AGENTS = ['claude-code', 'codex'] as const
 export type CodingAgent = (typeof CODING_AGENTS)[number]
 
 /** Coerce an unknown value to a known `CodingAgent`, or null when unrecognized.
- *  The ONE agent enum validator, imported by both write surfaces (server
- *  `buildEditUpdate`) and the web select — same anti-drift discipline as
- *  `validateUi`/schema validation. */
+ *  Canonical loop validation and the web agent select share this enum source. */
 export function coerceCodingAgent(value: unknown): CodingAgent | null {
   return typeof value === 'string' && (CODING_AGENTS as readonly string[]).includes(value) ? (value as CodingAgent) : null
 }
 
 export type ReportIncidentCode = 'REPORT_INVALID' | 'REPORT_CONFLICT'
-export type ReportIncidentFaultDomain = 'daemon' | 'compatibility' | 'internal'
+export type ReportIncidentFaultDomain = 'daemon' | 'protocol' | 'internal'
 export type ReportIncidentDisposition = 'run-error' | 'telemetry-rejected'
 
 /** Durable, client-safe diagnosis for a terminal report the server rejected. */
@@ -57,15 +43,17 @@ export interface ReportIncident {
 export type PauseCause =
   | { kind: 'owner'; at: string }
   | { kind: 'failure-streak'; at: string; runId: string; count: number }
-  | { kind: 'blocked'; at: string; runId: string; role: 'exec' | 'evolve' | 'steer' }
+  | { kind: 'blocked'; at: string; runId: string }
 
-export type RunStatus = 'kept' | 'no-change' | 'blocked' | string
-
-export interface ChartRun {
-  runIndex: number
-  ts: string
-  status: RunStatus | null
-  metrics: Record<string, number | null> | null
+export type RunStatus = 'keep' | 'no-change' | 'block'
+export type RunPhase = 'pending' | 'running' | 'done' | 'error' | 'canceled'
+export type LoopSchedule =
+  | { mode: 'cron'; cron: string; timezone: string; overlap: 'skip' | 'queue-one' }
+  | { mode: 'continuous'; delayMinutes: number }
+export interface StatusDefinitions {
+  keep: string
+  noChange: string
+  block: string
 }
 
 export interface RunSummary {
@@ -74,22 +62,15 @@ export interface RunSummary {
   /** The loop this run belongs to — lets the run-detail view resolve its files. */
   loopId: string
   ts: string
-  /** Durable queue row waiting for its loop and machine. */
-  queued?: boolean
-  /** Claimed by the machine and executing now. */
-  running?: boolean
+  /** Canonical durable lifecycle state. */
+  phase: RunPhase
   /** Interrupted terminal report authority: blocking waits for daemon recovery;
    * report-only no longer fences queued work. */
   reconciliation?: 'blocking' | 'report-only'
-  phase?: 'pending' | 'running' | 'done' | 'error' | 'canceled' | string
   requestedBy?: 'owner' | 'system'
-  /** Stopped by the user before it finished (phase canceled). */
-  canceled?: boolean
   /** Durable cancellation intent. This is never itself presented as Canceled. */
   cancelRequested?: boolean
-  /** Delivery role — lets the UI tint an in-flight evolve pass (blue) vs a normal run. */
-  role?: 'exec' | 'evolve' | 'steer'
-  /** Agent captured when this run was claimed; null for pending/legacy rows. */
+  /** Agent captured when this run was claimed; null while pending. */
   agent: CodingAgent | null
   status: RunStatus | null
   message: string | null
@@ -104,20 +85,8 @@ export interface RunSummary {
     cacheCreationTokens?: number
   } | null
   error: string | null
-  metrics: Record<string, number | null> | null
-  control: Array<{ command: string; args: Json; result: string; detail?: string }> | null
   sessionId: string | null
   reportIncident?: ReportIncident | null
-}
-
-/** A push channel for the Notifications panel + the loop channel picker. Secrets
- *  (bot token / chat id) are NEVER serialized to the client — only this summary. */
-export interface ChannelSummary {
-  id: string
-  type: 'telegram' | 'slack' | string
-  name: string
-  /** A redacted hint so the row reads as configured without leaking the secret. */
-  hint: string
 }
 
 /** A connected machine (a teammate's daemon) for the Machines panel. */
@@ -130,8 +99,7 @@ export interface MachineSummary {
   hostname: string | null
   platform: string | null
   arch: string | null
-  /** Daemon package version reported on poll (e.g. "0.8.0"); null for older
-   *  daemons / before the first poll. */
+  /** Daemon package version reported on poll; null before the first poll. */
   daemonVersion: string | null
   /** Breaking daemon/server protocol last observed on poll. */
   daemonProtocol: number | null
@@ -151,99 +119,47 @@ export interface MachineSummary {
   loopCount: number
 }
 
-export interface JobSummary {
+export interface LoopSummary {
   id: string
   name: string
-  cron: string
-  scheduleMode?: 'cron' | 'continuous'
-  continuousDelayMinutes?: number
-  kind: string
-  /** Unset means the coding-agent CLI chooses its own default. */
-  model?: string | null
-  /** Unset means the coding-agent CLI chooses its own default. */
-  reasoningEffort?: string | null
-  /** True when the job carries an agent-authored generative-UI template (Job.ui). */
-  hasUi?: boolean
+  schedule: LoopSchedule
+  workdir: string
+  agent: CodingAgent
+  model: string | null
+  reasoningEffort: string | null
   enabled: boolean
-  notify: 'auto' | 'always' | 'never' | string
   nextRun: string | null
-  /** True while the daemon is executing this loop right now (live indicator). */
   running?: boolean
-  /** True when one or more durable queue rows are waiting. */
   queued?: boolean
-  /** A reclaimed process is still fencing this loop pending daemon recovery. */
   reconciliationBlocking?: boolean
   lastRunTs: string | null
-  graduation: string | null
-  /** Optional standing objective. It guides runs but does not end the loop. */
-  goal?: string | null
-  /** Durable Stop-before-delete marker. Non-null means server deletion is waiting. */
   deleteRequestedAt?: string | null
   pauseCause?: PauseCause | null
-  /** The newest page of runs (chronological, capped) — the card seeds its
-   *  timeline from this and lazy-loads older pages via loadOlderRuns. */
   runs: RunSummary[]
-  /** Total runs for this loop. The timeline's "+N" pager and the "N runs" label
-   *  reflect this, not just the loaded page length. */
   runCount: number
 }
 
-/** Per-round observed metric declared on a job, used to label the trend chart. */
-export interface MetricField {
-  key: string
-  label?: string
-  unit?: string
-}
-
-/** The full Job row as stored by the daemon (fields the UI reads/edits). */
-export interface JobFull {
+/** The final editable loop configuration plus server lifecycle metadata. */
+export interface LoopFull {
   id: string
-  name?: string
-  cron: string
-  scheduleMode: 'cron' | 'continuous'
-  continuousDelayMinutes: number
+  name: string
+  schedule: LoopSchedule
+  workdir: string
+  agent: CodingAgent
+  model: string | null
+  reasoningEffort: string | null
+  prompt: string
+  statusDefinitions: StatusDefinitions
+  artifacts: string[]
   enabled: boolean
-  notify: 'auto' | 'always' | 'never' | string
-  /** Optional standing objective. */
-  goal?: string | null
   pauseCause?: PauseCause | null
-  taskFile?: string
-  metricSchema?: MetricField[]
-  /** Generative-UI template (agent-authored HTML; see LoopView). */
-  ui?: string
-  /** Push channel this loop notifies through (notification_channels.id). */
-  channelId?: string | null
-  /** Coding agent this loop is bound to and executed with (claude-code | codex).
-   *  Editable in the UI (LoopForm agent select); the next run spawns that agent
-   *  on the bound machine. */
-  agent?: CodingAgent
-  owner?: {
-    gateway?: string
-    accountId?: string
-    userId?: string
-    displayName?: string
-  }
-  exec?: {
-    executor: string
-    workdir: string
-    model?: string
-    reasoningEffort?: string
-    report?: 'viaAgent' | 'direct'
-    allowControl?: boolean
-    timeoutMs?: number
-  }
   createdAt?: string
   updatedAt?: string
 }
 
-/** One loop's full detail payload — what the getJobDetail server fn returns
- *  (built by adapters.toJobDetail; the loop + run detail pages render it). */
-export interface JobDetail {
-  job: JobFull
-  summary: JobSummary
-  taskFileContent: string | null
-  /** When taskFileContent was last synced from the machine (ISO); null ⇒ never. */
-  taskFileSyncedAt: string | null
+export interface LoopDetail {
+  loop: LoopFull
+  summary: LoopSummary
   /** The loop's execution machine + its live presence. Offline machines cannot
    *  claim immediately, but manual work remains queued; `presence` distinguishes a calm
    *  "asleep" (recently seen, likely just idle) from a hard "offline", and
@@ -257,7 +173,7 @@ export interface JobDetail {
   runs: RunSummary[]
 }
 
-// ---- artifacts: the loop's live-synced files (Phase 2) ----
+// ---- exact artifacts: the loop's current synced files ----
 
 /** One live file in a loop's current artifact set (metadata only; bytes are
  *  fetched lazily via getArtifact / the download route). */
@@ -272,9 +188,6 @@ export interface ArtifactSummary {
   binary: boolean
   /** Over the per-file cap → metadata only (no bytes stored; not downloadable). */
   oversize: boolean
-  /** Parsed front-matter subset ({type?,title?,date?}) for a typed markdown
-   *  product; null for an untyped / binary / oversize / not-yet-stored file. */
-  meta: ArtifactMeta | null
 }
 
 /** getArtifact result: a text file's decoded content, a marker for a
@@ -284,7 +197,7 @@ export type ArtifactContent =
   | { binary: true; size: number | null; oversize: boolean }
   | { error: string }
 
-// ---- per-run diff: what changed vs the previous run (Phase 3) ----
+// ---- per-run artifact diff ----
 
 /** One file's change between a run and the previous run. */
 export interface RunDiffFile {
@@ -319,44 +232,20 @@ export interface RunDiffResult {
   work?: { filesProcessed: number; inputBytes: number; emittedDiffChars: number }
 }
 
-// ---- writes: form / template ----
+// ---- canonical loop writes ----
 
-export interface OwnerRef {
-  gateway?: string
-  accountId?: string
-  userId?: string
-  displayName?: string
-}
-
-export interface ExecPayload {
-  executor: 'claude'
-  workdir?: string
-  report?: 'viaAgent' | 'direct'
-  allowControl?: boolean
-  model?: string
-  reasoningEffort?: string
-}
-
-/** The create/edit payload the form POSTs/PATCHes to the daemon. */
-export interface JobPayload {
+/** The canonical create/edit envelope used by the web and owner CLI. */
+export interface LoopPayload {
   name?: string
-  cron?: string
-  scheduleMode?: 'cron' | 'continuous'
-  continuousDelayMinutes?: number
-  taskFile?: string
-  notify?: 'auto' | 'always' | 'never' | string
-  /** Set (non-empty) or clear (null|'') the standing objective. */
-  goal?: string | null
-  metricSchema?: MetricField[]
-  ui?: string
-  /** Push channel id (notification_channels.id), or '' / null to clear it. */
-  channelId?: string | null
-  enabled?: boolean
-  /** Coding agent this loop executes with (claude-code | codex). Editable — the
-   *  next run picks up the new agent. */
+  schedule?: LoopSchedule
+  workdir?: string
   agent?: CodingAgent
-  exec?: ExecPayload
-  owner?: OwnerRef
+  model?: string | null
+  reasoningEffort?: string | null
+  prompt?: string
+  statusDefinitions?: StatusDefinitions
+  artifacts?: string[]
+  enabled?: boolean
 }
 
 export interface MutationResult {
@@ -370,25 +259,6 @@ export interface MutationResult {
   /** Server-side loop data was removed. Local files are never part of this action. */
   deleted?: boolean
   error?: string
-}
-
-/**
- * A template is a canned loop INTENT, not a flow: metadata only. Clicking its card
- * on the dashboard mints a connect-key and appends `description` to the standard
- * bootstrap snippet — bootstrap.md + create.md then handle cadence, config, and
- * dashboard authoring the same way they do for a blank loop.
- */
-export interface TemplateInfo {
-  name: string
-  label: string
-  /** One-line blurb shown on the dashboard card. */
-  desc: string
-  /** The canned task description (English) appended to the bootstrap snippet. */
-  description: string
-  /** Optional inline-SVG preview (the template folder's thumb.svg, repo-authored
-   *  and trusted) - a mock screenshot of what the loop produces, drawn with the
-   *  theme's CSS variables so it follows light/dark for free. */
-  thumb?: string
 }
 
 /** The team switcher's data: the teams this user may view + the active selection. */

@@ -2,27 +2,26 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { JobSummary } from '../types'
+import type { LoopSummary } from '../types'
 import { DashboardView, type DashboardData } from './DashboardView'
 
 const h = vi.hoisted(() => ({
-  listJobs: vi.fn(async () => [] as JobSummary[]),
+  listLoops: vi.fn(async () => [] as LoopSummary[]),
   onCreated: null as null | (() => void),
 }))
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => () => {} }))
 vi.mock('../server/loopApi', () => ({
-  listJobs: h.listJobs,
+  listLoops: h.listLoops,
   listMyTeams: vi.fn(async () => undefined),
 }))
 vi.mock('../server/machineFns', () => ({ listMachines: vi.fn(async () => []) }))
 vi.mock('./LoopCard', () => ({
-  LoopCard: ({ job }: { job: JobSummary }) =>
-    createElement('div', { 'data-testid': `loop-${job.id}` }, job.name),
+  LoopCard: ({ loop }: { loop: LoopSummary }) =>
+    createElement('div', { 'data-testid': `loop-${loop.id}` }, loop.name),
 }))
 vi.mock('./TeamSwitcher', () => ({ TeamSwitcher: () => null }))
 vi.mock('./MachinesModal', () => ({ MachinesModal: () => null }))
-vi.mock('./NotificationsModal', () => ({ NotificationsModal: () => null }))
 vi.mock('./TeamsModal', () => ({ TeamsModal: () => null }))
 vi.mock('./ComposeModal', () => ({
   ComposeModal: ({ onCreated }: { onCreated: () => void }) => {
@@ -30,31 +29,30 @@ vi.mock('./ComposeModal', () => ({
     return null
   },
 }))
-vi.mock('./LoopPlaybook', () => ({ LoopPlaybook: () => null }))
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-function job(id: string, name: string): JobSummary {
+function loopSummary(id: string, name: string): LoopSummary {
   return {
     id,
     name,
-    cron: '0 6 * * *',
-    kind: 'exec:claude-code',
+    schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' },
+    workdir: '/tmp/project',
+    agent: 'claude-code',
+    model: null,
+    reasoningEffort: null,
     enabled: true,
-    notify: 'auto',
     nextRun: null,
     running: false,
     lastRunTs: null,
-    graduation: null,
     deleteRequestedAt: null,
     runs: [],
     runCount: 0,
   }
 }
 
-const initial = (jobs: JobSummary[]): DashboardData => ({
-  jobs,
-  templates: [],
+const initial = (loops: LoopSummary[]): DashboardData => ({
+  loops,
   machines: [],
   teams: undefined,
 })
@@ -74,13 +72,13 @@ async function render(data: DashboardData) {
   })
 }
 
-function loop(id: string) {
+function findLoop(id: string) {
   return host!.querySelector(`[data-testid="loop-${id}"]`)
 }
 
 afterEach(async () => {
-  h.listJobs.mockReset()
-  h.listJobs.mockResolvedValue([])
+  h.listLoops.mockReset()
+  h.listLoops.mockResolvedValue([])
   h.onCreated = null
   if (root) await act(async () => root!.unmount())
   host?.remove()
@@ -90,28 +88,28 @@ afterEach(async () => {
 
 describe('DashboardView loader and live data ordering', () => {
   it('renders a refreshed loader result instead of retaining its one-time seed', async () => {
-    await render(initial([job('deleted', 'Deleted loop')]))
-    expect(loop('deleted')).not.toBeNull()
+    await render(initial([loopSummary('deleted', 'Deleted loop')]))
+    expect(findLoop('deleted')).not.toBeNull()
 
     await render(initial([]))
 
-    expect(loop('deleted')).toBeNull()
+    expect(findLoop('deleted')).toBeNull()
   })
 
   it('does not let an older loader result overwrite a successful live refresh', async () => {
     await render(initial([]))
-    h.listJobs.mockResolvedValue([job('live', 'Live loop')])
+    h.listLoops.mockResolvedValue([loopSummary('live', 'Live loop')])
 
     await act(async () => {
       h.onCreated!()
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(loop('live')).not.toBeNull()
+    expect(findLoop('live')).not.toBeNull()
 
-    await render(initial([job('deleted', 'Deleted loop')]))
+    await render(initial([loopSummary('deleted', 'Deleted loop')]))
 
-    expect(loop('live')).not.toBeNull()
-    expect(loop('deleted')).toBeNull()
+    expect(findLoop('live')).not.toBeNull()
+    expect(findLoop('deleted')).toBeNull()
   })
 })

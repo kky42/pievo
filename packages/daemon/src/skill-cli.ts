@@ -8,7 +8,6 @@
  *
  *   pievo skill              # same as `pievo skill install`
  *   pievo skill install      # install for each known agent at user scope (~/…)
- *   pievo skill install -g   # same (accepted, redundant)
  *   pievo skill status       # report each agent's install location + bundle state
  */
 import fs from "node:fs";
@@ -34,9 +33,7 @@ export async function runSkill(args: string[]): Promise<number> {
   const sub = args[0] && !args[0].startsWith("-") ? args[0] : "install";
   const flags = args.filter((arg) => arg.startsWith("-"));
   const extraPositionals = args.filter((arg) => !arg.startsWith("-")).slice(1);
-  const validFlags = sub === "status"
-    ? flags.length === 0
-    : sub === "install" && flags.every((flag) => flag === "-g" || flag === "--global");
+  const validFlags = flags.length === 0;
   if (!validFlags || extraPositionals.length > 0) {
     process.stderr.write("pievo: usage: pievo skill [status|install]\n");
     return 2;

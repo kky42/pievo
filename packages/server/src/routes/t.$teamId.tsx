@@ -1,13 +1,13 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
-import { canViewTeam, getAuthState, listTemplates } from '../server/loopApi'
+import { canViewTeam, getAuthState } from '../server/loopApi'
 import { authClient, useSession } from '../lib/auth-client'
 import { DashboardView, fetchLiveData, type DashboardData } from '../components/DashboardView'
 import { SignIn } from '../components/SignIn'
 import { LoadErrorCard } from '../components/actionUi'
 
 /**
- * The explicit-team dashboard (`/t/<teamId>`, Phase 2): the same dashboard scoped
+ * The explicit-team dashboard (`/t/<teamId>`): the same dashboard scoped
  * to the team in the PATH, so a view is bookmarkable and each browser tab keeps
  * its own team (the list server fns take an explicit `teamId`, independent of the
  * shared last-used cookie). A team id rides the URL verbatim.
@@ -35,7 +35,7 @@ export const Route = createFileRoute('/t/$teamId')({
         throw new Error('This team does not exist, or you do not have access to it.')
       }
     }
-    const initial = { ...(await fetchLiveData(teamId)), templates: await listTemplates() }
+    const initial = await fetchLiveData(teamId)
     return { mode: 'dashboard', auth, teamId, initial }
   },
   component: TeamDashboard,

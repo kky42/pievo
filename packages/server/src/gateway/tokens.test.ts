@@ -2,11 +2,11 @@
  * Run-lease lifecycle + connect-key binding, DB-backed (durable across deploys).
  * Exercises the lease state machine in `tokens.ts` against the real `run_leases`
  * table — mint (`rk_` prefix), lazy expiry, the active→terminal-grace terminalize
- * transition, single-shot retire, the prune, bare-UUID back-compat resolution,
- * and that only the token's HASH ever lands in a row. The gateway-level 409
+ * transition, single-shot retire, pruning, strict token shape, and that only
+ * the token's hash ever lands in a row. The gateway-level 409
  * fencing + reconcile are covered end-to-end by `sleep-reclaim.test.ts` /
  * `index.test.ts`; this pins the primitives. The connect-key section pins the
- * `connect_keys` upsert + TTL that replaced the deploy-fragile in-memory maps.
+ * `connect_keys` upsert and TTL.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -32,9 +32,9 @@ afterAll(() => {
 
 let seq = 0;
 /** A distinct run each call so leases never collide across tests (shared table). */
-function caps(over: Partial<import("./tokens.js").RunLeaseCaps> = {}): import("./tokens.js").RunLeaseCaps {
+function caps(over: Partial<import("./tokens.js").RunLeaseRegistration> = {}): import("./tokens.js").RunLeaseRegistration {
   seq += 1;
-  return { runId: `run-${seq}`, loopId: `loop-${seq}`, machineId: `m-${seq}`, role: "exec", allowControl: true, ...over };
+  return { runId: `run-${seq}`, loopId: `loop-${seq}`, machineId: `m-${seq}`, ...over };
 }
 
 test("registerRunLease mints an rk_-prefixed token and an active, non-expiring lease", async () => {
@@ -60,7 +60,8 @@ test("a lease row stores only the token HASH — never the wire token", async ()
   expect(JSON.stringify(byHash[0])).not.toContain(token);
 });
 
-test("resolveLease returns undefined for an unknown token", async () => {
+test("resolveLease rejects malformed and unknown tokens", async () => {
+  expect(await tokens.resolveLease("00000000-0000-0000-0000-000000000000")).toBeUndefined();
   expect(await tokens.resolveLease("rk_does-not-exist")).toBeUndefined();
 });
 
@@ -132,17 +133,6 @@ test("pruneExpiredLeases retires expired grace while preserving active, in-windo
   expect((await tokens.resolveLease(alreadyRetired))?.state).toBe("retired");
 });
 
-test("bare-UUID back-compat: resolveLease keys on the FULL token, doing no prefix parsing", async () => {
-  // The lease table is keyed by sha256(whole wire token), so resolution needs no
-  // `rk_` prefix stripping — the mechanism that lets a PRE-Batch-6 bare-UUID token
-  // (minted before the deploy) resolve identically to an `rk_` one. Proof: the token
-  // round-trips verbatim (no slicing), and a lookup for a raw non-rk_ string is a
-  // plain miss (undefined), never a throw on an unparseable prefix.
-  const token = await tokens.registerRunLease(caps());
-  expect((await tokens.resolveLease(token))?.runId).toBe((await tokens.resolveLease(token))?.runId);
-  expect(await tokens.resolveLease("00000000-0000-0000-0000-000000000000")).toBeUndefined();
-});
-
 // ---- connect keys (owner + team binding, durable) ----
 
 test("rememberConnectKey binds minter + team; readClaimIntent and getDeviceOwner both read it", async () => {
@@ -152,15 +142,6 @@ test("rememberConnectKey binds minter + team; readClaimIntent and getDeviceOwner
   // NON-evicting: one paste may create several loops.
   expect(await tokens.readClaimIntent(key)).toEqual({ userId: "u-mint", teamId: "team-b" });
   expect(await tokens.getDeviceOwner(tokens.machineIdFromToken(key))).toBe("u-mint");
-});
-
-test("a teamless connect-key (pre-created machine path) still records the owner", async () => {
-  const key = tokens.mintDeviceToken();
-  await tokens.rememberConnectKey(key, { userId: "u-own", teamId: null });
-  // No team bound ⇒ no claim intent (createLoop falls back to the home team)…
-  expect(await tokens.readClaimIntent(key)).toBeUndefined();
-  // …but the self-register owner lookup still resolves.
-  expect(await tokens.getDeviceOwner(tokens.machineIdFromToken(key))).toBe("u-own");
 });
 
 test("connect-key bindings expire after the TTL (lazy on read)", async () => {

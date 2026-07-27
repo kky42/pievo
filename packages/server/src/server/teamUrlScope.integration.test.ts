@@ -3,6 +3,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { testStore, type TestStore } from '../../test/store.js'
+
 /**
  * End-to-end proof of the Phase-2 team-URL intent at the data boundary the
  * dashboard tabs render: for ONE signed-in member of teams A and B, the
@@ -11,7 +13,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
  * cookie, and a non-member team is rejected enumeration-safe (indistinguishable
  * from a missing loop).
  *
- * The `/t/<id>` server fns (`listJobs`/`canViewTeam`/`getDefaultTeam`) are thin
+ * The `/t/<id>` server fns (`listLoops`/`canViewTeam`/`getDefaultTeam`) are thin
  * `createServerFn` wrappers around exactly this composition — `requestScope(teamId)`
  * then a `store` read — so this drives the SAME code path they run, over a real
  * pglite store with the Better Auth session + cookie mocked (the auth.test.ts
@@ -25,7 +27,7 @@ vi.mock('@tanstack/react-start/server', () => ({
 
 let tmp: string
 let db: typeof import('../db/index.js')
-let store: typeof import('../db/store.js')
+let store: TestStore
 let authMod: typeof import('../auth.js')
 
 const MEMBER = 'u_member'
@@ -45,16 +47,16 @@ function setCookie(teamId: string | null) {
 
 /** Seed a loop into a team so the two tabs have distinguishable content. */
 async function seedLoop(teamId: string, name: string) {
-  await store.createLoop({ userId: MEMBER, teamId, machineId: 'm_x', name, cron: '0 6 * * *' })
+  await store.createLoop({ workdir: "/work", userId: MEMBER, teamId, machineId: 'm_x', name, cron: '0 6 * * *' })
 }
 
-/** listJobs' body, verbatim: resolve the explicit team, then list that team's
+/** listLoops' body, verbatim: resolve the explicit team, then list that team's
  *  loops. Returns loop names for readable evidence. */
-async function listJobsFor(explicitTeam?: string): Promise<string[]> {
+async function listLoopsFor(explicitTeam?: string): Promise<string[]> {
   const { enforce, userId, teamId: active } = await authMod.requestScope(explicitTeam)
   if (enforce && !userId) return []
   const loops = await store.listLoops(enforce ? active : undefined)
-  return loops.map((l) => l.name ?? '(unnamed)').sort()
+  return loops.map((l) => l.name).sort()
 }
 
 /** canViewTeam's body, verbatim: the `/t/<id>` loader membership gate. */
@@ -82,7 +84,7 @@ beforeAll(async () => {
 
   db = await import('../db/index.js')
   await db.runMigrations()
-  store = await import('../db/store.js')
+  store = testStore(await import('../db/store.js'))
   authMod = await import('../auth.js')
 
   TEAM_A = store.teamIdForUser(MEMBER)
@@ -111,18 +113,18 @@ beforeEach(() => {
 })
 
 describe('two tabs on /t/A and /t/B render different teams at once (explicit teamId)', () => {
-  it('listJobs is scoped by the explicit route team, independent of the cookie', async () => {
+  it('listLoops is scoped by the explicit route team, independent of the cookie', async () => {
     signInAs(MEMBER, 'member@example.com')
     // The last-used cookie points at team A, but the /t/B tab passes B explicitly.
     setCookie(TEAM_A)
 
-    const namesA = await listJobsFor(TEAM_A)
-    const namesB = await listJobsFor(TEAM_B)
+    const namesA = await listLoopsFor(TEAM_A)
+    const namesB = await listLoopsFor(TEAM_B)
 
     console.log('\n=== /t/<team> dashboard payloads (one signed-in member, two tabs) ===')
     console.log('  cookie last-used = team A')
-    console.log(`  GET listJobs(teamId="${TEAM_A}")  ->`, namesA)
-    console.log(`  GET listJobs(teamId="${TEAM_B}")  ->`, namesB)
+    console.log(`  GET listLoops(teamId="${TEAM_A}")  ->`, namesA)
+    console.log(`  GET listLoops(teamId="${TEAM_B}")  ->`, namesB)
 
     expect(namesA).toEqual(['Alpha loop (team A)'])
     expect(namesB).toEqual(['Bravo loop (team B)']) // cookie=A did NOT leak into the /t/B tab

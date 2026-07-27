@@ -1,10 +1,8 @@
 /**
- * Agent recording at `pievo new`: the env-fingerprint detector and the
- * resolution precedence (measured env > declared --agent/config > undefined).
- * Pure functions, no network — they decide the `agent` field the create POST
- * carries (or omits, letting the server default it to claude-code).
+ * Canonical `pievo new` envelope checks, retry idempotency, and the skill-install
+ * trigger after a confirmed create. The required agent is always explicit.
  *
- * Plus the skill-install trigger at create: that the USER-scope install fires only
+ * The USER-scope install fires only
  * after a confirmed create, never blocking it (both with the fetch + installer seams
  * injected, so nothing hits the network or spawns npx).
  */
@@ -14,7 +12,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { canonicalJson, coerceAgent, cronLooksValid, detectAgentFromEnv, idempotencyKey, resolveAgent, runCreate } from "./create.js";
+import { canonicalJson, coerceAgent, cronLooksValid, idempotencyKey, runCreate } from "./create.js";
 import type { InstallOutcome } from "./skill-install.js";
 
 const okResponse = (body: unknown) => ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
@@ -25,6 +23,18 @@ const errResponse = (status: number, body: unknown) =>
 function cfgJson(cfg: object): string {
   return JSON.stringify(cfg);
 }
+
+const validConfig = (overrides: Record<string, unknown> = {}) => ({
+  name: "Docs",
+  schedule: { mode: "cron", cron: "0 5 * * *", timezone: "UTC", overlap: "skip" },
+  workdir: "/tmp/docs",
+  agent: "claude-code",
+  prompt: "Review the docs.",
+  statusDefinitions: { keep: "updated", noChange: "already current", block: "needs owner input" },
+  artifacts: [],
+  enabled: true,
+  ...overrides,
+});
 
 /** An absolute path under a fresh temp dir that does NOT yet exist — so a test can
  *  prove the installer's cwd is created before the install spawns (the ENOENT fix). */
@@ -51,30 +61,6 @@ describe("cronLooksValid (local pre-check only — the server/croner is the sole
   });
 });
 
-describe("detectAgentFromEnv", () => {
-  test("fingerprints Claude Code from CLAUDECODE (verified live)", () => {
-    expect(detectAgentFromEnv({ CLAUDECODE: "1" })).toBe("claude-code");
-    expect(detectAgentFromEnv({ CLAUDE_CODE_ENTRYPOINT: "cli" })).toBe("claude-code");
-  });
-
-  test("fingerprints Codex from its sandbox env (per current Codex CLI docs)", () => {
-    expect(detectAgentFromEnv({ CODEX_SANDBOX: "seatbelt" })).toBe("codex");
-    expect(detectAgentFromEnv({ CODEX_SANDBOX_NETWORK_DISABLED: "1" })).toBe("codex");
-  });
-
-  test("ignores CODEX_COMPANION_* (a Claude Code session can export it — would misattribute)", () => {
-    expect(detectAgentFromEnv({ CODEX_COMPANION_SESSION_ID: "abc" })).toBeNull();
-  });
-
-  test("returns null when no host marker is present (undetectable → caller falls back)", () => {
-    expect(detectAgentFromEnv({ PATH: "/usr/bin" })).toBeNull();
-  });
-
-  test("Claude Code wins when both markers are present (its session is the real host)", () => {
-    expect(detectAgentFromEnv({ CLAUDECODE: "1", CODEX_SANDBOX: "seatbelt" })).toBe("claude-code");
-  });
-});
-
 describe("coerceAgent", () => {
   test("passes through known agents, rejects everything else", () => {
     expect(coerceAgent("claude-code")).toBe("claude-code");
@@ -84,25 +70,6 @@ describe("coerceAgent", () => {
     expect(coerceAgent(undefined)).toBeNull();
   });
 });
-
-describe("resolveAgent (precedence: measured > declared > undefined)", () => {
-  test("a measured host overrides a conflicting declaration (can't be fooled)", () => {
-    // Dialog/skill said codex, but we were pasted into a Claude Code session.
-    expect(resolveAgent({ CLAUDECODE: "1" }, "codex")).toBe("claude-code");
-  });
-
-  test("falls back to the declared value when the env is undetectable", () => {
-    expect(resolveAgent({ PATH: "/usr/bin" }, "codex")).toBe("codex");
-    expect(resolveAgent({ PATH: "/usr/bin" }, "claude-code")).toBe("claude-code");
-  });
-
-  test("returns undefined when neither measured nor declared (server defaults it)", () => {
-    expect(resolveAgent({ PATH: "/usr/bin" }, undefined)).toBeUndefined();
-    expect(resolveAgent({ PATH: "/usr/bin" }, "")).toBeUndefined();
-    expect(resolveAgent({ PATH: "/usr/bin" }, "garbage")).toBeUndefined();
-  });
-});
-
 
 describe("idempotencyKey / canonicalJson (F8 — `new` retry-safety, design §8.1)", () => {
   test("canonicalJson sorts object keys recursively, preserves array order", () => {
@@ -114,26 +81,26 @@ describe("idempotencyKey / canonicalJson (F8 — `new` retry-safety, design §8.
   });
 
   test("the key is STABLE across retries (same token + config, any key order)", () => {
-    const k1 = idempotencyKey("dk_test", { name: "Docs", cron: "0 6 * * 1", taskFile: "x" });
-    const k2 = idempotencyKey("dk_test", { taskFile: "x", cron: "0 6 * * 1", name: "Docs" });
+    const k1 = idempotencyKey("dk_test", { name: "Docs", prompt: "Check docs", schedule: { mode: "cron" } });
+    const k2 = idempotencyKey("dk_test", { schedule: { mode: "cron" }, prompt: "Check docs", name: "Docs" });
     expect(k1).toBe(k2);
     expect(k1).toMatch(/^[0-9a-f]{64}$/); // a sha256 hex digest
   });
 
   test("the key DIFFERS across configs and across machines (tokens)", () => {
-    const base = { name: "Docs", cron: "0 6 * * 1", taskFile: "x" };
-    expect(idempotencyKey("dk_test", base)).not.toBe(idempotencyKey("dk_test", { ...base, cron: "0 7 * * 1" }));
+    const base = { name: "Docs", prompt: "Check docs", schedule: { mode: "cron", cron: "0 6 * * 1" } };
+    expect(idempotencyKey("dk_test", base)).not.toBe(idempotencyKey("dk_test", { ...base, schedule: { ...base.schedule, cron: "0 7 * * 1" } }));
     // A different device token ⇒ a different machine id in the hash ⇒ a different key.
     expect(idempotencyKey("dk_a", base)).not.toBe(idempotencyKey("dk_b", base));
   });
 
   test("hashing the FULL resolved body closes the envelope-collision class (timezone/claim/agent all count)", () => {
     // The body is the exact outgoing request payload (config + envelope), so any field difference splits the key.
-    const body = { name: "Docs", cron: "0 6 * * 1", taskFile: "x", timezone: "Europe/Paris" };
+    const body = { name: "Docs", prompt: "Check docs", schedule: { mode: "cron", timezone: "Europe/Paris" } };
     // Same body ⇒ same key (a genuine retry with identical argv+env still collapses).
     expect(idempotencyKey("dk_test", body)).toBe(idempotencyKey("dk_test", { ...body }));
-    // A different --tz (envelope) ⇒ different keys — the tz-collision the previous cherry-pick missed.
-    expect(idempotencyKey("dk_test", body)).not.toBe(idempotencyKey("dk_test", { ...body, timezone: "America/New_York" }));
+    // A different schedule timezone produces a distinct key.
+    expect(idempotencyKey("dk_test", body)).not.toBe(idempotencyKey("dk_test", { ...body, schedule: { ...body.schedule, timezone: "America/New_York" } }));
     // A different connect-key/team (rides in `claim`) ⇒ different keys (no cross-team collapse).
     expect(idempotencyKey("dk_test", { ...body, claim: "dk_teamA" })).not.toBe(idempotencyKey("dk_test", { ...body, claim: "dk_teamB" }));
     // A different recorded agent ⇒ different keys.
@@ -161,7 +128,7 @@ describe("runCreate — sends the idempotency key on a real create, omits it on 
   const keyOf = (sent: any[]) => JSON.parse(sent[sent.length - 1].argv[2]).idempotencyKey as string | undefined;
 
   test("a real create stamps a 64-hex `idempotencyKey`, stable across a retry of the same config", async () => {
-    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "pievo/x/README.md" });
+    const cfg = cfgJson(validConfig());
     const sent: any[] = [];
     const run = (json: string) =>
       runCreate(["--json", json, "--server-url", "http://test"], {
@@ -178,12 +145,26 @@ describe("runCreate — sends the idempotency key on a real create, omits it on 
     expect(await run(cfg)).toBe(0); // a retry (same argv)
     expect(keyOf(sent)).toBe(first); // stable across the retry
     // A different config ⇒ a different key (an intentional twin isn't collapsed).
-    expect(await run(cfgJson({ cron: "0 6 * * *", taskFile: "pievo/x/README.md" }))).toBe(0);
+    expect(await run(cfgJson(validConfig({ schedule: { mode: "cron", cron: "0 6 * * *", timezone: "UTC", overlap: "skip" } })))).toBe(0);
     expect(keyOf(sent)).not.toBe(first);
   });
 
-  test("--dry-run carries NO idempotency key (a preview creates nothing to dedupe)", async () => {
-    const cfg = cfgJson({ cron: "0 5 * * *", taskFile: "pievo/x/README.md" });
+  test("removed scalar envelope flags fail loudly", async () => {
+    const fetchImpl = vi.fn();
+    expect(await runCreate(["--json", cfgJson(validConfig()), "--agent", "codex", "--server-url", "http://test"], { fetchImpl })).toBe(2);
+    expect(await runCreate(["--json", cfgJson(validConfig()), "--tz", "UTC", "--server-url", "http://test"], { fetchImpl })).toBe(2);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  test("agent is required and schedule must use the discriminated union", async () => {
+    const fetchImpl = vi.fn();
+    expect(await runCreate(["--json", cfgJson(validConfig({ agent: undefined })), "--server-url", "http://test"], { fetchImpl })).toBe(2);
+    expect(await runCreate(["--json", cfgJson(validConfig({ schedule: undefined })), "--server-url", "http://test"], { fetchImpl })).toBe(2);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  test("--dry-run still carries the required exact idempotency transport field", async () => {
+    const cfg = cfgJson(validConfig());
     let payload: any = null;
     const code = await runCreate(["--json", cfg, "--dry-run", "--server-url", "http://test"], {
       fetchImpl: async (_url: any, init: any) => {
@@ -194,7 +175,7 @@ describe("runCreate — sends the idempotency key on a real create, omits it on 
       stdout: () => {},
     });
     expect(code).toBe(0);
-    expect(payload.idempotencyKey).toBeUndefined();
+    expect(payload.idempotencyKey).toMatch(/^[0-9a-f]{64}$/);
     expect(payload.dryRun).toBe(true);
   });
 });

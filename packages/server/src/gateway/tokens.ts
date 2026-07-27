@@ -19,7 +19,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { and, eq, inArray, isNotNull, lt } from "drizzle-orm";
 
 import { db } from "../db/index.js";
-import { connectKeys, runLeases, type CodingAgent, type RunRole } from "../db/schema.js";
+import { connectKeys, runLeases, type CodingAgent } from "../db/schema.js";
 
 export function sha256(s: string): string {
   return createHash("sha256").update(s).digest("hex");
@@ -36,16 +36,10 @@ export function machineIdFromToken(token: string): string {
 }
 
 /**
- * Whether a string is shaped like a device token (`dk_…`). A cheap malformed-input
- * filter at the enrollment surface — it rejects junk (empty / wrong prefix / absurd
- * length / stray whitespace) BEFORE any lookup work. It is NOT the auth boundary: a
- * well-shaped but unknown token is still rejected by the connect-key gate in
- * gated mode (`gateway/index.ts` `poll`). The charset is deliberately permissive
- * past the prefix — real tokens are `dk_`+hex (`mintDeviceToken`), but hand-minted
- * demo/dev tokens (e.g. `dk_demo_cookie_unified`) are legitimately word-shaped, and
- * only the login gate decides who may enroll.
+ * Whether a string has the one current device-token wire shape. This malformed-input
+ * filter runs before enrollment lookup; the connect-key gate remains the auth boundary.
  */
-const DEVICE_TOKEN_RE = /^dk_[A-Za-z0-9_-]{3,120}$/;
+const DEVICE_TOKEN_RE = /^dk_[0-9a-f]{30}$/;
 export function isDeviceTokenShape(token: string): boolean {
   return DEVICE_TOKEN_RE.test(token);
 }
@@ -58,11 +52,9 @@ export function isDeviceTokenShape(token: string): boolean {
 // teams. The teamId is captured server-side from the authenticated session (never
 // from client input); the gateway re-validates membership at create time (§4).
 //
-// Durable rows (the Phase-3 Option C upgrade): the old in-memory maps meant a
-// deploy between mint and paste silently mis-filed the loop into the machine's
-// home team. Keyed by the DERIVED machine id, so the key itself is never stored.
-// Not single-read: one paste may create several loops, and the self-register
-// seed reads it too.
+// Bindings are keyed by the derived machine id, so the key itself is never stored.
+// They are not single-read: one paste may create several loops, and enrollment
+// reads the binding too.
 
 export interface ClaimIntent {
   /** The user who minted the key (the authenticated dashboard session). */
@@ -71,24 +63,22 @@ export interface ClaimIntent {
   teamId: string;
 }
 
-/** Keep bindings long enough for a leisurely paste, then drop (bounded table).
- *  Also bounds the self-register owner lookup: a key unused for >24h registers
- *  as shared — strictly better than the old map, which lost it on any restart. */
+/** Keep bindings long enough for a leisurely paste, then drop (bounded table). */
 export const CONNECT_KEY_TTL_MS = 24 * 60 * 60 * 1000;
 
 function connectKeyFresh(mintedAt: string, now: number): boolean {
   return now - Date.parse(mintedAt) <= CONNECT_KEY_TTL_MS;
 }
 
-/** Bind a freshly-minted connect-key to its minter (+ team, when the mint came
- *  from a team dashboard session). Prunes expired rows on write. */
-export async function rememberConnectKey(connectKey: string, intent: { userId: string; teamId?: string | null }): Promise<void> {
+/** Bind a freshly-minted connect-key to its minter and validated team.
+ *  Prunes expired rows on write. */
+export async function rememberConnectKey(connectKey: string, intent: ClaimIntent): Promise<void> {
   const now = new Date();
   await db.delete(connectKeys).where(lt(connectKeys.mintedAt, new Date(now.getTime() - CONNECT_KEY_TTL_MS).toISOString()));
   const row = {
     machineId: machineIdFromToken(connectKey),
     userId: intent.userId,
-    teamId: intent.teamId ?? null,
+    teamId: intent.teamId,
     mintedAt: now.toISOString(),
   };
   await db.insert(connectKeys).values(row).onConflictDoUpdate({ target: connectKeys.machineId, set: row });
@@ -98,7 +88,7 @@ export async function rememberConnectKey(connectKey: string, intent: { userId: s
 export async function readClaimIntent(connectKey: string | null | undefined, now: number = Date.now()): Promise<ClaimIntent | undefined> {
   if (!connectKey) return undefined;
   const row = (await db.select().from(connectKeys).where(eq(connectKeys.machineId, machineIdFromToken(connectKey))))[0];
-  if (!row || row.teamId == null || !connectKeyFresh(row.mintedAt, now)) return undefined;
+  if (!row || !connectKeyFresh(row.mintedAt, now)) return undefined;
   return { userId: row.userId, teamId: row.teamId };
 }
 
@@ -109,24 +99,15 @@ export async function getDeviceOwner(machineId: string, now: number = Date.now()
   return row.userId;
 }
 
-/** The least-privilege capability set a run lease carries. Normal delivery
- * derives these inside `store.claimReadyRunForMachine` and inserts the lease in
- * the claim transaction; `registerRunLease` remains the direct helper for tests
- * and compatibility paths. */
-export interface RunLeaseCaps {
+/** Identity needed to seed a report-only lease outside the atomic claim path. */
+export interface RunLeaseRegistration {
   runId: string;
   loopId: string;
   machineId: string;
-  role: RunRole;
-  allowControl: boolean;
-  canSetUi?: boolean;
-  canSetSchema?: boolean;
 }
 
 /**
- * A run lease: the per-run credential's caps plus a tiny lifecycle state machine
- * that replaces the old mint→revoke scatter (`revokeRunToken` /
- * `revokeRunTokensForRun` / `markRunTokensReclaimed` / `pruneReclaimedRunTokens`).
+ * A run lease: the per-run credential and its lifecycle state machine.
  *
  *   active ──[normal report / canceled]──────────────────────────▶ deleted
  *      │
@@ -136,12 +117,15 @@ export interface RunLeaseCaps {
  *                                      └──[expiry]────────────▶ retired ──[410 receipt]──────────▶ deleted
  *
  * `terminal-grace` marks terminal-report-only authority for a swept run awaiting
- * reconciliation. Agent-api
- * mutations are refused (409); ONLY the single final report is honored. A
+ * reconciliation. Non-report CLI verbs are refused; only the single final report
+ * is honored. A
  * lease past `expiresAt` loses reconciliation authority and becomes durable
  * `retired`; it is deleted only when a matching 410 receipt commits.
  */
-export interface RunLease extends RunLeaseCaps {
+export interface RunLease {
+  runId: string;
+  loopId: string;
+  machineId: string;
   state: "active" | "terminal-grace" | "reconciliation-only" | "retired";
   /** Absolute expiry (ms epoch). `Infinity` for active and retired rows;
    *  both reconciliation states carry the same late-report deadline. */
@@ -154,20 +138,14 @@ export interface RunLease extends RunLeaseCaps {
  *  `RECLAIM_GRACE_MS`.) */
 export const TERMINAL_GRACE_MS = 24 * 60 * 60 * 1000;
 
-/** Leases live in the `run_leases` table, keyed by sha256(full wire token) — so a
- *  deploy is invisible to an in-flight run, a bare-UUID run token minted by a
- *  PRE-Batch-6 server resolves identically to an `rk_`-prefixed one (no prefix
- *  parsing), and a DB leak never hands out live run credentials (hash only). In
- *  rows, `expiresAt` null encodes the active lease's `Infinity`. */
+/** Leases live in the `run_leases` table, keyed by sha256(full `rk_…` wire
+ * token), so a deploy is invisible to an in-flight run and a DB leak never hands
+ * out live credentials. In rows, `expiresAt` null encodes `Infinity`. */
 function leaseFromRow(row: typeof runLeases.$inferSelect): RunLease {
   return {
     runId: row.runId,
     loopId: row.loopId,
     machineId: row.machineId,
-    role: row.role,
-    allowControl: row.allowControl,
-    canSetUi: row.canSetUi,
-    canSetSchema: row.canSetSchema,
     state: row.state,
     expiresAt: row.expiresAt == null ? Number.POSITIVE_INFINITY : Date.parse(row.expiresAt),
   };
@@ -176,17 +154,18 @@ function leaseFromRow(row: typeof runLeases.$inferSelect): RunLease {
 /** Mint a fresh run lease and return its wire token (`rk_…`, so the unified CLI
  *  dispatch can tell a run credential from a device `dk_…` in O(1) before any
  *  lookup). Starts `active` with no expiry. */
-export async function registerRunLease(caps: RunLeaseCaps): Promise<string> {
+const RUN_TOKEN_RE = /^rk_[0-9a-f]{32}$/;
+export function isRunTokenShape(token: string): boolean {
+  return RUN_TOKEN_RE.test(token);
+}
+
+export async function registerRunLease(caps: RunLeaseRegistration): Promise<string> {
   const token = `rk_${randomBytes(16).toString("hex")}`;
   await db.insert(runLeases).values({
     tokenHash: sha256(token),
     runId: caps.runId,
     loopId: caps.loopId,
     machineId: caps.machineId,
-    role: caps.role,
-    allowControl: caps.allowControl,
-    canSetUi: caps.canSetUi ?? false,
-    canSetSchema: caps.canSetSchema ?? false,
     createdAt: new Date().toISOString(),
   });
   return token;
@@ -195,6 +174,7 @@ export async function registerRunLease(caps: RunLeaseCaps): Promise<string> {
 /** Resolve a run lease. An elapsed reconciliation window is atomically reduced
  * to durable, non-authorizing retired evidence rather than deleted. */
 export async function resolveLease(token: string, now: number = Date.now()): Promise<RunLease | undefined> {
+  if (!isRunTokenShape(token)) return undefined;
   const tokenHash = sha256(token);
   let row = (await db.select().from(runLeases).where(eq(runLeases.tokenHash, tokenHash)))[0];
   if (!row) return undefined;
@@ -247,7 +227,7 @@ export async function pruneExpiredLeases(now: number = Date.now()): Promise<void
 // key returns the existing loop instead of a second one. In-memory + TTL-pruned,
 // matching the claim-intent/lease posture (a server restart inside the window is an
 // accepted gap — the same tradeoff the lease/claim maps already accept). An absent
-// key ⇒ no dedupe, so an old daemon (which sends none) keeps the pre-batch-3 behavior.
+// key ⇒ no dedupe.
 
 export interface NewIdempotencyRecord {
   loopId: string;
@@ -299,9 +279,8 @@ export interface ClaimResult {
   loopId: string;
   name: string;
   machineId: string;
-  // The coding agent the daemon MEASURED on the host (env fingerprint) and the
-  // server recorded on the loop — surfaced so the New-loop confirmation shows
-  // the agent that actually ran `pievo new`, not a stale dialog pre-selection.
+  // The coding agent selected in the canonical loop config, surfaced in the
+  // New-loop confirmation.
   agent: CodingAgent;
 }
 

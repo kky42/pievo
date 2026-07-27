@@ -1,11 +1,7 @@
 /**
- * The bundled skill that ships in the npm tarball must be EXACTLY the public
- * surface — SKILL.md + references/{create,update,evolve,dashboard,run}.md — and nothing else.
- * The server's src/skill/ also holds INTERNAL run prompts under run/ (exec-core,
- * steer) that are server-side run-dispatch only; a naive recursive copy would leak
- * them into every user's installed ~/.claude/skills/pievo/. This runs the real
- * sync-skill.mjs and asserts the selectivity (guards against a regression to
- * `cpSync(src, dst, {recursive})`).
+ * The npm bundle must contain exactly the installed owner-facing skill:
+ * SKILL.md + references/{connect,create,update}.md. Run the real sync script so a
+ * future recursive copy cannot leak any server-only skill content.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -31,18 +27,12 @@ function listTree(dir: string): string[] {
   return out.sort();
 }
 
-test("sync-skill bundles ONLY the public surface (no internal run prompts)", () => {
+test("sync-skill bundles exactly SKILL/connect/create/update", () => {
   execFileSync("node", [script], { stdio: "pipe" });
-  const files = listTree(bundle);
-  expect(files).toEqual(["SKILL.md", "references/create.md", "references/update.md", "references/evolve.md", "references/dashboard.md", "references/run.md"].sort());
-  // Explicitly: the internal run prompts never reach the tarball.
-  expect(files).not.toContain("run/exec-core.md");
-  expect(files).not.toContain("run/steer.md");
-  expect(files.some((f) => f.startsWith("run/"))).toBe(false);
-  // And the server-only first-capture onboarding doc (served at /api/skill) is NOT
-  // an installable skill file, so it must never ship in the bundle either.
-  expect(files).not.toContain("bootstrap.md");
-  // The template-market docs (skill/templates/*) are PUBLIC-served (like bootstrap.md)
-  // but not installable — they must never leak into the tarball either.
-  expect(files.some((f) => f.startsWith("templates/"))).toBe(false);
+  expect(listTree(bundle)).toEqual([
+    "SKILL.md",
+    "references/connect.md",
+    "references/create.md",
+    "references/update.md",
+  ]);
 });

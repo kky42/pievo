@@ -1,17 +1,17 @@
-import type { JobDetail, JobSummary } from '../types'
+import type { LoopDetail, LoopSummary } from '../types'
 
-export const DASHBOARD_PROTOCOL = 3
+export const DASHBOARD_PROTOCOL = 4
 export const DAEMON_UPGRADE_REQUIRED = 'Daemon upgrade required to stop a running process. Run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.'
 
 export type LoopLifecycle = 'deleting' | 'stopping' | 'paused-finishing' | 'paused' | 'active'
 
 /** Derive product lifecycle state only from durable server facts. */
-export function deriveLoopLifecycle(job: JobSummary): LoopLifecycle {
-  if (job.deleteRequestedAt != null) return 'deleting'
-  const running = job.runs.find((run) => run.running)
-  if (!job.enabled && running?.cancelRequested) return 'stopping'
-  if (!job.enabled && (job.running || running)) return 'paused-finishing'
-  if (!job.enabled) return 'paused'
+export function deriveLoopLifecycle(loop: LoopSummary): LoopLifecycle {
+  if (loop.deleteRequestedAt != null) return 'deleting'
+  const running = loop.runs.find((run) => run.phase === 'running')
+  if (!loop.enabled && running?.cancelRequested) return 'stopping'
+  if (!loop.enabled && (loop.running || running)) return 'paused-finishing'
+  if (!loop.enabled) return 'paused'
   return 'active'
 }
 
@@ -22,14 +22,14 @@ export function daemonStopSupport(protocol: number | null | undefined): { suppor
 }
 
 /** Exact user-facing lifecycle wording, including uncertainty boundaries. */
-export function lifecycleDisplay(detail: JobDetail): string {
+export function lifecycleDisplay(detail: LoopDetail): string {
   const state = deriveLoopLifecycle(detail.summary)
   if (detail.summary.queued && detail.summary.reconciliationBlocking) {
     return detail.machine.presence === 'online'
       ? 'Queued · machine is checking an interrupted run'
       : 'Queued · waiting for machine recovery'
   }
-  const running = detail.summary.runs.find((run) => run.running)
+  const running = detail.summary.runs.find((run) => run.phase === 'running')
   if (running && detail.machine.daemonProtocol !== DASHBOARD_PROTOCOL) {
     return DAEMON_UPGRADE_REQUIRED
   }

@@ -36,7 +36,7 @@ function capture(extra: ShowDeps = {}) {
 describe("runShow", () => {
   test("explicit id → forwards `show <id>` and prints the server envelope text", async () => {
     const toon = "loop:\n  id: loop-x\n  name: X\n  cron: 0 8 * * *\nnextFire: 2026-07-13 06:00:00 PDT";
-    const { fetchFn, calls } = stub([{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }], () => ({ ok: true, body: { ok: true, text: toon, exitCode: 0 } }));
+    const { fetchFn, calls } = stub([{ id: "loop-x", name: "X", workdir: "/elsewhere" }], () => ({ ok: true, body: { ok: true, text: toon, exitCode: 0 } }));
     const cap = capture({ fetchFn });
     expect(await runShow(["loop-x"], cap.deps)).toBe(0);
     expect(calls[1]!.argv).toEqual(["show", "loop-x"]);
@@ -44,21 +44,21 @@ describe("runShow", () => {
   });
 
   test("--json + --full are forwarded on the show argv (the roundtrip envelope transport)", async () => {
-    const { fetchFn, calls } = stub([{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }], () => ({ ok: true, body: { ok: true, text: "{\"id\":\"loop-x\"}", exitCode: 0 } }));
+    const { fetchFn, calls } = stub([{ id: "loop-x", name: "X", workdir: "/elsewhere" }], () => ({ ok: true, body: { ok: true, text: "{\"id\":\"loop-x\"}", exitCode: 0 } }));
     const cap = capture({ fetchFn });
     expect(await runShow(["loop-x", "--json", "--full"], cap.deps)).toBe(0);
     expect(calls[1]!.argv).toEqual(["show", "loop-x", "--json", "--full"]);
   });
 
   test("resolves the cwd loop when no id is given", async () => {
-    const { fetchFn, calls } = stub([{ id: "loop-here", name: "Here", workdir: "/work/here", taskFile: null }], () => ({ ok: true, body: { ok: true, text: "loop:\n  id: loop-here", exitCode: 0 } }));
+    const { fetchFn, calls } = stub([{ id: "loop-here", name: "Here", workdir: "/work/here" }], () => ({ ok: true, body: { ok: true, text: "loop:\n  id: loop-here", exitCode: 0 } }));
     const cap = capture({ fetchFn, cwd: () => "/work/here" });
     expect(await runShow([], cap.deps)).toBe(0);
     expect(calls[1]!.argv).toEqual(["show", "loop-here"]);
   });
 
   test("--server-url <url> is consumed as a flag value, not the positional loop id", async () => {
-    const { fetchFn, calls } = stub([{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }], () => ({ ok: true, body: { ok: true, text: "loop:\n  id: loop-x", exitCode: 0 } }));
+    const { fetchFn, calls } = stub([{ id: "loop-x", name: "X", workdir: "/elsewhere" }], () => ({ ok: true, body: { ok: true, text: "loop:\n  id: loop-x", exitCode: 0 } }));
     const cap = capture({ fetchFn });
     // The URL must NOT be mistaken for the loop id; `loop-x` still resolves.
     expect(await runShow(["--server-url", "https://srv.test", "loop-x"], cap.deps)).toBe(0);
@@ -74,7 +74,7 @@ describe("runShow", () => {
   });
 
   test("F5: an explicit nonexistent loop id → structured NOT_FOUND to STDOUT, exit 1", async () => {
-    const { fetchFn } = stub([{ id: "loop-real", name: "Real", workdir: "/elsewhere", taskFile: null }], () => ({ ok: true, body: {} }));
+    const { fetchFn } = stub([{ id: "loop-real", name: "Real", workdir: "/elsewhere" }], () => ({ ok: true, body: {} }));
     const cap = capture({ fetchFn });
     const code = await runShow(["loop-zzzz-00000000"], cap.deps);
     expect(code).toBe(1);
@@ -83,8 +83,16 @@ describe("runShow", () => {
     expect(cap.stderr()).toBe("");
   });
 
+  test("extra positional arguments are rejected before listing loops", async () => {
+    const { fetchFn, calls } = stub([{ id: "loop-x", name: "X", workdir: "/elsewhere" }], () => ({ ok: true, body: {} }));
+    const cap = capture({ fetchFn });
+    expect(await runShow(["loop-x", "extra"], cap.deps)).toBe(2);
+    expect(cap.stderr()).toContain("usage: pievo show");
+    expect(calls).toHaveLength(0);
+  });
+
   test("an unknown flag on show → exit 2 (uniform with loops/log/edit)", async () => {
-    const { fetchFn, calls } = stub([{ id: "loop-x", name: "X", workdir: "/elsewhere", taskFile: null }], () => ({ ok: true, body: {} }));
+    const { fetchFn, calls } = stub([{ id: "loop-x", name: "X", workdir: "/elsewhere" }], () => ({ ok: true, body: {} }));
     const cap = capture({ fetchFn });
     expect(await runShow(["loop-x", "--bogus"], cap.deps)).toBe(2);
     expect(cap.stderr()).toContain("unknown flag --bogus");

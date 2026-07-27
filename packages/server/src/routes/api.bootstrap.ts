@@ -13,13 +13,13 @@ import { createFileRoute } from '@tanstack/react-router'
 // frontmatter — it's fetched-and-followed, not installed. It is server-only: the
 // daemon bundles/installs the clean SKILL.md instead (see sync-skill.mjs), so the
 // on-disk skill never carries "I'm probably not installed yet" noise. bootstrap.md
-// routes to the focused references (create/update/evolve), which the agent fetches
+// routes to the focused create/update references, which the agent fetches
 // over HTTP from /api/skill/references/<file> (see api.skill.references.$.ts) until
 // the local install lands. Single source of truth: packages/server/src/skill/.
 //
 // Route renamed from /api/skill to /api/bootstrap in batch 2 (it never served the
 // installable skill — it serves the bootstrap doc, so the path now says so). The
-// old /api/skill root route is gone; the references stay at /api/skill/references/*.
+// Public references are served from /api/skill/references/*.
 import bootstrap from '../skill/bootstrap.md?raw'
 
 /** GET /api/bootstrap — the first-capture bootstrap doc Claude Code follows (see ComposeModal). */

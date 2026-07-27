@@ -3,7 +3,7 @@
  * self-contained UI page (src/scheduler/ui.ts). The six status colors encode
  * meaning and are reused by the timeline, chart, and A/B panel.
  */
-import type { JobSummary, RunSummary } from '../types'
+import type { LoopSummary, RunSummary } from '../types'
 
 export const fmt = (t: string | null | undefined): string =>
   t ? new Date(t).toLocaleString() : '—'
@@ -96,43 +96,35 @@ export interface StatusMeta {
  * for meaning. Mirrored by the --color-run-* tokens used in Tailwind classes.
  */
 export const ST = {
-  kept: { c: 'var(--color-run-kept)', label: 'Kept' },
+  keep: { c: 'var(--color-run-keep)', label: 'Keep' },
   'no-change': { c: 'var(--color-run-no-change)', label: 'No change' },
-  blocked: { c: 'var(--color-run-blocked)', label: 'Blocked' },
+  block: { c: 'var(--color-run-block)', label: 'Block' },
   error: { c: 'var(--color-run-error)', label: 'Error' },
   warning: { c: 'var(--color-run-warning)', label: 'Missing status' },
   canceled: { c: 'var(--color-run-canceled)', label: 'Canceled' },
   queued: { c: 'var(--color-run-queued)', label: 'Queued' },
   reconciling: { c: 'var(--color-run-warning)', label: 'Reconciling…' },
-  'active-exec': { c: 'var(--color-run-active-exec)', label: 'Running…' },
-  'active-steer': { c: 'var(--color-run-active-steer)', label: 'Steering…' },
-  'active-evolve': { c: 'var(--color-run-active-evolve)', label: 'Evolving…' },
+  active: { c: 'var(--color-run-active)', label: 'Running…' },
 } satisfies Record<string, StatusMeta>
 
 const statusMeta = (k: string | null | undefined): StatusMeta | undefined =>
-  k === 'kept' || k === 'no-change' || k === 'blocked' ? ST[k] : undefined
-
-const roleWord = (r: RunSummary): 'exec' | 'steer' | 'evolve' =>
-  r.role === 'steer' ? 'steer' : r.role === 'evolve' ? 'evolve' : 'exec'
-
-const keptLabel = (r: RunSummary): string =>
-  roleWord(r) === 'steer' ? 'Steered' : roleWord(r) === 'evolve' ? 'Improved' : 'Kept'
+  k === 'keep' || k === 'no-change' || k === 'block' ? ST[k] : undefined
 
 export function dotColor(r: RunSummary): string {
   if (r.reconciliation) return ST.reconciling.c
-  if (r.running) return ST[`active-${roleWord(r)}`].c
-  if (r.status === 'blocked') return ST.blocked.c
-  if (r.queued) return ST.queued.c
+  if (r.phase === 'running') return ST.active.c
   if (r.phase === 'error') return ST.error.c
-  if (r.canceled || r.phase === 'canceled') return ST.canceled.c
+  if (r.status === 'block') return ST.block.c
+  if (r.phase === 'pending') return ST.queued.c
+  if (r.phase === 'canceled') return ST.canceled.c
   if (r.phase === 'done' && !statusMeta(r.status)) return ST.warning.c
   return (statusMeta(r.status) ?? ST['no-change']).c
 }
 
 export function dotOpacity(r: RunSummary): number {
-  if (r.reconciliation || r.running || r.status === 'blocked' || r.phase === 'error') return 1
-  if (r.queued) return 0.7
-  if (r.canceled || r.phase === 'canceled') return 0.5
+  if (r.reconciliation || r.phase === 'running' || r.status === 'block' || r.phase === 'error') return 1
+  if (r.phase === 'pending') return 0.7
+  if (r.phase === 'canceled') return 0.5
   if (r.phase === 'done' && !statusMeta(r.status)) return 0.9
   if (r.status === 'no-change') return 0.55
   return 1
@@ -141,29 +133,28 @@ export function dotOpacity(r: RunSummary): number {
 export function dotLabel(r: RunSummary): string {
   if (r.reconciliation === 'blocking') return 'Waiting for machine recovery'
   if (r.reconciliation === 'report-only') return 'Awaiting late report'
-  if (r.queued) return ST.queued.label
-  if (r.running) {
+  if (r.phase === 'pending') return ST.queued.label
+  if (r.phase === 'running') {
     if (r.cancelRequested) return 'Stopping…'
-    return ST[`active-${roleWord(r)}`].label
+    return ST.active.label
   }
-  // Blocked is actionability, so it outranks canceled/error visual labels.
-  if (r.status === 'blocked') return ST.blocked.label
   if (r.phase === 'error') {
     if (r.cancelRequested) return 'Failed while stopping'
     return ST.error.label
   }
-  if (r.canceled || r.phase === 'canceled') {
+  if (r.status === 'block') return ST.block.label
+  if (r.phase === 'canceled') {
     if (r.error === 'stopped by user') return 'Canceled'
     return 'Canceled'
   }
   if (r.cancelRequested && r.phase === 'done') return 'Succeeded while stopping'
-  if (r.status === 'kept') return keptLabel(r)
+  if (r.status === 'keep') return ST.keep.label
   if (r.status === 'no-change') return ST['no-change'].label
   if (r.phase === 'done') return ST.warning.label
   return ST['no-change'].label
 }
 
-export const lastRunOf = (j: JobSummary): RunSummary | null => {
+export const lastRunOf = (j: LoopSummary): RunSummary | null => {
   const a = j.runs ?? []
   return a.length ? a[a.length - 1]! : null
 }

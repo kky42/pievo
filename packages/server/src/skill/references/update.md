@@ -1,73 +1,65 @@
 # Edit an existing loop
 
-A loop has distinct control, instruction, and learned-context surfaces. Use the same **pievo-cli** prefix as for create (default `pievo`); it reuses this machine's persisted device token.
+Use the same **pievo-cli** prefix used to connect the machine (default `pievo`). The
+machine's persisted device credential authorizes edits to loops bound to it.
 
-- **Schedule / delivery envelope + goal** — cadence, name, timezone, notify, model, reasoning effort, pause, goal, etc. Change it with `pievo edit --json '<patch>'`.
-- **Standing instructions** — the task file (`pievo/<slug>/README.md`) contains one required authoritative `## Spec`. Edit the Spec directly. To point at a different README, patch `taskFile`.
-- **Learned context** — sibling `COOKBOOK.md` contains `Consolidated through: #N`, `## Knowledge`, and `## Timeline`. Knowledge holds durable facts and reusable positive/negative evidence; Timeline holds only evolve/steer decision boundaries and stays bounded.
-- **Dashboard / metric schema** — usually left to evolution. If the user explicitly asks, push them with `--ui-file` / `--schema-file`; schema changes are additive.
-
-Find the loop id:
+Find the loop and inspect its current editable envelope:
 
 ```bash
 <pievo-cli> loops
+<pievo-cli> show <loop-id> --json
 ```
 
-Before reshaping behavior, read README and Cookbook. Gather history progressively: `<pievo-cli> log <loop-id> --summary --after N --json` first, then a filtered `<pievo-cli> log <loop-id> --after N`, then at most a few `<pievo-cli> log <loop-id> --run <index> [--diff]` details. Never replay history exhaustively.
-
-For an existing loop with `## Current understanding` or a per-run `## Timeline` in README, the next evolve or steer moves useful learned content into COOKBOOK.md, leaves README's Spec authoritative, and records that migration boundary. An ordinary direct config edit need not rewrite content files.
-
-To delegate a plain-language change as one owner-authorized agent pass, queue a steer run instead of patching configuration directly:
+Patch only the requested fields with one JSON object. Preview before applying:
 
 ```bash
-<pievo-cli> steer <loop-id> --message "change the schedule to weekdays at 9am"
-<pievo-cli> steer <loop-id> --message-file instruction.txt
+<pievo-cli> edit <loop-id> --json '<patch>' --dry-run
+<pievo-cli> edit <loop-id> --json '<patch>'
 ```
 
-A pending steer coalesces and the latest owner instruction wins. `pievo edit` remains the direct configuration patch command.
+Accepted fields are:
 
-## Edit the envelope
+| field | value |
+|---|---|
+| `name` | non-empty string |
+| `schedule` | complete cron or continuous schedule object |
+| `workdir` | absolute working-directory path |
+| `agent` | `claude-code` or `codex` |
+| `model` | string or `null` for provider default |
+| `reasoningEffort` | string or `null` for provider default |
+| `prompt` | non-empty string, preserved as written |
+| `statusDefinitions` | complete `{keep,noChange,block}` object with non-empty strings |
+| `artifacts` | array of exact paths relative to `workdir` |
+| `enabled` | boolean |
+
+Schedule examples:
 
 ```bash
-<pievo-cli> edit <loop-id> --json '{"cron":"0 9 * * *","notify":"always"}'
-<pievo-cli> edit <loop-id> --json '{"scheduleMode":"continuous","continuousDelayMinutes":5}'
-<pievo-cli> edit <loop-id> --json '{"enabled":false}'
-<pievo-cli> edit <loop-id> --json '{"goal":"ship v1.0"}'
-<pievo-cli> edit <loop-id> --json '{"goal":null}'
+<pievo-cli> edit <loop-id> --json '{"schedule":{"mode":"cron","cron":"0 9 * * 1-5","timezone":"Europe/London","overlap":"queue-one"}}'
+<pievo-cli> edit <loop-id> --json '{"schedule":{"mode":"continuous","delayMinutes":15}}'
 ```
 
-Accepted keys:
-
-| key | value | effect |
-|---|---|---|
-| `name` | string | rename |
-| `cron` | 5-field cron string | retained cron cadence |
-| `scheduleMode` | `cron` \| `continuous` | switch cadence mode |
-| `continuousDelayMinutes` | integer >= 1 | delay after each continuous exec terminal |
-| `timezone` | IANA name | change cron zone |
-| `notify` | `always` \| `auto` \| `never` | delivery policy |
-| `model` | string or `null` | provider model; `null` uses CLI default |
-| `reasoningEffort` | string or `null` | provider reasoning effort; `null` uses CLI default |
-| `agent` | `claude-code` \| `codex` | coding agent used on the bound machine |
-| `allowControl` | boolean | `false` pins the schedule |
-| `enabled` | boolean | pause/resume |
-| `runAt` | `2h` / ISO | one extra run soon |
-| `taskFile` | absolute path | repoint at a different task-file README |
-| `goal` | string or `null` | set/change/clear the standing objective |
-| `ui` | HTML string | usually via `--ui-file` |
-| `metricSchema` | array of `{key,label?,unit?}` | usually via `--schema-file` |
-
-Preview with `--dry-run`.
-
-## Content fields
+Other examples:
 
 ```bash
-<pievo-cli> edit <loop-id> --ui-file dash.html
-<pievo-cli> edit <loop-id> --schema-file schema.json
+<pievo-cli> edit <loop-id> --json '{"prompt":"Run the verified release check and summarize only actionable findings."}'
+<pievo-cli> edit <loop-id> --json '{"statusDefinitions":{"keep":"A verified action was completed.","noChange":"The check completed with nothing actionable.","block":"Owner input is required."}}'
+<pievo-cli> edit <loop-id> --json '{"artifacts":["release-check.md"]}'
+<pievo-cli> edit <loop-id> --json '{"model":null,"reasoningEffort":null}'
 ```
 
-Explicit `--json` keys win over file flags. Follow `dashboard.md` when changing UI. You can only edit loops bound to this machine.
+Important constraints:
 
-## Diagnose a rejected terminal report
+- Replacing `schedule` requires one complete exclusive shape. Cron requires `cron`,
+  `timezone`, and `overlap`; continuous requires only `delayMinutes`.
+- Replacing `statusDefinitions` requires all three definitions.
+- Artifact entries are exact stable file paths, not globs. They must be relative to
+  `workdir` and cannot traverse outside it.
+- The server validates every field and rejects unknown keys without mutating the loop.
+- Pievo appends the runtime report contract to `prompt`; do not duplicate it in the
+  stored prompt.
 
-Use `<pievo-cli> show <loop-id>` and `<pievo-cli> log <loop-id>` first. If the incident names the daemon or compatibility fault domain, upgrade Pievo and restart the daemon: `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`. Edit loop configuration only when diagnostics point to a config problem.
+Run once is intentionally a Web action: use **Run once** on the loop detail page.
+For Pause, Start, Stop, Delete, and history, use `<pievo-cli> --help` and the
+relevant command's `--help` instead of treating lifecycle operations as
+prompt-authoring fields.

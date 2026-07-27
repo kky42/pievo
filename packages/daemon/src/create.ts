@@ -1,49 +1,19 @@
 /**
  * `pievo new` — create a loop from a config file the agent wrote.
  *
- * Folds SKILL.md §3 (hand IANA-timezone detection) and §4 (hand-built JSON +
- * curl) into one command. The agent's config carries only real intent —
- * name · cron · taskFile · workdir · model · reasoningEffort · metricSchema · ui · notify. This
- * command fills the fixed envelope the agent shouldn't have to think about:
- *   - timezone: auto-detected IANA (config/--tz override), so the cadence fires
- *     in the user's local time, not the server's (UTC in prod),
- *   - claim:    the connect-key, so the web New-loop dialog resolves,
- *   - auth:     Bearer this machine's stored device token,
- * then POSTs to the gateway's existing /api/machine/loop. The server stays the
- * sole validator; we pre-check the obvious local mistakes for a clear message.
+ * The JSON object is the canonical loop envelope: name, exclusive schedule
+ * union, workdir, required agent, optional provider settings, prompt, three
+ * status definitions, exact artifact paths, and enabled. This command adds only
+ * the connect claim, idempotency key, and machine authentication, then posts
+ * through `/api/machine/cli`. The server stays the sole validator; we pre-check
+ * obvious local mistakes for a clear message.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 
-import type { CliResponse, LegacyFallback } from "./cli-client.js";
-import { postCli, printTextOrTooOld } from "./cli-client.js";
+import { postCli, printCliResponse } from "./cli-client.js";
 import { DEVICE_FILE, flag, readStored, resolveServerUrl } from "./config.js";
 import { type InstallOutcome, installSkill } from "./skill-install.js";
-
-/**
- * Best-effort IANA zone for THIS machine. `Intl` is the portable primary (works
- * in containers with no /etc/localtime symlink); the symlink is a fallback for
- * the rare host whose Intl data is misconfigured. Empty ⇒ caller asks for --tz.
- */
-function detectTimezone(): string {
-  let intlZone = "";
-  try {
-    intlZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (intlZone && intlZone !== "UTC") return intlZone;
-  } catch {
-    /* fall through */
-  }
-  try {
-    const link = fs.readlinkSync("/etc/localtime");
-    const m = link.match(/zoneinfo\/(.+)$/);
-    if (m?.[1]) return m[1];
-  } catch {
-    /* fall through */
-  }
-  // No symlink zone: fall back to whatever Intl gave us ("UTC" genuine or
-  // default) rather than nothing — trust it over an empty string.
-  return intlZone || "";
-}
 
 /** Local pre-check only — the server (croner) is the SOLE validator. Croner
  *  accepts 5- and 6-field expressions plus @-shortcuts (@daily …), so reject
@@ -60,7 +30,7 @@ export function cronLooksValid(cron: unknown): cron is string {
 /**
  * Deterministic JSON: object keys sorted recursively so two logically-identical
  * configs (any key order) serialize identically. Arrays keep their order (order is
- * meaningful — e.g. a metricSchema's fields). The idempotency key hashes this.
+ * meaningful — e.g. configured artifact paths). The idempotency key hashes this.
  */
 export function canonicalJson(v: unknown): string {
   if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
@@ -81,13 +51,11 @@ function machineIdFromToken(token: string): string {
  * The `new` idempotency key (F8, design §8.1): `sha256(machineId + canonicalJSON(body))`
  * over the EXACT outgoing request body, minus the `idempotencyKey` nonce itself.
  * A timed-out retry of the SAME `pievo new` resolves to an identical body (same argv +
- * env ⇒ same config, timezone, connect-key/claim, agent), so it sends the SAME key and
+ * env ⇒ same config and connect-key/claim), so it sends the SAME key and
  * the server replays the existing loop instead of making a twin. ANY envelope difference —
- * a different `--tz`, `--connect-key` (target team), `--agent`, or config field — yields a
+ * a different `--connect-key` (target team) or config field — yields a
  * DISTINCT key, so genuinely-different creates never collapse (this closes the whole
- * envelope-collision class, not just the connect-key case). Additive on the wire: an old
- * server ignores the key, a new server treats an absent key as no-dedupe, so both
- * directions stay compatible.
+ * envelope-collision class, not just the connect-key case).
  */
 export function idempotencyKey(token: string, resolvedBody: Record<string, unknown>): string {
   const { idempotencyKey: _nonce, ...rest } = resolvedBody;
@@ -99,41 +67,9 @@ export function idempotencyKey(token: string, resolvedBody: Record<string, unkno
 /** The coding agents Pievo can record a loop against (TS-only; cheap to widen). */
 export type CodingAgent = "claude-code" | "codex";
 
-/** Coerce an arbitrary declared value (--agent flag / config.agent) to a known
- *  agent, or null when it's absent/unrecognized (so it can't override a measurement
- *  and the server falls back to its own default). */
+/** Coerce the required config.agent field to one supported agent. */
 export function coerceAgent(v: unknown): CodingAgent | null {
   return v === "claude-code" || v === "codex" ? v : null;
-}
-
-/**
- * Best-effort fingerprint of the coding agent hosting THIS `pievo new` process,
- * read from the env the host agent exported into our shell. This MEASURES the real
- * host (it can't be fooled by a wrong dialog selection), but it's best-effort: a
- * host that runs us without its marker env (e.g. Codex under bypass-sandbox mode)
- * is undetectable here, so callers fall back to the declared/selected value.
- *
- * Fingerprints (verified against the live Claude Code env + current Codex CLI docs,
- * `CODEX_SANDBOX*` per openai/codex AGENTS.md, not memory):
- *   - Claude Code: `CLAUDECODE` (also exports many `CLAUDE_CODE_*`).
- *   - Codex CLI:  `CODEX_SANDBOX` / `CODEX_SANDBOX_NETWORK_DISABLED` (set for its
- *     shell tool under the sandbox). We deliberately ignore `CODEX_COMPANION_*`,
- *     which a Claude Code session can also export and would misattribute.
- */
-export function detectAgentFromEnv(env: NodeJS.ProcessEnv): CodingAgent | null {
-  if (env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT || env.CLAUDE_CODE_SESSION_ID) return "claude-code";
-  if (env.CODEX_SANDBOX || env.CODEX_SANDBOX_NETWORK_DISABLED) return "codex";
-  return null;
-}
-
-/**
- * Resolve the recorded agent by the agreed precedence:
- *   measured CLI env-fingerprint > declared (--agent / config.agent) > undefined.
- * Returns undefined when nothing is known so the server applies its own default
- * (claude-code) — we never invent a value the host didn't actually evidence.
- */
-export function resolveAgent(env: NodeJS.ProcessEnv, declared: unknown): CodingAgent | undefined {
-  return detectAgentFromEnv(env) ?? coerceAgent(declared) ?? undefined;
 }
 
 /** Tests inject these to assert the post-create skill install without network/npx. */
@@ -147,13 +83,23 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   const fetchImpl = deps.fetchImpl ?? fetch;
   const installer = deps.installer ?? installSkill;
   const write = deps.stdout ?? ((s: string) => void process.stdout.write(s));
-  // The config is passed INLINE as `--json '<obj>'` (or `--json -` to read stdin),
-  // replacing the old `--config <file>` temp-file ritual (batch 2). `--dry-run`
-  // validates + previews without creating anything.
+  const valueFlags = new Set(["--json", "--connect-key", "--server-url"]);
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--dry-run") continue;
+    if (valueFlags.has(arg)) {
+      i++; // value validation below gives the flag-specific usage error
+      continue;
+    }
+    process.stderr.write(`pievo: unknown argument ${arg} — try \`pievo new --help\`\n`);
+    return 2;
+  }
+  // The config is passed inline as `--json '<obj>'` (or `--json -` for stdin).
+  // `--dry-run` validates and previews without creating anything.
   const jsonArg = flag(args, "json");
   const dryRun = args.includes("--dry-run");
   if (jsonArg === undefined) {
-    process.stderr.write("pievo: usage: pievo new --json '<config>' [--dry-run] [--connect-key dk_…] [--server-url <url>] [--tz <IANA>] [--agent claude-code|codex]\n");
+    process.stderr.write("pievo: usage: pievo new --json '<config>' [--dry-run] [--connect-key dk_…] [--server-url <url>]\n");
     return 2;
   }
 
@@ -173,7 +119,7 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     return 1;
   }
   if (!raw.trim()) {
-    process.stderr.write("pievo: --json needs the config object (e.g. --json '{\"cron\":\"0 8 * * *\",\"taskFile\":\"pievo/x/README.md\"}')\n");
+    process.stderr.write("pievo: --json needs the loop config object (including schedule, agent, prompt, and statusDefinitions)\n");
     return 2;
   }
   let config: Record<string, unknown>;
@@ -188,76 +134,50 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     return 1;
   }
 
-  if (!cronLooksValid(config.cron)) {
-    process.stderr.write('pievo: config needs a "cron" expression (e.g. "0 8 * * *")\n');
+  const schedule = config.schedule as Record<string, unknown> | undefined;
+  if (!schedule || typeof schedule !== "object" || Array.isArray(schedule) ||
+      (schedule.mode !== "cron" && schedule.mode !== "continuous")) {
+    process.stderr.write('pievo: config needs a schedule union with mode "cron" or "continuous"\n');
     return 2;
   }
-  // The `task` column is gone (batch 2): a loop's brief lives in its task file, so a
-  // loop needs a task file (path to the Spec) to work from.
-  if (!config.taskFile) {
-    process.stderr.write('pievo: config needs a "taskFile" (path to the loop\'s Spec)\n');
+  if (schedule.mode === "cron" && !cronLooksValid(schedule.cron)) {
+    process.stderr.write('pievo: schedule.cron needs a cron expression (e.g. "0 8 * * *")\n');
+    return 2;
+  }
+  if (!coerceAgent(config.agent)) {
+    process.stderr.write('pievo: config needs "agent": "claude-code" or "codex"\n');
     return 2;
   }
 
-  // The CLI owns the fixed envelope: timezone (so "8am" means the user's 8am),
-  // claim (so the web dialog learns the loop was created), auth (the bearer).
-  const timezone = (typeof config.timezone === "string" && config.timezone) || flag(args, "tz") || detectTimezone();
   const connectKey = flag(args, "connect-key");
-  // Record which coding agent this loop is bound to: measure our host from the env
-  // first (honest), else fall back to what was declared via --agent or a hand-written
-  // config `agent:` line (the New-loop dialog no longer emits one — self-detection
-  // drives it). Undefined ⇒ let the server default it to claude-code.
-  const agent = resolveAgent(process.env, flag(args, "agent") ?? config.agent);
-  const body: Record<string, unknown> = { ...config, timezone };
-  // Send only a coerced agent (or none) — never a raw config.agent that skipped
-  // resolution; the server defaults a missing value to claude-code.
-  if (agent) body.agent = agent;
-  else delete body.agent;
+  const body: Record<string, unknown> = { ...config };
   if (connectKey) body.claim = connectKey;
-  // Idempotency (F8): stamp a content-hash key on real creates so a timed-out retry
-  // replays the existing loop instead of making a twin. A dry-run creates nothing, so
-  // it carries no key. Hashed over the ENTIRE resolved body (config + timezone +
-  // connect-key/claim + agent) minus the nonce, so any envelope difference — including a
-  // different --tz — yields a distinct key and genuinely-different creates never collapse.
+  // Idempotency is a required create-transport field, including validate-only
+  // requests. Hash the whole resolved envelope (minus the nonce itself) only
+  // after adding dryRun so each exact request has one stable identity.
   if (dryRun) body.dryRun = true;
-  else body.idempotencyKey = idempotencyKey(token, body);
+  body.idempotencyKey = idempotencyKey(token, body);
 
   try {
-    // The whole config travels as the unified `new --json <config>` verb; the legacy
-    // fallback (old server, no /api/machine/cli) POSTs the same body to the pre-batch-4
-    // `/api/machine/loop`. The connection was pre-checked above, so postCli is given the
-    // resolved device token + server explicitly (never falls to "not-configured" here).
-    const legacyCreate: LegacyFallback = async (ctx): Promise<CliResponse> => {
-      const res = await ctx.fetchImpl(`${ctx.server}/api/machine/loop`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${ctx.token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
-    };
-    const r = await postCli(["new", "--json", JSON.stringify(body)], legacyCreate, {
+    // The whole config travels as `new --json <config>`. The connection was
+    // pre-checked above, so postCli receives the resolved token and server.
+    const r = await postCli(["new", "--json", JSON.stringify(body)], {
       fetchImpl,
       server,
       deviceToken: token,
     });
     if (r.kind !== "ok") {
-      const detail = r.kind === "network-error" ? r.message : r.kind === "read-error" ? `cannot read ${r.path}` : "machine not connected";
+      const detail = r.kind === "network-error" ? r.message : "machine not connected";
       process.stderr.write(`pievo: ${detail}\n`);
       return 1;
     }
-    // Text-sink: the server renders the created / dry-run / idempotent-replay TOON (incl.
-    // classification, nextRuns, dashboard applied/not, the dropped-dashboard `warning:`
-    // line) AND the error TOON (`error:`/`code:`); we just print it. A too-old server
-    // (no `text`) → a definitive SERVER_TOO_OLD error, never blank output.
-    const code = printTextOrTooOld(r.body, r.status, write);
+    const code = printCliResponse(r.body, r.status, write);
     if (code !== 0) return code;
     if (dryRun) return 0;
-    // Best-effort: now that the loop exists, install/refresh the pievo skill at
-    // USER scope (`~/.claude/skills/pievo`), so the coding agent discovers the
-    // references from ANY loop workdir. Announced, never blocks — any failure
-    // degrades to the always-working /api/skill/references path. Only runs after a
-    // confirmed create. (`pievo daemon start` also refreshes it; this keeps a create made
-    // without a fresh daemon start current too.)
+    // Best-effort: after a confirmed create, refresh the owner-facing skill at
+    // user scope so future coding-agent sessions can discover its connect/create/
+    // update guidance from any workdir. Failure is announced but never blocks;
+    // the owner may retry with `pievo skill install`.
     await announceSkillInstall(installer, write);
     return 0;
   } catch (err) {

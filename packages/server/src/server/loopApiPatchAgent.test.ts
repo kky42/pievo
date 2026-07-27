@@ -4,31 +4,13 @@ import path from 'node:path'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 
 import { CODING_AGENTS, coerceCodingAgent } from '../types.js'
-import type { JobPayload } from '../types.js'
-import type { NewLoop } from '../db/schema.js'
+import { validateLoopEdit } from '../gateway/loopConfig.js'
+import { testStore, type TestStore } from '../../test/store.js'
 
-/**
- * The shared coding-agent enum validator + the web `patchJob` agent write path.
- *
- * `coerceCodingAgent` is the ONE enum validator both write surfaces read (server
- * `buildEditUpdate` + the web `patchJob`/select), so it is exercised directly here.
- *
- * `patchJob` is a thin `createServerFn` wrapper; its distinguishing agent logic is
- * `const agent = coerceCodingAgent(p.agent)` then `...(agent ? { agent } : {})`
- * spread into `store.updateLoop`. Following the `teamUrlScope.integration`
- * convention, this mirrors exactly that spread over a real pglite store to prove a
- * `JobPayload` carrying a KNOWN `agent` persists, an absent one is untouched, and an
- * UNRECOGNIZED one is dropped (never persisted).
- */
+/** The shared coding-agent enum and canonical web/CLI edit validation. */
 
 let tmp: string
-let store: typeof import('../db/store.js')
-
-/** patchJob's agent write, verbatim (the only field this test drives). */
-function agentUpdate(p: JobPayload): Partial<NewLoop> {
-  const agent = coerceCodingAgent(p.agent)
-  return { ...(agent ? { agent } : {}) }
-}
+let store: TestStore
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pievo-patchagent-'))
@@ -37,7 +19,7 @@ beforeAll(async () => {
   process.env.PIEVO_LOG_LEVEL = 'silent'
   const db = await import('../db/index.js')
   await db.runMigrations()
-  store = await import('../db/store.js')
+  store = testStore(await import('../db/store.js'))
 })
 
 afterAll(() => {
@@ -51,19 +33,22 @@ test('coerceCodingAgent accepts every known enum value and rejects the rest', ()
   }
 })
 
-test('patchJob agent spread persists a JobPayload agent through store.updateLoop', async () => {
-  const created = await store.createLoop({ userId: 'u1', teamId: 't1', machineId: 'm1', name: 'A', cron: '0 6 * * *' })
-  // Create default is claude-code (no agent on the create body).
+test('canonical edit validation persists known agents and rejects unknown agents', async () => {
+  const created = await store.createLoop({ workdir: "/work", userId: 'u1', teamId: 't1', machineId: 'm1', name: 'A', cron: '0 6 * * *' })
   expect(created.agent).toBe('claude-code')
 
-  const updated = await store.updateLoop(created.id, agentUpdate({ agent: 'codex' }))
+  const accepted = validateLoopEdit(created, { agent: 'codex' })
+  expect(accepted.ok).toBe(true)
+  if (!accepted.ok) throw new Error(accepted.detail)
+  const updated = await store.updateLoop(created.id, accepted.value)
   expect(updated!.agent).toBe('codex')
 
-  // An absent agent leaves the recorded value untouched (empty spread → no write).
-  const noop = await store.updateLoop(created.id, agentUpdate({ name: 'B' }))
-  expect(noop!.agent).toBe('codex')
+  const absent = validateLoopEdit(updated!, { name: 'B' })
+  expect(absent.ok).toBe(true)
+  if (!absent.ok) throw new Error(absent.detail)
+  const renamed = await store.updateLoop(created.id, absent.value)
+  expect(renamed!.agent).toBe('codex')
 
-  // An unrecognized agent is dropped by the shared validator, never persisted.
-  const dropped = await store.updateLoop(created.id, agentUpdate({ agent: 'emacs' as never }))
-  expect(dropped!.agent).toBe('codex')
+  expect(validateLoopEdit(renamed!, { agent: 'emacs' })).toMatchObject({ ok: false })
+  expect((await store.getLoop(created.id))!.agent).toBe('codex')
 })

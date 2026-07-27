@@ -3,269 +3,100 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 
+import { testStore, type TestStore } from "../../test/store.js";
+
 let tmp: string;
 let db: typeof import("../db/index.js");
-let store: typeof import("../db/store.js");
-let tokens: typeof import("./tokens.js");
+let store: TestStore;
 let history: typeof import("./history.js");
-let CliGateway: typeof import("./cli.js").CliGateway;
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-history-"));
   process.env.PIEVO_DATA_DIR = tmp;
+  process.env.PIEVO_DB_PATH = path.join(tmp, "test.db");
   process.env.PIEVO_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();
-  store = await import("../db/store.js");
-  tokens = await import("./tokens.js");
+  store = testStore(await import("../db/store.js"));
   history = await import("./history.js");
-  CliGateway = (await import("./cli.js")).CliGateway;
 });
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 beforeEach(async () => {
-  await (db.client as any).exec("DELETE FROM terminal_report_incidents; DELETE FROM run_report_receipts; DELETE FROM run_leases; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
+  await (db.client as any).exec("DELETE FROM run_snapshots; DELETE FROM artifact_files; DELETE FROM blobs; DELETE FROM run_leases; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
-async function seedMachineLoop(suffix = "a") {
-  const token = tokens.mintDeviceToken();
-  const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: `M-${suffix}`, tokenHash: tokens.sha256(token), online: true });
-  const loop = await store.createLoop({
-    userId: "u1", machineId, name: `History ${suffix}`, cron: "0 0 1 1 *", enabled: true, notify: "auto",
-    agent: "codex", model: "gpt-history", reasoningEffort: "high", goal: "keep it healthy",
-  });
-  return { token, machineId, loop };
+async function seeded() {
+  const machine = await store.createMachine({ id: "m-history", userId: "u1", name: "M", tokenHash: "h", online: true });
+  const loop = await store.createLoop({ workdir: "/work", userId: "u1", machineId: machine.id, name: "History", cron: "0 0 * * *", enabled: true });
+  return { machine, loop };
 }
 
-test("run indexes follow claim priority, then unclaimed terminalization", async () => {
-  const { machineId, loop } = await seedMachineLoop();
-  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "system" });
-  await store.enqueueRun(loop.id, { role: "evolve", requestedBy: "owner" });
-  await store.enqueueRun(loop.id, { role: "steer", requestedBy: "owner", requestText: "go first" });
+test("history grammar rejects unknown filters", () => {
+  expect(history.parseHistoryFlags({ unknown: true })).toMatchObject({ ok: false });
 
-  const first = (await store.claimReadyRunForMachine(machineId))!;
-  expect(first.run).toMatchObject({ role: "steer", runIndex: 1, agent: "codex", model: "gpt-history", reasoningEffort: "high" });
-  await store.finalizeRunningRun(loop.id, first.run.id, { phase: "done", ts: "2026-01-01T00:00:01Z" }, {}, tokens.sha256(first.runToken));
-
-  const second = (await store.claimReadyRunForMachine(machineId))!;
-  expect(second.run).toMatchObject({ role: "evolve", runIndex: 2 });
-  await store.finalizeRunningRun(loop.id, second.run.id, { phase: "done", ts: "2026-01-01T00:00:02Z" }, {}, tokens.sha256(second.runToken));
-
-  const pendingExec = (await store.openRunsForLoop(loop.id)).find((run) => run.role === "exec")!;
-  const canceled = (await store.requestRunCancel(loop.id, pendingExec.id))!;
-  expect(canceled).toMatchObject({ phase: "canceled", runIndex: 3 });
-  expect((await store.getLoop(loop.id))!.lastRunIndex).toBe(3);
-});
-
-test("terminal-grace reconciliation preserves its original index and is single-shot", async () => {
-  const { machineId, loop } = await seedMachineLoop();
-  await store.enqueueRun(loop.id, { role: "exec", requestedBy: "owner" });
-  const claimed = (await store.claimReadyRunForMachine(machineId))!;
-  expect(claimed.run.runIndex).toBe(1);
-  const hash = tokens.sha256(claimed.runToken);
-  await store.reclaimRun(claimed.run.id, "running", "asleep", new Date(Date.now() - 1_000).toISOString(), 60_000);
-  const reconciled = await store.reconcileReclaimedRun(loop.id, claimed.run.id, hash, { phase: "done", status: "kept", ts: new Date().toISOString() });
-  expect(reconciled?.run.runIndex).toBe(1);
-  expect((await store.getLoop(loop.id))!.lastRunIndex).toBe(1);
-  expect(await store.reconcileReclaimedRun(loop.id, claimed.run.id, hash, { phase: "done", ts: new Date().toISOString() })).toBeUndefined();
-});
-
-async function seedSummary() {
-  const seeded = await seedMachineLoop();
-  const base = Date.parse("2026-02-01T00:00:00Z");
-  await store.addRun({ loopId: seeded.loop.id, userId: "u1", machineId: seeded.machineId, phase: "done", role: "exec", requestedBy: "system", ts: new Date(base + 1_000).toISOString(), status: "no-change", message: "first result", finalText: "first final response", durationMs: 100, usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 1_000, cacheCreationTokens: 2_000 }, metrics: { score: 2 }, agent: "codex", model: "m1", reasoningEffort: "high" });
-  await store.addRun({ loopId: seeded.loop.id, userId: "u1", machineId: seeded.machineId, phase: "done", role: "steer", requestedBy: "owner", requestText: "focus on validation robustness", ts: new Date(base + 2_000).toISOString(), status: "kept", message: "steer applied", usage: { inputTokens: 4, outputTokens: 5, cacheReadTokens: 3_000 }, agent: "claude-code", model: null, reasoningEffort: null });
-  await store.addRun({ loopId: seeded.loop.id, userId: "u1", machineId: seeded.machineId, phase: "done", role: "exec", requestedBy: "system", ts: new Date(base + 3_000).toISOString(), status: "no-change", durationMs: 300, usage: { inputTokens: 30, outputTokens: 6 }, metrics: { score: 4 }, agent: "codex", model: "m1", reasoningEffort: "high" });
-  await store.addRun({ loopId: seeded.loop.id, userId: "u1", machineId: seeded.machineId, phase: "error", role: "exec", requestedBy: "system", ts: new Date(base + 4_000).toISOString(), error: "boom", agent: "codex", model: "m2", reasoningEffort: "low" });
-  await store.addRun({ loopId: seeded.loop.id, userId: "u1", machineId: seeded.machineId, phase: "pending", role: "evolve", requestedBy: "owner", ts: new Date(base + 5_000).toISOString() });
-  return seeded;
-}
-
-test("initial Cookbook cursor #0 is a valid exclusive history boundary", () => {
-  expect(history.parseHistoryFlags({ summary: true, after: "0", json: true })).toMatchObject({
+  expect(history.parseHistoryFlags({ since: "2026-01-01T00:00:00Z", status: "keep", limit: "5", json: true })).toMatchObject({
     ok: true,
-    value: { mode: "summary", after: 0, json: true },
+    value: { mode: "list", status: "keep", limit: 5, json: true },
   });
+  expect(history.parseHistoryFlags({ run: "3", diff: true })).toMatchObject({ ok: true, value: { mode: "detail", run: 3, diff: true } });
 });
 
-test("history list is one compact agent evidence shape for every role", async () => {
-  const { loop } = await seedSummary();
-  const jsonResult = await history.readLoopHistory(loop, { limit: "20", json: true });
-  expect(jsonResult.status).toBe(200);
-  expect(Object.keys(jsonResult.body as any)).toEqual(["text"]);
-  const data = JSON.parse((jsonResult.body as any).text);
-  expect(Object.keys(data)).toEqual(["through", "count", "total", "runs"]);
-  expect(data).toMatchObject({ through: 4, count: 4, total: 4 });
-  expect(Object.keys(data.runs[0])).toEqual([
-    "runIndex", "terminalAt", "role", "requestText", "requestTextTruncated", "phase", "status",
-    "durationMs", "tokenUsage", "metrics", "message", "messageTruncated", "finalTextAvailable",
-  ]);
-  expect(data.runs.find((run: any) => run.runIndex === 1)).toEqual(expect.objectContaining({
-    role: "exec", requestText: null, tokenUsage: 12, metrics: { score: 2 }, message: "first result", finalTextAvailable: true,
-  }));
-  expect(data.runs.find((run: any) => run.runIndex === 2)).toEqual(expect.objectContaining({
-    role: "steer", requestText: "focus on validation robustness", requestTextTruncated: false, tokenUsage: 9, finalTextAvailable: false,
-  }));
-  expect(data.runs[0]).not.toHaveProperty("result");
-  expect(data.runs[0]).not.toHaveProperty("usage");
-  expect(data.runs[0]).not.toHaveProperty("sessionId");
-
-  const toonResult = await history.readLoopHistory(loop, { limit: "20" });
-  const text = (toonResult.body as any).text as string;
-  expect(text).toContain("runs[4]{index,terminal,role,requestText,phase,status,durationMs,tokenUsage,metrics,message,finalTextAvailable}");
-  expect(text).toMatch(/\n  2,[^\n]+,steer,/);
-  expect(text).not.toContain(",running,");
-  expect(text).toContain("through: 4");
-});
-
-test("requestText exposes owner steering only, never system text", async () => {
-  const { loop, machineId } = await seedMachineLoop("request-text");
-  const system = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "steer", requestedBy: "system", requestText: "internal text", ts: "2026-02-01T00:00:00Z" });
-  const owner = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "steer", requestedBy: "owner", requestText: "owner direction", ts: "2026-02-02T00:00:00Z" });
-  const listed = JSON.parse(((await history.readLoopHistory(loop, { json: true })).body as any).text).runs;
-  expect(listed.find((run: any) => run.runIndex === system.runIndex).requestText).toBeNull();
-  expect(listed.find((run: any) => run.runIndex === owner.runIndex).requestText).toBe("owner direction");
-  const detail = JSON.parse(((await history.readLoopHistory(loop, { run: String(system.runIndex), json: true })).body as any).text);
-  expect(detail.requestText).toBeNull();
-});
-
-test("summary windows keep phase/status separate and exclude missing telemetry", async () => {
-  const { loop } = await seedSummary();
-  const res = await history.readLoopHistory(loop, { summary: true, through: "3", json: true });
-  expect(res.status).toBe(200);
-  const summary = (res.body as any).summary;
-  expect(summary).toMatchObject({ through: 3, total: 3, byRole: { exec: 2, steer: 1, evolve: 0 }, phases: { done: 3, error: 0, canceled: 0 }, openNow: 1, execNoChangeStreak: 2 });
-  expect(summary.reportedStatusByRole.exec).toMatchObject({ "no-change": 2, kept: 0 });
-  expect(summary.tokenUsage.overall).toEqual({ total: 57, average: 19, samples: 3 });
-  expect(summary).not.toHaveProperty("usage");
-  expect(summary.duration.overall).toEqual({ total: 400, average: 200, samples: 2 });
-  expect(summary.metrics.values.score).toMatchObject({ samples: 2, first: { runIndex: 1, value: 2 }, latest: { runIndex: 3, value: 4 }, min: 2, max: 4, average: 3 });
-  expect(summary.executionProfiles.agent.counts).toMatchObject({ codex: 2, "claude-code": 1 });
-  expect(JSON.parse((res.body as any).text).through).toBe(3);
-
-  const timed = await history.readLoopHistory(loop, { summary: true, since: "2026-02-01T00:00:02Z", until: "2026-02-01T00:00:03Z", json: true });
-  expect((timed.body as any).summary).toMatchObject({ total: 2, through: 3, firstTerminal: { runIndex: 2 }, lastTerminal: { runIndex: 3 } });
-});
-
-test("summary cursor stops before the lowest indexed open run and omits later terminal evidence", async () => {
-  const { loop, machineId } = await seedMachineLoop("contiguous");
-  for (let runIndex = 1; runIndex <= 9; runIndex++) {
-    await store.addRun({ id: `00000000-0000-4000-8000-${String(runIndex).padStart(12, "0")}`, loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", runIndex, ts: `2026-02-${String(runIndex).padStart(2, "0")}T00:00:00Z` });
-  }
-  await store.addRun({ id: "00000000-0000-4000-8000-000000000010", loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", runIndex: 10, ts: "2026-02-10T00:00:00Z" });
-  await store.addRun({ id: "00000000-0000-4000-8000-000000000011", loopId: loop.id, userId: "u1", machineId, phase: "canceled", role: "steer", runIndex: 11, ts: "2026-02-11T00:00:00Z" });
-
-  const summaryResult = await history.readLoopHistory(loop, { summary: true, json: true });
-  expect(summaryResult.status).toBe(200);
-  expect((summaryResult.body as any).summary).toMatchObject({ through: 9, total: 9, lastTerminal: { runIndex: 9 }, openNow: 1 });
-
-  const listResult = await history.readLoopHistory(loop, { limit: "20", json: true });
-  const listed = JSON.parse((listResult.body as any).text);
-  expect(listed.runs[0]).toMatchObject({ runIndex: 11, phase: "canceled" });
-  expect(listed.through).toBe(9);
-});
-
-test("summary fails loudly when its bounded row budget is exceeded", async () => {
-  const { loop, machineId } = await seedMachineLoop("budget");
-  await (db.client as any).exec(`
-    INSERT INTO runs (id,loop_id,user_id,machine_id,phase,role,run_index,ts)
-    SELECT 'budget-' || n, '${loop.id}', 'u1', '${machineId}', 'done', 'exec', n, '2026-01-01T00:00:00Z'
-    FROM generate_series(1, ${history.HISTORY_SUMMARY_ROWS_MAX + 1}) AS n;
-  `);
-  const result = await history.readLoopHistory(loop, { summary: true, json: true });
-  expect(result.status).toBe(413);
-  expect((result.body as any).error).toContain(`more than ${history.HISTORY_SUMMARY_ROWS_MAX} runs`);
-  expect((result.body as any).error).toContain("--after or --since");
-});
-
-test("detail is loop scoped and bounds large fields with explicit truncation", async () => {
-  const a = await seedMachineLoop("a");
-  const otherMachine = tokens.mintDeviceToken();
-  const otherMachineId = tokens.machineIdFromToken(otherMachine);
-  await store.createMachine({ id: otherMachineId, userId: "u2", name: "M-b", tokenHash: tokens.sha256(otherMachine), online: true });
-  const b = await store.createLoop({ userId: "u2", machineId: otherMachineId, name: "B", cron: "0 0 1 1 *", enabled: true, notify: "auto" });
-  const foreign = await store.addRun({ loopId: b.id, userId: "u2", machineId: otherMachineId, phase: "done", role: "exec", ts: "2026-03-01T00:00:00Z" });
-  expect((await history.readLoopHistory(a.loop, { run: foreign.id, json: true })).status).toBe(404);
-
-  const local = await store.addRun({
-    loopId: a.loop.id, userId: "u1", machineId: a.machineId, phase: "error", role: "steer", requestedBy: "owner",
-    requestText: "x".repeat(history.HISTORY_DETAIL_TEXT_CAP + 10), message: null, error: "missing report",
-    ts: "2026-03-02T00:00:00Z", finalText: "y".repeat(history.HISTORY_DETAIL_TEXT_CAP + 10),
-    usage: { inputTokens: 7, outputTokens: 3, cacheReadTokens: 10_000, cacheCreationTokens: 20_000 },
+test("list history returns the canonical bounded summary", async () => {
+  const { machine, loop } = await seeded();
+  await store.addRun({
+    loopId: loop.id,
+    machineId: machine.id,
+    phase: "done",
+    requestedBy: "owner",
+    status: "keep",
+    message: "ordinary result",
+    durationMs: 120,
+    usage: { inputTokens: 10, outputTokens: 2 },
+    finalText: "provider output",
+    ts: "2026-01-02T00:00:00Z",
   });
-  const detail = await history.readLoopHistory(a.loop, { run: String(local.runIndex), diff: true, json: true });
-  expect(detail.status).toBe(200);
-  expect(Object.keys(detail.body as any)).toEqual(["text"]);
-  const body = JSON.parse((detail.body as any).text);
-  expect(Object.keys(body)).toEqual([
-    "runIndex", "terminalAt", "role", "requestText", "requestTextTruncated", "phase", "status", "durationMs",
-    "tokenUsage", "metrics", "message", "messageTruncated", "error", "errorTruncated", "finalText",
-    "finalTextTruncated", "control", "controlTruncated", "diffAvailable", "diff",
-  ]);
-  expect(body).toMatchObject({
-    runIndex: local.runIndex, role: "steer", phase: "error", status: null, tokenUsage: 10,
-    message: null, messageTruncated: false, error: "missing report", errorTruncated: false,
-    requestTextTruncated: true, finalTextTruncated: true,
-  });
-  expect(body.requestText).toHaveLength(history.HISTORY_DETAIL_TEXT_CAP);
-  expect(body.finalText).toHaveLength(history.HISTORY_DETAIL_TEXT_CAP);
-  expect(body).not.toHaveProperty("result");
-  expect(body).not.toHaveProperty("truncation");
-  expect(body).not.toHaveProperty("sessionId");
-  expect(body.diff).toEqual({ included: true, available: false, reason: "snapshot-unavailable", truncated: false, files: [] });
-  expect(Buffer.byteLength(JSON.stringify(detail.body), "utf8")).toBeLessThanOrEqual(history.HISTORY_JSON_TEXT_CAP);
-});
 
-test("history detail applies the bounded diff file budget and exposes truncation metadata", async () => {
-  const { loop, machineId } = await seedMachineLoop("diff-budget");
-  const previous = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: "2026-03-01T00:00:00Z" });
-  const current = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "done", role: "exec", ts: "2026-03-02T00:00:00Z" });
-  const manifest = (prefix: string) => Object.fromEntries(Array.from({ length: history.HISTORY_DIFF_FILES_MAX + 1 }, (_, index) => [
-    `file-${String(index).padStart(3, "0")}.bin`,
-    { hash: prefix.repeat(64), size: 1, binary: true, oversize: false },
-  ]));
-  await store.putRunSnapshot(previous.id, loop.id, manifest("a"));
-  await store.putRunSnapshot(current.id, loop.id, manifest("b"));
-
-  const result = await history.readLoopHistory(loop, { run: String(current.runIndex), diff: true, json: true });
+  const result = await history.readLoopHistory(loop, { json: true });
   expect(result.status).toBe(200);
-  const detail = JSON.parse((result.body as any).text);
-  expect(detail.diff).toMatchObject({
-    available: true,
-    totalFiles: history.HISTORY_DIFF_FILES_MAX + 1,
-    truncated: true,
-    truncation: { files: true, inputBytes: false, diffChars: false },
-    work: { filesProcessed: history.HISTORY_DIFF_FILES_MAX, inputBytes: 0, emittedDiffChars: 0 },
+  const data = JSON.parse(String((result.body as any).text));
+  expect(data).toMatchObject({ count: 1, total: 1, runs: [{ phase: "done", status: "keep", message: "ordinary result", tokenUsage: 12 }] });
+  expect(Object.keys(data.runs[0]).sort()).toEqual([
+    "durationMs", "finalTextAvailable", "message", "messageTruncated", "phase", "runIndex", "status", "terminalAt", "tokenUsage",
+  ]);
+});
+
+test("detail history keeps diagnostics and diff availability", async () => {
+  const { machine, loop } = await seeded();
+  const run = await store.addRun({
+    loopId: loop.id,
+    machineId: machine.id,
+    phase: "error",
+    error: "provider failed",
+    message: "agent summary",
+    finalText: "provider final",
+    durationMs: 50,
+    usage: { inputTokens: 3, outputTokens: 4 },
+    ts: "2026-01-03T00:00:00Z",
   });
-  expect(detail.diff.files).toHaveLength(history.HISTORY_DIFF_FILES_MAX);
+  const result = await history.readLoopHistory(loop, { run: String(run.runIndex), json: true });
+  expect(result.status).toBe(200);
+  const detail = JSON.parse(String((result.body as any).text));
+  expect(detail).toMatchObject({
+    runIndex: run.runIndex,
+    phase: "error",
+    error: "provider failed",
+    message: "agent summary",
+    finalText: "provider final",
+    tokenUsage: 7,
+    diffAvailable: false,
+  });
 });
 
-test("in-run log --json uses the same server JSON text and displays steer", async () => {
-  const { loop, machineId } = await seedSummary();
-  const active = await store.addRun({ loopId: loop.id, userId: "u1", machineId, phase: "running", role: "exec", ts: new Date().toISOString() });
-  const runToken = await tokens.registerRunLease({ runId: active.id, loopId: loop.id, machineId, role: "exec", allowControl: false });
-  const cli = new CliGateway({} as any);
-  const argv = ["log", "--json", "--limit", "20"];
-  const res = await cli.agentApi(runToken, argv);
-  const unified = await cli.cli(runToken, argv);
-  expect(res.status).toBe(200);
-  expect((unified.body as any).text).toBe((res.body as any).text);
-  const parsed = JSON.parse((res.body as any).text);
-  expect(parsed.runs.some((run: any) => run.role === "steer")).toBe(true);
-  expect(parsed.through).toBe(4);
-});
-
-test("history rejects mixed windows and invalid filters", () => {
-  for (const flags of [
-    { after: "1", since: "2026-01-01T00:00:00Z" },
-    { role: "edit" },
-    { status: "success" },
-    { phase: "running" },
-    { limit: "21" },
-    { diff: true },
-  ]) {
-    expect(history.parseHistoryFlags(flags as any)).toMatchObject({ ok: false });
-  }
+test("detail selector is loop-scoped", async () => {
+  const { machine, loop } = await seeded();
+  const other = await store.createLoop({ workdir: "/work", userId: "u1", machineId: machine.id, name: "Other", cron: "0 0 * * *", enabled: true });
+  const foreign = await store.addRun({ loopId: other.id, machineId: machine.id, phase: "done", ts: "2026-01-04T00:00:00Z" });
+  expect((await history.readLoopHistory(loop, { run: foreign.id, json: true })).status).toBe(404);
 });

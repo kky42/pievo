@@ -1,6 +1,6 @@
 /**
  * Machine presence derivation — a single, shared, three-state view of a machine's
- * connectivity used by both the server adapters and the web UI, so the dashboard
+ * connectivity used by both the server projections and the web UI, so the dashboard
  * and loop-detail banner never drift on where the thresholds sit.
  *
  * The daemon heartbeats every poll (~3s), stamping `lastSeen`. A laptop that

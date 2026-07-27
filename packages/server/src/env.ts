@@ -118,17 +118,6 @@ function posIntEnv(name: string, fallback: number): number {
 }
 
 /**
- * Per-loop total stored-bytes cap. Once a loop's live (byte-backed) artifact
- * footprint reaches this, the sync stops accepting NEW bytes for that loop (it
- * still reconciles deletions and already-stored files) and surfaces the cap —
- * mirroring how the per-file 10MB cap surfaces oversize. Generous default so a
- * normal loop folder never hits it; a runaway growing folder does. 500MB.
- */
-export function loopBytesCap(): number {
-  return posIntEnv("PIEVO_LOOP_BYTES_CAP", 500 * 1024 * 1024);
-}
-
-/**
  * How many of the most recent run snapshots to keep per loop. Older ones are
  * pruned (their now-unreferenced blobs then become GC-collectable). The per-run
  * diff only needs the immediately-prior snapshot, so 20 keeps ample history for
@@ -195,20 +184,4 @@ export function dbWatchdogTimeoutMs(): number {
  */
 export function dbWatchdogFailureThreshold(): number {
   return posIntEnv("PIEVO_DB_WATCHDOG_FAILURES", 3);
-}
-
-/**
- * Self-schedule cadence floors — enforced ONLY on the RUN self-schedule path (a
- * run using `set-cron` / `reschedule` on itself). The owner's `editLoop` path is
- * unlimited. A run may not set a cron whose adjacent fires are closer than
- * `PIEVO_SELF_CRON_FLOOR_MINUTES` (default 15), nor reschedule sooner than
- * `PIEVO_SELF_RESCHEDULE_FLOOR_MINUTES` (default 5). Lazy env reads like the
- * other knobs, so tests set them per-case.
- */
-export function selfCronFloorMinutes(): number {
-  return posIntEnv("PIEVO_SELF_CRON_FLOOR_MINUTES", 15);
-}
-
-export function selfRescheduleFloorMinutes(): number {
-  return posIntEnv("PIEVO_SELF_RESCHEDULE_FLOOR_MINUTES", 5);
 }
