@@ -38,7 +38,7 @@ interface FormState {
   artifacts: string
 }
 
-const AGENT_LABEL: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
+const AGENT_LABEL: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi' }
 const hintCls = 'mt-1 text-caption leading-snug text-disabled'
 
 function initState(initial?: LoopFormSeed): FormState {

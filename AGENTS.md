@@ -2,7 +2,7 @@
 
 Pievo is a multi-user scheduled prompt runner and status ledger. The TanStack Start
 server owns scheduling, queueing, auth, persistence, and byte serving; the
-`@kky42/pievo` daemon runs Claude Code or Codex on a user's machine.
+`@kky42/pievo` daemon runs Claude Code, Codex, or Pi on a user's machine.
 
 ## Invariants
 
@@ -71,9 +71,10 @@ PIEVO_REAL_LLM_TESTS=1 pnpm --filter @kky42/pievo test src/telemetry.real.test.t
 
 ## Release and deployment sharp edges
 
-- Fresh deployments use the single reviewed baseline migration. Do not commit
-  generated Drizzle snapshots. Hosted migrations require a direct Postgres URL when
-  runtime uses a transaction pooler.
+- Keep SQL migrations reviewed: `0000_baseline` defines the original schema and
+  deployed schema changes append forward migrations. Do not commit generated Drizzle
+  snapshots. Hosted migrations require a direct Postgres URL when runtime uses a
+  transaction pooler.
 - `server-v*` publishes only `@kky42/pievo-server`; `v*` publishes only
   `@kky42/pievo`. Tag and package versions must match.
 - Publishing uses npm OIDC/trusted publishing and repository provenance. Do not add

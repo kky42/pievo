@@ -28,8 +28,12 @@ function response(overrides: Record<string, unknown> = {}) {
 }
 
 describe("protocol-v4 poll response runtime schema", () => {
-  test("accepts the exact complete runner delivery", () => {
+  test("accepts the exact complete runner delivery, including Pi on protocol v4", () => {
     expect(parsePollResponse(response())).toEqual({ ok: true, value: response() });
+    const pi = response();
+    pi.delivery.loop.agent = "pi";
+    pi.delivery.loop.reasoningEffort = "xhigh";
+    expect(parsePollResponse(pi)).toEqual({ ok: true, value: pi });
     expect(parsePollResponse({ delivery: null, cancelRunIds: ["run-2"] })).toEqual({
       ok: true,
       value: { delivery: null, cancelRunIds: ["run-2"] },

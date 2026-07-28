@@ -79,8 +79,8 @@ function decodeLoop(value: unknown): Decode<Delivery["loop"]> {
   if (!model.ok) return model;
   const reasoningEffort = nullableText(raw.reasoningEffort, "delivery.loop.reasoningEffort");
   if (!reasoningEffort.ok) return reasoningEffort;
-  if (raw.agent !== "claude-code" && raw.agent !== "codex") {
-    return { ok: false, error: "delivery.loop.agent must be exactly claude-code|codex" };
+  if (raw.agent !== "claude-code" && raw.agent !== "codex" && raw.agent !== "pi") {
+    return { ok: false, error: "delivery.loop.agent must be exactly claude-code|codex|pi" };
   }
   return {
     ok: true,

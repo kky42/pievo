@@ -37,7 +37,7 @@ describe("pievo skill status — multi-agent", () => {
     for (const t of SKILL_TARGET_AGENTS) {
       expect(out).toContain(t.label);
     }
-    // The two CodingAgent values are exactly what we target today.
+    // Pi consumes the existing Codex-targeted ~/.agents/skills copy.
     expect(SKILL_TARGET_AGENTS.map((t) => t.id)).toEqual(["claude-code", "codex"]);
   });
 

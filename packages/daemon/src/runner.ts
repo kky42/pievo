@@ -60,6 +60,8 @@ const SELF_SCHEDULING_TOOLS = "ScheduleWakeup,CronCreate,CronList,CronDelete";
 export interface AgentSpawn {
   bin: string;
   args: string[];
+  /** Exact provider stdin, used only by agents whose CLI accepts the task there. */
+  stdin?: string;
 }
 
 /**
@@ -74,7 +76,9 @@ export interface AgentSpawn {
  *     rejected, and full child-env inheritance so the run-scoped `pievo` callback
  *     shim at the front of PATH survives Codex's shell environment policy.
  *
- * Escape hatches: `PIEVO_CLAUDE_BIN` / `PIEVO_CODEX_BIN`.
+ *   - `pi`: print-mode JSONL with normal Pi session persistence; task text is stdin.
+ *
+ * Escape hatches: `PIEVO_CLAUDE_BIN` / `PIEVO_CODEX_BIN` / `PIEVO_PI_BIN`.
  *
  * Each arm's JSONL is consumed by its provider-specific terminal collector;
  * neither provider emits tool/text live progress through the daemon protocol.
@@ -86,6 +90,17 @@ export function buildAgentSpawn(opts: {
   reasoningEffort?: string | null;
 }): AgentSpawn {
   const { agent, prompt, model, reasoningEffort } = opts;
+  if (agent === "pi") {
+    return {
+      bin: process.env.PIEVO_PI_BIN || "pi",
+      args: [
+        "-p", "--mode", "json", "--approve",
+        ...(model ? ["--model", model] : []),
+        ...(reasoningEffort ? ["--thinking", reasoningEffort] : []),
+      ],
+      stdin: prompt,
+    };
+  }
   if (agent === "codex") {
     // Codex surface is `codex exec [OPTIONS] [PROMPT]` — never Claude's
     // `-p` / stream-json flags and never a session resume.
@@ -170,7 +185,7 @@ export async function executeDelivery(
   let exitCode: number | null = null;
   // Spawn + credential set branch on the explicitly configured agent.
   const agent: CodingAgent = d.loop.agent;
-  const agentLabel = agent === "claude-code" ? "claude" : agent === "codex" ? "codex" : "unknown agent";
+  const agentLabel = agent === "claude-code" ? "claude" : agent;
   try {
     const env: NodeJS.ProcessEnv = {
       ...execEnv(agent),
@@ -183,7 +198,7 @@ export async function executeDelivery(
 
     // Provider sessions are deliberately single-shot. Capture sessionId for
     // possible future use, but never resume or retry this run's provider process.
-    const { bin, args } = buildAgentSpawn({
+    const { bin, args, stdin } = buildAgentSpawn({
       agent,
       prompt: task,
       model: d.loop.model,
@@ -192,7 +207,7 @@ export async function executeDelivery(
 
     if (canceled()) return completeRun({ runId: d.runId, exitCode: null, durationMs: Date.now() - start, error: "canceled before provider spawn" }, "canceled");
     const collector = makeTerminalCollector(agent);
-    const r = await runProcess(bin, args, { cwd: workdir, env, timeoutMs: TIMEOUT_MS, onStdout: collector.feed, signal });
+    const r = await runProcess(bin, args, { cwd: workdir, env, timeoutMs: TIMEOUT_MS, onStdout: collector.feed, signal, stdin });
     const final = collector.result();
     exitCode = r.code;
     finalText = final.finalText?.trim() || undefined;

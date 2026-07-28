@@ -37,18 +37,18 @@ test('canonical edit validation persists known agents and rejects unknown agents
   const created = await store.createLoop({ workdir: "/work", userId: 'u1', teamId: 't1', machineId: 'm1', name: 'A', cron: '0 6 * * *' })
   expect(created.agent).toBe('claude-code')
 
-  const accepted = validateLoopEdit(created, { agent: 'codex' })
+  const accepted = validateLoopEdit(created, { agent: 'pi', reasoningEffort: 'medium' })
   expect(accepted.ok).toBe(true)
   if (!accepted.ok) throw new Error(accepted.detail)
   const updated = await store.updateLoop(created.id, accepted.value)
-  expect(updated!.agent).toBe('codex')
+  expect(updated!.agent).toBe('pi')
 
   const absent = validateLoopEdit(updated!, { name: 'B' })
   expect(absent.ok).toBe(true)
   if (!absent.ok) throw new Error(absent.detail)
   const renamed = await store.updateLoop(created.id, absent.value)
-  expect(renamed!.agent).toBe('codex')
+  expect(renamed!.agent).toBe('pi')
 
   expect(validateLoopEdit(renamed!, { agent: 'emacs' })).toMatchObject({ ok: false })
-  expect((await store.getLoop(created.id))!.agent).toBe('codex')
+  expect((await store.getLoop(created.id))!.agent).toBe('pi')
 })

@@ -40,6 +40,35 @@ test("canonical create requires the complete prompt-runner config", () => {
   expect(validateLoopCreate({ ...base, artifacts: "report.md" } as any)).toMatchObject({ ok: false });
 });
 
+test("Pi thinking is conditional and agent switches validate the effective edit state", () => {
+  for (const reasoningEffort of ["off", "minimal", "low", "medium", "high", "xhigh", "max", null]) {
+    expect(validateLoopCreate({ ...base, agent: "pi", reasoningEffort })).toMatchObject({ ok: true });
+  }
+  expect(validateLoopCreate({ ...base, agent: "pi", reasoningEffort: "custom-high" })).toMatchObject({ ok: false, detail: expect.stringContaining("for pi") });
+  expect(validateLoopCreate({ ...base, agent: "codex", reasoningEffort: "custom-high", model: " unchanged/model " })).toMatchObject({
+    ok: true,
+    value: { config: { model: "unchanged/model", reasoningEffort: "custom-high" } },
+  });
+
+  const loop = {
+    ...base,
+    id: "loop-pi-switch",
+    agent: "codex",
+    reasoningEffort: "custom-high",
+    scheduleMode: "cron",
+    cron: "0 6 * * *",
+    timezone: "UTC",
+    cronOverlap: "skip",
+    continuousDelayMinutes: 1,
+  } as unknown as Loop;
+  expect(validateLoopEdit(loop, { agent: "pi" })).toMatchObject({ ok: false, detail: expect.stringContaining("for pi") });
+  expect(validateLoopEdit(loop, { agent: "pi", reasoningEffort: "high" })).toEqual({ ok: true, value: { agent: "pi", reasoningEffort: "high" } });
+
+  const piLoop = { ...loop, agent: "pi", reasoningEffort: "xhigh" } as Loop;
+  expect(validateLoopEdit(piLoop, { reasoningEffort: "turbo" })).toMatchObject({ ok: false });
+  expect(validateLoopEdit(piLoop, { agent: "claude-code", reasoningEffort: "turbo" })).toEqual({ ok: true, value: { agent: "claude-code", reasoningEffort: "turbo" } });
+});
+
 test("schedule is an exclusive discriminated union", () => {
   expect(validateSchedule({ mode: "cron", cron: "0 6 * * *", timezone: "UTC", overlap: "queue-one", delayMinutes: 5 })).toMatchObject({ ok: false });
   expect(validateSchedule({ mode: "cron", cron: "0 6 * * *", overlap: "queue-one" })).toMatchObject({ ok: false, detail: "schedule.timezone is required" });

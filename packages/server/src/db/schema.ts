@@ -136,7 +136,7 @@ export const loops = pgTable(
     reasoningEffort: text("reasoning_effort"),
     /** Coding agent this loop is BOUND TO and EXECUTED with: the daemon's
      *  `buildAgentSpawn` branches on this value (`claude-code` → claude,
-     *  `codex` → `codex exec`). Measured from the creating CLI's env when
+     *  `codex` → `codex exec`, `pi` → Pi print mode). Measured from the creating CLI's env when
      *  detectable, else the declared/selected value. The text column carries
      *  both a TypeScript enum and a database CHECK constraint. */
     agent: text("agent", { enum: CODING_AGENTS }).notNull(),
@@ -157,7 +157,7 @@ export const loops = pgTable(
     index("loops_team_idx").on(t.teamId),
     index("loops_machine_idx").on(t.machineId),
     index("delete_requested_loops").on(t.deleteRequestedAt).where(sql`${t.deleteRequestedAt} IS NOT NULL`),
-    check("loops_agent_check", sql`${t.agent} IN ('claude-code', 'codex')`),
+    check("loops_agent_check", sql`${t.agent} IN ('claude-code', 'codex', 'pi')`),
     check("loops_schedule_mode_check", sql`${t.scheduleMode} IN ('cron', 'continuous')`),
     check("loops_cron_overlap_check", sql`${t.cronOverlap} IN ('skip', 'queue-one')`),
   ],
@@ -214,7 +214,7 @@ export const runs = pgTable(
     // Current scheduling has one pending queue slot per loop.
     uniqueIndex("runs_loop_pending_idx").on(t.loopId).where(sql`${t.phase} = 'pending'`),
     uniqueIndex("one_running_run_per_loop").on(t.loopId).where(sql`${t.phase} = 'running'`),
-    check("runs_agent_check", sql`${t.agent} IS NULL OR ${t.agent} IN ('claude-code', 'codex')`),
+    check("runs_agent_check", sql`${t.agent} IS NULL OR ${t.agent} IN ('claude-code', 'codex', 'pi')`),
     check("runs_phase_check", sql`${t.phase} IN ('pending', 'running', 'done', 'error', 'canceled')`),
     check("runs_requested_by_check", sql`${t.requestedBy} IN ('owner', 'system')`),
     check("runs_status_check", sql`${t.status} IS NULL OR ${t.status} IN ('keep', 'no-change', 'block')`),

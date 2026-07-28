@@ -4,7 +4,7 @@ import type { MachinePresence } from './lib/machinePresence'
 export type { MachinePresence } from './lib/machinePresence'
 
 /** The coding agent a loop is bound to AND executed with (BYOA on the owner's
- *  machine): `claude-code` → Claude Code, `codex` → `codex exec`.
+ *  machine): `claude-code` → Claude Code, `codex` → `codex exec`, `pi` → Pi.
  *  Non-Claude agents may still have thinner daemon telemetry until stream
  *  integration lands; execution itself is real for every value.
  *
@@ -14,7 +14,7 @@ export type { MachinePresence } from './lib/machinePresence'
  *  web agent `<select>` (LoopForm). So widening the set is a one-line edit HERE with
  *  no other server change (the daemon's own enum in `packages/daemon/src/create.ts`
  *  is a separate package, widened alongside). */
-export const CODING_AGENTS = ['claude-code', 'codex'] as const
+export const CODING_AGENTS = ['claude-code', 'codex', 'pi'] as const
 export type CodingAgent = (typeof CODING_AGENTS)[number]
 
 /** Coerce an unknown value to a known `CodingAgent`, or null when unrecognized.

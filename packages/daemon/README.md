@@ -1,8 +1,8 @@
 # @kky42/pievo
 
 The machine-side daemon and CLI for [Pievo](https://github.com/kky42/pievo), a
-self-hosted scheduled prompt runner. It polls a Pievo server, launches Claude Code or
-Codex in a configured local working directory, and durably reports the result.
+self-hosted scheduled prompt runner. It polls a Pievo server, launches Claude Code,
+Codex, or Pi in a configured local working directory, and durably reports the result.
 
 Pievo is BYOA. The server schedules, authenticates, and stores data but never starts an
 LLM or executes user code. This package is the execution plane and uses the provider
@@ -10,8 +10,8 @@ credentials, files, and tools available on your machine.
 
 ## Requirements
 
-- Node.js `>=22.13`
-- Claude Code (`claude`) or Codex (`codex`) installed and authenticated
+- Node.js `>=22.13` (Pi 0.82.1 itself requires Node.js `>=22.19`)
+- Claude Code (`claude`), Codex (`codex`), or Pi (`pi`) installed and authenticated
 - a Pievo server URL and secret device/connect credential from its web UI
 
 > The daemon launches coding agents in unattended mode. They can use the files,
@@ -101,7 +101,8 @@ decision; Pievo does not filter files by name, extension, MIME type, or content.
 - `PIEVO_ROOTS=/allowed/root,/another/root` creates an always-applied cwd jail;
   server-provided roots may only narrow it. Empty means unrestricted.
 - Child environments are provider-specific allowlists. Claude Code receives only
-  Claude/Anthropic credentials; Codex receives only Codex/OpenAI credentials.
+  Claude/Anthropic credentials; Codex receives only Codex/OpenAI credentials; Pi
+  receives its documented config and built-in-provider credential keys.
 - The detached daemon and provider child argv omit device and run credentials; local
   credential files use owner-only permissions. The initial `--connect-key` command is
   the explicit exception and should be treated as secret.
@@ -109,14 +110,14 @@ decision; Pievo does not filter files by name, extension, MIME type, or content.
 - `PIEVO_EXEC_TIMEOUT_MS` accepts a positive override; otherwise the provider timeout
   is 12 hours.
 
-Useful binary overrides are `PIEVO_CLAUDE_BIN` and `PIEVO_CODEX_BIN`.
+Useful binary overrides are `PIEVO_CLAUDE_BIN`, `PIEVO_CODEX_BIN`, and `PIEVO_PI_BIN`.
 
 ## Owner skill
 
 The package bundles a small owner-facing skill for connection, creation, and editing.
-`daemon start` best-effort installs it at user scope for Claude Code and Codex.
-Installation failure never blocks execution, and runtime prompts do not depend on the
-skill. Inspect or refresh it with `pievo skill status|install`.
+`daemon start` best-effort installs it for Claude Code and in `~/.agents/skills`,
+which Codex and Pi both consume. Installation failure never blocks execution, and
+runtime prompts do not depend on the skill. Inspect or refresh it with `pievo skill status|install`.
 
 ## License
 

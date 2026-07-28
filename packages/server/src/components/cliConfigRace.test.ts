@@ -72,7 +72,7 @@ describe('custom PIEVO_CLI config ordering', () => {
     expect(bodyText()).toContain('--connect-key dk_claim')
     expect(bodyText()).toContain('Run this command in your terminal')
     expect(bodyText()).toContain('Start a new agent session')
-    expect(bodyText()).toContain('start a new Claude Code or Codex session')
+    expect(bodyText()).toContain('start a new Claude Code, Codex, or Pi session')
     expect(bodyText()).not.toContain('same session')
     expect(bodyText()).not.toContain('npm install -g')
     expect(copy.disabled).toBe(false)

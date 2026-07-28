@@ -4,7 +4,7 @@
  * Run explicitly:
  *   PIEVO_REAL_LLM_TESTS=1 pnpm --filter @kky42/pievo test src/telemetry.real.test.ts
  *
- * Never enable this in the default suite: it invokes both installed CLIs and
+ * Never enable this in the default suite: it invokes installed CLIs and
  * consumes the operator's real provider credentials/credits.
  */
 import fs from "node:fs";
@@ -22,10 +22,11 @@ const TEST_TIMEOUT_MS = 5 * 60_000;
 
 interface RealCase {
   name: string;
-  agent: "claude-code" | "codex";
+  agent: "claude-code" | "codex" | "pi";
   command: string;
   marker: string;
   args(prompt: string): string[];
+  stdin?(prompt: string): string;
 }
 
 const cases: RealCase[] = [
@@ -62,6 +63,20 @@ const cases: RealCase[] = [
       prompt,
     ],
   },
+  {
+    name: "Pi DeepSeek V4 Flash thinking=high",
+    agent: "pi",
+    command: process.env.PIEVO_PI_BIN || "pi",
+    marker: "PIEVO_REAL_PI_TELEMETRY_OK",
+    args: () => [
+      "-p",
+      "--mode", "json",
+      "--approve",
+      "--model", "deepseek/deepseek-v4-flash",
+      "--thinking", "high",
+    ],
+    stdin: (prompt) => prompt,
+  },
 ];
 
 function assertPositiveUsage(usage: TokenUsage | undefined): void {
@@ -71,7 +86,7 @@ function assertPositiveUsage(usage: TokenUsage | undefined): void {
 }
 
 describe.skipIf(!REAL_LLM_TESTS)("real provider terminal telemetry", () => {
-  test.each(cases)("$name matches the live JSONL schema", async ({ agent, command, marker, args }) => {
+  test.each(cases)("$name matches the live JSONL schema", async ({ agent, command, marker, args, stdin }) => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `pievo-real-${agent}-`));
     const collector = makeTerminalCollector(agent);
     const prompt = `Reply with exactly this marker and nothing else: ${marker}`;
@@ -82,6 +97,7 @@ describe.skipIf(!REAL_LLM_TESTS)("real provider terminal telemetry", () => {
         env: process.env,
         timeoutMs: PROCESS_TIMEOUT_MS,
         onStdout: collector.feed,
+        stdin: stdin?.(prompt),
       });
       const telemetry = collector.result();
       const diagnostic = [

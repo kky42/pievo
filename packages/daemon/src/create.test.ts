@@ -49,6 +49,7 @@ describe("coerceAgent", () => {
   test("passes through known agents, rejects everything else", () => {
     expect(coerceAgent("claude-code")).toBe("claude-code");
     expect(coerceAgent("codex")).toBe("codex");
+    expect(coerceAgent("pi")).toBe("pi");
     expect(coerceAgent("unknown")).toBeNull();
     expect(coerceAgent("")).toBeNull();
     expect(coerceAgent(undefined)).toBeNull();

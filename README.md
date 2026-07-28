@@ -7,8 +7,8 @@
 **Run a stored coding-agent prompt on a reliable schedule, on your own machine.**
 
 Pievo is a self-hosted scheduler and status ledger. Its server stores configuration,
-queues runs, and serves the web UI; the `@kky42/pievo` daemon executes Claude Code or
-Codex locally with your credentials and tools.
+queues runs, and serves the web UI; the `@kky42/pievo` daemon executes Claude Code,
+Codex, or Pi locally with your credentials and tools.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/kky42/pievo?style=flat)](https://github.com/kky42/pievo/stargazers)
@@ -26,7 +26,7 @@ Codex locally with your credentials and tools.
 Each loop combines a stored prompt with:
 
 - a cron schedule or continuous delay;
-- a local working directory and Claude Code or Codex;
+- a local working directory and Claude Code, Codex, or Pi;
 - `keep`, `no-change`, and `block` outcomes;
 - optional exact artifact paths for viewing and diffing in the web UI.
 
@@ -44,8 +44,8 @@ machine; a team may later connect other machines to the same server.
 
 ### Prerequisites
 
-- Node.js `>=22.13`
-- Claude Code or Codex installed and authenticated on the execution machine
+- Node.js `>=22.13` (Pi 0.82.1 itself requires Node.js `>=22.19`)
+- Claude Code, Codex, or Pi installed and authenticated on the execution machine
 
 > **Local execution is powerful.** The daemon launches the selected coding agent in
 > unattended mode, where it can use the files, commands, and credentials available to
@@ -75,7 +75,7 @@ pievo-server status
 3. Confirm that the command prints `daemon online` and `pievo skill: installed`. If
    skill installation was skipped, run `pievo skill install` and verify with
    `pievo skill status`.
-4. Start a fresh Claude Code or Codex session in the project you want to schedule,
+4. Start a fresh Claude Code, Codex, or Pi session in the project you want to schedule,
    then tell the agent: **“Create a Pievo loop.”**
 
 The fresh session discovers Pievo's owner skill, gathers and confirms the prompt,
@@ -108,7 +108,7 @@ pievo daemon restart
 flowchart LR
   UI["Pievo web UI"] --> Server["Pievo server<br/>schedule · queue · auth · storage"]
   Server <-->|"authenticated polling and reports"| Daemon["Pievo daemon<br/>your machine"]
-  Daemon --> Agent["Claude Code or Codex"]
+  Daemon --> Agent["Claude Code, Codex, or Pi"]
 ```
 
 The server owns schedules and queued runs. The daemon polls for work, runs the coding
@@ -152,6 +152,10 @@ Run exactly one server process and choose one database tier:
 - **Embedded PGlite:** leave `DATABASE_URL` unset, set `PIEVO_DB=pglite`, and place
   `PIEVO_DATA_DIR` on durable storage. Production fails closed without this explicit
   opt-in so a lost database secret cannot silently create an empty database.
+
+> The `0001_add_pi_agent` forward migration upgrades existing agent constraints.
+> Hosted Postgres applies it through the direct prestart migration connection; PGlite
+> applies it in-process during server boot.
 
 Artifact bytes default to `<PIEVO_DATA_DIR>/blobs`. A complete `PIEVO_R2_*`
 configuration selects R2; `PIEVO_BLOB_STORE=local|r2|memory` can select explicitly.

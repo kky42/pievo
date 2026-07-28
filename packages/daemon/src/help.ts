@@ -69,11 +69,12 @@ Canonical config
       mode: cron        cron, IANA timezone, overlap: skip|queue-one
       mode: continuous  delayMinutes (integer >= 1)
     workdir             absolute path on this machine
-    agent               claude-code|codex
+    agent               claude-code|codex|pi
     prompt              non-empty string, stored unchanged
     statusDefinitions   non-empty keep, noChange, block strings
   Optional:
     model, reasoningEffort  string or null for the provider default
+                            Pi thinking: off|minimal|low|medium|high|xhigh|max
     artifacts              exact workdir-relative file paths; default []
     enabled                boolean; default true
 

@@ -8,6 +8,13 @@
       "when": 1785146849042,
       "tag": "0000_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785146849043,
+      "tag": "0001_add_pi_agent",
+      "breakpoints": true
     }
   ]
 }

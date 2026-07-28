@@ -14,7 +14,7 @@ import { Timeline, WINDOW } from './Timeline'
 import { btn, btnDanger, btnPrimary, btnQuiet, ErrorBanner, Loading, Pill, runPulseStyle, sectionHeadCls } from './ui'
 import { ConfirmBar, FlashLine, LoadErrorCard, useFlash } from './actionUi'
 
-const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
+const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi' }
 
 export function LoopDetailView({ id }: { id: string }) {
   const navigate = useNavigate()

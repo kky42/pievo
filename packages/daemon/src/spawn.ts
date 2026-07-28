@@ -1,7 +1,7 @@
 /**
  * Shared subprocess runner: spawn, collect stdout/stderr, honor an AbortSignal
  * (SIGTERM→SIGKILL), enforce a wall-clock timeout. Ported from c0's handoff
- * spawn.ts. Task text goes via argv; stdin is unused.
+ * spawn.ts. Providers may optionally receive task text via stdin.
  */
 import { spawn } from "node:child_process";
 import type { CodingAgent } from "./create.js";
@@ -29,6 +29,8 @@ export interface SpawnOptions {
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** Exact bytes to write before ending stdin; omitted providers keep stdin closed. */
+  stdin?: string;
   /** Called with each stdout chunk as it arrives (for live/streamed parsing). */
   onStdout?: (chunk: string) => void;
 }
@@ -46,7 +48,7 @@ export function runProcess(command: string, args: string[], opts: SpawnOptions):
     const child = spawn(command, args, {
       cwd: opts.cwd,
       env: opts.env ?? process.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [opts.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       detached: grouped,
     });
 
@@ -97,7 +99,7 @@ export function runProcess(command: string, args: string[], opts: SpawnOptions):
       opts.signal?.removeEventListener("abort", onAbort);
     };
 
-    child.stdout.on("data", (d) => {
+    child.stdout!.on("data", (d) => {
       const s = d.toString();
       if (opts.onStdout) {
         opts.onStdout(s); // consumer parses live; keep only a bounded tail for errors
@@ -106,13 +108,21 @@ export function runProcess(command: string, args: string[], opts: SpawnOptions):
         stdout += s;
       }
     });
-    child.stderr.on("data", (d) => {
+    child.stderr!.on("data", (d) => {
       stderr += d.toString();
     });
     child.on("error", (err) => {
       cleanup();
       reject(err);
     });
+    if (opts.stdin !== undefined && child.stdin) {
+      // A provider may exit before consuming the task. EPIPE is then expected and
+      // must not become an unhandled stream error or obscure the process result.
+      child.stdin.on("error", (err: NodeJS.ErrnoException) => {
+        if (err.code !== "EPIPE") child.emit("error", err);
+      });
+      child.stdin.end(opts.stdin);
+    }
 
     let settled = false;
     const settle = (code: number | null, sig: NodeJS.Signals | null) => {
@@ -158,6 +168,8 @@ export function allowlistEnv(extra: { keys?: string[]; prefixes?: string[] } = {
  *     (proxy/gateway users + relocated Claude config)
  *   - codex: OPENAI_API_KEY / CODEX_API_KEY (+ optional CODEX_HOME); OAuth /
  *     session files under `~/.codex` are free via HOME
+ *   - pi: its documented process config plus exact built-in provider credentials;
+ *     OAuth/auth.json and config remain reachable via HOME
  * Keys ride ONLY their agent's path so a claude run never inherits an unrelated
  * OpenAI secret. */
 export function execEnv(agent: CodingAgent): NodeJS.ProcessEnv {
@@ -170,6 +182,37 @@ export function execEnv(agent: CodingAgent): NodeJS.ProcessEnv {
     return allowlistEnv({
       keys: ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"],
       prefixes: ["ANTHROPIC_"],
+    });
+  }
+  if (agent === "pi") {
+    // Reviewed against Pi 0.82.1's primary env-api-keys map plus its documented
+    // process, Azure, Vertex, Cloudflare, and Bedrock configuration variables.
+    return allowlistEnv({
+      keys: [
+        "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "PI_PACKAGE_DIR",
+        "PI_OFFLINE", "PI_SKIP_VERSION_CHECK", "PI_TELEMETRY", "PI_CACHE_RETENTION",
+        "PI_SHARE_VIEWER_URL", "PI_HARDWARE_CURSOR", "VISUAL", "EDITOR",
+        "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY",
+        "COPILOT_GITHUB_TOKEN", "ANT_LING_API_KEY", "QWEN_TOKEN_PLAN_API_KEY",
+        "QWEN_TOKEN_PLAN_CN_API_KEY", "OPENAI_API_KEY", "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_RESOURCE_NAME", "AZURE_OPENAI_API_VERSION",
+        "AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "NVIDIA_API_KEY", "DEEPSEEK_API_KEY",
+        "GEMINI_API_KEY", "GOOGLE_CLOUD_API_KEY",
+        "GROQ_API_KEY", "CEREBRAS_API_KEY", "XAI_API_KEY", "RADIUS_API_KEY",
+        "OPENROUTER_API_KEY", "AI_GATEWAY_API_KEY", "ZAI_API_KEY", "ZAI_CODING_CN_API_KEY",
+        "MISTRAL_API_KEY", "MINIMAX_API_KEY", "MINIMAX_CN_API_KEY", "MOONSHOT_API_KEY",
+        "HF_TOKEN", "FIREWORKS_API_KEY", "TOGETHER_API_KEY", "OPENCODE_API_KEY",
+        "KIMI_API_KEY", "CLOUDFLARE_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID",
+        "XIAOMI_API_KEY", "XIAOMI_TOKEN_PLAN_CN_API_KEY", "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
+        "XIAOMI_TOKEN_PLAN_SGP_API_KEY", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_APPLICATION_CREDENTIALS", "AWS_PROFILE", "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_BEARER_TOKEN_BEDROCK", "AWS_REGION",
+        "AWS_DEFAULT_REGION", "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "AWS_ROLE_ARN",
+        "AWS_ROLE_SESSION_NAME", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+        "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", "AWS_ENDPOINT_URL_BEDROCK_RUNTIME",
+        "AWS_BEDROCK_SKIP_AUTH", "AWS_BEDROCK_FORCE_HTTP1", "AWS_BEDROCK_FORCE_CACHE",
+      ],
     });
   }
   throw new Error(`unsupported coding agent: ${String(agent)}`);

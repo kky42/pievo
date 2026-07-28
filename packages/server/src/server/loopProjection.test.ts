@@ -30,7 +30,7 @@ beforeEach(async () => {
   await (db.client as { exec(q: string): Promise<unknown> }).exec("DELETE FROM run_leases; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
-async function seed(agent: "claude-code" | "codex") {
+async function seed(agent: "claude-code" | "codex" | "pi") {
   await store.createMachine({ id: "m-a", userId: "u1", name: "M", tokenHash: "h", online: true });
   return store.createLoop({
     userId: "u1",

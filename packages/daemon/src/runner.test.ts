@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { buildAgentSpawn, resolveExecTimeoutMs, type Delivery } from "./runner.js";
+import { buildAgentSpawn, executeDelivery, resolveExecTimeoutMs, type Delivery } from "./runner.js";
 import { makeTerminalCollector } from "./telemetry.js";
 
 describe("terminal JSONL collectors", () => {
@@ -78,6 +78,41 @@ describe("terminal JSONL collectors", () => {
     expect(c.result()).toMatchObject({ isError: true, errorType: "connection dropped" });
   });
 
+  test("Pi aggregates assistant and successful compaction usage and keeps the latest assistant text", () => {
+    const c = makeTerminalCollector("pi");
+    c.feed('{"type":"session","version":3,"id":"pi-session","cwd":"/work"}\n');
+    c.feed('{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"draft"}],"usage":{"input":10,"output":2,"cacheRead":3,"cacheWrite":4},"stopReason":"toolUse"}}\n');
+    c.feed('{"type":"compaction_end","aborted":false,"result":{"usage":{"input":5,"output":6,"cacheRead":7,"cacheWrite":8}}}\n');
+    c.feed('{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":"final answer"}],"usage":{"input":20,"output":9,"cacheRead":11,"cacheWrite":13},"stopReason":"stop"}}\n');
+    expect(c.result()).toEqual({
+      sessionId: "pi-session",
+      finalText: "final answer",
+      usage: { inputTokens: 35, outputTokens: 17, cacheReadTokens: 21, cacheCreationTokens: 25 },
+      isError: false,
+      errorType: undefined,
+    });
+  });
+
+  test.each(["error", "aborted"])("Pi treats final assistant stopReason %s as failure independently of process exit", (stopReason) => {
+    const c = makeTerminalCollector("pi");
+    c.feed(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "failed" }], usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 }, stopReason, errorMessage: "provider failed" } }) + "\n");
+    expect(c.result()).toMatchObject({ isError: true, errorType: "provider failed", finalText: "failed" });
+  });
+
+  test("Pi includes standard toolResult usage without inspecting tool details", () => {
+    const c = makeTerminalCollector("pi");
+    c.feed('{"type":"message_end","message":{"role":"assistant","content":[],"usage":{"input":1,"output":2,"cacheRead":3,"cacheWrite":4},"stopReason":"toolUse"}}\n');
+    c.feed('{"type":"message_end","message":{"role":"toolResult","toolName":"custom","details":{"usage":{"tokens":"unknown"}},"usage":{"input":5,"output":6,"cacheRead":7,"cacheWrite":8}}}\n');
+    expect(c.result().usage).toEqual({ inputTokens: 6, outputTokens: 8, cacheReadTokens: 10, cacheCreationTokens: 12 });
+  });
+
+  test("Pi does not report an earlier tool-use draft as the final text", () => {
+    const c = makeTerminalCollector("pi");
+    c.feed('{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"draft"}],"usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0},"stopReason":"toolUse"}}\n');
+    c.feed('{"type":"message_end","message":{"role":"assistant","content":[],"usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0},"stopReason":"error","errorMessage":"provider failed"}}\n');
+    expect(c.result()).toMatchObject({ isError: true, errorType: "provider failed", finalText: undefined });
+  });
+
   test("Codex final text accepts nested content and structured_content shapes", () => {
     const nested = makeTerminalCollector("codex");
     nested.feed('{"type":"item.completed","item":{"type":"agent_message","content":[{"type":"text","content":"nested "},{"message":{"text":"text"}}]}}\n');
@@ -93,6 +128,7 @@ describe("buildAgentSpawn", () => {
   afterEach(() => {
     delete process.env.PIEVO_CLAUDE_BIN;
     delete process.env.PIEVO_CODEX_BIN;
+    delete process.env.PIEVO_PI_BIN;
   });
 
   test("claude-code: default bin + canonical argument vector", () => {
@@ -151,6 +187,28 @@ describe("buildAgentSpawn", () => {
       reasoningEffort: "custom-high",
     });
     expect(args).toContain('model_reasoning_effort="custom-high"');
+  });
+
+  test("pi: exact JSON print argv and unchanged stdin, including model and thinking", () => {
+    process.env.PIEVO_PI_BIN = "/opt/pi";
+    const prompt = "  complete task\nwith trailing whitespace  \n";
+    expect(buildAgentSpawn({ agent: "pi", prompt, model: "anthropic/claude-sonnet-4", reasoningEffort: "xhigh" })).toEqual({
+      bin: "/opt/pi",
+      args: [
+        "-p", "--mode", "json", "--approve",
+        "--model", "anthropic/claude-sonnet-4",
+        "--thinking", "xhigh",
+      ],
+      stdin: prompt,
+    });
+  });
+
+  test("pi: defaults the binary and omits optional provider flags", () => {
+    expect(buildAgentSpawn({ agent: "pi", prompt: "task" })).toEqual({
+      bin: "pi",
+      args: ["-p", "--mode", "json", "--approve"],
+      stdin: "task",
+    });
   });
 
   test("an unknown agent throws instead of defaulting to Claude", () => {
@@ -212,6 +270,7 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.PIEVO_CLAUDE_BIN;
   delete process.env.PIEVO_CODEX_BIN;
+  delete process.env.PIEVO_PI_BIN;
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -271,9 +330,37 @@ function writeArgvClaude(): string {
   return p;
 }
 
+function writeFakePi(stopReason = "stop"): string {
+  const p = path.join(root, `fake-pi-${stopReason}.sh`);
+  fs.writeFileSync(p, [
+    "#!/bin/sh",
+    "cat > captured-task.txt",
+    `echo '{"type":"session","version":3,"id":"pi-session"}'`,
+    `echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"pi final"}],"usage":{"input":3,"output":4,"cacheRead":5,"cacheWrite":6},"stopReason":"${stopReason}","errorMessage":"pi provider error"}}'`,
+    "exit 0",
+    "",
+  ].join("\n"), "utf8");
+  fs.chmodSync(p, 0o755);
+  return p;
+}
 
+describe("Pi delivery", () => {
+  test("round-trips the complete composed task through stdin unchanged", async () => {
+    process.env.PIEVO_PI_BIN = writeFakePi();
+    const d = delivery();
+    d.loop.agent = "pi";
+    d.task = "  composed task\n\nreport contract  \n";
+    const report = await executeDelivery(d, "http://server.test", []);
+    expect(fs.readFileSync(path.join(workdir, "captured-task.txt"), "utf8")).toBe(d.task);
+    expect(report).toMatchObject({ result: "success", exitCode: 0, sessionId: "pi-session", finalText: "pi final" });
+  });
 
-
-
-
+  test("fails an exit-zero run when Pi's last assistant stopReason is error", async () => {
+    process.env.PIEVO_PI_BIN = writeFakePi("error");
+    const d = delivery();
+    d.loop.agent = "pi";
+    const report = await executeDelivery(d, "http://server.test", []);
+    expect(report).toMatchObject({ result: "failure", exitCode: 0, error: "pi provider error" });
+  });
+});
 

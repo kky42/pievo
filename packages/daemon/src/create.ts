@@ -64,11 +64,11 @@ export function idempotencyKey(token: string, resolvedBody: Record<string, unkno
 }
 
 /** The coding agents Pievo can record a loop against (TS-only; cheap to widen). */
-export type CodingAgent = "claude-code" | "codex";
+export type CodingAgent = "claude-code" | "codex" | "pi";
 
 /** Coerce the required config.agent field to one supported agent. */
 export function coerceAgent(v: unknown): CodingAgent | null {
-  return v === "claude-code" || v === "codex" ? v : null;
+  return v === "claude-code" || v === "codex" || v === "pi" ? v : null;
 }
 
 export interface CreateDeps {
@@ -141,7 +141,7 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     return 2;
   }
   if (!coerceAgent(config.agent)) {
-    process.stderr.write('pievo: config needs "agent": "claude-code" or "codex"\n');
+    process.stderr.write('pievo: config needs "agent": "claude-code", "codex", or "pi"\n');
     return 2;
   }
 

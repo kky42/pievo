@@ -108,6 +108,16 @@ function optionalProvider(value: unknown, field: string): Validation<string | nu
   return { ok: true, value: normalizeProviderSetting(value) };
 }
 
+const PI_THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+function validateReasoningEffort(value: unknown, agent: CodingAgent): Validation<string | null> {
+  const result = optionalProvider(value, "reasoningEffort");
+  if (!result.ok) return result;
+  if (agent === "pi" && result.value !== null && !PI_THINKING.has(result.value)) {
+    return { ok: false, detail: "reasoningEffort for pi must be one of off, minimal, low, medium, high, xhigh, max, or null" };
+  }
+  return result;
+}
+
 function validTimezone(timezone: string): boolean {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format();
@@ -278,10 +288,10 @@ export function validateLoopCreate(value: unknown): Validation<ValidatedLoopCrea
   if (!artifacts.ok) return artifacts;
   const model = optionalProvider(raw.model, "model");
   if (!model.ok) return model;
-  const reasoningEffort = optionalProvider(raw.reasoningEffort, "reasoningEffort");
-  if (!reasoningEffort.ok) return reasoningEffort;
   const agent = coerceCodingAgent(raw.agent);
   if (!agent) return { ok: false, detail: `agent is required and must be one of ${CODING_AGENTS.join(", ")}` };
+  const reasoningEffort = validateReasoningEffort(raw.reasoningEffort, agent);
+  if (!reasoningEffort.ok) return reasoningEffort;
   if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") return { ok: false, detail: "enabled must be boolean" };
   const config: CanonicalLoopConfig = {
     name: name.value,
@@ -360,15 +370,18 @@ export function validateLoopEdit(loop: Loop, value: unknown): Validation<Partial
     if (!result.ok) return result;
     update.model = result.value;
   }
-  if (raw.reasoningEffort !== undefined) {
-    const result = optionalProvider(raw.reasoningEffort, "reasoningEffort");
-    if (!result.ok) return result;
-    update.reasoningEffort = result.value;
-  }
+  let effectiveAgent = loop.agent;
   if (raw.agent !== undefined) {
     const agent = coerceCodingAgent(raw.agent);
     if (!agent) return { ok: false, detail: `agent must be one of ${CODING_AGENTS.join(", ")}` };
+    effectiveAgent = agent;
     update.agent = agent;
+  }
+  if (raw.reasoningEffort !== undefined || raw.agent !== undefined) {
+    const effectiveEffort = raw.reasoningEffort !== undefined ? raw.reasoningEffort : loop.reasoningEffort;
+    const result = validateReasoningEffort(effectiveEffort, effectiveAgent);
+    if (!result.ok) return result;
+    if (raw.reasoningEffort !== undefined) update.reasoningEffort = result.value;
   }
   if (raw.enabled !== undefined) {
     if (typeof raw.enabled !== "boolean") return { ok: false, detail: "enabled must be boolean" };

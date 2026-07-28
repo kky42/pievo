@@ -8,9 +8,8 @@
  * failure (no network, no npx, no write permission, bundled skill absent) prints
  * one diagnostic line and leaves `pievo skill install` as the manual retry path.
  *
- * MULTI-AGENT: the skill is installed for every coding agent pievo knows about
- * (`SKILL_TARGET_AGENTS` — currently Claude Code and Codex, the two `CodingAgent`
- * values), so a Codex user (or any of the two) gets the skill, not just Claude Code.
+ * MULTI-AGENT: the skill is installed for Claude Code and the universal `.agents`
+ * target used by Codex and Pi. Pi therefore needs no separate installer target.
  * We deliberately DON'T pass `-a '*'`: empirically the `skills` CLI treats `'*'` as
  * "install to ALL ~72 supported agents regardless of presence", littering dozens of
  * home dirs (`~/.aider-desk`, `~/.astrbot`, …). Targeting the known agents explicitly
@@ -113,12 +112,13 @@ export interface InstallOpts {
 }
 
 /**
- * The coding agents the pievo skill install targets — the two `CodingAgent`
- * values. Each carries the `skills` CLI agent id (for `-a <id>`), a human label,
+ * The two skill CLI targets. Each carries the `skills` CLI agent id (for
+ * `-a <id>`), a human label,
  * and the skill dir layout that agent reads (relative to the scope root: `~` for a
  * global/user install, the cwd for a project install). Verified empirically against
  * the current `skills` CLI: Claude Code reads `.claude/skills`, Codex reads the
- * universal `.agents/skills`. Extend this list to cover a new agent (installArgs and
+ * universal `.agents/skills`, which Pi also consumes. Extend this list only when a
+ * new skill directory is required (installArgs and
  * `pievo skill status` both derive from it — they cannot drift).
  */
 export const SKILL_TARGET_AGENTS: ReadonlyArray<{

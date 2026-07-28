@@ -103,6 +103,17 @@ function normalizeCodexUsage(raw: RawCodexUsage): TokenUsage {
   };
 }
 
+function parsePiUsage(value: unknown): TokenUsage | undefined {
+  const raw = record(value);
+  if (!raw) return undefined;
+  const inputTokens = nonNegative(raw.input);
+  const outputTokens = nonNegative(raw.output);
+  const cacheReadTokens = nonNegative(raw.cacheRead);
+  const cacheCreationTokens = nonNegative(raw.cacheWrite);
+  if (inputTokens === undefined || outputTokens === undefined || cacheReadTokens === undefined || cacheCreationTokens === undefined) return undefined;
+  return { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens };
+}
+
 function addUsage(a: TokenUsage | undefined, b: TokenUsage | undefined): TokenUsage | undefined {
   if (!a) return b;
   if (!b) return a;
@@ -175,6 +186,8 @@ function makeCollector(agent: CodingAgent): TerminalCollector {
   let codexTurnCompleted = false;
   let codexTurnFailed = false;
   let codexDiagnosticError: string | undefined;
+  let piStopReason: string | undefined;
+  let piErrorMessage: string | undefined;
 
   const handle = (line: string): void => {
     let event: JsonRecord;
@@ -205,6 +218,26 @@ function makeCollector(agent: CodingAgent): TerminalCollector {
       if (event.type === "error") {
         isError = true;
         errorType = typeof event.message === "string" ? event.message : "error";
+      }
+      return;
+    }
+
+    if (agent === "pi") {
+      if (event.type === "session" && typeof event.id === "string") sessionId = event.id;
+      if (event.type === "message_end") {
+        const message = record(event.message);
+        if (message?.role === "assistant") {
+          usage = addUsage(usage, parsePiUsage(message.usage));
+          finalText = assistantText(message.content);
+          piStopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
+          piErrorMessage = typeof message.errorMessage === "string" ? message.errorMessage : undefined;
+        } else if (message?.role === "toolResult") {
+          usage = addUsage(usage, parsePiUsage(message.usage));
+        }
+      }
+      if (event.type === "compaction_end" && event.aborted === false) {
+        const result = record(event.result);
+        usage = addUsage(usage, parsePiUsage(result?.usage));
       }
       return;
     }
@@ -281,6 +314,9 @@ function makeCollector(agent: CodingAgent): TerminalCollector {
       if (agent === "codex") {
         isError = codexTurnFailed || (!codexTurnCompleted && codexDiagnosticError !== undefined);
         if (!codexTurnFailed) errorType = isError ? codexDiagnosticError : undefined;
+      } else if (agent === "pi") {
+        isError = piStopReason === "error" || piStopReason === "aborted";
+        errorType = isError ? (piErrorMessage ?? piStopReason) : undefined;
       }
       finished = { sessionId, finalText, usage, isError, errorType };
       return finished;
@@ -289,7 +325,7 @@ function makeCollector(agent: CodingAgent): TerminalCollector {
 }
 
 export function makeTerminalCollector(agent: CodingAgent): TerminalCollector {
-  if (agent !== "claude-code" && agent !== "codex") {
+  if (agent !== "claude-code" && agent !== "codex" && agent !== "pi") {
     throw new Error(`unsupported coding agent: ${String(agent)}`);
   }
   return makeCollector(agent);

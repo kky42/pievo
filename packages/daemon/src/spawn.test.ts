@@ -69,6 +69,27 @@ describe("execEnv", () => {
     expect(env.HOME).toBe(process.env.HOME);
   });
 
+  test("pi forwards reviewed config/provider keys without arbitrary custom-provider env", () => {
+    setEnv("PI_CODING_AGENT_DIR", "/tmp/pi-agent");
+    setEnv("PI_OFFLINE", "1");
+    setEnv("ANTHROPIC_API_KEY", "anthropic-secret");
+    setEnv("OPENROUTER_API_KEY", "openrouter-secret");
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/google.json");
+    setEnv("AWS_ACCESS_KEY_ID", "aws-key");
+    setEnv("MY_CUSTOM_PROVIDER_KEY", "must-not-leak");
+    const env = execEnv("pi");
+    expect(env).toMatchObject({
+      HOME: process.env.HOME,
+      PI_CODING_AGENT_DIR: "/tmp/pi-agent",
+      PI_OFFLINE: "1",
+      ANTHROPIC_API_KEY: "anthropic-secret",
+      OPENROUTER_API_KEY: "openrouter-secret",
+      GOOGLE_APPLICATION_CREDENTIALS: "/tmp/google.json",
+      AWS_ACCESS_KEY_ID: "aws-key",
+    });
+    expect(env.MY_CUSTOM_PROVIDER_KEY).toBeUndefined();
+  });
+
   test("claude path does NOT forward OpenAI/Codex keys", () => {
     setEnv("OPENAI_API_KEY", "sk-openai");
     setEnv("CODEX_API_KEY", "codex-secret");
@@ -87,6 +108,19 @@ async function waitFor(cond: () => boolean, timeoutMs: number): Promise<boolean>
   }
   return cond();
 }
+
+describe("runProcess stdin", () => {
+  test("round-trips stdin exactly", async () => {
+    const input = "  leading\ntrailing  \n";
+    const r = await runProcess(process.execPath, ["-e", "process.stdin.pipe(process.stdout)"], { cwd: os.tmpdir(), stdin: input });
+    expect(r).toMatchObject({ code: 0, stdout: input });
+  });
+
+  test("does not crash when a child exits before consuming stdin", async () => {
+    const r = await runProcess(process.execPath, ["-e", "process.exit(0)"], { cwd: os.tmpdir(), stdin: "x".repeat(1_000_000) });
+    expect(r.code).toBe(0);
+  });
+});
 
 describe("runProcess — process-group kill (posix)", () => {
   test("an already-aborted run never spawns a child", async () => {

@@ -84,7 +84,7 @@ export function ComposeModal({
 
         <Step number="2" title="Start a new agent session">
           <p className="mt-1.5 text-body leading-snug text-secondary">
-            After the command finishes, start a new Claude Code or Codex session in the project where the loop should run, then say:
+            After the command finishes, start a new Claude Code, Codex, or Pi session in the project where the loop should run, then say:
           </p>
           <div className="mt-3 rounded-control border border-hairline bg-raised p-4 text-body font-medium text-display">
             Create a Pievo loop.
