@@ -66,7 +66,7 @@ export function ComposeModal({
       <div className="mt-6">
         <Step number="1" continued title="Install and connect the daemon">
           <p className="mt-1.5 text-body leading-snug text-secondary">
-            Paste this command into the foreground coding-agent session where the loop should run.
+            Run this command in your terminal. It connects the daemon and installs the Pievo skill.
           </p>
           <div className="mt-3 flex min-w-0 items-start gap-2">
             <pre className="min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-control bg-display p-4 font-mono text-label leading-relaxed text-paper">
@@ -82,9 +82,9 @@ export function ComposeModal({
           </div>
         </Step>
 
-        <Step number="2" title="Create the loop">
+        <Step number="2" title="Start a new agent session">
           <p className="mt-1.5 text-body leading-snug text-secondary">
-            Then, in the same session, say:
+            After the command finishes, start a new Claude Code or Codex session in the project where the loop should run, then say:
           </p>
           <div className="mt-3 rounded-control border border-hairline bg-raised p-4 text-body font-medium text-display">
             Create a Pievo loop.

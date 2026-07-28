@@ -52,7 +52,7 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
   if (unknown.length) return err(`pievo: unknown flag --${unknown[0]} — try \`pievo show --help\`\n`), 2;
   if (positional.length > 1) return err("pievo: usage: pievo show [<loop>] [--json] [--full]\n"), 2;
   const notConnected = () =>
-    err("pievo: this machine isn't connected yet — run `pievo daemon start`\n");
+    err("pievo: this machine isn't connected yet — run `pievo daemon connect`\n");
 
   // 1. List the machine's loops and resolve the target client-side.
   const resolution = await resolveOwnerLoop(positional[0], cwd(), cliDeps);

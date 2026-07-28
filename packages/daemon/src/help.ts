@@ -9,8 +9,11 @@ Usage: pievo [command] [options]
 
 Install and daemon lifecycle
   npm install -g @kky42/pievo@latest
-  daemon start [--foreground] [--server-url <url>] [--connect-key <dk_…>]
-                          Start detached by default; --foreground runs attached.
+  daemon connect --server-url <url> [--connect-key <dk_…>]
+                          Save/select a server and ensure its daemon is running.
+  daemon connections      List saved servers; * marks the active server.
+  daemon start [--foreground]
+                          Start the active connection; --foreground runs attached.
   daemon stop [--force]   Stop the daemon. --force bounds the durability wait.
   daemon restart [--force]
   daemon status           Show local daemon and connection diagnostics.
@@ -46,8 +49,10 @@ Upgrade
 `;
 
 const VERB_USAGE: Record<string, string> = {
-  daemon: "pievo daemon <start|stop|restart|status>\n  Manage this machine's Pievo daemon.",
-  "daemon start": "pievo daemon start [--foreground] [--server-url <url>] [--connect-key <dk_…>]\n  Start detached by default, or attached with --foreground.",
+  daemon: "pievo daemon <connect|connections|start|stop|restart|status>\n  Manage this machine's Pievo daemon and saved server connections.",
+  "daemon connect": "pievo daemon connect --server-url <url> [--connect-key <dk_…>]\n  First connection to a server requires a key; saved servers do not.",
+  "daemon connections": "pievo daemon connections\n  List saved servers; * marks the active server.",
+  "daemon start": "pievo daemon start [--foreground]\n  Start the active connection detached by default, or attached with --foreground.",
   "daemon stop": "pievo daemon stop [--force]\n  Default waits for terminal-report durability; --force bounds the wait.",
   "daemon restart": "pievo daemon restart [--force]\n  Stop then start the currently installed version.",
   "daemon status": "pievo daemon status\n  Show local daemon, server connectivity, run, and report diagnostics.",

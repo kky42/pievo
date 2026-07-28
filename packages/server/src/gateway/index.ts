@@ -26,7 +26,6 @@ import { buildDelivery, type Delivery } from "./delivery.js";
 import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainResult } from "./retention.js";
 import { machinePresence } from "../lib/machinePresence.js";
-import { loginGateEnabled } from "../lib/loginGate.js";
 import { isValidSemver } from "../lib/semver.js";
 import { snapshotRetention } from "../env.js";
 import {
@@ -457,19 +456,14 @@ export class MachineGateway {
     const { machineId } = auth;
     let machine = auth.machine;
     if (!machine) {
-      // First contact — self-register, but ONLY an enrollable token:
-      //  - open/dev mode (gate off): any well-shaped token enrolls into the shared
-      //    workspace (anonymous BYOA is intentional there);
-      //  - gated mode (GitHub login on): the token MUST resolve to a live, unexpired
-      //    connect key bound to a signed-in user (getDeviceOwner) — i.e. the owner
-      //    ran the web/AI-First connect flow. An unknown/forged token is REJECTED,
-      //    never minted into a "shared" machine (audit H-01 / M2). This closes the
-      //    unauthenticated self-registration + resource-creation hole.
+      // First contact requires a live connect-key binding in every deployment
+      // mode. Machine deletion revokes that binding, so a still-running daemon
+      // cannot recreate server data after the owner deletes it.
       const owner = await getDeviceOwner(machineId);
-      if (loginGateEnabled() && owner == null) {
+      if (owner == null) {
         return { status: 401, body: { error: "unknown device token — connect this machine first" } };
       }
-      const ownerId = owner ?? "shared";
+      const ownerId = owner;
       // Home/default team for this machine: ALWAYS the owner's personal team (the
       // no-claim fallback for loops created on it later). A loop's actual team comes
       // from the validated claim intent at createLoop time, never from this home
@@ -1315,7 +1309,7 @@ function renderLoopsText(loops: LoopListRecord[], fields: string[]): string {
       emptyList("loops"),
       helpBlock([
         "Run `pievo new --json '{...}'` to create your first loop",
-        "Run `pievo daemon start` if this machine isn't connected yet",
+        "Run `pievo daemon connect` if this machine isn't connected yet",
       ]),
     );
   }

@@ -42,7 +42,7 @@ describe("runHome", () => {
     const cap = capture({ fetchImpl: fetchFn, server: "", token: undefined });
     expect(await runHome(cap.deps)).toBe(0);
     expect(calls).toHaveLength(0);
-    expect(cap.stdout()).toContain("machine: not connected — run `pievo daemon start`");
+    expect(cap.stdout()).toContain("machine: not connected — run `pievo daemon connect`");
     expect(cap.stdout()).toContain("description:");
   });
 

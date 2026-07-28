@@ -739,7 +739,7 @@ function renderHomeText(
 ): string {
   const machineLine =
     presence === null
-      ? "machine: not connected — run `pievo daemon start`"
+      ? "machine: not connected — run `pievo daemon connect`"
       : `machine: ${[presence, ctx.pid ? `daemon pid ${ctx.pid}` : null, ctx.server].filter(Boolean).join(" · ")}`;
   // Lead with the durable bin path or an explicit global-install fallback.
   const binLineText = ctx.bin ? kvLine("bin", ctx.bin) : "bin: (not on PATH — run `npm install -g @kky42/pievo@latest`)";
@@ -751,7 +751,7 @@ function renderHomeText(
       kvLine("description", HOME_DESCRIPTION),
       machineLine,
       helpBlock([
-        "Run `pievo daemon start --server-url <url> --connect-key <dk_…>` to connect this machine",
+        "Run `pievo daemon connect --server-url <url> --connect-key <dk_…>` to connect this machine",
         "Run `pievo --help` to see every command",
       ]),
     );

@@ -42,7 +42,7 @@ describe("pievo CLI dispatch", () => {
   test("bare pievo opens the machine home", async () => {
     const r = await runCli([]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("pievo daemon start");
+    expect(r.stdout).toContain("pievo daemon connect");
   });
 
   test("report outside a run fails locally with a run-only diagnostic", async () => {

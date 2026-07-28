@@ -12,7 +12,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 
 import { postCli, printCliResponse } from "./cli-client.js";
-import { DEVICE_FILE, flag, readStored, resolveServerUrl } from "./config.js";
+import { connectionFor, flag, resolveServerUrl } from "./config.js";
 
 /** Local pre-check only — the server (croner) is the SOLE validator. Croner
  *  accepts 5- and 6-field expressions plus @-shortcuts (@daily …), so reject
@@ -100,9 +100,9 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   }
 
   const server = resolveServerUrl(flag(args, "server-url"));
-  const token = readStored(DEVICE_FILE) || process.env.PIEVO_TOKEN;
+  const token = (server ? connectionFor(server)?.deviceToken : undefined) || process.env.PIEVO_TOKEN;
   if (!server || !token) {
-    process.stderr.write("pievo: this machine isn't connected yet — run `pievo daemon start --server-url … --connect-key …` first\n");
+    process.stderr.write("pievo: this machine isn't connected yet — run `pievo daemon connect --server-url … --connect-key …` first\n");
     return 2;
   }
 

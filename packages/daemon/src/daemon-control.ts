@@ -15,7 +15,7 @@
  */
 import path from "node:path";
 
-import { DEVICE_FILE, PIEVO_DIR, readStored, resolveServerUrl } from "./config.js";
+import { activeConnection, PIEVO_DIR, serverOutboxPath } from "./config.js";
 import { boundedFetch } from "./http.js";
 import { readPidFile, clearPidFile, isAlive, processStartTime, verifiedRunningPid, type PidRecord } from "./pidfile.js";
 import { readReportDiagnostics, type ReportDiagnostics } from "./report-outbox.js";
@@ -78,7 +78,7 @@ function deps(d: DaemonControlDeps): Seams {
     fetchOnline: d.fetchOnline ?? fetchMachineStatus,
     out: d.out ?? ((s) => process.stdout.write(s)),
     err: d.err ?? ((s) => process.stderr.write(s)),
-    reportDiagnostics: d.reportDiagnostics ?? (() => readReportDiagnostics(path.join(PIEVO_DIR, "pending-reports.sqlite"))),
+    reportDiagnostics: d.reportDiagnostics ?? (() => ({ pendingRunIds: [] })),
     runtimeDiagnostics: d.runtimeDiagnostics ?? (() => readRuntimeDiagnostics(path.join(PIEVO_DIR, "runtime-status.json"))),
   };
 }
@@ -89,8 +89,9 @@ export async function runDaemonStatus(args: string[], injected: DaemonControlDep
     return 2;
   }
   const d = deps(injected);
-  const server = "server" in injected ? (injected.server ?? "") : resolveServerUrl(undefined);
-  const token = "token" in injected ? injected.token : readStored(DEVICE_FILE);
+  const active = activeConnection();
+  const server = "server" in injected ? (injected.server ?? "") : (active?.serverUrl ?? "");
+  const token = "token" in injected ? injected.token : active?.deviceToken;
   // The shared pidfile.verifiedRunningPid check (reused-pid safe), fed our seams.
   const pid = verifiedRunningPid(d);
 
@@ -100,9 +101,11 @@ export async function runDaemonStatus(args: string[], injected: DaemonControlDep
       ? `  daemon:    running (pid ${pid})\n`
       : "  daemon:    not running — run `pievo daemon start` to start it\n",
   );
-  d.out(`  server:    ${server || "not configured — run `pievo daemon start --server-url <url>`"}\n`);
-  if (!token) d.out("  identity:  no device token — run `pievo daemon start`\n");
-  const report = d.reportDiagnostics();
+  d.out(`  server:    ${server || "not configured — run `pievo daemon connect --server-url <url> --connect-key <dk_…>`"}\n`);
+  if (!token) d.out("  identity:  no device token — run `pievo daemon connect`\n");
+  const report = "reportDiagnostics" in injected
+    ? d.reportDiagnostics()
+    : readReportDiagnostics(server ? serverOutboxPath(server) : path.join(PIEVO_DIR, "pending-reports-unconfigured.sqlite"));
   // The runtime file is a live-process handoff, not durable execution authority.
   // Ignore stale contents when the verified daemon pid is absent.
   const runtime = pid !== undefined ? d.runtimeDiagnostics() : undefined;

@@ -26,6 +26,7 @@ import {
   runLeases,
   runReportReceipts,
   terminalReportIncidents,
+  connectKeys,
   type ArtifactFile,
   type Loop,
   type Machine,
@@ -85,7 +86,7 @@ export async function getLoop(id: string): Promise<Loop | undefined> {
   return (await db.select().from(loops).where(eq(loops.id, id)))[0];
 }
 
-/** Loops bound to a machine — gates machine deletion (must be empty first). */
+/** Loops bound to a machine — used by machine cascade authorization and UI counts. */
 export async function loopsForMachine(machineId: string): Promise<Loop[]> {
   return db.select().from(loops).where(eq(loops.machineId, machineId));
 }
@@ -126,7 +127,14 @@ export async function createLoop(input: CreateLoopInput): Promise<Loop> {
     createdAt: ts,
     updatedAt: ts,
   };
-  return (await db.insert(loops).values(row).returning())[0]!;
+  return db.transaction(async (tx) => {
+    // Fence machine deletion: a loop can only commit while its machine exists,
+    // and forceDeleteMachine's UPDATE lock waits for this key-share lock.
+    const machine = (await tx.select({ id: machines.id }).from(machines)
+      .where(eq(machines.id, input.machineId)).for("key share"))[0];
+    if (!machine) throw new Error(`machine ${input.machineId} does not exist`);
+    return (await tx.insert(loops).values(row).returning())[0]!;
+  });
 }
 
 type StoreTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -362,15 +370,17 @@ export async function tryDeleteLoop(id: string): Promise<boolean> {
   });
 }
 
+async function forceDeleteLoopTx(tx: StoreTx, id: string): Promise<boolean> {
+  const loop = (await tx.select().from(loops).where(eq(loops.id, id)).for("update"))[0];
+  if (!loop) return false;
+  // Retired is durable acknowledgement evidence, not execution authority. It
+  // never blocks claims and has no wall-clock expiry.
+  await tx.update(runLeases).set({ state: "retired", expiresAt: null }).where(and(eq(runLeases.loopId, id), inArray(runLeases.state, ["active", "terminal-grace", "reconciliation-only", "retired"])));
+  return deleteLoopDataTx(tx, id);
+}
+
 export async function forceDeleteLoop(id: string): Promise<boolean> {
-  return db.transaction(async (tx) => {
-    const loop = (await tx.select().from(loops).where(eq(loops.id, id)).for("update"))[0];
-    if (!loop) return false;
-    // Retired is durable acknowledgement evidence, not execution authority. It
-    // never blocks claims and has no wall-clock expiry.
-    await tx.update(runLeases).set({ state: "retired", expiresAt: null }).where(and(eq(runLeases.loopId, id), inArray(runLeases.state, ["active", "terminal-grace", "reconciliation-only", "retired"])));
-    return deleteLoopDataTx(tx, id);
-  });
+  return db.transaction((tx) => forceDeleteLoopTx(tx, id));
 }
 
 // ---- runs ----
@@ -1499,6 +1509,32 @@ export async function updateMachine(id: string, patch: Partial<NewMachine>): Pro
 export async function deleteMachine(id: string): Promise<boolean> {
   const deleted = await db.delete(machines).where(eq(machines.id, id)).returning({ id: machines.id });
   return deleted.length > 0;
+}
+
+export type ForceDeleteMachineResult =
+  | { state: "deleted"; loopIds: string[] }
+  | { state: "not-found" }
+  | { state: "forbidden" };
+
+/** Atomically retire all loop authority, remove server-owned machine data, revoke
+ * enrollment, and delete the machine. `allowedTeamIds` is supplied by the
+ * authenticated owner flow; a concurrent loop from another team aborts safely. */
+export async function forceDeleteMachine(id: string, allowedTeamIds?: readonly string[]): Promise<ForceDeleteMachineResult> {
+  return db.transaction(async (tx) => {
+    const machine = (await tx.select({ id: machines.id }).from(machines).where(eq(machines.id, id)).for("update"))[0];
+    if (!machine) return { state: "not-found" };
+    const ownedLoops = await tx.select().from(loops).where(eq(loops.machineId, id)).for("update");
+    if (allowedTeamIds) {
+      const allowed = new Set(allowedTeamIds);
+      if (ownedLoops.some((loop) => !allowed.has(loop.teamId))) return { state: "forbidden" };
+    }
+    for (const loop of ownedLoops) {
+      if (!(await forceDeleteLoopTx(tx, loop.id))) throw new Error(`failed to delete loop ${loop.id}`);
+    }
+    await tx.delete(connectKeys).where(eq(connectKeys.machineId, id));
+    await tx.delete(machines).where(eq(machines.id, id));
+    return { state: "deleted", loopIds: ownedLoops.map((loop) => loop.id) };
+  });
 }
 
 export async function setMachineOnline(id: string, online: boolean): Promise<void> {

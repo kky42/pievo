@@ -6,7 +6,7 @@
  * whole TOON render (`renderHomeText`). The daemon just prints `body.text`.
  *
  * When this machine has no stored credential/server the post
- * short-circuits to a definitive local "not connected — run `pievo daemon start`"
+ * short-circuits to a definitive local "not connected — run `pievo daemon connect`"
  * view. The in-run bare `pievo`
  * is handled separately (cli.ts routes it to the callback as `home` on the run cred).
  *
@@ -101,9 +101,9 @@ function notConnectedHome(bin: string | null): string {
   return (
     `${binLine(bin)}\n` +
     "description: Run your scheduled Pievo agent loops on this machine with your own coding agent.\n" +
-    "machine: not connected — run `pievo daemon start`\n" +
+    "machine: not connected — run `pievo daemon connect`\n" +
     "help[2]:\n" +
-    "  Run `pievo daemon start --server-url <url> --connect-key <dk_…>` to connect this machine\n" +
+    "  Run `pievo daemon connect --server-url <url> --connect-key <dk_…>` to connect this machine\n" +
     "  Run `pievo --help` to see every command\n"
   );
 }

@@ -97,6 +97,7 @@ beforeAll(async () => {
     createdAt: new Date(0).toISOString(),
   })
   await store.ensureTeam(TEAM_C, 'Team C', 'u_stranger')
+  await store.createMachine({ id: 'm_x', userId: MEMBER, name: 'Team URL test machine', tokenHash: 'hash-m-x' })
 
   await seedLoop(TEAM_A, 'Alpha loop (team A)')
   await seedLoop(TEAM_B, 'Bravo loop (team B)')

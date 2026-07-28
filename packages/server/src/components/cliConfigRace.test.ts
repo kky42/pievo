@@ -68,9 +68,12 @@ describe('custom PIEVO_CLI config ordering', () => {
 
     const custom = 'tsx /repo/packages/daemon/src/cli.ts'
     await act(async () => h.config!.resolve({ pievoCli: custom, customCli: true }))
-    expect(bodyText()).toContain(`${custom} daemon start`)
+    expect(bodyText()).toContain(`${custom} daemon connect`)
     expect(bodyText()).toContain('--connect-key dk_claim')
-    expect(bodyText()).toContain('same session')
+    expect(bodyText()).toContain('Run this command in your terminal')
+    expect(bodyText()).toContain('Start a new agent session')
+    expect(bodyText()).toContain('start a new Claude Code or Codex session')
+    expect(bodyText()).not.toContain('same session')
     expect(bodyText()).not.toContain('npm install -g')
     expect(copy.disabled).toBe(false)
   })
@@ -83,11 +86,11 @@ describe('custom PIEVO_CLI config ordering', () => {
 
     expect(bodyText()).toContain('Loading connection command…')
     expect(bodyText()).not.toContain('npm install -g')
-    expect(bodyText()).not.toContain('pievo daemon start')
+    expect(bodyText()).not.toContain('pievo daemon connect')
 
     const custom = 'node /repo/packages/daemon/dist/cli.js'
     await act(async () => h.config!.resolve({ pievoCli: custom, customCli: true }))
-    expect(bodyText()).toContain(`${custom} daemon start`)
+    expect(bodyText()).toContain(`${custom} daemon connect`)
     expect(bodyText()).not.toContain('npm install -g')
   })
 

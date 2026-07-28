@@ -5,6 +5,10 @@ import { classify } from "./route.js";
 
 async function runDaemonCommand(command: string | undefined, args: string[]): Promise<number> {
   switch (command) {
+    case "connect":
+      return (await import("./daemon-lifecycle.js")).runDaemonConnect(args);
+    case "connections":
+      return (await import("./daemon-lifecycle.js")).runDaemonConnections(args);
     case "start":
       return (await import("./daemon-lifecycle.js")).runDaemonStart(args);
     case "stop":
@@ -16,7 +20,7 @@ async function runDaemonCommand(command: string | undefined, args: string[]): Pr
     default:
       process.stderr.write(command
         ? `pievo: unknown daemon command '${command}' — try \`pievo daemon --help\`\n`
-        : "pievo: usage: pievo daemon <start|stop|restart|status>\n");
+        : "pievo: usage: pievo daemon <connect|connections|start|stop|restart|status>\n");
       return 2;
   }
 }

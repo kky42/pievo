@@ -4,6 +4,7 @@ import { btn, btnDanger, btnPrimary, ErrorBanner, inputCls, labelCls } from './u
 import { rel } from '../lib/format'
 import { machinePresence } from '../lib/machinePresence'
 import { daemonStopSupport } from '../lib/lifecycleUi'
+import { ConfirmBar } from './actionUi'
 import {
   listMachines,
   createMachine,
@@ -53,6 +54,8 @@ export function MachinesModal({
   const [status, setStatus] = useState<MachineSummary | null>(null)
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const [delErr, setDelErr] = useState<string | null>(null)
   const [cliConfig, setCliConfig] = useState<{ pievoCli: string; customCli: boolean } | null>(null)
   const [configErr, setConfigErr] = useState(false)
@@ -143,14 +146,20 @@ export function MachinesModal({
   }
 
   async function remove(id: string) {
+    setDeleting(true)
     setDelErr(null)
-    const r = await deleteMachine({ data: id })
-    if (!r.ok) {
-      setDelErr(r.error ?? 'Could not delete this machine.')
-      await load() // refresh counts in case they changed under us
-      return
+    try {
+      const r = await deleteMachine({ data: id })
+      if (!r.ok) {
+        setDelErr(r.error ?? 'Could not delete this machine.')
+        await load() // refresh counts in case they changed under us
+        return
+      }
+      setConfirmDelete(null)
+      await load()
+    } finally {
+      setDeleting(false)
     }
-    await load()
   }
 
   const connected = !!status?.online
@@ -177,6 +186,9 @@ export function MachinesModal({
                 {configErr ? 'Could not load the connection command. Close and try again.' : 'Loading connection command…'}
               </div>
             )}
+            <div className="mt-3 text-label text-secondary">
+              Connecting makes this server active on that computer. Loops on other servers are not copied or deleted, and return when the computer reconnects there.
+            </div>
             <div className="mt-4 flex items-center gap-2.5 rounded-control border border-hairline bg-warn-soft px-4 py-3">
               <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-rubik-orange" />
               <span className="text-[14px] font-medium text-warn">Waiting for computer to connect…</span>
@@ -252,14 +264,27 @@ export function MachinesModal({
               </div>
               <button
                 className={btnDanger}
-                disabled={m.loopCount > 0}
-                title={m.loopCount > 0 ? 'Delete its loops first' : undefined}
-                onClick={() => void remove(m.id)}
+                disabled={deleting}
+                onClick={() => setConfirmDelete(m.id)}
               >
                 Delete
               </button>
             </div>
+            {confirmDelete === m.id && (
+              <ConfirmBar
+                prompt={`Delete ${m.name} and ${m.loopCount} loop${m.loopCount === 1 ? '' : 's'}?`}
+                note={`This permanently deletes the machine, ${m.loopCount} loop${m.loopCount === 1 ? '' : 's'}, and their server history and artifact metadata. Local project files are not deleted, but an unreachable local agent may continue running.`}
+                cta="Delete machine"
+                danger
+                busy={deleting}
+                onConfirm={() => void remove(m.id)}
+                onCancel={() => setConfirmDelete(null)}
+              />
+            )}
             <div className="text-label text-secondary">{daemonStopSupport(m.daemonProtocol).label}</div>
+            {presence === 'offline' && (
+              <div className="text-label text-secondary">It may be stopped or connected elsewhere. Its data remains on this server.</div>
+            )}
             {!daemonStopSupport(m.daemonProtocol).supported && (
               <div className="text-label text-accent">Daemon upgrade required to stop a running process</div>
             )}

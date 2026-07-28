@@ -10,6 +10,7 @@ let workdir: string
 let sentinel: string
 let db: typeof import('../db/index.js')
 let store: TestStore
+let tokens: typeof import('../gateway/tokens.js')
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pievo-lifecycle-local-files-'))
@@ -22,6 +23,7 @@ beforeAll(async () => {
   db = await import('../db/index.js')
   await db.runMigrations()
   store = testStore(await import('../db/store.js'))
+  tokens = await import('../gateway/tokens.js')
 })
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
@@ -58,5 +60,23 @@ test('Pause, Stop, Delete, and Force-delete only mutate server state and never r
   await store.requestDeleteLoop(forced.id)
   expect(await store.forceDeleteLoop(forced.id)).toBe(true)
   expect(await store.getLoop(forced.id)).toBeUndefined()
+  expectSentinel()
+})
+
+test('machine force-delete atomically removes its loops and revokes enrollment', async () => {
+  const token = tokens.mintDeviceToken()
+  const machineId = tokens.machineIdFromToken(token)
+  await tokens.rememberConnectKey(token, { userId: 'owner', teamId: 'team-owner' })
+  await store.createMachine({ id: machineId, userId: 'owner', name: 'cascade-machine', tokenHash: tokens.sha256(token), online: true })
+  const first = await store.createLoop({ id: 'cascade-a', userId: 'owner', machineId, name: 'cascade-a', cron: '0 6 * * *', workdir, enabled: true })
+  const second = await store.createLoop({ id: 'cascade-b', userId: 'owner', machineId, name: 'cascade-b', cron: '0 7 * * *', workdir, enabled: true })
+
+  const deleted = await store.forceDeleteMachine(machineId, ['team-owner'])
+  expect(deleted.state).toBe('deleted')
+  if (deleted.state === 'deleted') expect(deleted.loopIds).toEqual(expect.arrayContaining([first.id, second.id]))
+  expect(await store.getMachine(machineId)).toBeUndefined()
+  expect(await store.getLoop(first.id)).toBeUndefined()
+  expect(await store.getLoop(second.id)).toBeUndefined()
+  expect(await tokens.getDeviceOwner(machineId)).toBeUndefined()
   expectSentinel()
 })

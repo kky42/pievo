@@ -6,7 +6,7 @@
  * `/api/machine/cli`.
  */
 
-import { DEVICE_FILE, readStored, resolveServerUrl } from "./config.js";
+import { activeConnection, connectionFor, resolveServerUrl } from "./config.js";
 import { boundedFetch } from "./http.js";
 
 const CLI_TIMEOUT_MS = 30_000;
@@ -22,7 +22,7 @@ export interface PostCliDeps {
   fetchImpl?: typeof fetch;
   /** Env carrying the run token (defaults to process.env). */
   env?: NodeJS.ProcessEnv;
-  /** Test override for the persisted device token (else readStored(DEVICE_FILE)). */
+  /** Test override for the active connection's device token. */
   deviceToken?: string | undefined;
   /** Fully-resolved server url override (tests) — bypasses resolveServerUrl. */
   server?: string;
@@ -39,11 +39,13 @@ export type PostCliResult =
  * Resolve the credential: the in-run run token wins, otherwise use the persisted
  * device token. Undefined means neither is available.
  */
-export function resolveCredential(deps: PostCliDeps = {}): { token: string } | undefined {
+export function resolveCredential(deps: PostCliDeps = {}, server?: string): { token: string } | undefined {
   const env = deps.env ?? process.env;
   const runToken = env.PIEVO_RUN_TOKEN;
   if (runToken) return { token: runToken };
-  const device = "deviceToken" in deps ? deps.deviceToken : readStored(DEVICE_FILE);
+  const device = "deviceToken" in deps
+    ? deps.deviceToken
+    : (server ? connectionFor(server)?.deviceToken : activeConnection()?.deviceToken);
   if (device) return { token: device };
   return undefined;
 }
@@ -54,8 +56,8 @@ export function resolveCredential(deps: PostCliDeps = {}): { token: string } | u
  * distinct results so callers render their own message.
  */
 export async function postCli(argv: string[], deps: PostCliDeps = {}): Promise<PostCliResult> {
-  const cred = resolveCredential(deps);
   const server = "server" in deps ? (deps.server ?? "") : resolveServerUrl(deps.serverFlag);
+  const cred = resolveCredential(deps, server);
   if (!cred || !server) return { kind: "not-configured" };
   const fetchImpl = deps.fetchImpl ?? ((url: string, init: RequestInit) => boundedFetch(url, init, CLI_TIMEOUT_MS));
 

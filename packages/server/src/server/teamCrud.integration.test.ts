@@ -49,6 +49,7 @@ beforeAll(async () => {
   await store.ensureTeam(store.teamIdForUser(ALICE), "alice's Team", ALICE)
   await store.ensureTeam(store.teamIdForUser(BOB), "bob's Team", BOB)
   await store.ensureTeam(store.teamIdForUser(CAROL), "carol's Team", CAROL)
+  await store.createMachine({ id: 'm_x', userId: ALICE, name: 'Team test machine', tokenHash: 'hash-m-x' })
 })
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))

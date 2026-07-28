@@ -114,7 +114,7 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
   const { positional, flags } = parseFlags(argv.slice(1), booleanFlags);
 
   const notConnected = () =>
-    err("pievo: this machine isn't connected yet — run `pievo daemon start --server-url … --connect-key …` first\n");
+    err("pievo: this machine isn't connected yet — run `pievo daemon connect --server-url … --connect-key …` first\n");
 
   if (verb === "loops") {
     // Forward supported flags and reject unknown ones locally as usage errors.

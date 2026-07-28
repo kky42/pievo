@@ -4,10 +4,10 @@
  * minted a "shared" machine for ANY bearer string even under the GitHub login
  * gate, letting an unauthenticated caller create unbounded machine/loop rows.
  *
- * These tests reproduce the audit's two curl calls (poll → loop) and assert they
- * are now REJECTED in gated mode, prove the legitimate connect-key flow still
- * registers + polls + creates a loop end to end, cover the `dk_` shape filter, and
- * pin that OPEN mode keeps its permissive anonymous self-registration.
+ * These tests reproduce the audit's poll enrollment path, prove unknown keys are
+ * rejected in every mode, and cover expiry plus the `dk_` shape filter. Requiring
+ * a remembered key also makes machine deletion durable: an old daemon cannot
+ * recreate the row after its enrollment binding is revoked.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -119,16 +119,34 @@ test("malformed device tokens are rejected early with 401", async () => {
   }
 });
 
-// ---- open mode: anonymous self-registration is preserved ----
+// ---- open mode still requires dashboard enrollment ----
 
-test("open mode: an unknown dk_ token still self-registers into the shared workspace", async () => {
-  // Gate OFF (default in tests) ⇒ open/dev mode keeps anonymous BYOA enrollment.
+test("open mode: an unknown dk_ token cannot self-register", async () => {
   const gw = gateway();
   const token = tokens.mintDeviceToken();
   const res = await pollV4(gw, token, { host: "dev-box" });
+  expect(res.status).toBe(401);
+  expect(await store.getMachine(tokens.machineIdFromToken(token))).toBeUndefined();
+});
+
+test("open mode: a remembered connect key can self-register into the shared workspace", async () => {
+  const gw = gateway();
+  const token = tokens.mintDeviceToken();
+  await tokens.rememberConnectKey(token, { userId: "shared", teamId: store.teamIdForUser("shared") });
+  const res = await pollV4(gw, token, { host: "dev-box" });
   expect(res.status).toBe(200);
-  const machine = await store.getMachine(tokens.machineIdFromToken(token));
-  expect(machine?.userId).toBe("shared");
+  expect((await store.getMachine(tokens.machineIdFromToken(token)))?.userId).toBe("shared");
+});
+
+test("a deleted machine cannot recreate itself with its revoked token", async () => {
+  const gw = gateway();
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await tokens.rememberConnectKey(token, { userId: "shared", teamId: store.teamIdForUser("shared") });
+  expect((await pollV4(gw, token, { host: "dev-box" })).status).toBe(200);
+  expect((await store.forceDeleteMachine(machineId)).state).toBe("deleted");
+  expect((await pollV4(gw, token, { host: "dev-box" })).status).toBe(401);
+  expect(await store.getMachine(machineId)).toBeUndefined();
 });
 
 // ---- token-hash binding: a machine-id collision can't impersonate ----

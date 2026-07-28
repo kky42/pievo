@@ -24,6 +24,8 @@ describe("runDaemon startup ordering", () => {
     process.env.PIEVO_TOKEN = "dk_startup";
     process.env.PIEVO_SERVER_URL = "https://server.test";
     process.env.PIEVO_POLL_MS = "1";
+    const { saveActiveConnection } = await import("./config.js");
+    saveActiveConnection("https://server.test", "dk_startup");
     const execute = vi.fn();
     let polls = 0;
 
@@ -65,6 +67,8 @@ describe("runDaemon startup ordering", () => {
     process.env.PIEVO_HOME = home;
     process.env.PIEVO_TOKEN = "dk_startup";
     process.env.PIEVO_SERVER_URL = "https://server.test";
+    const { saveActiveConnection, serverOutboxPath } = await import("./config.js");
+    saveActiveConnection("https://server.test", "dk_startup");
     const events: string[] = [];
 
     vi.doMock("./http.js", () => ({
@@ -84,7 +88,7 @@ describe("runDaemon startup ordering", () => {
     }));
 
     const { PendingReportOutbox } = await import("./report-outbox.js");
-    const box = new PendingReportOutbox(path.join(home, "pending-reports.sqlite"));
+    const box = new PendingReportOutbox(serverOutboxPath("https://server.test"));
     box.put("rk_pending", {
       reportId: "55555555-5555-4555-8555-555555555555",
       runId: "run-pending",

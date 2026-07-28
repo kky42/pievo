@@ -104,7 +104,7 @@ describe("runCreate — sends the idempotency key on a real create, omits it on 
     else process.env.PIEVO_TOKEN = prevToken;
   });
 
-  // NB: the daemon resolves its token from ~/.pievo/device-token first (env is the
+  // NB: the daemon uses the matching saved connection (this test injects env as the
   // fallback), so the integration test can't pin the exact key to a fixed token — it
   // asserts the CONTRACT (present, 64-hex, stable across retries, differs by config).
   // The exact `sha256(machineId + canonicalJSON(resolvedBody))` value is pinned by the

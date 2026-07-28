@@ -7,7 +7,7 @@ import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
 import { executeDelivery, RUN_CANCEL_REASON, type Delivery } from "./runner.js";
 import { PendingReportOutbox, sendTerminalReport, type PersistedReport, type ReportAck, type TerminalReport } from "./report-outbox.js";
-import { DEVICE_FILE, PIEVO_DIR, SERVER_FILE, persist, readStored } from "./config.js";
+import { activeConnection, PIEVO_DIR, serverOutboxPath } from "./config.js";
 import { ensureCallbackBin } from "./callback-bin.js";
 import { writePidFile, clearPidFile, verifiedRunningPid } from "./pidfile.js";
 import { daemonVersion } from "./version.js";
@@ -210,15 +210,12 @@ export function nextPollDelayMs(elapsedMs: number, pollMs = POLL_MS): number {
   return Math.max(REPOLL_MS, pollMs - elapsedMs);
 }
 
-function resolveStored(file: string, explicit: string | undefined): string | undefined {
-  if (explicit) { persist(file, explicit); return explicit; }
-  return readStored(file);
-}
-
 export async function runDaemon(args: string[] = []): Promise<number> {
-  const token = resolveStored(DEVICE_FILE, process.env.PIEVO_TOKEN);
-  const server = resolveStored(SERVER_FILE, (flag(args, "--server-url") || process.env.PIEVO_SERVER_URL)?.replace(/\/$/, ""));
-  if (!token || !server) { logger.error("run `pievo daemon start --server-url <url> --connect-key <dk_…>` first"); return 1; }
+  if (args.length) { logger.error("daemon runtime does not accept connection arguments"); return 1; }
+  const connection = activeConnection();
+  const token = process.env.PIEVO_TOKEN || connection?.deviceToken;
+  const server = connection?.serverUrl;
+  if (!token || !server) { logger.error("run `pievo daemon connect --server-url <url> --connect-key <dk_…>` first"); return 1; }
   const roots = (process.env.PIEVO_ROOTS || "").split(",").map((s) => s.trim()).filter(Boolean);
   const info = { host: os.hostname(), platform: process.platform, arch: process.arch, version: daemonVersion() };
   const daemonInstanceId = randomUUID();
@@ -229,7 +226,7 @@ export async function runDaemon(args: string[] = []): Promise<number> {
   writePidFile();
   const pollAbort = new AbortController();
   let stopping = false;
-  const outbox = new PendingReportOutbox(path.join(PIEVO_DIR, "pending-reports.sqlite"));
+  const outbox = new PendingReportOutbox(serverOutboxPath(server));
   const runtimeStatusFile = path.join(PIEVO_DIR, "runtime-status.json");
   let lastNeedsUpdateKey: string | undefined;
   let runtimeState: { currentRuns: CurrentRun[]; cancelPendingRunIds: string[]; persistenceError?: string; outboxPath?: string } = { currentRuns: [], cancelPendingRunIds: [] };

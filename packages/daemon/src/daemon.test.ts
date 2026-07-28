@@ -42,6 +42,8 @@ describe("runDaemon", () => {
     process.env.PIEVO_HOME = home;
     process.env.PIEVO_TOKEN = "dk_test";
     process.env.PIEVO_SERVER_URL = "http://127.0.0.1:1";
+    const { saveActiveConnection } = await import("./config.js");
+    saveActiveConnection("http://127.0.0.1:1", "dk_test");
 
     const pidfile = await import("./pidfile.js");
     pidfile.writePidFile(process.pid); // alive + matching start-time: a "live daemon"

@@ -115,7 +115,7 @@ export interface MachineSummary {
    *  the auth gate it is serialized ONLY to the machine's owner — null for
    *  everyone else (the token fully impersonates the machine). */
   token: string | null
-  /** Loops bound to this machine — must be 0 before it can be deleted. */
+  /** Loops bound to this machine; machine deletion removes them after confirmation. */
   loopCount: number
 }
 

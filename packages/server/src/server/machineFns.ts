@@ -133,26 +133,37 @@ export const finalizeMachine = createServerFn({ method: 'POST' })
   })
 
 /**
- * Cancel a pending connect (or delete an existing machine). A machine that still
- * owns loops can't be deleted — the loops execute on it, so they must be removed
- * first (we block rather than cascade, to never silently nuke a loop's history).
- * Pending/unnamed machines have no loops, so the connect-cancel path passes through.
+ * Cancel a pending connect or delete a machine and all of its server-owned data.
+ * Each loop goes through forceDeleteLoop so execution authority is retired and
+ * history/artifact metadata is removed. Nothing reaches into the machine's cwd.
+ *
+ * A teammate may still remove an empty machine as before. Cascading loops is
+ * stronger: under the auth gate the caller must own every affected loop team,
+ * matching the authority required to force-retire those teams' run leases.
  */
 export const deleteMachine = createServerFn({ method: 'POST' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<{ ok: boolean; error?: string }> => {
-    await ensureServer()
+    const { scheduler } = await ensureServer()
     const { scope, machine } = await scopedMachine(id)
     // Distinct error shapes on purpose: a signed-out caller is "unauthorized",
     // an out-of-scope/missing machine is "machine not found".
     if (scope.enforce && !scope.userId) return { ok: false, error: 'unauthorized' }
     if (!machine) return { ok: false, error: 'machine not found' }
     const loops = await store.loopsForMachine(id)
-    if (loops.length > 0) {
-      return {
-        ok: false,
-        error: `This machine still has ${loops.length} loop${loops.length === 1 ? '' : 's'} — delete ${loops.length === 1 ? 'it' : 'them'} first.`,
+    let allowedTeamIds: string[] | undefined = scope.enforce ? [] : undefined
+    if (scope.enforce && loops.length > 0) {
+      allowedTeamIds = [...new Set(loops.map((loop) => loop.teamId))]
+      const memberships = await Promise.all(allowedTeamIds.map((teamId) => store.getTeamMember(teamId, scope.userId!)))
+      if (memberships.some((membership) => membership?.role !== 'owner')) {
+        return { ok: false, error: 'Only an owner of every affected team can delete this machine and its loops.' }
       }
     }
-    return { ok: await store.deleteMachine(id) }
+    const deleted = await store.forceDeleteMachine(id, allowedTeamIds)
+    if (deleted.state === 'forbidden') {
+      return { ok: false, error: 'Machine loops changed while deleting; review them and try again.' }
+    }
+    if (deleted.state === 'not-found') return { ok: false, error: 'machine not found' }
+    for (const loopId of deleted.loopIds) scheduler.removeLoop(loopId)
+    return { ok: true }
   })

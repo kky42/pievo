@@ -5,7 +5,7 @@ const HELP_FLAG_ARGS = new Set(["--help", "-h"]);
 const VERSION_FLAGS = new Set(["--version", "-v"]);
 const COMMAND_VERBS = new Set(["daemon", "new", "skill", "log", "show", ...INTERACTIVE_VERBS]);
 const HELP_VERBS = new Set([...COMMAND_VERBS, "report"]);
-const DAEMON_SUBCOMMANDS = new Set(["start", "stop", "restart", "status"]);
+const DAEMON_SUBCOMMANDS = new Set(["connect", "connections", "start", "stop", "restart", "status"]);
 
 function hasHelpFlag(args: string[]): boolean {
   return args.some((a) => HELP_FLAG_ARGS.has(a));

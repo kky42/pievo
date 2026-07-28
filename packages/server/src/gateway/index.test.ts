@@ -923,6 +923,7 @@ test("report clips valid diagnostic strings and durably rejects a non-string err
 test("poll persists the daemon version, updating only when it changes", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
+  await tokens.rememberConnectKey(token, { userId: "shared", teamId: store.teamIdForUser("shared") });
   // First poll self-registers and records the reported version.
   await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64", version: "0.8.0" } });
   expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.8.0");

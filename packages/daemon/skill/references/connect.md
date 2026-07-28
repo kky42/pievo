@@ -1,8 +1,8 @@
 # Connect a machine
 
 Use the **pievo-cli** command prefix supplied by the user; otherwise use `pievo`.
-A dashboard connection command supplies a **server-url** and one-time
-**connect-key**. Use both verbatim.
+A dashboard connection command supplies a **server-url** and persistent
+**connect-key** for that server. Use both verbatim and treat the key as a secret.
 
 If no custom command prefix was supplied, install the current CLI:
 
@@ -13,7 +13,7 @@ npm install -g @kky42/pievo@latest
 Start the daemon:
 
 ```bash
-<pievo-cli> daemon start --server-url <server-url> --connect-key <connect-key>
+<pievo-cli> daemon connect --server-url <server-url> --connect-key <connect-key>
 ```
 
 The command is idempotent: it reuses this machine's identity, starts one detached

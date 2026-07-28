@@ -6,8 +6,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { ensureBinShim } from "./bin-shim.js";
-import { DEVICE_FILE, PIEVO_DIR, SERVER_FILE, flag, persist, readStored, resolveServerUrl } from "./config.js";
+import { activeConnection, connectionFor, normalizeServerUrl, PIEVO_DIR, readConnections, saveActiveConnection, validServerUrl, type SavedConnection } from "./config.js";
 import { fetchMachineStatus, runDaemonStop } from "./daemon-control.js";
+import { boundedFetch } from "./http.js";
 import { verifiedRunningPid } from "./pidfile.js";
 import { type InstallOutcome, installSkill } from "./skill-install.js";
 
@@ -23,8 +24,8 @@ const INTERNAL_DAEMON_CHILD = "PIEVO_INTERNAL_DAEMON_CHILD";
  * file is carefully 0600. The child re-enters through the public nested command;
  * a private environment marker prevents it duplicating the parent's refresh.
  */
-export function buildDaemonSpawn(server: string, token: string): { args: string[]; env: NodeJS.ProcessEnv } {
-  const args = [...process.execArgv, process.argv[1] ?? "", "daemon", "start", "--foreground", "--server-url", server];
+export function buildDaemonSpawn(token: string): { args: string[]; env: NodeJS.ProcessEnv } {
+  const args = [...process.execArgv, process.argv[1] ?? "", "daemon", "start", "--foreground"];
   return { args, env: { ...process.env, PIEVO_TOKEN: token, [INTERNAL_DAEMON_CHILD]: "1" } };
 }
 
@@ -36,7 +37,7 @@ export function buildDaemonSpawn(server: string, token: string): { args: string[
  */
 function spawnDaemonDefault(server: string, token: string, logFile: string): number | undefined {
   const out = fs.openSync(logFile, "a");
-  const { args, env } = buildDaemonSpawn(server, token);
+  const { args, env } = buildDaemonSpawn(token);
   const child = spawn(process.execPath, args, {
     detached: true,
     stdio: ["ignore", out, out],
@@ -63,8 +64,7 @@ export type DaemonStartDeps = {
   sleep?: (ms: number) => Promise<void>;
   /** The local pidfile check (verified alive + start-time match). */
   localPid?: () => number | undefined;
-  persist?: (file: string, value: string) => void;
-  readToken?: () => string | undefined;
+  readConnection?: () => SavedConnection | undefined;
   /** Refresh the user-scope skill (best-effort, announced). Injected in tests. */
   installSkill?: () => Promise<InstallOutcome>;
   /** Install/refresh the `pievo` PATH shim (best-effort). Injected in tests. */
@@ -77,17 +77,7 @@ export type DaemonStartDeps = {
 };
 
 function validStartArgs(args: string[]): boolean {
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--foreground") continue;
-    if (arg === "--server-url" || arg === "--connect-key") {
-      if (!args[i + 1] || args[i + 1]!.startsWith("--")) return false;
-      i += 1;
-      continue;
-    }
-    return false;
-  }
-  return true;
+  return args.length === 0 || (args.length === 1 && args[0] === "--foreground");
 }
 
 export async function runDaemonStart(args: string[], injected: DaemonStartDeps = {}): Promise<number> {
@@ -97,8 +87,7 @@ export async function runDaemonStart(args: string[], injected: DaemonStartDeps =
     kill: injected.kill ?? ((pid: number, sig: NodeJS.Signals) => process.kill(pid, sig)),
     sleep: injected.sleep ?? sleep,
     localPid: injected.localPid ?? (() => verifiedRunningPid()),
-    persist: injected.persist ?? persist,
-    readToken: injected.readToken ?? (() => readStored(DEVICE_FILE)),
+    readConnection: injected.readConnection ?? (() => activeConnection()),
     installSkill: injected.installSkill ?? installSkill,
     ensureBinShim: injected.ensureBinShim ?? (() => void ensureBinShim()),
     internalChild: injected.internalChild ?? process.env[INTERNAL_DAEMON_CHILD] === "1",
@@ -123,27 +112,23 @@ export async function runDaemonStart(args: string[], injected: DaemonStartDeps =
   };
 
   if (!validStartArgs(args)) {
-    d.err("pievo: usage: pievo daemon start [--foreground] [--server-url <url>] [--connect-key <dk_…>]\n");
+    d.err("pievo: usage: pievo daemon start [--foreground]\n");
     return 2;
   }
-  const server = resolveServerUrl(flag(args, "server-url"));
-  // Reuse this machine's stored identity first (so we stay the SAME machine across
-  // runs); only adopt the connect-key the first time, when nothing is stored yet.
-  const token = d.readToken() || flag(args, "connect-key") || process.env.PIEVO_TOKEN;
+  const connection = d.readConnection();
+  const server = connection?.serverUrl;
+  // Detached children receive the credential only through the environment. A
+  // direct foreground invocation uses the active connection's saved identity.
+  const token = process.env.PIEVO_TOKEN || connection?.deviceToken;
   if (!server || !token) {
-    d.err("pievo: usage: pievo daemon start [--foreground] [--server-url <url>] [--connect-key <dk_…>]\n");
+    d.err("pievo: no active connection — run `pievo daemon connect --server-url <url> --connect-key <dk_…>`\n");
     return 2;
   }
-
-  // Persist both now so `pievo new` and a restart are zero-config (the daemon
-  // persists them too on boot; doing it here makes them available immediately).
-  d.persist(SERVER_FILE, server);
-  d.persist(DEVICE_FILE, token);
 
   if (args.includes("--foreground")) {
     // Start polling before any potentially 90s skill install. A detached child does
     // no refresh at all: its parent owns the single post-readiness refresh.
-    const running = d.foreground(["--server-url", server]);
+    const running = d.foreground([]);
     if (!d.internalChild) void refreshSkill();
     return running;
   }
@@ -203,6 +188,112 @@ export async function runDaemonStart(args: string[], injected: DaemonStartDeps =
   }
   d.err(`pievo: daemon did not come online within ${READY_TIMEOUT_MS / 1000}s — check ${logFile}\n`);
   return 1;
+}
+
+export type DaemonConnectDeps = {
+  readConfig?: () => ReturnType<typeof readConnections>;
+  save?: (serverUrl: string, token: string) => void;
+  probeSaved?: (serverUrl: string, token: string) => Promise<"valid" | "invalid" | "unreachable">;
+  stop?: (args: string[]) => Promise<number>;
+  start?: (args: string[]) => Promise<number>;
+  out?: (s: string) => void;
+  err?: (s: string) => void;
+};
+
+async function probeSavedConnection(serverUrl: string, token: string): Promise<"valid" | "invalid" | "unreachable"> {
+  try {
+    const response = await boundedFetch(`${serverUrl}/api/machine/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }, 3000);
+    if (response.ok) return "valid";
+    return response.status === 401 || response.status === 403 || response.status === 404 ? "invalid" : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
+function parseConnectArgs(args: string[]): { serverUrl: string; connectKey?: string } | undefined {
+  let serverUrl: string | undefined;
+  let connectKey: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg !== "--server-url" && arg !== "--connect-key") return undefined;
+    const value = args[++i];
+    if (!value || value.startsWith("--")) return undefined;
+    if (arg === "--server-url") {
+      if (serverUrl !== undefined) return undefined;
+      serverUrl = value;
+    } else {
+      if (connectKey !== undefined) return undefined;
+      connectKey = value;
+    }
+  }
+  return serverUrl ? { serverUrl, ...(connectKey ? { connectKey } : {}) } : undefined;
+}
+
+/** Select a saved server or enroll a new one, stopping the old execution plane
+ * before changing the active credential. */
+export async function runDaemonConnect(args: string[], injected: DaemonConnectDeps = {}): Promise<number> {
+  const out = injected.out ?? ((s: string) => process.stdout.write(s));
+  const err = injected.err ?? ((s: string) => process.stderr.write(s));
+  const parsed = parseConnectArgs(args);
+  if (!parsed) {
+    err("pievo: usage: pievo daemon connect --server-url <url> [--connect-key <dk_…>]\n");
+    return 2;
+  }
+  if (!validServerUrl(parsed.serverUrl)) {
+    err("pievo: server URL must be an http(s) origin without credentials, path, query, or fragment\n");
+    return 2;
+  }
+  const serverUrl = normalizeServerUrl(parsed.serverUrl);
+  const config = (injected.readConfig ?? readConnections)();
+  const saved = connectionFor(serverUrl, config);
+  if (!saved && !parsed.connectKey) {
+    err(`pievo: first connection to ${serverUrl} requires --connect-key\n`);
+    return 2;
+  }
+  let token = saved?.deviceToken ?? parsed.connectKey!;
+  let identityChanged = false;
+  if (saved && parsed.connectKey && parsed.connectKey !== saved.deviceToken) {
+    const state = await (injected.probeSaved ?? probeSavedConnection)(serverUrl, saved.deviceToken);
+    if (state === "unreachable") {
+      err(`pievo: could not verify the saved connection to ${serverUrl}; it was not replaced\n`);
+      return 1;
+    }
+    identityChanged = state === "invalid";
+    if (identityChanged) token = parsed.connectKey;
+    else out(`using saved identity for ${serverUrl}; the supplied key remains available for loop creation\n`);
+  }
+  if (config.active !== null && (config.active !== serverUrl || identityChanged)) {
+    const stopped = await (injected.stop ?? ((stopArgs) => runDaemonStop(stopArgs)))(["--force"]);
+    if (stopped !== 0) return stopped;
+  }
+  try {
+    (injected.save ?? ((target, deviceToken) => { saveActiveConnection(target, deviceToken); }))(serverUrl, token);
+  } catch (cause) {
+    err(`pievo: could not save connection: ${cause instanceof Error ? cause.message : String(cause)}\n`);
+    return 1;
+  }
+  if (identityChanged) out(`replaced saved identity for ${serverUrl}\n`);
+  return (injected.start ?? ((startArgs) => runDaemonStart(startArgs)))([]);
+}
+
+export function runDaemonConnections(args: string[], injected: Pick<DaemonConnectDeps, "readConfig" | "out" | "err"> = {}): number {
+  const out = injected.out ?? ((s: string) => process.stdout.write(s));
+  const err = injected.err ?? ((s: string) => process.stderr.write(s));
+  if (args.length) {
+    err("pievo: usage: pievo daemon connections\n");
+    return 2;
+  }
+  const config = (injected.readConfig ?? readConnections)();
+  const urls = Object.keys(config.connections).sort();
+  if (!urls.length) {
+    out("no saved daemon connections\n");
+    return 0;
+  }
+  out("pievo daemon connections:\n");
+  for (const url of urls) out(`  ${url === config.active ? "*" : " "} ${url}\n`);
+  return 0;
 }
 
 export type DaemonRestartDeps = {

@@ -22,14 +22,18 @@ credentials, files, and tools available on your machine.
 
 ```bash
 npm install -g @kky42/pievo@latest
-pievo daemon start --server-url <url> --connect-key <dk_…>
+pievo daemon connect --server-url <url> --connect-key <dk_…>
 ```
 
-`daemon start` is detached and idempotent by default. In detached mode it stores the
-server URL and machine credential under `PIEVO_HOME` (default `~/.pievo`), waits for a
-fresh server heartbeat, and prints `daemon online` on first success. `--foreground`
-stays attached for a supervisor or debugging rather than returning after that
-readiness check.
+`daemon connect` saves a per-server machine credential in owner-only
+`PIEVO_HOME/connections.json` (default `~/.pievo/connections.json`), selects that
+server, and ensures its daemon is running. A saved URL can later be selected without
+a key. Switching servers force-stops the current daemon and runs before activating
+the target. Use `pievo daemon connections` to list saved URLs.
+
+`daemon start` starts the active connection and is detached and idempotent by default.
+It waits for a fresh server heartbeat and prints `daemon online` on first success.
+`--foreground` stays attached for a supervisor or debugging.
 
 The `dk_…` credential is a persistent bearer secret. The generated initial connect
 command passes it as `--connect-key`, so protect the command and your shell history.
@@ -47,7 +51,9 @@ pievo daemon restart
 pievo                         Show this machine's loops and recent runs.
 
 Daemon lifecycle
-  daemon start [--foreground] [--server-url <url>] [--connect-key <dk_…>]
+  daemon connect --server-url <url> [--connect-key <dk_…>]
+  daemon connections
+  daemon start [--foreground]
   daemon stop [--force]
   daemon restart [--force]
   daemon status
@@ -81,8 +87,8 @@ enabled state, and exact artifact paths.
 ## Runtime behavior
 
 The daemon has no inbound listener. It polls the server, runs each delivered prompt
-once, and saves the terminal payload to an owner-only SQLite outbox until the server
-accepts it. There is no provider retry or session resume. Different loops may run
+once, and saves the terminal payload to an owner-only, server-specific SQLite outbox
+until that server accepts it. There is no provider retry or session resume. Different loops may run
 concurrently, while each loop remains serialized.
 
 Artifacts are exact workdir-relative file paths—never globs or directory scans. Pievo

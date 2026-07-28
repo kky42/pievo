@@ -77,7 +77,7 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   const missingValue = VALUE_FLAGS.find((key) => flags[key] === true);
   if (missingValue) return d.err(`pievo: --${missingValue} requires a value\n`), 2;
   const notConnected = () =>
-    d.err("pievo: this machine isn't connected yet — run `pievo daemon start --server-url … --connect-key …` first\n");
+    d.err("pievo: this machine isn't connected yet — run `pievo daemon connect --server-url … --connect-key …` first\n");
 
   // 1. List the machine's loops and resolve the target client-side.
   const resolution = await resolveOwnerLoop(positional[0], d.cwd(), cliDeps);
