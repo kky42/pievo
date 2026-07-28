@@ -12,6 +12,7 @@ import {
   pidStatus,
   processStartTime,
   readinessReady,
+  recordedProcessState,
   terminateRecordedProcess,
 } from "./server-cli-lib.mjs";
 
@@ -128,6 +129,18 @@ describe("safe pid identity", () => {
       startTime: () => record.startTime,
       clear: vi.fn(),
     })).toMatchObject({ state: "running", record });
+  });
+
+  test("treats exit between the liveness probe and start-time lookup as gone", () => {
+    const probe = vi.fn()
+      .mockReturnValueOnce("alive")
+      .mockReturnValueOnce("gone");
+
+    expect(recordedProcessState(record, {
+      probe,
+      startTime: () => undefined,
+    })).toEqual({ state: "gone" });
+    expect(probe).toHaveBeenCalledTimes(2);
   });
 
   test("clears records only after death or verified pid reuse", () => {

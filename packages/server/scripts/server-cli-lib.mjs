@@ -268,7 +268,11 @@ export function recordedProcessState(record, deps = {}) {
   if (probed === "gone" || probed === false) return { state: "gone" };
   if (probed === "unknown") return { state: "unsafe", error: "cannot determine whether the recorded process is alive" };
   const actual = startTime(record.pid);
-  if (!actual) return { state: "unsafe", error: "cannot verify the live process start time" };
+  if (!actual) {
+    const reprobed = probe(record.pid);
+    if (reprobed === "gone" || reprobed === false) return { state: "gone" };
+    return { state: "unsafe", error: "cannot verify the live process start time" };
+  }
   return actual === record.startTime
     ? { state: "same" }
     : { state: "gone", reused: true };
