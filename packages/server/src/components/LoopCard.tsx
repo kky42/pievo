@@ -1,14 +1,9 @@
 import { useMemo, useState } from 'react'
-import type { CodingAgent, LoopSummary, RunSummary } from '../types'
-import { dotLabel, lastRunOf, rel } from '../lib/format'
+import type { LoopSummary, RunSummary } from '../types'
 import { mergeRuns } from '../lib/runs'
-import { lifecyclePresentation } from '../lib/lifecycleUi'
 import { loadOlderRuns } from '../server/loopApi'
-import { Timeline, WINDOW } from './Timeline'
-import { LoopMeta } from './LoopMeta'
-import { Pill, useHydrated } from './ui'
-
-const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
+import { LoopOverview } from './LoopOverview'
+import { WINDOW } from './Timeline'
 
 export function LoopCard({
   loop,
@@ -20,9 +15,6 @@ export function LoopCard({
   onPickRun: (id: string, run: RunSummary) => void
 }) {
   const en = loop.enabled
-  const last = lastRunOf(loop)
-  const lifecycle = lifecyclePresentation(loop)
-  const hydrated = useHydrated()
 
   // The loader seeds `loop.runs` with the newest page; we lazily fetch OLDER
   // pages on demand and keep them here. The merged list (loop's fresh newest page
@@ -57,56 +49,13 @@ export function LoopCard({
       }`}
       style={{ animation: 'fadeIn .25s cubic-bezier(0.25,0.1,0.25,1) both' }}
     >
-      <div className="mb-6 flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            onOpen(loop.id)
-          }}
-          className="cursor-pointer rounded-sm text-left text-[17px] font-semibold tracking-[-0.01em] text-display outline-none focus-visible:ring-2 focus-visible:ring-interactive focus-visible:ring-offset-4 focus-visible:ring-offset-surface"
-        >
-          {loop.name}
-        </button>
-        <Pill tone={lifecycle.tone}>{lifecycle.label}</Pill>
-        <Pill tone="outline">{AGENT_LABEL[loop.agent]}</Pill>
-        <div className="ml-auto min-w-0">
-          <LoopMeta
-            schedule={loop.schedule}
-            nextRun={loop.nextRun}
-            enabled={loop.enabled}
-            machine={loop.machine}
-            workdir={loop.workdir}
-            model={loop.model}
-            reasoningEffort={loop.reasoningEffort}
-          />
-        </div>
-      </div>
-
-      <Timeline
+      <LoopOverview
         loop={loop}
         runs={runs}
-        total={loop.runCount}
         onLoadMore={loadMore}
         onPickRun={(run) => onPickRun(loop.id, run)}
+        onOpen={() => onOpen(loop.id)}
       />
-
-      <div className="mt-[18px] flex items-center gap-2 text-label text-secondary">
-        <span>{loop.runCount} runs</span>
-        {last && (
-          <span>
-            · last {dotLabel(last)}
-            {hydrated && ` · ${rel(last.ts)}`}
-          </span>
-        )}
-      </div>
-
-      {latestIncidentRun?.reportIncident && (
-        <div className="mt-1.5 text-label text-secondary">
-          {latestIncidentRun.phase === 'error' ? 'Last run failed · Terminal report rejected' : 'Last run telemetry warning · Terminal report rejected'}
-        </div>
-      )}
-
     </div>
   )
 }

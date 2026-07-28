@@ -21,7 +21,7 @@ export function LoopMeta({
   return (
     <div className="min-w-0 text-right text-meta text-secondary">
       <div className="flex flex-wrap items-center justify-end gap-x-2.5 gap-y-1">
-        <span className="text-primary" title={schedule.mode === 'cron' ? schedule.cron : undefined}>{scheduleText(schedule)}</span>
+        <span title={schedule.mode === 'cron' ? schedule.cron : undefined}>{scheduleText(schedule)}</span>
         <span className="text-wire">·</span>
         <span>next {fmt(nextRun)}</span>
         {nextRun && enabled && <span className="text-disabled">({until(nextRun)})</span>}
@@ -32,7 +32,7 @@ export function LoopMeta({
           <span className="sr-only">({machine.presence})</span>
         </span>
       </div>
-      <div className="mt-1 truncate text-caption text-disabled" title={workdir}>
+      <div className="mt-1 truncate" title={workdir}>
         {workdir} · Model: {model || 'default'} · Reasoning: {reasoningEffort || 'default'}
       </div>
     </div>

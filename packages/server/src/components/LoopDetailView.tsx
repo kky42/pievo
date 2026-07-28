@@ -3,12 +3,12 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import type { CodingAgent, LoopDetail, RunSummary } from '../types'
 import { dotColor, dotLabel, dur, rel, tsShort } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
-import { DAEMON_UPGRADE_REQUIRED, daemonStopSupport, deriveLoopLifecycle, lifecycleDisplay, lifecyclePresentation } from '../lib/lifecycleUi'
+import { DAEMON_UPGRADE_REQUIRED, daemonStopSupport, deriveLoopLifecycle } from '../lib/lifecycleUi'
 import { setActiveTeamCookie } from '../lib/teamCookie'
 import { deleteLoop, getLoopDetail, loadOlderRuns, patchLoop, pauseLoop, runLoop, startLoop, stopLoop } from '../server/loopApi'
 import { LoopFilesPanel } from './LoopFilesPanel'
 import { LoopForm, type LoopFormHandle } from './LoopForm'
-import { LoopMeta } from './LoopMeta'
+import { LoopOverview } from './LoopOverview'
 import { MachinesModal } from './MachinesModal'
 import { Timeline, WINDOW } from './Timeline'
 import { btn, btnDanger, btnPrimary, btnQuiet, ErrorBanner, Loading, Pill, runPulseStyle, sectionHeadCls } from './ui'
@@ -105,7 +105,6 @@ export function LoopDetailView({ id }: { id: string }) {
 
   const { loop, summary, runs } = detail
   const lifecycle = deriveLoopLifecycle(summary)
-  const lifecycleBadge = lifecyclePresentation(summary)
   const deleting = lifecycle === 'deleting'
   const active = summary.enabled && !deleting
   const paused = !summary.enabled && !deleting
@@ -139,27 +138,25 @@ export function LoopDetailView({ id }: { id: string }) {
     : `continuous · ${loop.schedule.delayMinutes}m after terminal`
   const model = loop.model || 'default'
   const effort = loop.reasoningEffort || 'default'
+  const overviewRuns = older.length ? mergeRuns(summary.runs, older) : summary.runs
+  const loadMore = async (): Promise<number> => {
+    const oldest = overviewRuns[0]
+    if (!oldest) return 0
+    const more = await loadOlderRuns({ data: { loopId: id, beforeTs: oldest.ts, limit: WINDOW } })
+    if (more.length) setOlder((current) => mergeRuns(current, more))
+    return more.length
+  }
 
   return (
     <Shell back={back}>
-      <header className="rounded-card border border-hairline bg-surface px-6 pb-5 pt-[22px] shadow-card">
-        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
-          <div className="flex min-w-0 flex-wrap items-center gap-3">
-            <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.015em] text-display">{summary.name}</h1>
-            <Pill tone={lifecycleBadge.tone}>{lifecycleDisplay(detail)}</Pill>
-            <Pill tone="outline">{AGENT_LABEL[loop.agent]}</Pill>
-            {crossTeam && <Pill tone="outline">{crossTeam.name}</Pill>}
-          </div>
-          <LoopMeta
-            schedule={loop.schedule}
-            nextRun={summary.nextRun}
-            enabled={summary.enabled}
-            machine={summary.machine}
-            workdir={loop.workdir}
-            model={loop.model}
-            reasoningEffort={loop.reasoningEffort}
-          />
-        </div>
+      <header className="rounded-card border border-hairline bg-surface px-[26px] pb-5 pt-[22px] shadow-card">
+        <LoopOverview
+          loop={summary}
+          runs={overviewRuns}
+          onLoadMore={loadMore}
+          onPickRun={(run) => navigate({ to: '/loops/$loopId/runs/$runId', params: { loopId: id, runId: run.id } })}
+          extraPill={crossTeam ? <Pill tone="outline">{crossTeam.name}</Pill> : undefined}
+        />
 
         <div className="mt-5 border-t border-hairline pt-4">
           {crossTeam && <TeamBanner team={crossTeam} onSwitch={() => { setActiveTeamCookie(crossTeam.id); void navigate({ to: '/t/$teamId', params: { teamId: crossTeam.id } }) }} />}
@@ -181,14 +178,7 @@ export function LoopDetailView({ id }: { id: string }) {
 
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
         <LoopFilesPanel loopId={id} configuredPaths={loop.artifacts} running={running} />
-        <RunsSection loopId={id} summary={summary} runs={runs} older={older} onPickRun={(run) => navigate({ to: '/loops/$loopId/runs/$runId', params: { loopId: id, runId: run.id } })} onMore={async () => {
-          const seed = older.length ? mergeRuns(summary.runs, older) : summary.runs
-          const oldest = seed[0]
-          if (!oldest) return 0
-          const more = await loadOlderRuns({ data: { loopId: id, beforeTs: oldest.ts, limit: WINDOW } })
-          if (more.length) setOlder((current) => mergeRuns(current, more))
-          return more.length
-        }} />
+        <RunsSection loopId={id} summary={summary} runs={runs} older={older} onPickRun={(run) => navigate({ to: '/loops/$loopId/runs/$runId', params: { loopId: id, runId: run.id } })} onMore={loadMore} />
       </div>
 
       <section className="mt-6 min-w-0 rounded-card border border-hairline bg-surface px-6 py-5 shadow-card">
