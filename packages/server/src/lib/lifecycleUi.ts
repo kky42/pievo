@@ -4,6 +4,7 @@ export const DASHBOARD_PROTOCOL = 4
 export const DAEMON_UPGRADE_REQUIRED = 'Daemon upgrade required to stop a running process. Run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.'
 
 export type LoopLifecycle = 'deleting' | 'stopping' | 'paused-finishing' | 'paused' | 'active'
+export type LoopLifecycleTone = 'neutral' | 'success' | 'attention' | 'accent'
 
 /** Derive product lifecycle state only from durable server facts. */
 export function deriveLoopLifecycle(loop: LoopSummary): LoopLifecycle {
@@ -15,6 +16,18 @@ export function deriveLoopLifecycle(loop: LoopSummary): LoopLifecycle {
   return 'active'
 }
 
+/** Stable lifecycle badge shared by dashboard cards and loop detail. It shows
+ * only scheduling state and its durable pause cause; execution transients
+ * (queued/running/stopping) stay in the runs timeline and never replace it. */
+export function lifecyclePresentation(loop: LoopSummary): { label: string; tone: LoopLifecycleTone } {
+  if (loop.deleteRequestedAt != null) return { label: 'Deleting', tone: 'accent' }
+  if (loop.enabled) return { label: 'Active', tone: 'success' }
+  if (loop.pauseCause?.kind === 'blocked') return { label: 'Paused · blocked', tone: 'attention' }
+  if (loop.pauseCause?.kind === 'failure-streak') return { label: 'Paused · failure streak', tone: 'attention' }
+  if (loop.pauseCause?.kind === 'owner') return { label: 'Paused · owner', tone: 'neutral' }
+  return { label: 'Paused', tone: 'neutral' }
+}
+
 export function daemonStopSupport(protocol: number | null | undefined): { supported: boolean; label: string } {
   return protocol === DASHBOARD_PROTOCOL
     ? { supported: true, label: `Daemon protocol ${DASHBOARD_PROTOCOL} · Stop supported` }
@@ -23,24 +36,5 @@ export function daemonStopSupport(protocol: number | null | undefined): { suppor
 
 /** Exact user-facing lifecycle wording, including uncertainty boundaries. */
 export function lifecycleDisplay(detail: LoopDetail): string {
-  const state = deriveLoopLifecycle(detail.summary)
-  if (detail.summary.queued && detail.summary.reconciliationBlocking) {
-    return detail.machine.presence === 'online'
-      ? 'Queued · machine is checking an interrupted run'
-      : 'Queued · waiting for machine recovery'
-  }
-  const running = detail.summary.runs.find((run) => run.phase === 'running')
-  if (running && detail.machine.daemonProtocol !== DASHBOARD_PROTOCOL) {
-    return DAEMON_UPGRADE_REQUIRED
-  }
-  if (state === 'stopping' && running && !detail.machine.online) {
-    return `Stopping · waiting for ${detail.machine.name || 'machine'}`
-  }
-  switch (state) {
-    case 'deleting': return 'Deleting'
-    case 'stopping': return 'Stopping'
-    case 'paused-finishing': return detail.summary.pauseCause?.kind === 'blocked' ? 'Paused — blocked · current run finishing' : detail.summary.pauseCause?.kind === 'owner' ? 'Paused by owner · current run finishing' : 'Paused · current run finishing'
-    case 'paused': return detail.summary.pauseCause?.kind === 'blocked' ? 'Paused — blocked' : detail.summary.pauseCause?.kind === 'failure-streak' ? 'Paused automatically' : detail.summary.pauseCause?.kind === 'owner' ? 'Paused by owner' : 'Paused'
-    case 'active': return 'Active'
-  }
+  return lifecyclePresentation(detail.summary).label
 }

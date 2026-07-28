@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { LoopDetail, LoopSummary, RunSummary } from '../types'
-import { daemonStopSupport, deriveLoopLifecycle, lifecycleDisplay } from './lifecycleUi'
+import { daemonStopSupport, deriveLoopLifecycle, lifecycleDisplay, lifecyclePresentation } from './lifecycleUi'
 
 const run = (patch: Partial<RunSummary> = {}): RunSummary => ({
   id: 'r1', loopId: 'l1', ts: '2026-01-01T00:00:00Z', phase: 'done', agent: null, status: null, message: null, durationMs: null, exitCode: null,
@@ -31,10 +31,25 @@ describe('Dashboard lifecycle derivation', () => {
     expect(deriveLoopLifecycle(loop())).toBe('active')
   })
 
-  it('renders exact offline and unsupported-protocol Stop wording', () => {
-    const stopping = loop({ enabled: false, running: true, runs: [run({ phase: 'running', cancelRequested: true })] })
-    expect(lifecycleDisplay(detail(stopping, { online: false, presence: 'offline' }))).toBe('Stopping · waiting for MacBook Pro')
-    expect(lifecycleDisplay(detail(stopping, { daemonProtocol: 1 }))).toBe('Daemon upgrade required to stop a running process. Run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.')
+  it('maps durable scheduling state and pause causes to stable labels and tones', () => {
+    expect(lifecyclePresentation(loop())).toEqual({ label: 'Active', tone: 'success' })
+    expect(lifecyclePresentation(loop({ enabled: false, pauseCause: { kind: 'owner', at: '2026-01-01T00:00:00Z' } }))).toEqual({ label: 'Paused · owner', tone: 'neutral' })
+    expect(lifecyclePresentation(loop({ enabled: false, pauseCause: { kind: 'failure-streak', at: '2026-01-01T00:00:00Z', runId: 'r1', count: 3 } }))).toEqual({ label: 'Paused · failure streak', tone: 'attention' })
+    expect(lifecyclePresentation(loop({ enabled: false, pauseCause: { kind: 'blocked', at: '2026-01-01T00:00:00Z', runId: 'r1' } }))).toEqual({ label: 'Paused · blocked', tone: 'attention' })
+    expect(lifecyclePresentation(loop({ enabled: false }))).toEqual({ label: 'Paused', tone: 'neutral' })
+    expect(lifecyclePresentation(loop({ enabled: false, deleteRequestedAt: '2026-01-01T00:00:00Z' }))).toEqual({ label: 'Deleting', tone: 'accent' })
+  })
+
+  it('does not let queued execution replace the Active lifecycle label', () => {
+    expect(lifecyclePresentation(loop({ queued: true }))).toEqual({ label: 'Active', tone: 'success' })
+  })
+
+  it('does not let running or stopping execution replace the persisted pause cause', () => {
+    const owner = { kind: 'owner' as const, at: '2026-01-01T00:00:00Z' }
+    const finishing = loop({ enabled: false, running: true, pauseCause: owner, runs: [run({ phase: 'running' })] })
+    const stopping = loop({ enabled: false, running: true, pauseCause: owner, runs: [run({ phase: 'running', cancelRequested: true })] })
+    expect(lifecycleDisplay(detail(finishing))).toBe('Paused · owner')
+    expect(lifecycleDisplay(detail(stopping, { online: false, presence: 'offline', daemonProtocol: 1 }))).toBe('Paused · owner')
   })
 
   it('reports breaking protocol support explicitly', () => {

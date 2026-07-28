@@ -113,12 +113,12 @@ describe('LoopDetailView flat lifecycle actions', () => {
     const owner = makeDetail({ state: 'paused' })
     owner.summary.pauseCause = { kind: 'owner', at: '2026-01-01T00:00:00Z' }
     await mount(owner)
-    expect(host!.textContent).toContain('Paused by owner')
+    expect(host!.textContent).toContain('Paused · owner')
     await act(async () => { root!.unmount() }); root = null; host!.remove(); host = null
     const automatic = makeDetail({ state: 'paused' })
     automatic.summary.pauseCause = { kind: 'failure-streak', at: '2026-01-01T00:00:00Z', runId: 'r1', count: 3 }
     await mount(automatic)
-    expect(host!.textContent).toContain('Paused automatically')
+    expect(host!.textContent).toContain('Paused · failure streak')
   })
 
   it('shows one input-plus-output token total and ignores cache telemetry', async () => {
@@ -160,9 +160,11 @@ describe('LoopDetailView flat lifecycle actions', () => {
     expect(host!.textContent).toContain('report-1')
   })
 
-  it('keeps truthful paused/stopping and RunView protocol wording', async () => {
-    await mount(makeDetail({ state: 'paused', online: false, running: true, cancelRequested: true }))
-    expect(host!.textContent).toContain('Stopping · waiting for MacBook Pro')
+  it('keeps execution transients out of the lifecycle badge and preserves RunView protocol wording', async () => {
+    const stopping = makeDetail({ state: 'paused', online: false, running: true, cancelRequested: true })
+    stopping.summary.pauseCause = { kind: 'owner', at: '2026-01-01T00:00:00Z' }
+    await mount(stopping)
+    expect(host!.textContent).toContain('Paused · owner')
     await act(async () => { root!.unmount() }); root = null; host!.remove(); host = null
     const d = makeDetail({ state: 'paused', protocol: 1, running: true })
     h.detail = d

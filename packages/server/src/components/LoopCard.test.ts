@@ -35,17 +35,31 @@ afterEach(async () => {
   root = null
 })
 
-test('shows lifecycle and agent labels beside the loop name', async () => {
+async function renderLoop(value: LoopSummary) {
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
   await act(async () => {
-    root!.render(createElement(LoopCard, { loop, onOpen: () => {}, onPickRun: () => {} }))
+    root!.render(createElement(LoopCard, { loop: value, onOpen: () => {}, onPickRun: () => {} }))
   })
+}
 
-  expect(host.textContent).toContain('Active loop')
-  const labels = [...host.querySelectorAll('span')].map((element) => element.textContent)
+test('shows lifecycle and agent labels beside the loop name', async () => {
+  await renderLoop(loop)
+
+  expect(host!.textContent).toContain('Active loop')
+  const labels = [...host!.querySelectorAll('span')].map((element) => element.textContent)
   expect(labels).toContain('Active')
   expect(labels).toContain('Claude Code')
-  expect(host.textContent).not.toContain('·claude-code')
+  expect(host!.textContent).not.toContain('·claude-code')
+  expect([...host!.querySelectorAll('span')].find((element) => element.textContent === 'Active')?.className).toContain('bg-success-soft')
+})
+
+test('keeps Active as the loop lifecycle while execution is queued or running', async () => {
+  await renderLoop({ ...loop, running: true, queued: true })
+
+  const labels = [...host!.querySelectorAll('span')].map((element) => element.textContent)
+  expect(labels).toContain('Active')
+  expect(labels).not.toContain('Running')
+  expect(labels).not.toContain('Queued')
 })

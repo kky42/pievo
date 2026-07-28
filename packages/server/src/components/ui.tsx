@@ -112,6 +112,7 @@ const PILL_TONES = {
   ink: 'bg-raised text-primary',
   outline: 'border border-hairline text-secondary',
   running: 'bg-running-soft text-running',
+  attention: 'bg-running-soft text-running',
   success: 'bg-success-soft text-success',
   accent: 'bg-accent-soft text-accent',
   warn: 'bg-warn-soft text-warn',

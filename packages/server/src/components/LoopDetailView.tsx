@@ -3,7 +3,7 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import type { CodingAgent, LoopDetail, RunSummary } from '../types'
 import { dotColor, dotLabel, dur, fmt, rel, tsShort, until } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
-import { DAEMON_UPGRADE_REQUIRED, daemonStopSupport, deriveLoopLifecycle, lifecycleDisplay } from '../lib/lifecycleUi'
+import { DAEMON_UPGRADE_REQUIRED, daemonStopSupport, deriveLoopLifecycle, lifecycleDisplay, lifecyclePresentation } from '../lib/lifecycleUi'
 import { setActiveTeamCookie } from '../lib/teamCookie'
 import { deleteLoop, getLoopDetail, loadOlderRuns, patchLoop, pauseLoop, runLoop, startLoop, stopLoop } from '../server/loopApi'
 import { LoopFilesPanel } from './LoopFilesPanel'
@@ -104,6 +104,7 @@ export function LoopDetailView({ id }: { id: string }) {
 
   const { loop, summary, runs } = detail
   const lifecycle = deriveLoopLifecycle(summary)
+  const lifecycleBadge = lifecyclePresentation(summary)
   const deleting = lifecycle === 'deleting'
   const active = summary.enabled && !deleting
   const paused = !summary.enabled && !deleting
@@ -145,8 +146,7 @@ export function LoopDetailView({ id }: { id: string }) {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.015em] text-display">{summary.name}</h1>
-              <Pill tone={lifecycle === 'stopping' ? 'running' : undefined} dot={lifecycle === 'stopping' ? 'pulse' : undefined}>{lifecycleDisplay(detail)}</Pill>
-              {summary.queued && lifecycle === 'active' && <Pill tone="outline">Queued</Pill>}
+              <Pill tone={lifecycleBadge.tone}>{lifecycleDisplay(detail)}</Pill>
               <Pill tone="outline">{AGENT_LABEL[loop.agent]}</Pill>
               {crossTeam && <Pill tone="outline">{crossTeam.name}</Pill>}
             </div>

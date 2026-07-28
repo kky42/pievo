@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import type { CodingAgent, LoopSummary, RunSummary } from '../types'
 import { cronText, dotLabel, lastRunOf, rel } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
-import { deriveLoopLifecycle } from '../lib/lifecycleUi'
+import { lifecyclePresentation } from '../lib/lifecycleUi'
 import { loadOlderRuns } from '../server/loopApi'
 import { Timeline, WINDOW } from './Timeline'
 import { Pill, useHydrated } from './ui'
@@ -20,7 +20,7 @@ export function LoopCard({
 }) {
   const en = loop.enabled
   const last = lastRunOf(loop)
-  const lifecycle = deriveLoopLifecycle(loop)
+  const lifecycle = lifecyclePresentation(loop)
   const hydrated = useHydrated()
 
   // The loader seeds `loop.runs` with the newest page; we lazily fetch OLDER
@@ -67,24 +67,7 @@ export function LoopCard({
         >
           {loop.name}
         </button>
-        {lifecycle === 'stopping' ? (
-          <Pill tone="running" dot="pulse">Stopping</Pill>
-        ) : lifecycle === 'paused-finishing' ? (
-          <Pill>{loop.pauseCause?.kind === 'blocked' ? 'Paused — blocked · current run finishing' : loop.pauseCause?.kind === 'owner' ? 'Paused by owner · current run finishing' : 'Paused · current run finishing'}</Pill>
-        ) : lifecycle === 'deleting' ? (
-          <Pill>Deleting</Pill>
-        ) : loop.running ? (
-          <Pill tone="running" dot="pulse">Running</Pill>
-        ) : loop.queued && loop.reconciliationBlocking ? (
-          <Pill tone="outline">Queued · waiting for machine recovery</Pill>
-        ) : loop.queued ? (
-          <Pill tone="outline">Queued</Pill>
-        ) : null}
-        {lifecycle === 'paused' ? (
-          <Pill tone={loop.pauseCause?.kind === 'blocked' ? 'accent' : undefined}>{loop.pauseCause?.kind === 'blocked' ? 'Paused — blocked' : loop.pauseCause?.kind === 'failure-streak' ? 'Paused automatically' : loop.pauseCause?.kind === 'owner' ? 'Paused by owner' : 'Paused'}</Pill>
-        ) : lifecycle === 'active' && !loop.running && !loop.queued ? (
-          <Pill>Active</Pill>
-        ) : null}
+        <Pill tone={lifecycle.tone}>{lifecycle.label}</Pill>
         <Pill tone="outline">{AGENT_LABEL[loop.agent]}</Pill>
         <div className="ml-auto min-w-0 text-right text-meta text-secondary">
           <div className="whitespace-nowrap">
