@@ -88,7 +88,14 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
     return () => clearInterval(t)
   }, [refetch, anyRunning])
 
-  const activeOn = loops.filter((j) => j.enabled).length
+  const activeCount = loops.filter((loop) => loop.enabled && !loop.deleteRequestedAt).length
+  const pausedCount = loops.filter((loop) => !loop.enabled && !loop.deleteRequestedAt).length
+  const deletingCount = loops.filter((loop) => Boolean(loop.deleteRequestedAt)).length
+  const lifecycleCounts = [
+    `${activeCount} active`,
+    `${pausedCount} paused`,
+    ...(deletingCount ? [`${deletingCount} deleting`] : []),
+  ].join(' · ')
 
   const cardProps = () => ({
     onOpen: (id: string) => void navigate({ to: '/loops/$loopId', params: { loopId: id } }),
@@ -139,7 +146,7 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
         <div className="mb-5 mt-12 flex items-baseline gap-2.5">
           <h2 className="text-body font-semibold text-display">Loops</h2>
           <span className="text-label text-secondary">
-            {loops.length ? `${activeOn} scheduled · ${loops.length} total` : ''}
+            {loops.length ? lifecycleCounts : ''}
           </span>
         </div>
 
