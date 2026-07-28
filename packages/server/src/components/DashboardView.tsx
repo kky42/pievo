@@ -12,7 +12,6 @@ import { ComposeModal } from './ComposeModal'
 import { PievoLogo } from './PievoLogo'
 import { GITHUB_URL, GitHubIcon } from './SocialLinks'
 
-/** The live seed handed to the dashboard route. */
 export interface DashboardData {
   loops: LoopSummary[]
   machines: MachineSummary[]
@@ -105,15 +104,12 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
 
   return (
     <Tooltip.Provider delay={120}>
-      {/* Sticky glass top bar - the ONE always-glass surface; content scrolls
-          beneath it so the material actually refracts something. */}
       <header className="glass glass-bar sticky top-0 z-50">
         <div className="mx-auto flex max-w-[1180px] items-center gap-3 px-8 py-2.5">
           <PievoLogo size={30} />
           <span className="text-[18px] font-semibold tracking-[-0.015em] text-display">Pievo</span>
           <TeamSwitcher data={teams} />
           <div className="flex-1" />
-          {/* Open-source repository, quiet icon pill */}
           <a href={GITHUB_URL} target="_blank" rel="noreferrer" aria-label="GitHub repository" title="GitHub" className={headerIconBtn}>
             <GitHubIcon className="size-[17px]" />
           </a>
@@ -179,10 +175,8 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
   )
 }
 
-/* The top bar's quiet pill button. */
 const headerBtn =
   'inline-flex shrink-0 cursor-pointer items-center rounded-full px-3 py-1.5 text-meta font-medium text-secondary transition-colors hover:bg-raised hover:text-display'
 
-/* Icon-only variant for the GitHub link. */
 const headerIconBtn =
   'inline-flex shrink-0 cursor-pointer items-center rounded-full p-1.5 text-secondary transition-colors hover:bg-raised hover:text-display'

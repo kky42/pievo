@@ -89,7 +89,6 @@ function RedeemInvite() {
   }
 
   if (!isPending && !signedIn) {
-    // Send them through the gated sign-in and back to this exact invite link.
     return <SignIn callbackURL={`/invite/${loaded.token}`} />
   }
 

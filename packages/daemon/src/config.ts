@@ -1,4 +1,3 @@
-/** Machine-local multi-server connection configuration. */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -96,8 +95,6 @@ export function saveActiveConnection(serverUrl: string, deviceToken: string, fil
   return config;
 }
 
-/** Resolve callback server env first; owner commands otherwise use the selected
- * saved connection. Explicit URL overrides only select an already-saved URL. */
 export function resolveServerUrl(flagValue: string | undefined): string {
   const callbackServer = process.env.PIEVO_RUN_TOKEN ? process.env.PIEVO_SERVER_URL : undefined;
   return normalizeServerUrl(flagValue || callbackServer || activeConnection()?.serverUrl || "");
@@ -110,7 +107,6 @@ export function serverOutboxPath(serverUrl: string): string {
   return path.join(PIEVO_DIR, `pending-reports-${id}.sqlite`);
 }
 
-/** Read a `--flag value` from an argv slice (bare/terminal `--flag` → ""). */
 export function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(`--${name}`);
   if (i < 0) return undefined;

@@ -1,4 +1,3 @@
-/** Display helpers and the semantic run-status palette. */
 import type { LoopSchedule, LoopSummary, RunSummary } from '../types'
 
 export const fmt = (t: string | null | undefined): string =>
@@ -42,14 +41,12 @@ export function cronText(cron: string): string {
   return 'custom schedule'
 }
 
-/** Human-readable schedule summary shared by dashboard and detail headers. */
 export function scheduleText(schedule: LoopSchedule): string {
   return schedule.mode === 'cron'
     ? `${cronText(schedule.cron)} · ${schedule.timezone} · overlap ${schedule.overlap}`
     : `continuous · ${schedule.delayMinutes}m after completion`
 }
 
-/** Compact time-until-future: "due" / "in 50m" / "in 2h" / "in 3d". */
 export const until = (t: string | null | undefined): string => {
   if (!t) return ''
   const s = Math.round((Date.parse(t) - Date.now()) / 1000)
@@ -61,7 +58,6 @@ export const until = (t: string | null | undefined): string => {
   return `in ${Math.round(h / 24)}d`
 }
 
-/** Compact run-log timestamp: "MM/DD HH:mm" (24h, zero-padded, local). */
 export const tsShort = (t: string | null | undefined): string => {
   if (!t) return '—'
   const d = new Date(t)
@@ -69,7 +65,6 @@ export const tsShort = (t: string | null | undefined): string => {
   return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
-/** Compact decimal magnitude — "1.2k", "3.4m", "5.6b". */
 export const fnum = (n: number): string => {
   const abs = Math.abs(n)
   const [divisor, suffix] = abs >= 1_000_000_000
@@ -82,10 +77,8 @@ export const fnum = (n: number): string => {
   return `${Math.round((n / divisor) * 10) / 10}${suffix}`
 }
 
-/** Duration in ms → "Ns" (empty for null/0). */
 export const dur = (ms: number | null | undefined): string => (ms ? `${Math.round(ms / 1000)}s` : '')
 
-/** Magnitude-formatted byte count — "240 B", "1.8 KB", "3.4 MB" (1024 thresholds). */
 export function humanBytes(n: number): string {
   const abs = Math.abs(n)
   if (abs < 1024) return `${abs} B`
@@ -98,11 +91,6 @@ export interface StatusMeta {
   label: string
 }
 
-/**
- * status key → color + label. Colors are CSS theme vars (Nothing semantic
- * palette, light/dark aware) — mostly monochrome, with green/amber/red reserved
- * for meaning. Mirrored by the --color-run-* tokens used in Tailwind classes.
- */
 export const ST = {
   keep: { c: 'var(--color-run-keep)', label: 'Keep' },
   'no-change': { c: 'var(--color-run-no-change)', label: 'No change' },

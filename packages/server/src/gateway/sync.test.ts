@@ -44,7 +44,6 @@ function oversizeEntry(path: string, size: number, binary = false) {
   return { path, hash: null, size, binary, oversize: true };
 }
 
-/** An ArtifactSync with an injected in-memory blob store we can assert against. */
 function syncWithStore(): { art: InstanceType<typeof syncMod.ArtifactSync>; blobs: MemoryBlobStore } {
   const blobs = new MemoryBlobStore();
   return { art: new syncMod.ArtifactSync(blobs), blobs };
@@ -57,7 +56,6 @@ const TEST_ARTIFACTS = [
   "real.txt", "a.txt", "idea.md", "copy.md", "broken.md", "plain.md", " spaced report.md ",
 ];
 
-/** A registered machine (by device token) + a loop bound to it. */
 async function seed() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
@@ -82,28 +80,24 @@ test("negotiated upload: manifest → needHashes → PUT blob lands bytes in the
   const content = "# Breakfast report\n4g dispensed\n";
   const hash = sha256(content);
 
-  // 1. Post the manifest only — server has no bytes yet → it asks for the hash.
   const r1 = await art.sync(token, {
     loopId: loop.id,
     manifest: [manifestEntry("report.md", hash, content.length)],
   });
   expect(r1.status).toBe(200);
   expect((r1.body as any).needHashes).toEqual([hash]);
-  expect(await blobs.has(hash)).toBe(false); // not stored until the PUT
+  expect(await blobs.has(hash)).toBe(false);
 
-  // artifact_files already reflects the file (hash recorded, pointing at the pending blob).
   const files = (await store.listArtifacts(loop.id));
   expect(files.map((f) => f.path)).toEqual(["report.md"]);
   expect(files[0]!.hash).toBe(hash);
   expect(files[0]!.deleted).toBe(false);
 
-  // 2. PUT the bytes → they land in the blob store + a blobs row is recorded.
   const put = await art.putBlob(token, hash, Buffer.from(content));
   expect(put.status).toBe(200);
   expect((await blobs.get(hash))!.toString()).toBe(content);
   expect((await store.blobExists(hash))).toBe(true);
 
-  // 3. Re-sync the unchanged manifest → content-addressed dedupe ⇒ zero uploads.
   const r2 = await art.sync(token, {
     loopId: loop.id,
     manifest: [manifestEntry("report.md", hash, content.length)],
@@ -138,7 +132,7 @@ test("a missing local byte object is requested and restored even when its databa
   await art.sync(token, { loopId: loop.id, manifest });
   expect((await art.putBlob(token, hash, Buffer.from(content))).status).toBe(200);
   expect(await store.blobExists(hash)).toBe(true);
-  await blobs.delete(hash); // simulate external loss while DB metadata survives
+  await blobs.delete(hash);
 
   const replay = await art.sync(token, { loopId: loop.id, manifest });
   expect((replay.body as any).needHashes).toEqual([hash]);
@@ -258,7 +252,6 @@ test("deletions: a path absent from the manifest is tombstoned, not hard-deleted
   });
   expect((await store.listArtifacts(loop.id)).map((f) => f.path)).toEqual(["a.md", "b.md"]);
 
-  // Reconcile with b.md absent: it leaves the live set and becomes a tombstone.
   await art.sync(token, { loopId: loop.id, manifest: [manifestEntry("a.md", a, 9)] });
   expect((await store.listArtifacts(loop.id)).map((f) => f.path)).toEqual(["a.md"]);
   const tomb = (await store.getArtifactFile(loop.id, "b.md"))!;
@@ -276,7 +269,6 @@ test("device-token auth is exact: malformed/unknown credentials are 401; another
   const unknown = await art.sync(stranger, { loopId: loop.id, manifest: [] });
   expect(unknown.status).toBe(401);
 
-  // A registered machine that doesn't own the loop → 404.
   const otherToken = tokens.mintDeviceToken();
   const otherId = tokens.machineIdFromToken(otherToken);
   (await store.createMachine({ id: otherId, userId: "u2", name: "B", tokenHash: tokens.sha256(otherToken), online: true }));
@@ -330,8 +322,6 @@ test("putBlob rejects a hash that doesn't match the body, and a bad hash format"
   const { token, loop } = (await seed());
   const { art, blobs } = syncWithStore();
   const realHash = sha256("real");
-  // The handshake first: sync writes the referencing row + asks for the hash
-  // (an unsolicited PUT is refused outright — see the upload-gate test below).
   await art.sync(token, { loopId: loop.id, manifest: [manifestEntry("real.txt", realHash, 4)] });
 
   const mismatch = await art.putBlob(token, realHash, Buffer.from("tampered"));
@@ -365,10 +355,8 @@ test("putBlob refuses a hash only ANOTHER machine's loop references (per-machine
   const { art, blobs } = syncWithStore();
   const content = "machine A's file";
   const hash = sha256(content);
-  // Machine A's sync legitimately requests the hash…
   await art.sync(tokenA, { loopId: loop.id, manifest: [manifestEntry("a.txt", hash, content.length)] });
 
-  // …but machine B (registered, unrelated) may not supply the bytes for it.
   const tokenB = tokens.mintDeviceToken();
   const machineB = tokens.machineIdFromToken(tokenB);
   (await store.createMachine({ id: machineB, userId: "u2", name: "B", tokenHash: tokens.sha256(tokenB), online: true }));
@@ -376,7 +364,6 @@ test("putBlob refuses a hash only ANOTHER machine's loop references (per-machine
   expect(denied.status).toBe(403);
   expect(await blobs.has(hash)).toBe(false);
 
-  // Machine A itself still can (the handshake path is unaffected).
   const ok = await art.putBlob(tokenA, hash, Buffer.from(content));
   expect(ok.status).toBe(200);
   expect(await blobs.has(hash)).toBe(true);

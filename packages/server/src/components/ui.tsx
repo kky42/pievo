@@ -38,21 +38,15 @@ export const btnDanger = `${btnBase} border border-transparent bg-rubik-red text
 // the px/text tug-of-war on CSS source-order. For inline affordances like Copy
 // that sit next to dense content rather than anchoring a dialog.
 export const btnSm = `inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-wire bg-surface px-3 py-1 text-label font-medium text-primary transition-colors duration-150 hover:bg-raised disabled:cursor-default disabled:opacity-40 ${focusRing}`
-// A prominent rounded primary pill at the standard control size (matches `btn`'s
-// px/py) in the display-ink fill - the Copy-prompt CTA in the compose modals.
 export const btnPrimaryPill = `inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-display bg-display px-4 py-2 text-body font-medium text-paper transition-colors duration-150 hover:opacity-85 disabled:cursor-default disabled:opacity-40 ${focusRing}`
 
-// A quiet borderless text button - back links, Done, dismissals.
 export const btnQuiet =
   'inline-flex cursor-pointer items-center gap-1.5 border-none bg-transparent p-0 text-meta font-medium text-secondary transition-colors hover:text-display'
 
-/** Section divider heading ink - shared by ModalSection and the page panels. */
 export const sectionHeadCls = 'text-label font-semibold text-secondary'
 
-/** Field labels: sentence case, quiet weight - hierarchy from color, not caps. */
 export const labelCls = 'mb-1.5 mt-3 block text-label font-medium text-secondary'
 export const inputCls = `w-full rounded-control border border-wire bg-surface px-3 py-2.5 text-sm text-primary outline-none transition-shadow focus:border-transparent focus:shadow-focus`
-/** Field-sized <select>: the input token + the `.lp-select` caret/padding. */
 export const selectCls = `${inputCls} lp-select cursor-pointer`
 
 /**
@@ -60,17 +54,14 @@ export const selectCls = `${inputCls} lp-select cursor-pointer`
  * keyframe (app.css). Shared so the in-flight timeline block and the Running
  * badge stay in lockstep. Spread into a `style` prop.
  */
-/** Just the breathing animation — spread onto any element to pulse it in its own color. */
 export const runPulseAnim = { animation: 'runPulse 1.1s ease-in-out infinite' } as const
 
-/** The live "running" signal light - the Rubik yellow, breathing. */
 export const runPulseStyle = {
   background: 'var(--color-rubik-yellow)',
   ...runPulseAnim,
 } as const
 
-/** The shared inline error banner - red signal dot + message + a dismiss link.
- *  One source so the four call sites (modals + detail view) stay in lockstep. */
+/* Centralized so error affordances stay consistent across modals and detail views. */
 export function ErrorBanner({
   message,
   onDismiss,
@@ -97,7 +88,6 @@ export function ErrorBanner({
   )
 }
 
-/** A read-only mono code block. */
 export function Pre({ children }: { children: ReactNode }) {
   return (
     <pre className="max-h-[300px] overflow-auto whitespace-pre-wrap rounded-control border border-hairline bg-raised px-4 py-3.5 font-mono text-meta leading-relaxed text-secondary">
@@ -106,7 +96,6 @@ export function Pre({ children }: { children: ReactNode }) {
   )
 }
 
-/** Shared semantic chip tones. */
 const PILL_TONES = {
   neutral: 'bg-raised text-secondary',
   ink: 'bg-raised text-primary',
@@ -125,7 +114,6 @@ export function Pill({
   children,
 }: {
   tone?: keyof typeof PILL_TONES
-  /** Optional signal light: 'pulse' = the breathing yellow, 'green' = solid go. */
   dot?: 'pulse' | 'green'
   title?: string
   children: ReactNode
@@ -146,12 +134,10 @@ export function Pill({
   )
 }
 
-/** The shared quiet loading placeholder. */
 export function Loading({ className = '' }: { className?: string }) {
   return <div className={`text-body text-disabled ${className}`}>Loading…</div>
 }
 
-/** A run's status as a colored dot + label. `colorText` also tints the label. */
 export function StatusPill({ run, colorText }: { run: RunSummary; colorText?: boolean }) {
   return (
     <span

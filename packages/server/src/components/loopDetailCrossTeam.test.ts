@@ -5,20 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LoopDetailView } from './LoopDetailView'
 import type { LoopDetail } from '../types'
 
-/**
- * End-to-end render guard for the cross-team-link fix (fm/team-url-design).
- *
- * The bug: a direct link to a loop in a team you belong to returned "loop not
- * found" unless that team was your ACTIVE team. The server fix authorizes by
- * membership; the UI half is this: when a member opens a loop that isn't their
- * active team, the loop still renders (in its own team context) and the header
- * surfaces (1) a quiet team chip and (2) an explicit "Switch to this team"
- * banner/button — it must NOT silently switch the active team. When the loop IS
- * the active team (or no team context), neither the chip nor the banner shows.
- *
- * getLoopDetail carries `team = {id, name, isActive}`; these tests render the real
- * LoopDetailView against each shape and assert the end-user surface.
- */
+/* Cross-team links must never silently change the user's active team. */
 
 const h = vi.hoisted(() => ({ detail: null as LoopDetail | null }))
 
@@ -93,16 +80,12 @@ describe('loop detail cross-team header', () => {
     h.detail = detailWithTeam({ id: 'team-b', name: 'Acme Web', isActive: false })
     await mount()
     const text = host!.textContent ?? ''
-    // The banner (the explicit, non-silent switch affordance).
     expect(text).toContain('Viewing a loop in Acme Web')
     expect(text).toContain('not your active team')
     expect(text).toContain('Switch to this team')
-    // The quiet team chip in the header.
     expect(text).toContain('Acme Web')
-    // The loop itself renders (NOT "not found") — its name is present.
     expect(text).toContain('Daily react-doctor triage')
 
-    // Write the rendered header as an evidence artifact.
     const header = host!.querySelector('header')
     const fs = await import('node:fs')
     const os = await import('node:os')
@@ -115,12 +98,9 @@ describe('loop detail cross-team header', () => {
   it('the switch banner is a button that sets the team cookie and does NOT silently switch', async () => {
     h.detail = detailWithTeam({ id: 'team-b', name: 'Acme Web', isActive: false })
     await mount()
-    // No cookie was written just by rendering the cross-team loop.
     expect(document.cookie).not.toContain('pievo.team')
     const btn = [...host!.querySelectorAll('button')].find((b) => b.textContent?.includes('Switch to this team'))
     expect(btn).toBeTruthy()
-    // Clicking the button is the ONLY thing that writes the active-team cookie.
-    // (jsdom has no navigation; stub reload so the handler doesn't throw.)
     Object.defineProperty(window, 'location', { value: { ...window.location, reload: () => {} }, writable: true })
     await act(async () => {
       btn!.click()

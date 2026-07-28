@@ -1,14 +1,7 @@
-/**
- * Latest-daemon-version lookup — the npm `latest` read and the cached accessor,
- * both driven by an INJECTED fetch (+ clock) so nothing hits the network. The
- * lookup is fail-silent: an unreachable/garbage registry yields null and never
- * throws, so the web simply shows no update hint.
- */
 import { describe, expect, test, vi } from "vitest";
 
 import { LatestDaemonVersion, fetchNpmLatest } from "./daemonVersion.js";
 
-/** A fetch stub that returns a JSON body (or a failure) once per call. */
 function jsonFetch(body: unknown, ok = true): typeof fetch {
   return (async () => ({ ok, json: async () => body })) as unknown as typeof fetch;
 }
@@ -37,7 +30,7 @@ describe("fetchNpmLatest", () => {
 describe("LatestDaemonVersion cache", () => {
   test("get() is null until refreshed, then returns the cached value", async () => {
     const c = new LatestDaemonVersion(jsonFetch({ "dist-tags": { latest: "0.9.0" } }), 1000, () => 0);
-    expect(c.get()).toBeNull(); // kicks off a background refresh, returns current (null)
+    expect(c.get()).toBeNull();
     expect(await c.refresh()).toBe("0.9.0");
     expect(c.get()).toBe("0.9.0");
   });
@@ -48,9 +41,9 @@ describe("LatestDaemonVersion cache", () => {
     let now = 0;
     const c = new LatestDaemonVersion(fetchImpl, 1000, () => now);
     expect(await c.refresh()).toBe("0.9.0");
-    ok = false; // registry now flaps
-    now = 5000; // stale → refresh
-    expect(await c.refresh()).toBe("0.9.0"); // last good value retained
+    ok = false;
+    now = 5000;
+    expect(await c.refresh()).toBe("0.9.0");
   });
 
   test("does not refetch while fresh (within TTL)", async () => {
@@ -58,8 +51,8 @@ describe("LatestDaemonVersion cache", () => {
     let now = 0;
     const c = new LatestDaemonVersion(fetchImpl, 1000, () => now);
     await c.refresh();
-    now = 500; // still within TTL
-    c.get(); // should NOT trigger another fetch
+    now = 500;
+    c.get();
     c.get();
     await Promise.resolve();
     expect((fetchImpl as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(1);

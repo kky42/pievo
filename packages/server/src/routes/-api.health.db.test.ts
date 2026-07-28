@@ -32,8 +32,6 @@ describe('/api/health/db', () => {
   test('a HUNG query → fast 503 via the client-side deadline (never eats the check timeout)', async () => {
     vi.useFakeTimers()
     try {
-      // A wedged pool: the ping never settles. The probe must resolve via its own
-      // 5s deadline, not hang until Fly's 10s check timeout.
       execute.mockReturnValueOnce(new Promise(() => {}))
       const resP = GET()
       await vi.advanceTimersByTimeAsync(5_000)

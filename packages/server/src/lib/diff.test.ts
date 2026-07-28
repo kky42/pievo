@@ -6,7 +6,6 @@ describe('parseUnifiedDiff', () => {
     const diff = ['--- a/file.txt', '+++ b/file.txt', '@@ -1,2 +1,2 @@', ' keep', '-old line', '+new line'].join('\n')
     const lines = parseUnifiedDiff(diff)
     expect(lines.map((l) => l.kind)).toEqual(['meta', 'meta', 'hunk', 'context', 'del', 'add'])
-    // markers are stripped from content, gutter carries the glyph
     expect(lines[3]).toMatchObject({ text: 'keep', gutter: '' })
     expect(lines[4]).toMatchObject({ text: 'old line', gutter: '-' })
     expect(lines[5]).toMatchObject({ text: 'new line', gutter: '+' })

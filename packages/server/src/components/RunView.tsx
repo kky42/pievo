@@ -8,9 +8,7 @@ import { DiffView } from './DiffView'
 import { btn, btnDanger, Loading, Pill, runPulseStyle, sectionHeadCls, StatusPill } from './ui'
 import { LoadErrorCard } from './actionUi'
 
-/** A section card - mirrors the loop page's surface panels with a sentence-case
- *  section heading. `min-w-0` so wide inner content (a wide diff line)
- *  scrolls inside the card, never widens the page. */
+/* `min-w-0` keeps wide diff lines from widening the page. */
 function Card({ label, count, children }: { label: string; count?: number; children: React.ReactNode }) {
   return (
     <section className="min-w-0 rounded-card border border-hairline bg-surface px-6 py-5 shadow-card">
@@ -23,7 +21,6 @@ function Card({ label, count, children }: { label: string; count?: number; child
   )
 }
 
-/** A stacked key/value field for the metadata rail - a small label over its value. */
 function Field({ k, children }: { k: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0">
@@ -38,8 +35,6 @@ function visibleTokenUsage(usage: RunSummary['usage']): number | null {
   return (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)
 }
 
-/** Per-run artifact diff vs the previous run, rendered as a colored diff
- *  view. Lazy by runId; degrades to a calm fallback for runs with no snapshot. */
 function Changes({ run }: { run: RunSummary }) {
   const [data, setData] = useState<RunDiffResult | null>(null)
   useEffect(() => {
@@ -94,7 +89,6 @@ function RunningState({ run }: { run: RunSummary }) {
   )
 }
 
-// Provider session id captured for correlation and future use. Mono + click-to-copy.
 function SessionId({ id }: { id: string }) {
   const [copied, setCopied] = useState(false)
   return (
@@ -121,29 +115,16 @@ function SessionId({ id }: { id: string }) {
  *  runId can't page the whole history. 64 × 100/page covers very deep histories. */
 const MAX_OLDER_PAGES = 64
 
-/**
- * Run detail PAGE body — its own route (`/loops/$loopId/runs/$runId`). Resolves
- * the run by id from the loop's detail payload (reusing getLoopDetail, no new
- * backend); a run older than that latest window is located by paging backward
- * with the existing `loadOlderRuns` cursor fn. Self-polls while it's in flight.
- *
- * Layout mirrors the loop detail page: a header card (name / status pill / chips
- * + action toolbar), then a two-column main — the meaty content (Changes diff +
- * Execution trace + Report) in a wide `minmax(0,1fr)` column, the run metadata in
- * a capped right rail. `min-w-0` everywhere + panes that scroll their own wide
- * content keep the page free of horizontal scroll at any width.
- */
 export function RunDetailView({ loopId, runId }: { loopId: string; runId: string }) {
   const [detail, setDetail] = useState<LoopDetail | null>(null)
-  const [olderRun, setOlderRun] = useState<RunSummary | null>(null) // located via backward paging
-  const [searchDone, setSearchDone] = useState(false) // backward search settled (found or exhausted)
+  const [olderRun, setOlderRun] = useState<RunSummary | null>(null)
+  const [searchDone, setSearchDone] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
-  // Initial load — surfaces a fatal error if the loop itself can't be read.
   const load = useCallback(async () => {
     try {
       setDetail(await getLoopDetail({ data: loopId }))
-      setErr(null) // clear a prior transient error on success
+      setErr(null)
     } catch (e) {
       setErr(String(e))
     }
@@ -187,7 +168,7 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
             if (alive) setOlderRun(hit)
             return
           }
-          cursor = page[0]!.ts // loadOlderRuns returns oldest-first; page back from the oldest
+          cursor = page[0]!.ts
         }
       } finally {
         if (alive) setSearchDone(true)
@@ -198,7 +179,6 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
     }
   }, [detail, run, searchDone, loopId, runId])
 
-  // Keep a live run fresh until its terminal fields and file snapshot settle.
   const running = !!run && (run.phase === 'pending' || run.phase === 'running' || !!run.reconciliation)
   useEffect(() => {
     if (!running) return
@@ -218,8 +198,6 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
   }
 
   if (err) return <LoadErrorCard title="Couldn't load this run." detail={err} onRetry={() => void load()} />
-  // Still loading while the loop detail is in flight, or while the backward
-  // search for an older run hasn't settled yet.
   if (!detail || (!run && !searchDone)) return <Loading />
   if (!run)
     return (
@@ -238,7 +216,6 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
   const loopName = detail.summary.name
   return (
     <>
-      {/* header card - mirrors the loop detail page */}
       <header className="rounded-card border border-hairline bg-surface px-6 pb-5 pt-[22px] shadow-card">
         <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
           <div className="min-w-0">
@@ -273,7 +250,6 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
         </div>
       </header>
 
-      {/* two-column main: meaty content wide, metadata in a capped rail */}
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
         <div className="flex min-w-0 flex-col gap-6">
           {run.phase === 'pending' ? (
@@ -325,7 +301,6 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
           )}
         </div>
 
-        {/* metadata rail */}
         <div className="flex min-w-0 flex-col gap-6">
           <Card label="Details">
             <div className="space-y-3.5">

@@ -1,12 +1,4 @@
-/**
- * Artifact-storage retention / GC tests. The whole point is correctness over
- * aggressiveness: a still-referenced (shared, or snapshot-retained) blob must
- * NEVER be reclaimed, while a blob no live row needs IS reclaimed once nothing
- * pins it. Snapshot retention remains bounded.
- *
- * Runs on an injected in-memory blob store + throwaway PGlite DB (no filesystem
- * artifact writes or network); the same BlobStore interface backs local/R2 prod.
- */
+// GC favors false retention over reclaiming shared or snapshot-referenced bytes.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -48,7 +40,6 @@ beforeEach(async () => {
   );
 });
 
-
 function sha256(s: string | Buffer): string {
   return createHash("sha256").update(s).digest("hex");
 }
@@ -83,7 +74,6 @@ async function seed() {
   return { token, machineId, loop };
 }
 
-/** Store a blob (bytes + metadata) directly, as a sync would. */
 async function putBlob(blobs: MemoryBlobStore, content: string): Promise<string> {
   const hash = sha256(content);
   await blobs.put(hash, Buffer.from(content));
@@ -109,11 +99,9 @@ test("GC keeps a blob still referenced by another live file (shared content)", a
   const { blobs } = gatewayWithStore();
   const hash = await putBlob(blobs, "shared bytes");
 
-  // Two distinct paths point at the SAME content hash.
   await putArtifact({ loopId: loop.id, path: "a.txt", hash, size: 11, binary: false, oversize: false });
   await putArtifact({ loopId: loop.id, path: "b.txt", hash, size: 11, binary: false, oversize: false });
 
-  // Reconcile one path away; the other still references the shared bytes.
   await reconcileArtifacts(loop.id, ["a.txt"]);
 
   const reclaimed = await retention.gcBlobs(blobs, FORCE);
@@ -127,18 +115,15 @@ test("GC keeps a blob a retained snapshot still references, then reclaims it onc
   const { blobs } = gatewayWithStore();
   const hash = await putBlob(blobs, "report v1");
 
-  // The blob was a live file, captured into a run snapshot, then the file deleted.
   await putArtifact({ loopId: loop.id, path: "report.md", hash, size: 9, binary: false, oversize: false });
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: new Date().toISOString() }));
   (await store.putRunSnapshot(run.id, loop.id, { "report.md": { hash, size: 9, binary: false, oversize: false } }));
   await reconcileArtifacts(loop.id, []);
 
-  // No live artifact_files row references it now — but the snapshot does, so KEEP.
   const r1 = await retention.gcBlobs(blobs, FORCE);
   expect(r1).toBe(0);
   expect(await blobs.has(hash)).toBe(true);
 
-  // Prune the snapshot (window of 0) → nothing references the hash anymore → reclaim.
   expect((await store.pruneRunSnapshots(loop.id, 0))).toBe(1);
   const r2 = await retention.gcBlobs(blobs, FORCE);
   expect(r2).toBe(1);
@@ -156,7 +141,6 @@ test("the grace window protects freshly-written (unreferenced) blobs", async () 
   expect(kept).toBe(0);
   expect(await blobs.has(hash)).toBe(true);
 
-  // With the grace effectively elapsed, the same unreferenced blob IS reclaimed.
   const reclaimed = await retention.gcBlobs(blobs, FORCE);
   expect(reclaimed).toBe(1);
   expect(await blobs.has(hash)).toBe(false);
@@ -169,7 +153,6 @@ test("GC deletes bytes before metadata: a blob re-referenced mid-delete drops me
   const hash = sha256(content);
   await base.put(hash, Buffer.from(content));
   await store.recordBlob(hash, content.length);
-  // No live row references it at pass start → it's garbage.
 
   // A BlobStore whose delete() simulates a concurrent sync racing the byte delete:
   // it re-references the hash (live file row + recreated blobs metadata) DURING the
@@ -204,19 +187,16 @@ test("snapshot retention prunes the oldest beyond the window, keeps the newest N
     const run = (await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: new Date().toISOString() }));
     (await store.putRunSnapshot(run.id, loop.id, {}));
     ids.push(run.id);
-    await new Promise((r) => setTimeout(r, 5)); // distinct createdAt for deterministic ordering
+    await new Promise((r) => setTimeout(r, 5));
   }
 
-  // Keep the 2 most recent → 3 oldest pruned.
   const pruned = (await store.pruneRunSnapshots(loop.id, 2));
   expect(pruned).toBe(3);
-  // Oldest three gone, newest two survive.
   expect((await store.getRunSnapshot(ids[0]!))).toBeUndefined();
   expect((await store.getRunSnapshot(ids[2]!))).toBeUndefined();
   expect((await store.getRunSnapshot(ids[3]!))).toBeDefined();
   expect((await store.getRunSnapshot(ids[4]!))).toBeDefined();
 
-  // Idempotent: pruning again at the same window removes nothing.
   expect((await store.pruneRunSnapshots(loop.id, 2))).toBe(0);
 });
 
@@ -257,7 +237,6 @@ test("GC spares a blob a snapshot comes to reference MID-PASS (per-candidate sna
   await store.recordBlob(h1, c1.length);
   await base.put(h2, Buffer.from(c2));
   await store.recordBlob(h2, c2.length);
-  // Neither is referenced at pass start → both are garbage in the keep-set computed then.
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: new Date().toISOString() }));
 
   // While the FIRST garbage blob's bytes are being deleted, a report() captures the
@@ -276,7 +255,6 @@ test("GC spares a blob a snapshot comes to reference MID-PASS (per-candidate sna
   };
 
   const reclaimed = await retention.gcBlobs(racing, FORCE);
-  // h1 collected; h2 SPARED because the per-candidate guard now also consults snapshots.
   expect(reclaimed).toBe(1);
   expect(await base.has(h1)).toBe(false);
   expect((await store.blobExists(h1))).toBe(false);
@@ -289,11 +267,10 @@ test("deleting a loop cascades runs/artifact_files/run_snapshots so its blobs be
   const { blobs } = gatewayWithStore();
   const hash = await putBlob(blobs, "doomed loop content");
 
-  // The blob is pinned twice: a live file row AND a retained run snapshot.
   await putArtifact({ loopId: loop.id, path: "f.md", hash, size: 19, binary: false, oversize: false });
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: new Date().toISOString() }));
   (await store.putRunSnapshot(run.id, loop.id, { "f.md": { hash, size: 19, binary: false, oversize: false } }));
-  expect(await retention.gcBlobs(blobs, FORCE)).toBe(0); // referenced → kept
+  expect(await retention.gcBlobs(blobs, FORCE)).toBe(0);
 
   // Delete the loop → its runs / file rows / snapshots go with it (previously they
   // lived forever, pinning the blob in the keep-set permanently).
@@ -302,21 +279,19 @@ test("deleting a loop cascades runs/artifact_files/run_snapshots so its blobs be
   expect((await store.listAllArtifactFiles(loop.id))).toHaveLength(0);
   expect((await store.getRunSnapshot(run.id))).toBeUndefined();
 
-  // Nothing references the blob anymore → the next GC pass reclaims the bytes.
   expect(await retention.gcBlobs(blobs, FORCE)).toBe(1);
   expect(await blobs.has(hash)).toBe(false);
   expect((await store.blobExists(hash))).toBe(false);
 });
 
 test("maintainStorage skips a concurrent pass while one is already running (in-flight guard)", async () => {
-  // One garbage blob with the grace forced open so gcBlobs awaits its byte delete.
   process.env.PIEVO_BLOB_GC_GRACE_MS = "1";
   const base = new MemoryBlobStore();
   const content = "garbage bytes";
   const hash = sha256(content);
   await base.put(hash, Buffer.from(content));
   await store.recordBlob(hash, content.length);
-  await new Promise((r) => setTimeout(r, 5)); // elapse the 1ms grace
+  await new Promise((r) => setTimeout(r, 5));
 
   let release!: () => void;
   const gate = new Promise<void>((r) => {
@@ -329,26 +304,25 @@ test("maintainStorage skips a concurrent pass while one is already running (in-f
     get: (h: string) => base.get(h),
     async delete(h: string): Promise<void> {
       deletes++;
-      await gate; // hold the FIRST pass inside its delete await
+      await gate;
       return base.delete(h);
     },
   };
   const gw = new gatewayMod.MachineGateway(scheduler, blocking as any);
 
   try {
-    const p1 = gw.maintainStorage(); // enters and blocks in delete()
+    const p1 = gw.maintainStorage();
     await new Promise((r) => setTimeout(r, 5));
     // A second tick fired while the first is in-flight must SKIP, not run a second
     // pass concurrently (which would re-scan + race the same deletes).
     const r2 = await gw.maintainStorage();
     expect(r2).toEqual({ snapshotsPruned: 0, blobsReclaimed: 0 });
-    expect(deletes).toBe(1); // only the first pass attempted a delete
+    expect(deletes).toBe(1);
 
     release();
     const r1 = await p1;
     expect(r1.blobsReclaimed).toBe(1);
     expect(await base.has(hash)).toBe(false);
-    // After it settles the latch is released → a fresh pass runs normally again.
     const r3 = await gw.maintainStorage();
     expect(r3).toEqual({ snapshotsPruned: 0, blobsReclaimed: 0 });
   } finally {
@@ -368,7 +342,6 @@ test("maintainStorage prunes snapshots then reclaims the blobs they freed", asyn
   const { loop, machineId } = (await seed());
   const { gw, blobs } = gatewayWithStore();
 
-  // Two runs, each snapshotting its own (now unreferenced — no live file) blob.
   const old = await putBlob(blobs, "old run content");
   const recent = await putBlob(blobs, "recent run content");
   const r1 = (await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: new Date().toISOString() }));
@@ -380,15 +353,15 @@ test("maintainStorage prunes snapshots then reclaims the blobs they freed", asyn
   // Window of 1: prune the older snapshot → its blob `old` becomes collectable.
   // (Use a forced grace via the lower-level call after pruning, since maintainStorage
   // uses the configured grace; here we drive the env knob to elapse the window.)
-  process.env.PIEVO_BLOB_GC_GRACE_MS = "1"; // ~immediate
+  process.env.PIEVO_BLOB_GC_GRACE_MS = "1";
   process.env.PIEVO_SNAPSHOT_RETENTION = "1";
   await new Promise((r) => setTimeout(r, 5));
   try {
     const res = await gw.maintainStorage();
     expect(res.snapshotsPruned).toBe(1);
     expect(res.blobsReclaimed).toBe(1);
-    expect(await blobs.has(old)).toBe(false); // freed
-    expect(await blobs.has(recent)).toBe(true); // still snapshot-referenced
+    expect(await blobs.has(old)).toBe(false);
+    expect(await blobs.has(recent)).toBe(true);
   } finally {
     delete process.env.PIEVO_BLOB_GC_GRACE_MS;
     delete process.env.PIEVO_SNAPSHOT_RETENTION;

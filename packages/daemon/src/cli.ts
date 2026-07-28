@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-/** Pievo CLI entry. Daemon lifecycle is available only as `pievo daemon …`;
- * loop management and in-run callbacks continue through their dedicated routes. */
 import { classify } from "./route.js";
 
 async function runDaemonCommand(command: string | undefined, args: string[]): Promise<number> {

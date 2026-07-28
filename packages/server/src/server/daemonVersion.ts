@@ -15,7 +15,7 @@
  */
 
 const NPM_URL = "https://registry.npmjs.org/@kky42/pievo";
-const DEFAULT_TTL_MS = 60 * 60 * 1000; // ~1h
+const DEFAULT_TTL_MS = 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 4000;
 
 type FetchLike = typeof fetch;
@@ -62,7 +62,6 @@ export class LatestDaemonVersion {
     private readonly now: NowFn = Date.now,
   ) {}
 
-  /** Cached latest version, refreshing in the background when stale. Non-blocking. */
   get(): string | null {
     if (this.now() - this.fetchedAt >= this.ttlMs) void this.refresh();
     return this.cached;
@@ -88,5 +87,4 @@ export class LatestDaemonVersion {
   }
 }
 
-/** Process-wide singleton the machine server fns read (fail-silent, cached). */
 export const latestDaemonVersion = new LatestDaemonVersion();

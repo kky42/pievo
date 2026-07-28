@@ -21,23 +21,19 @@ import type { RunDiffFile, RunDiffResult } from "../types.js";
  */
 const MAX_DIFF_BYTES = 512 * 1024;
 
-/** A file is text-diffable only when it has stored bytes and isn't binary/oversize. */
 function isText(e: SnapshotEntry | undefined): boolean {
   return !!e && !e.binary && !e.oversize && !!e.hash;
 }
 
-/** Within the inline-diff size cap (unknown size ⇒ allowed). */
 function withinDiffCap(e: SnapshotEntry | undefined): boolean {
   return !!e && (e.size == null || e.size <= MAX_DIFF_BYTES);
 }
 
-/** Load one snapshot blob, or null when recorded bytes are absent. */
 async function bytesOf(e: SnapshotEntry): Promise<Buffer | null> {
   if (!e.hash) return null;
   return (await (await getArtifactSync()).readBlob(e.hash)) ?? null;
 }
 
-/** Unified diff between two versions of a path (empty string ⇒ added/removed side). */
 function unified(path: string, oldText: string, newText: string, maxEditLength?: number): string | undefined {
   return maxEditLength === undefined
     ? createTwoFilesPatch(path, path, oldText, newText, "previous run", "this run")
@@ -47,9 +43,7 @@ function unified(path: string, oldText: string, newText: string, maxEditLength?:
 export interface RunDiffBudget {
   /** Changed paths returned and processed. Remaining paths never read blobs. */
   maxFiles: number;
-  /** Cumulative old+new blob bytes admitted before any read/jsdiff work. */
   maxInputBytes: number;
-  /** Cumulative unified-diff characters emitted. Zero also skips jsdiff. */
   maxDiffChars: number;
 }
 
@@ -147,7 +141,7 @@ export async function computeRunDiff(runId: string, budget?: RunDiffBudget): Pro
         ]);
         inputBytes += (oldBytes?.length ?? 0) + (newBytes?.length ?? 0);
         if (oldBytes == null || newBytes == null) {
-          file.binary = true; // bytes gone → can't show a diff
+          file.binary = true;
         } else {
           // A mismatched manifest size cannot buy extra jsdiff work.
           if (inputBytes > limits.maxInputBytes) {

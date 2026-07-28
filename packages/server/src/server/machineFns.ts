@@ -120,7 +120,6 @@ export const machineStatus = createServerFn({ method: 'GET' })
     return machine ? toSummary(machine, scope) : null
   })
 
-/** Act 2 — name the connected machine (it then appears in the list). */
 export const finalizeMachine = createServerFn({ method: 'POST' })
   .validator((d: { id: string; name: string }) => d)
   .handler(async ({ data }): Promise<{ ok: boolean }> => {

@@ -32,12 +32,10 @@ const IMAGE_MIME: Record<string, string> = {
   svg: 'image/svg+xml',
 }
 
-/** Lowercased file extension without the dot (`''` when the path has none). */
 export function ext(path: string): string {
   return (path.match(/\.([a-z0-9]+)$/i)?.[1] ?? '').toLowerCase()
 }
 
-/** The safe inline image MIME for this path, or null when it isn't a known image. */
 export function imageMime(path: string): string | null {
   return IMAGE_MIME[ext(path)] ?? null
 }
@@ -46,8 +44,6 @@ export const isImagePath = (path: string): boolean => imageMime(path) !== null
 export const isHtmlPath = (path: string): boolean => ext(path) === 'html' || ext(path) === 'htm'
 export const isMarkdownPath = (path: string): boolean => ext(path) === 'md' || ext(path) === 'markdown'
 
-/** The display kind for one artifact path (extension only - the bytes decide
- *  binary-ness elsewhere; here we only pick the RENDERER). */
 export function artifactKind(path: string): ArtifactKind {
   if (isImagePath(path)) return 'image'
   if (isHtmlPath(path)) return 'html'

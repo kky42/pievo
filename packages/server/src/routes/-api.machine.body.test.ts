@@ -33,7 +33,6 @@ describe('readJsonBody', () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
-        // Leave an observed oversize stream open so readJsonBody must cancel it.
         if (!cancel) controller.close()
       },
       cancel,
@@ -57,7 +56,6 @@ describe('readJsonBody', () => {
   })
 
   test('enforces bytes rather than UTF-16 code units for multibyte JSON', async () => {
-    // `"é"` is 3 JS code units but 4 UTF-8 bytes.
     expect(await readJsonBody(streamReq(['"é"']), 3)).toEqual({ kind: 'too-large' })
     expect(await readJsonBody(streamReq(['"é"']), 4)).toEqual({ kind: 'ok', body: 'é' })
   })

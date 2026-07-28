@@ -1,11 +1,3 @@
-/**
- * Post-run collection for explicitly configured artifacts.
- *
- * After a provider exits, the runner resolves each exact configured relative
- * path beneath the run workdir, builds a
- * bounded manifest, and reuses the existing sync/blob handshake so the server's
- * terminal snapshot captures those files.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -15,7 +7,6 @@ import { logger } from "./logger.js";
 
 const log = logger.child({ mod: "artifacts" });
 
-/** The existing artifact byte cap. Larger files are represented as metadata only. */
 export const BLOB_CAP = 10 * 1024 * 1024;
 const SYNC_TIMEOUT_MS = 30_000;
 const BLOB_PUT_TIMEOUT_MS = 120_000;

@@ -31,10 +31,8 @@
  * IPs/tokens can't grow memory without limit. Pure/injectable clock for tests.
  */
 
-/** A refilling token bucket: `capacity` burst, `refillPerSec` sustained rate. */
 interface Bucket {
   tokens: number;
-  /** Last refill timestamp (ms). Doubles as the LRU recency key for eviction. */
   last: number;
 }
 
@@ -44,11 +42,9 @@ export class TokenBucketLimiter {
   constructor(
     private readonly capacity: number,
     private readonly refillPerSec: number,
-    /** Cap on distinct keys held — a flood of unique keys evicts the stalest. */
     private readonly maxKeys = 20_000,
   ) {}
 
-  /** Consume one token for `key`. Returns true if allowed, false if the bucket is dry. */
   allow(key: string, now: number = Date.now()): boolean {
     let b = this.buckets.get(key);
     if (!b) {
@@ -56,7 +52,6 @@ export class TokenBucketLimiter {
       b = { tokens: this.capacity, last: now };
       this.buckets.set(key, b);
     }
-    // Refill by elapsed time, then spend one.
     const elapsedSec = Math.max(0, (now - b.last) / 1000);
     b.tokens = Math.min(this.capacity, b.tokens + elapsedSec * this.refillPerSec);
     b.last = now;
@@ -80,13 +75,11 @@ export class TokenBucketLimiter {
     if (oldestKey !== undefined) this.buckets.delete(oldestKey);
   }
 
-  /** Test seam — forget all state. */
   reset(): void {
     this.buckets.clear();
   }
 }
 
-/** Parse a positive-number env override, falling back to `dflt` on absent/invalid. */
 function envNum(name: string, dflt: number): number {
   const raw = process.env[name]?.trim();
   if (!raw) return dflt;
@@ -116,11 +109,9 @@ const tokenLimiter = new TokenBucketLimiter(
 /** Whether rate limiting is active. Off by default in tests unless opted in, so the
  *  large existing suites don't trip it; ON in a real server process. */
 function rateLimitEnabled(): boolean {
-  // Explicit override wins (either direction).
   const flag = process.env.PIEVO_RATE_LIMIT?.trim().toLowerCase();
   if (flag === "0" || flag === "false" || flag === "off") return false;
   if (flag === "1" || flag === "true" || flag === "on") return true;
-  // Default: enabled outside the test runner.
   return process.env.NODE_ENV !== "test" && process.env.VITEST !== "true";
 }
 
@@ -177,7 +168,6 @@ export function machineRouteLimit(
   return null;
 }
 
-/** Test seam — reset both limiters between cases. */
 export function __resetMachineRateLimiters(): void {
   ipLimiter.reset();
   tokenLimiter.reset();

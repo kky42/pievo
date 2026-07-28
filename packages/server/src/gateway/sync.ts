@@ -18,7 +18,6 @@ import { BLOB_CAP, isValidHash, parseArtifactSyncBody, sha256Buf } from "./artif
 import { authenticateDeviceToken } from "./deviceAuth.js";
 import type { HttpResult } from "./http.js";
 
-// Same `mod` tag as the rest of the gateway - these log lines predate the split.
 const log = logger.child({ mod: "gateway" });
 const BLOB_PRESENCE_CONCURRENCY = 16;
 
@@ -37,8 +36,6 @@ export class ArtifactSync {
     /** Artifact bytes (local filesystem by default, R2 when configured; injectable in tests). */
     private readonly blobStore: BlobStore = createBlobStore(),
   ) {}
-
-  // ---- POST /api/machine/sync ----
 
   /**
    * Reconcile one complete configured-path manifest after a run. Missing hashes
@@ -121,8 +118,6 @@ export class ArtifactSync {
     return { status: 200, body: { ok: true, needHashes: [...needHashes] } };
   }
 
-  // ---- PUT /api/machine/blob/:hash ----
-
   /**
    * Upload one content-addressed blob's raw bytes (Bearer device token). The
    * server recomputes sha256(body) and rejects any mismatch before storing —
@@ -150,7 +145,6 @@ export class ArtifactSync {
     return { status: 200, body: { ok: true } };
   }
 
-  /** Read stored content-addressed bytes, or null when absent. */
   readBlob(hash: string): Promise<Buffer | null> {
     if (!isValidHash(hash)) return Promise.resolve(null);
     return this.blobStore.get(hash);

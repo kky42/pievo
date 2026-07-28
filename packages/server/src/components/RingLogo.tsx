@@ -11,8 +11,6 @@
  *                see the canonical static first frame.
  */
 
-// Ring positions in sticker-chase order (clockwise from top-left); rc0 is
-// the runner, rc7/rc6 sit just behind it and carry the trail.
 const RING: Array<[number, number]> = [
   [9, 9],
   [37, 9],
@@ -58,7 +56,6 @@ export function RingLogo({
       aria-label="Pievo"
       className={rootClass}
     >
-      {/* Concentric corners: plate rx = sticker rx (6) + edge gap (9). */}
       {plate && <rect width="96" height="96" rx="15" fill="#0b0b0b" />}
       {RING.map(([x, y], i) => (
         <rect key={i} x={x} y={y} width={22} height={22} rx={6} className={cellClass(i)} />

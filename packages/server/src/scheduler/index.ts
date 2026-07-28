@@ -85,7 +85,6 @@ export class Scheduler {
     return this.enqueue(id, { requestedBy: "system" });
   }
 
-  /** Poll fallback and timer callback converge here. */
   async advanceDueSchedules(machineId?: string, loopId?: string): Promise<store.AdvancedSchedule[]> {
     const advanced = await store.advanceDueSchedules(new Date().toISOString(), { machineId, loopId });
     for (const item of advanced) {

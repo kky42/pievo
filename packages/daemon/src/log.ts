@@ -1,18 +1,3 @@
-/**
- * `pievo log` — bounded terminal history and run detail.
- * Every mode, including `--json`, is rendered by the server and printed verbatim;
- * provider transcripts are not a daemon telemetry or CLI surface.
- *
- * Like `pievo loops`/`edit`, this is an owner-OUTSIDE-a-run command: it goes
- * through the shared CLI client (`postCli`), which reuses the device token + server
- * URL the daemon persisted under ~/.pievo and POSTs `{argv}` to
- * `/api/machine/cli`. No run token, no re-auth — the machine is already connected.
- *
- * An explicit `<loop>` id wins; otherwise the current working directory is
- * matched against each loop's configured workdir (`resolveLoopDir`), so running there
- * finds that loop — a CLIENT-side resolution, since the server's `log` dispatch
- * needs an explicit loop id. Every external touch is an injectable seam for tests.
- */
 import type { PostCliDeps } from "./cli-client.js";
 import { postCli, printCliResponse } from "./cli-client.js";
 import { parseLongOptions } from "./long-options.js";
@@ -23,7 +8,6 @@ export type LogDeps = {
   fetchFn?: typeof fetch;
   out?: (s: string) => void;
   err?: (s: string) => void;
-  // Local config — overridable so tests are isolated from the ambient ~/.pievo.
   server?: string;
   token?: string;
 };
@@ -59,8 +43,6 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
     const i = argv.indexOf("--server-url");
     return i >= 0 ? argv[i + 1] : undefined;
   })();
-  // Shared postCli deps: injected server/token override the persisted ones so tests
-  // never touch ~/.pievo; production leaves them undefined and postCli resolves.
   const cliDeps: PostCliDeps = {
     fetchImpl: injected.fetchFn,
     serverFlag: flagServer,
@@ -69,8 +51,6 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   };
 
   const { positional, flags } = parseLongOptions(argv, (key) => !BOOL_FLAGS.has(key));
-  // Reject an unknown flag (exit 2) instead of silently ignoring it — uniform with the
-  // `loops`/`edit` flag discipline and the unknown-verb exit code.
   const unknown = Object.keys(flags).filter((k) => !LOG_FLAGS.has(k));
   if (unknown.length) return d.err(`pievo: unknown flag --${unknown[0]} — try \`pievo log --help\`\n`), 2;
   if (positional.length > 1) return d.err("pievo: log accepts at most one loop id or name\n"), 2;
@@ -79,15 +59,12 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   const notConnected = () =>
     d.err("pievo: this machine isn't connected yet — run `pievo daemon connect --server-url … --connect-key …` first\n");
 
-  // 1. List the machine's loops and resolve the target client-side.
   const resolution = await resolveOwnerLoop(positional[0], d.cwd(), cliDeps);
   if (resolution.kind === "not-configured") return notConnected(), 2;
   if (resolution.kind === "network-error") return d.err(`pievo: ${resolution.message}\n`), 1;
   if (resolution.kind === "list-error") return d.err(`pievo: ${resolution.message}\n`), 1;
   if (resolution.kind === "resolve-error") return renderResolveError(resolution.error, d.out, d.err);
 
-  // 2. Fetch the resolved loop's history. Canonicalize flags so the positional
-  // loop used for client-side resolution is not sent twice.
   const forwarded: string[] = [];
   for (const key of ["diff", "json"] as const) if (flags[key] === true || flags[key] === "true") forwarded.push(`--${key}`);
   for (const key of VALUE_FLAGS) {

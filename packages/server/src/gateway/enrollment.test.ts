@@ -45,7 +45,6 @@ afterEach(() => {
   delete process.env.GITHUB_CLIENT_SECRET;
 });
 
-/** Turn the GitHub login gate ON for the current test (read live by poll). */
 function enableGate(): void {
   process.env.GITHUB_CLIENT_ID = "gh-client-id";
   process.env.GITHUB_CLIENT_SECRET = "gh-client-secret";
@@ -78,28 +77,20 @@ function pollV4(
   });
 }
 
-// ---- gated mode: forged tokens are rejected (the audit's H-01 reproduction) ----
-
 test("gated mode: a forged bearer token cannot self-register via poll", async () => {
   enableGate();
   const gw = gateway();
   const forged = "dk_unauthenticated_gated_repro"; // the audit's exact repro token
   const res = await pollV4(gw, forged, { host: "attacker-gated" });
   expect(res.status).toBe(401);
-  // No machine row was minted.
   expect(await store.getMachine(tokens.machineIdFromToken(forged))).toBeUndefined();
 });
-
-
-// ---- gated mode: the legitimate connect-key flow still works end to end ----
-
 
 test("gated mode: an EXPIRED connect-key does not enroll", async () => {
   enableGate();
   const gw = gateway();
   const deviceToken = tokens.mintDeviceToken();
   await tokens.rememberConnectKey(deviceToken, { userId: "u1", teamId: store.teamIdForUser("u1") });
-  // Age the key past its TTL.
   await (db.client as any).exec(
     `UPDATE connect_keys SET minted_at = '${new Date(Date.now() - tokens.CONNECT_KEY_TTL_MS - 1000).toISOString()}'`,
   );
@@ -107,8 +98,6 @@ test("gated mode: an EXPIRED connect-key does not enroll", async () => {
   expect(res.status).toBe(401);
   expect(await store.getMachine(tokens.machineIdFromToken(deviceToken))).toBeUndefined();
 });
-
-// ---- dk_ shape validation (both modes) ----
 
 test("malformed device tokens are rejected early with 401", async () => {
   const gw = gateway();
@@ -118,8 +107,6 @@ test("malformed device tokens are rejected early with 401", async () => {
     expect((res.body as { error: string }).error).toMatch(/invalid device token/);
   }
 });
-
-// ---- open mode still requires dashboard enrollment ----
 
 test("open mode: an unknown dk_ token cannot self-register", async () => {
   const gw = gateway();
@@ -148,8 +135,6 @@ test("a deleted machine cannot recreate itself with its revoked token", async ()
   expect((await pollV4(gw, token, { host: "dev-box" })).status).toBe(401);
   expect(await store.getMachine(machineId)).toBeUndefined();
 });
-
-// ---- token-hash binding: a machine-id collision can't impersonate ----
 
 test("a token whose id collides with a registered machine but whose hash differs is rejected", async () => {
   const gw = gateway();

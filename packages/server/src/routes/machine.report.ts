@@ -2,7 +2,6 @@ import { createFileRoute } from '@tanstack/react-router'
 import { MACHINE_BODY_CAP, readJsonBody } from '../gateway/http'
 import { machineRouteLimit } from '../gateway/rateLimit'
 
-/** POST /machine/report — finalize a run (Bearer run token). */
 export const Route = createFileRoute('/machine/report')({
   server: {
     handlers: {

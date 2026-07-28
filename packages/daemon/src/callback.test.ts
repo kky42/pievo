@@ -1,8 +1,3 @@
-/**
- * Callback mode — the in-run `pievo <verb>` path (run token in env). Proves it now
- * posts through `/api/machine/cli` carrying the run token. Global `fetch` is
- * stubbed and the run env is set, so nothing hits the network.
- */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 // Isolate ~/.pievo BEFORE config.ts loads (PIEVO_DIR is read at import) so the
@@ -15,7 +10,6 @@ import { runCallback } from "./callback.js";
 
 type Call = { url: string; init: any };
 
-/** Stub global fetch with a per-request handler; record every call. */
 function stubFetch(handler: (url: string, init: any) => { status: number; body: unknown }) {
   const calls: Call[] = [];
   vi.stubGlobal("fetch", async (url: any, init: any) => {

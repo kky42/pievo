@@ -1,7 +1,3 @@
-/**
- * Workdir-jail helpers — the local-always-wins semantics: server-sent roots may
- * only NARROW the daemon's PIEVO_ROOTS jail, never widen it.
- */
 import os from "node:os";
 import path from "node:path";
 
@@ -22,10 +18,8 @@ describe("isWithinRoots", () => {
   });
 
   test("unresolved `..` segments cannot escape the jail (lexical-prefix bypass)", () => {
-    // Lexically under the root, but the OS resolves it OUTSIDE — must be rejected.
     expect(isWithinRoots("/home/u/projects/../../../etc", ["/home/u/projects"])).toBe(false);
     expect(isWithinRoots("/home/u/projects/../.ssh", ["/home/u/projects"])).toBe(false);
-    // `..` that stays inside the root is fine.
     expect(isWithinRoots("/home/u/projects/a/../b", ["/home/u/projects"])).toBe(true);
   });
 });

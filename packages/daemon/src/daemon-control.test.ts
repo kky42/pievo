@@ -1,13 +1,7 @@
-/**
- * `pievo daemon status` / `pievo daemon stop`, exercised with every external touch INJECTED
- * (pidfile read, liveness probe, start-time lookup, kill, server fetch, output) so
- * nothing reads a real ~/.pievo, signals a real process, or hits the network.
- */
 import { describe, expect, test } from "vitest";
 
 import { runDaemonStatus, runDaemonStop, type DaemonControlDeps } from "./daemon-control.js";
 
-/** Capture stdout/stderr into strings for assertions. */
 function capture(extra: DaemonControlDeps = {}): DaemonControlDeps & { stdout: () => string; stderr: () => string } {
   let out = "";
   let err = "";

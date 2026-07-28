@@ -25,8 +25,6 @@ export default defineConfig({
   plugins: [
     tailwindcss(),
     tanstackStart(),
-    // Nitro builds the production server (default node-server preset → a
-    // listening `.output/server/index.mjs`, started by `pnpm start`).
     nitro(),
     // react's vite plugin must come after start's vite plugin
     viteReact(),

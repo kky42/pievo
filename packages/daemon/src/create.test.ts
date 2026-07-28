@@ -1,7 +1,3 @@
-/**
- * Canonical `pievo new` envelope checks and retry idempotency. The required agent
- * is always explicit.
- */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { canonicalJson, coerceAgent, cronLooksValid, idempotencyKey, runCreate } from "./create.js";
@@ -10,7 +6,6 @@ const okResponse = (body: unknown) => ({ ok: true, status: 200, json: async () =
 const errResponse = (status: number, body: unknown) =>
   ({ ok: false, status, json: async () => body }) as unknown as Response;
 
-/** Serialize the canonical inline config argument. */
 function cfgJson(cfg: object): string {
   return JSON.stringify(cfg);
 }
@@ -60,7 +55,6 @@ describe("idempotencyKey / canonicalJson", () => {
   test("canonicalJson sorts object keys recursively, preserves array order", () => {
     expect(canonicalJson({ b: 1, a: 2 })).toBe(canonicalJson({ a: 2, b: 1 }));
     expect(canonicalJson({ a: 2, b: 1 })).toBe('{"a":2,"b":1}');
-    // Nested objects also canonicalize; arrays keep order (order is meaningful).
     expect(canonicalJson({ x: { d: 4, c: 3 }, y: [1, 2] })).toBe('{"x":{"c":3,"d":4},"y":[1,2]}');
     expect(canonicalJson([3, 1, 2])).toBe("[3,1,2]");
   });
@@ -69,28 +63,21 @@ describe("idempotencyKey / canonicalJson", () => {
     const k1 = idempotencyKey("dk_test", { name: "Docs", prompt: "Check docs", schedule: { mode: "cron" } });
     const k2 = idempotencyKey("dk_test", { schedule: { mode: "cron" }, prompt: "Check docs", name: "Docs" });
     expect(k1).toBe(k2);
-    expect(k1).toMatch(/^[0-9a-f]{64}$/); // a sha256 hex digest
+    expect(k1).toMatch(/^[0-9a-f]{64}$/);
   });
 
   test("the key DIFFERS across configs and across machines (tokens)", () => {
     const base = { name: "Docs", prompt: "Check docs", schedule: { mode: "cron", cron: "0 6 * * 1" } };
     expect(idempotencyKey("dk_test", base)).not.toBe(idempotencyKey("dk_test", { ...base, schedule: { ...base.schedule, cron: "0 7 * * 1" } }));
-    // A different device token ⇒ a different machine id in the hash ⇒ a different key.
     expect(idempotencyKey("dk_a", base)).not.toBe(idempotencyKey("dk_b", base));
   });
 
   test("hashing the FULL resolved body closes the envelope-collision class (timezone/claim/agent all count)", () => {
-    // The body is the exact outgoing request payload (config + envelope), so any field difference splits the key.
     const body = { name: "Docs", prompt: "Check docs", schedule: { mode: "cron", timezone: "Europe/Paris" } };
-    // Same body ⇒ same key (a genuine retry with identical argv+env still collapses).
     expect(idempotencyKey("dk_test", body)).toBe(idempotencyKey("dk_test", { ...body }));
-    // A different schedule timezone produces a distinct key.
     expect(idempotencyKey("dk_test", body)).not.toBe(idempotencyKey("dk_test", { ...body, schedule: { ...body.schedule, timezone: "America/New_York" } }));
-    // A different connect-key/team (rides in `claim`) ⇒ different keys (no cross-team collapse).
     expect(idempotencyKey("dk_test", { ...body, claim: "dk_teamA" })).not.toBe(idempotencyKey("dk_test", { ...body, claim: "dk_teamB" }));
-    // A different recorded agent ⇒ different keys.
     expect(idempotencyKey("dk_test", { ...body, agent: "claude-code" })).not.toBe(idempotencyKey("dk_test", { ...body, agent: "codex" }));
-    // The idempotencyKey nonce itself is EXCLUDED from the hash (its presence/value can't change the key).
     expect(idempotencyKey("dk_test", body)).toBe(idempotencyKey("dk_test", { ...body, idempotencyKey: "whatever" }));
   });
 });
@@ -105,11 +92,6 @@ describe("runCreate — sends the idempotency key on a real create, omits it on 
     else process.env.PIEVO_TOKEN = prevToken;
   });
 
-  // NB: the daemon uses the matching saved connection (this test injects env as the
-  // fallback), so the integration test can't pin the exact key to a fixed token — it
-  // asserts the CONTRACT (present, 64-hex, stable across retries, differs by config).
-  // The exact `sha256(machineId + canonicalJSON(resolvedBody))` value is pinned by the
-  // pure idempotencyKey tests above.
   const keyOf = (sent: any[]) => JSON.parse(sent[sent.length - 1].argv[2]).idempotencyKey as string | undefined;
 
   test("a real create stamps a 64-hex `idempotencyKey`, stable across a retry of the same config", async () => {
@@ -126,9 +108,8 @@ describe("runCreate — sends the idempotency key on a real create, omits it on 
     expect(await run(cfg)).toBe(0);
     const first = keyOf(sent);
     expect(first).toMatch(/^[0-9a-f]{64}$/);
-    expect(await run(cfg)).toBe(0); // a retry (same argv)
-    expect(keyOf(sent)).toBe(first); // stable across the retry
-    // A different config ⇒ a different key (an intentional twin isn't collapsed).
+    expect(await run(cfg)).toBe(0);
+    expect(keyOf(sent)).toBe(first);
     expect(await run(cfgJson(validConfig({ schedule: { mode: "cron", cron: "0 6 * * *", timezone: "UTC", overlap: "skip" } })))).toBe(0);
     expect(keyOf(sent)).not.toBe(first);
   });

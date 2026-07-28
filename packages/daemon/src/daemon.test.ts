@@ -1,13 +1,3 @@
-/**
- * runDaemon boot guard — a second daemon must REFUSE to start while a live,
- * verified daemon owns the pidfile: it would otherwise overwrite the file, and
- * its exit would delete it while daemon #1 still runs (invisible to `daemon status`,
- * unkillable by `daemon stop`, double-polling the server).
- *
- * Uses a temp PIEVO_HOME and records THIS test process's pid as "the running
- * daemon" — it's alive and its `ps` start-time matches, so the verified check
- * treats it exactly like a live daemon, with no child process to manage.
- */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -46,12 +36,11 @@ describe("runDaemon", () => {
     saveActiveConnection("http://127.0.0.1:1", "dk_test");
 
     const pidfile = await import("./pidfile.js");
-    pidfile.writePidFile(process.pid); // alive + matching start-time: a "live daemon"
+    pidfile.writePidFile(process.pid);
 
     const { runDaemon } = await import("./daemon.js");
     const code = await runDaemon();
     expect(code).toBe(1);
-    // The existing daemon's pidfile is untouched (not overwritten, not cleared).
     expect(pidfile.readPidFile()?.pid).toBe(process.pid);
   }, 15000);
 });
@@ -69,11 +58,8 @@ describe("poll transport helpers", () => {
 
   test("nextPollDelayMs: a held long-poll re-polls immediately; a fast answer keeps the cadence", async () => {
     const { nextPollDelayMs } = await import("./daemon.js");
-    // An instant poll answer sleeps out the remaining interval.
     expect(nextPollDelayMs(200, 3000)).toBe(2800);
-    // Server-held long-poll consumed the interval ⇒ only the small breather.
     expect(nextPollDelayMs(20_000, 3000)).toBe(250);
-    // Exactly on the boundary still floors at the breather.
     expect(nextPollDelayMs(3000, 3000)).toBe(250);
   });
 });

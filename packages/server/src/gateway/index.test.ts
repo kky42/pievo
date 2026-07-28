@@ -38,7 +38,6 @@ async function createLoop(input: Omit<TestLoopSeed, "workdir"> & { workdir?: str
   return store.createLoop({ ...input, workdir: input.workdir ?? "/work/project" });
 }
 
-/** Test facade over the core gateway and canonical CLI dispatch. */
 type TestGateway = InstanceType<typeof gatewayMod.MachineGateway> & {
   runCli: InstanceType<typeof cliMod.CliGateway>["cli"];
   cli: InstanceType<typeof cliMod.CliGateway>["cli"];
@@ -131,7 +130,6 @@ test("protocol rejection uses upgrade terminology and gives the restart flow", a
   expect((res.body as any).error).not.toMatch(/update\s+required/i);
 });
 
-/** Seed a loop with a running run ready for a report() call. */
 async function seededExecRun() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
@@ -379,7 +377,6 @@ test("report persists normalized terminal telemetry without cost or transcript f
   expect(stored && "transcript" in stored).toBe(false);
 });
 
-
 test("machine finalization turns a successful process into an error when the run skipped its required report", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
@@ -413,7 +410,6 @@ test("report terminalizes the leased run when payload runId does not match", asy
 
 test("a machine's bound loops gate its deletion (loopsForMachine drains to empty)", async () => {
   const { machine, loop } = (await seededLoop());
-  // While a loop is bound, the delete guard sees it and must block.
   expect((await store.loopsForMachine(machine.id)).map((l) => l.id)).toEqual([loop.id]);
   // An executing loop requires explicit authority retirement before deletion.
   (await store.forceDeleteLoop(loop.id));
@@ -457,7 +453,6 @@ test("concurrent polls deliver a pending run exactly once (atomic pending->runni
   expect(delivered.filter((d) => d.runId === run.id)).toHaveLength(1);
   expect((await store.getRun(run.id))!.phase).toBe("running");
 
-  // A later poll sees the run as already claimed - no re-delivery, no error.
   const again = await pollV4(gw, token, { currentRuns: [{ runId: run.id, stage: "executing" }] });
   expect((again.body as any).delivery).toBeNull();
 });
@@ -563,11 +558,6 @@ test("pollV4 with the supported daemon version can claim pending work", async ()
   expect((await store.getRun(secondRun.id))?.phase).toBe("pending");
 });
 
-
-
-
-// ---- per-team connect-key ------------------------------------------------------
-
 test("createLoop uses the claim intent team instead of the machine home team", async () => {
   await makeTeam("team-home", ["u1"]);
   await makeTeam("team-target", ["u1"]);
@@ -600,21 +590,9 @@ test("listMachinesForTeam is membership-scoped — a machine shows in its owner'
   const t2 = tokens.mintDeviceToken();
   (await store.createMachine({ id: tokens.machineIdFromToken(t2), userId: "u2", teamId: "team-u2", name: "Other", tokenHash: tokens.sha256(t2), online: true }));
 
-  // u1's machine (home team-u1) appears under team-lm via membership; u2's doesn't.
   expect((await store.listMachinesForTeam("team-lm")).map((m) => m.id)).toEqual([m1]);
 });
 
-
-
-
-
-
-
-
-
-// ---- --dry-run: validate-only preview for new + edit (no persistence) ----
-
-/** A connected machine + its device token, for the dry-run tests. */
 async function seededMachine() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
@@ -655,9 +633,6 @@ test("editLoop --dry-run returns canonical before and after without persisting",
   expect(await store.getLoop(loop.id)).toMatchObject({ name: "Before", model: null });
 });
 
-
-
-/** Add a finalized run with an explicit timestamp for deterministic ordering. */
 async function addExecRun(loopId: string, machineId: string, phase: "done" | "error", ts: string) {
   return (await store.addRun({ loopId, machineId, phase, ts }));
 }
@@ -715,7 +690,7 @@ test("continuous loop stops enqueueing after the 3rd exec error trips the breake
     expect((await reportV2(gw, rt, { result: "failure" as const, error: `boom ${attempt}`, durationMs: 1 })).status).toBe(200);
     let waiting = (await store.openRunsForLoop(loop.id)).find((r) => r.phase === "pending");
     if (attempt < 3) {
-      expect(waiting).toBeUndefined(); // cadence remains a fact until due
+      expect(waiting).toBeUndefined();
       const target = (await store.getLoop(loop.id))!.nextCadenceAt!;
       await store.advanceDueSchedules(new Date(Date.parse(target) + 1).toISOString());
       waiting = (await store.openRunsForLoop(loop.id)).find((r) => r.phase === "pending");
@@ -769,27 +744,19 @@ test("an auto deferred pending run past the catch-up horizon retires as `skipped
   const loop = (await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
   const gw = gateway();
 
-  // Pending for 8 days — the machine never came back inside the 7-day horizon.
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "pending", ts: new Date(Date.now() - 8 * 86_400_000).toISOString() }));
   (await gw.sweep());
 
   const retired = (await store.getRun(run.id))!;
   expect(retired.phase).toBe("canceled");
   expect(retired.error).toBeNull();
-  // Skipped is neither success nor failure.
 });
-
-/** A machine + loop with bounded ordinary history. */
-// ---- run-lifecycle hardening: canceled ordering, sweep inactivity/revocation ----
-
-
 
 test("sweep marks a reclaimed run token report-only while preserving one wake-report", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
   const loop = (await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
-  // Claimed 30min ago, no heartbeat heard since → past the 20min inactivity window.
   const staleTs = new Date(Date.now() - 30 * 60_000).toISOString();
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: staleTs }));
   const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId });
@@ -890,18 +857,15 @@ test("sweep is INACTIVITY-based: a >20min run reported in currentRuns is NOT rec
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: staleTs }));
 
   const gw = gateway();
-  // Another machine cannot heartbeat this run.
   const otherToken = tokens.mintDeviceToken();
   await pollV4(gw, otherToken, { info: { host: "other" }, currentRuns: [{ runId: run.id, stage: "executing" }] });
   expect((await store.getRun(run.id))!.heartbeatAt).toBeNull();
 
-  // The owning daemon's currentRuns heartbeat refreshes the dedicated stamp.
   await pollV4(gw, token, { currentRuns: [{ runId: run.id, stage: "executing" }] });
   expect((await store.getRun(run.id))!.heartbeatAt).toBeTruthy();
   (await gw.sweep());
-  expect((await store.getRun(run.id))!.phase).toBe("running"); // never falsely failed
+  expect((await store.getRun(run.id))!.phase).toBe("running");
 
-  // Once the stamp itself goes stale (nothing heard for the full window) → reclaimed.
   (await store.updateRun(run.id, { heartbeatAt: staleTs }));
   (await gw.sweep());
   expect((await store.getRun(run.id))!.phase).toBe("error");
@@ -954,7 +918,6 @@ test("CLI flags are NUL-stripped before any pg write", async () => {
   expect(stored.message).toBe("beforeafter");
 });
 
-
 test("report clips valid diagnostic strings and durably rejects a non-string error", async () => {
   const { run, rt } = (await seededExecRun());
   const res = (await gateway().report(rt, {
@@ -965,8 +928,8 @@ test("report clips valid diagnostic strings and durably rejects a non-string err
   }));
   expect(res.status).toBe(200);
   const stored = (await store.getRun(run.id))!;
-  expect(stored.sessionId!.length).toBe(200); // SESSION_ID_CAP
-  expect(stored.error!.length).toBe(2000); // MESSAGE_CAP
+  expect(stored.sessionId!.length).toBe(200);
+  expect(stored.error!.length).toBe(2000);
 
   const again = (await seededExecRun());
   const invalid = await gateway().report(again.rt, { result: "failure" as const, durationMs: 1, error: 42 as never });
@@ -979,25 +942,16 @@ test("poll persists the daemon version, updating only when it changes", async ()
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   await tokens.rememberConnectKey(token, { userId: "shared", teamId: store.teamIdForUser("shared") });
-  // First poll self-registers and records the reported version.
   await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64", version: "0.8.0" } });
   expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.8.0");
-  // A newer version on the next poll updates it.
   await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64", version: "0.9.0" } });
   expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.9.0");
-  // A poll with no version leaves the stored version unchanged.
   await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64" } });
   expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.9.0");
-  // An invalid version is rejected by the dispatch gate and never sanitized or stored.
   await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", version: "9".repeat(200) } });
   expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.9.0");
 });
 
-// ---- /api/machine/cli — verb × credential matrix -----------------------------
-
-/** A machine seeded from a REAL device token, an OPEN loop bound to it, and an exec
- *  run RUNNING with a fresh run token — so one setup drives both the device-credential
- *  and run-credential branches of `cli()` against the same loop. */
 async function seededCli() {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
@@ -1021,11 +975,9 @@ async function seededCli() {
 test("cli branches by canonical dk_ and rk_ credential prefixes", async () => {
   const { deviceToken, runToken, loop } = (await seededCli());
   const gw = gateway();
-  // Device credential lists the machine's loops (owner authority).
   const dev = (await gw.cli(deviceToken, ["loops"]));
   expect(dev.status).toBe(200);
   expect((dev.body as any).loops.map((l: any) => l.id)).toContain(loop.id);
-  // The same `loops` verb on a RUN credential is owner-only → 403.
   const run = (await gw.cli(runToken, ["loops"]));
   expect(run.status).toBe(403);
   expect((await gw.cli("00000000-0000-0000-0000-000000000000", ["report"])).status).toBe(401);
@@ -1042,7 +994,6 @@ test("cli run credential rejects every owner verb with the report-only boundary"
     expect((res.body as { text: string }).text).toMatch(/only pievo report|may only report/);
   }
 });
-
 
 test("cli device lifecycle: pause/start are truthful and use the store lifecycle", async () => {
   const { deviceToken, loop } = await seededCli();
@@ -1200,7 +1151,6 @@ test("cli device credential: report is run-only and removed finish verbs are unk
 
 test("cli device credential: log/show of a loop on ANOTHER machine is a flat 404 (existence never leaks)", async () => {
   const { deviceToken } = (await seededCli());
-  // A second machine + loop the first device does not own.
   const otherDevice = tokens.mintDeviceToken();
   const otherMachineId = tokens.machineIdFromToken(otherDevice);
   (await store.createMachine({ id: otherMachineId, userId: "u2", name: "M2", tokenHash: tokens.sha256(otherDevice), online: true }));

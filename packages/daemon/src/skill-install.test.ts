@@ -1,9 +1,3 @@
-/**
- * The best-effort `npx skills` install path, exercised with the runner INJECTED so
- * nothing spawns npx or touches the network. Covers the exact argv (verified
- * against the current `skills` CLI), user scope, idempotent-overwrite
- * success, and the never-throws fallback on every failure mode.
- */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,7 +11,6 @@ import {
   type Runner,
 } from "./skill-install.js";
 
-// A throwaway bundled-skill dir so the presence check passes without a real build.
 const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-skill-"));
 fs.writeFileSync(path.join(fixtureDir, "SKILL.md"), "---\nname: pievo\n---\n# x\n");
 
@@ -25,8 +18,6 @@ afterAll(() => fs.rmSync(fixtureDir, { recursive: true, force: true }));
 
 describe("installArgs", () => {
   test("always uses user scope with a verified multi-agent invocation", () => {
-    // Repeated `-a <id>` flags, one per known agent (the comma form `-a a,b` is
-    // rejected by the `skills` CLI as a single bogus agent name).
     expect(installArgs("/b/skill")).toEqual([
       "--yes", "skills", "add", "/b/skill", "-a", "claude-code", "-a", "codex", "-y", "--copy", "-g",
     ]);
@@ -51,8 +42,8 @@ describe("installSkill", () => {
     };
     const r = await installSkill({ dir: fixtureDir, runner });
     expect(r.ok).toBe(true);
-    expect(r.line).toContain("~/.claude/skills/pievo"); // Claude Code
-    expect(r.line).toContain("~/.agents/skills/pievo"); // Codex
+    expect(r.line).toContain("~/.claude/skills/pievo");
+    expect(r.line).toContain("~/.agents/skills/pievo");
     expect(seen).toEqual(installArgs(fixtureDir));
     expect(seen).toContain("-g");
   });
@@ -74,7 +65,7 @@ describe("installSkill", () => {
     const r = await installSkill({ dir: fixtureDir, runner });
     expect(r.ok).toBe(false);
     expect(r.line).toContain("EACCES: permission denied");
-    expect(r.line).not.toContain("more"); // only the first stderr line
+    expect(r.line).not.toContain("more");
   });
 
   test("runner that throws is swallowed → skipped, never throws", async () => {

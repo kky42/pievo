@@ -35,6 +35,16 @@ server owns scheduling, queueing, auth, persistence, and byte serving; the
   PGlite when `DATABASE_URL` is absent. Keep heavy/native server dependencies out of
   client bundles via dynamic imports.
 
+## Comment standard
+
+- Keep comments only when they add durable context absent from the code: why and
+  trade-offs, default-value rationale, TODOs, protocol/compatibility/security
+  constraints, deliberate compromises, applicability limits, or non-obvious risks.
+- Delete comments that paraphrase symbols, branches, return types, CSS properties,
+  section headings, tests, or assertions. Prefer clear names, types, and tests.
+- For limits and defaults, record the unit, rationale or source, and consequence of
+  changing them. Keep comments next to the invariant and update them with behavior.
+
 ## Module map
 
 - `packages/server/src/gateway/index.ts`: poll/report lifecycle, reconciliation,

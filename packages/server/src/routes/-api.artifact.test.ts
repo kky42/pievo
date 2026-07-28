@@ -45,8 +45,6 @@ describe('/api/artifact/$loopId/$', () => {
   })
 })
 
-// ---- disposition branches (store/auth/bytes mocked) ----
-
 const bytes = Buffer.from([1, 2, 3, 4])
 const readBytes = vi.fn()
 
@@ -66,7 +64,6 @@ describe('/api/artifact/$loopId/$ dispositions', () => {
     expect(res.headers.get('content-type')).toBe('image/png')
     expect(res.headers.get('content-disposition')).toContain('inline')
     expect(res.headers.get('x-content-type-options')).toBe('nosniff')
-    // The load-bearing isolation for a direct navigation to a scripted SVG/HTML.
     expect(res.headers.get('content-security-policy')).toBe('sandbox')
   })
 

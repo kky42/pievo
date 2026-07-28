@@ -1,8 +1,3 @@
-/**
- * Shared subprocess runner: spawn, collect stdout/stderr, honor an AbortSignal
- * (SIGTERM→SIGKILL), enforce a wall-clock timeout. Ported from c0's handoff
- * spawn.ts. Providers may optionally receive task text via stdin.
- */
 import { spawn } from "node:child_process";
 import type { CodingAgent } from "./create.js";
 
@@ -29,9 +24,7 @@ export interface SpawnOptions {
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   timeoutMs?: number;
-  /** Exact bytes to write before ending stdin; omitted providers keep stdin closed. */
   stdin?: string;
-  /** Called with each stdout chunk as it arrives (for live/streamed parsing). */
   onStdout?: (chunk: string) => void;
 }
 
@@ -58,7 +51,6 @@ export function runProcess(command: string, args: string[], opts: SpawnOptions):
     let aborted = false;
     let killTimer: NodeJS.Timeout | undefined;
 
-    /** Signal the child's process group (posix), falling back to the child alone. */
     const signalTree = (sig: NodeJS.Signals) => {
       if (grouped && child.pid) {
         try {
@@ -102,7 +94,7 @@ export function runProcess(command: string, args: string[], opts: SpawnOptions):
     child.stdout!.on("data", (d) => {
       const s = d.toString();
       if (opts.onStdout) {
-        opts.onStdout(s); // consumer parses live; keep only a bounded tail for errors
+        opts.onStdout(s);
         stdout = (stdout + s).slice(-STDOUT_TAIL_CAP);
       } else {
         stdout += s;
@@ -138,8 +130,6 @@ export function runProcess(command: string, args: string[], opts: SpawnOptions):
   });
 }
 
-/** Base env keys every allowlisted child gets — what a process needs to RUN
- *  (paths, locale, proxy/CA config), never the rest of the user's shell. */
 const BASE_ALLOW = [
   "PATH", "HOME", "SHELL", "USER", "LOGNAME", "TMPDIR", "TZ",
   "LANG", "LC_ALL", "LC_CTYPE", "TERM",
@@ -147,8 +137,6 @@ const BASE_ALLOW = [
   "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "XDG_CONFIG_HOME",
 ];
 
-/** Build an allowlisted child env: the base set plus extra exact keys and prefix
- *  families. */
 export function allowlistEnv(extra: { keys?: string[]; prefixes?: string[] } = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const k of [...BASE_ALLOW, ...(extra.keys ?? [])]) {

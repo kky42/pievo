@@ -252,7 +252,6 @@ export function statusDefinitionsFromLoop(loop: Loop): StatusDefinitions {
   return { keep: loop.statusKeep, noChange: loop.statusNoChange, block: loop.statusBlock };
 }
 
-/** The single owner-facing structured loop shape used by show/list JSON output. */
 export function canonicalLoopEnvelope(loop: Loop): CanonicalLoopConfig & { id: string } {
   return {
     id: loop.id,

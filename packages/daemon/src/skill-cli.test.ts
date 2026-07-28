@@ -1,10 +1,3 @@
-/**
- * `pievo skill status` — honest, per-agent install reporting. The install now
- * targets every agent in `SKILL_TARGET_AGENTS` (Claude Code + Codex today), so
- * status must report each one's user-scope location, derived from the same target
- * list as the installer so the two surfaces cannot drift.
- * Nothing here spawns npx or hits the network — status is pure filesystem reads.
- */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,7 +7,6 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { runSkill } from "./skill-cli.js";
 import { SKILL_TARGET_AGENTS } from "./skill-install.js";
 
-/** Capture stdout for the duration of one runSkill call. */
 async function captureStatus(): Promise<string> {
   let out = "";
   const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {

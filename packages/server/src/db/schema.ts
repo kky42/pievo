@@ -21,9 +21,6 @@ import { pgTable, text, integer, boolean, jsonb, index, uniqueIndex, timestamp, 
 import { CODING_AGENTS } from "../types.js";
 import type { PauseCause, ReportIncident, ReportIncidentDisposition } from "../types.js";
 
-// ---- shared value shapes ----
-
-/** Provider-neutral token usage reported by the daemon. */
 export interface RunUsage {
   inputTokens?: number;
   outputTokens?: number;
@@ -54,28 +51,19 @@ export type RunStatus = "keep" | "no-change" | "block";
  *  DERIVED from the `CODING_AGENTS` single source so it widens automatically. */
 export type CodingAgent = (typeof CODING_AGENTS)[number];
 
-// ---- machines: a teammate's daemon (machine == identity unit) ----
-
 export const machines = pgTable(
   "machines",
   {
-    /** m-sha256(deviceToken)[:16] */
     id: text("id").primaryKey(),
-    /** Owning user (Better Auth user.id) — creator attribution. */
     userId: text("user_id").notNull(),
-    /** Owning team — the scope machines and loops are listed by. */
     teamId: text("team_id").notNull(),
-    /** Friendly name (set AFTER the daemon connects; empty string = pending/unnamed). */
     name: text("name").notNull(),
-    /** Daemon-reported machine identity (captured on first connect). */
     hostname: text("hostname"),
     platform: text("platform"),
     arch: text("arch"),
-    /** Daemon package version reported on poll. Drives the web upgrade hint. */
     daemonVersion: text("daemon_version"),
     /** Breaking machine protocol last observed on poll. */
     daemonProtocol: integer("daemon_protocol"),
-    /** Hash of the device token (machine identity derives from the token). */
     tokenHash: text("token_hash").notNull(),
     /**
      * Plaintext device token. Stored so the UI can re-show the connect command
@@ -83,56 +71,40 @@ export const machines = pgTable(
      * for a self-hosted team tool where the DB is already the trust root).
      */
     token: text("token"),
-    /** Workdir allowlist the daemon enforces as cwd jail; null/[] = unrestricted. */
     roots: jsonb("roots").$type<string[]>(),
-    /** Last WS contact (ISO). */
     lastSeen: text("last_seen"),
-    /** Live WS connection state. */
     online: boolean("online").notNull().default(false),
     createdAt: text("created_at").notNull(),
   },
   (t) => [index("machines_user_idx").on(t.userId), index("machines_team_idx").on(t.teamId)],
 );
 
-// ---- loops: a scheduled behavior bound to one machine ----
-
 export const loops = pgTable(
   "loops",
   {
     id: text("id").primaryKey(),
-    /** Owning user (creator attribution). */
     userId: text("user_id").notNull(),
-    /** Owning team — the scope loops are listed and authorized by. */
     teamId: text("team_id").notNull(),
     /** Execution machine (set at creation; no cross-machine fallback). */
     machineId: text("machine_id").notNull(),
     name: text("name").notNull(),
-    /** The user's complete runtime prompt. Canonical writes always provide it. */
     prompt: text("prompt").notNull(),
-    /** User-authored meanings appended to every delivered prompt. */
     statusKeep: text("status_keep").notNull(),
     statusNoChange: text("status_no_change").notNull(),
     statusBlock: text("status_block").notNull(),
     /** Exact workdir-relative artifact paths collected by the daemon after provider exit. */
     artifacts: jsonb("artifacts").$type<string[]>().notNull().default([]),
     cron: text("cron").notNull(),
-    /** Cadence facts stay denormalized internally; external writes use LoopSchedule. */
     scheduleMode: text("schedule_mode", { enum: ["cron", "continuous"] }).notNull(),
     /** Cron-only overlap behavior. Continuous runs never overlap. */
     cronOverlap: text("cron_overlap", { enum: ["skip", "queue-one"] }).notNull(),
-    /** Delay used when a done/error terminal restores continuous cadence. */
     continuousDelayMinutes: integer("continuous_delay_minutes").notNull(),
-    /** IANA tz for cron rows; null for continuous rows. */
     timezone: text("timezone"),
-    /** Absolute project dir ON THE MACHINE the agent runs in (cwd). */
     workdir: text("workdir").notNull(),
     /** Durable Stop-before-delete marker. A deleting loop is never claimable. */
     deleteRequestedAt: timestamp("delete_requested_at", { withTimezone: true, mode: "string" }),
-    /** Diagnostic annotation for a paused loop. */
     pauseCause: jsonb("pause_cause").$type<PauseCause>(),
-    /** Optional provider model id. Null delegates model selection to the coding-agent CLI. */
     model: text("model"),
-    /** Optional provider reasoning-effort value. Null delegates to the coding-agent CLI. */
     reasoningEffort: text("reasoning_effort"),
     /** Coding agent this loop is BOUND TO and EXECUTED with: the daemon's
      *  `buildAgentSpawn` branches on this value (`claude-code` → claude,
@@ -141,13 +113,11 @@ export const loops = pgTable(
      *  both a TypeScript enum and a database CHECK constraint. */
     agent: text("agent", { enum: CODING_AGENTS }).notNull(),
     enabled: boolean("enabled").notNull().default(true),
-    /** One-shot override, independent of the recurring cadence (ISO). */
     nextRunAt: text("next_run_at"),
     /** The next recurring cadence occurrence not yet materialized as a run. Cron
      * advances this fact after each due occurrence; continuous clears it on due
      * and restores it from a successful/error terminal. */
     nextCadenceAt: text("next_cadence_at"),
-    /** Last history number assigned under this loop's row lock. */
     lastRunIndex: integer("last_run_index").notNull().default(0),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
@@ -163,45 +133,34 @@ export const loops = pgTable(
   ],
 );
 
-// ---- runs: one execution record (own table, not embedded) ----
-
 export const runs = pgTable(
   "runs",
   {
     id: text("id").primaryKey(),
     loopId: text("loop_id").notNull(),
     machineId: text("machine_id").notNull(),
-    /** Execution profile captured atomically at claim. Pending/unclaimed rows are null. */
     agent: text("agent", { enum: CODING_AGENTS }),
     model: text("model"),
     reasoningEffort: text("reasoning_effort"),
-    /** 1-based execution/terminal order, assigned at claim or unclaimed terminalization. */
     runIndex: integer("run_index"),
     phase: text("phase", { enum: ["pending", "running", "done", "error", "canceled"] }).notNull(),
     /** Durable queue authority. It only promotes system→owner; diagnostic trigger
      * reasons, if added later, must never drive lifecycle state. */
     requestedBy: text("requested_by", { enum: ["owner", "system"] }).notNull().default("system"),
-    /** Current phase/event timestamp. */
     ts: text("ts").notNull(),
-    /** Immutable queue/history age anchor plus mutation timestamp. */
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP::text`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP::text`),
-    /** Canonical report status. */
     status: text("status", { enum: ["keep", "no-change", "block"] }),
     message: text("message"),
     durationMs: integer("duration_ms"),
     exitCode: integer("exit_code"),
     finalText: text("final_text"),
     error: text("error"),
-    /** Provider session id on the machine, retained for owner-side continuation. */
     sessionId: text("session_id"),
-    /** Provider-neutral token usage. Dollar cost is deliberately not stored. */
     usage: jsonb("usage").$type<RunUsage>(),
     /** Monotonic cancellation intent. Running becomes canceled only on daemon report. */
     cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true, mode: "string" }),
-    /** Last poll where this machine declared the run active. Timeout authority. */
     heartbeatAt: text("heartbeat_at"),
-    /** Latest rejected terminal-report diagnosis, if any. */
     reportIncident: jsonb("report_incident").$type<ReportIncident>(),
   },
   (t) => [
@@ -221,8 +180,6 @@ export const runs = pgTable(
   ],
 );
 
-// ---- run_leases: the per-run credential (durable across deploys) ----
-//
 // A RUN LEASE is minted per delivery and authorizes the report callback.
 // Only the SHA-256 digest of the wire token is stored; plaintext is never needed
 // again. Lifecycle: `active` (expiresAt null = no expiry; the inactivity sweep
@@ -233,7 +190,6 @@ export const runs = pgTable(
 export const runLeases = pgTable(
   "run_leases",
   {
-    /** sha256 hex of the full `rk_…` wire token. */
     tokenHash: text("token_hash").primaryKey(),
     runId: text("run_id").notNull(),
     loopId: text("loop_id").notNull(),
@@ -250,8 +206,6 @@ export const runLeases = pgTable(
     check("run_leases_state_check", sql`${t.state} IN ('active', 'terminal-grace', 'reconciliation-only', 'retired')`),
   ],
 );
-
-// ---- durable terminal report receipts (survive loop deletion) ----
 
 export const runReportReceipts = pgTable(
   "run_report_receipts",
@@ -287,8 +241,6 @@ export const terminalReportIncidents = pgTable(
   ],
 );
 
-// ---- connect_keys: a minted connect-key's owner + team binding (durable) ----
-//
 // One row per minted connect-key/claim token, keyed by the machine id DERIVED
 // from it (`m-sha256(token)[:16]`) so both consumers resolve without storing the
 // key itself: the self-register owner lookup (by machine id) and the createLoop
@@ -298,22 +250,16 @@ export const terminalReportIncidents = pgTable(
 // Rows expire after CONNECT_KEY_TTL_MS (lazy on read + pruned on write).
 
 export const connectKeys = pgTable("connect_keys", {
-  /** m-sha256(connectKey)[:16] — the machine id this key self-registers as. */
   machineId: text("machine_id").primaryKey(),
-  /** The user who minted the key (the authenticated dashboard session). */
   userId: text("user_id").notNull(),
-  /** The validated active team the key was minted under. */
   teamId: text("team_id").notNull(),
   /** Mint time (ISO) — drives the TTL. */
   mintedAt: text("minted_at").notNull(),
 });
 
-// ---- teams: the ownership/scope unit (every user gets a personal team) ----
-
 export const teams = pgTable("teams", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
-  /** The user whose personal team this is (null for the open-mode shared team). */
   ownerUserId: text("owner_user_id"),
   createdAt: text("created_at").notNull(),
 });
@@ -334,8 +280,6 @@ export const teamMembers = pgTable(
   ],
 );
 
-// ---- team_invites: a short-lived, single-use link a signed-in recipient redeems ----
-//
 // An owner shares `/invite/<token>` and a signed-in recipient redeems membership.
 // Single-use (`redeemedAt`
 // stamps it spent), short TTL (`expiresAt`), and the granted `role` is baked in
@@ -346,18 +290,13 @@ export const teamMembers = pgTable(
 export const teamInvites = pgTable(
   "team_invites",
   {
-    /** The wire token the recipient presents (`/invite/<token>`). */
     token: text("token").primaryKey(),
     teamId: text("team_id").notNull(),
-    /** Role granted on redeem (capped at the inviter's role at mint time). */
     role: text("role", { enum: ["owner", "member"] }).notNull().default("member"),
-    /** The owner who minted the invite (attribution). */
     invitedByUserId: text("invited_by_user_id").notNull(),
-    /** When the invite lapses (ISO). A redeem past this is refused. */
     expiresAt: text("expires_at").notNull(),
     /** Single-use stamp: set on redeem so the same link can't be reused. */
     redeemedAt: text("redeemed_at"),
-    /** The user who redeemed it (attribution). */
     redeemedByUserId: text("redeemed_by_user_id"),
     createdAt: text("created_at").notNull(),
   },
@@ -367,8 +306,6 @@ export const teamInvites = pgTable(
   ],
 );
 
-// ---- exact artifacts: content-addressed loop files ----
-//
 // After a run, the daemon reads only configured exact paths. Blob bytes live in
 // local or configured object storage keyed by sha256, not in the business DB.
 // These tables hold the deduplicated metadata and each loop's current manifest.
@@ -378,7 +315,6 @@ export const teamInvites = pgTable(
  * the byte store under the hash; this row records verified byte presence and size.
  */
 export const blobs = pgTable("blobs", {
-  /** sha256 hex of the bytes (the byte-store key). */
   hash: text("hash").primaryKey(),
   size: integer("size").notNull(),
   createdAt: text("created_at").notNull(),
@@ -397,14 +333,12 @@ export const artifactFiles = pgTable(
     loopId: text("loop_id").notNull(),
     /** Normalized workdir-relative path (never absolute or escaping the workdir). */
     path: text("path").notNull(),
-    /** → blobs.hash. Null when deleted or oversize (no bytes stored). */
     hash: text("hash"),
     size: integer("size"),
     /** Bytes contain a NUL (set even for oversize metadata-only files). */
     binary: boolean("binary").notNull().default(false),
     /** File exceeds the per-file byte cap → metadata-only (path + size), no blob. */
     oversize: boolean("oversize").notNull().default(false),
-    /** Tombstone: the file vanished from the loop's manifest (kept for future diffs). */
     deleted: boolean("deleted").notNull().default(false),
     updatedAt: text("updated_at").notNull(),
   },
@@ -430,7 +364,6 @@ export interface SnapshotEntry {
   oversize: boolean;
 }
 
-/** A loop's full artifact set at a run boundary. */
 export type SnapshotManifest = Record<string, SnapshotEntry>;
 
 /**

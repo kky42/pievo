@@ -1,13 +1,3 @@
-/**
- * `pievo new` — create a loop from a config file the agent wrote.
- *
- * The JSON object is the canonical loop envelope: name, exclusive schedule
- * union, workdir, required agent, optional provider settings, prompt, three
- * status definitions, exact artifact paths, and enabled. This command adds only
- * the connect claim, idempotency key, and machine authentication, then posts
- * through `/api/machine/cli`. The server stays the sole validator; we pre-check
- * obvious local mistakes for a clear message.
- */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 
@@ -63,10 +53,8 @@ export function idempotencyKey(token: string, resolvedBody: Record<string, unkno
     .digest("hex");
 }
 
-/** The coding agents Pievo can record a loop against (TS-only; cheap to widen). */
 export type CodingAgent = "claude-code" | "codex" | "pi";
 
-/** Coerce the required config.agent field to one supported agent. */
 export function coerceAgent(v: unknown): CodingAgent | null {
   return v === "claude-code" || v === "codex" || v === "pi" ? v : null;
 }
@@ -84,14 +72,12 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     const arg = args[i]!;
     if (arg === "--dry-run") continue;
     if (valueFlags.has(arg)) {
-      i++; // value validation below gives the flag-specific usage error
+      i++;
       continue;
     }
     process.stderr.write(`pievo: unknown argument ${arg} — try \`pievo new --help\`\n`);
     return 2;
   }
-  // The config is passed inline as `--json '<obj>'` (or `--json -` for stdin).
-  // `--dry-run` validates and previews without creating anything.
   const jsonArg = flag(args, "json");
   const dryRun = args.includes("--dry-run");
   if (jsonArg === undefined) {
@@ -108,7 +94,6 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
 
   let raw: string;
   try {
-    // `--json -` reads the config from stdin (fd 0) — handy for a large inline object.
     raw = jsonArg === "-" ? fs.readFileSync(0, "utf8") : jsonArg;
   } catch (err) {
     process.stderr.write(`pievo: cannot read config from stdin: ${err instanceof Error ? err.message : String(err)}\n`);
@@ -155,8 +140,6 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   body.idempotencyKey = idempotencyKey(token, body);
 
   try {
-    // The whole config travels as `new --json <config>`. The connection was
-    // pre-checked above, so postCli receives the resolved token and server.
     const r = await postCli(["new", "--json", JSON.stringify(body)], {
       fetchImpl,
       server,

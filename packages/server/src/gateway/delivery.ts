@@ -3,7 +3,6 @@ import { buildRunTask } from "./prompt.js";
 
 export interface Delivery {
   runId: string;
-  /** Internal history ordering fact. */
   runIndex: number;
   runToken: string;
   loop: {

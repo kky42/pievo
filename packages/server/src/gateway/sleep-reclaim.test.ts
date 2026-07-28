@@ -1,14 +1,3 @@
-/**
- * Sleep/wake reclaim reconciliation. Seeds backdated liveness state and drives the
- * real gateway sweep and report paths:
- *   (a) a running run reclaimed as timed-out, then a late SUCCESS wake-report →
- *       the run ends `done` with its message preserved and the false failure gone;
- *   (b) a pending run on an unreachable machine is DEFERRED (held claimable for
- *       catch-up), never failed and never alerted;
- *   (c) a long (>20min) run with a FRESH heartbeat survives the sweep.
- * Plus: a late FAILURE report records the real error honestly, and only ONE late
- * report is honored (single-shot).
- */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -45,7 +34,6 @@ beforeEach(async () => {
   await (db.client as any).exec("DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
-/** A recording notifier: captures every push instead of hitting a channel. */
 function gateway(scheduler?: any) {
   const gw = new gatewayMod.MachineGateway(
     scheduler ?? {
@@ -70,7 +58,6 @@ function gateway(scheduler?: any) {
 const isoAgo = (ms: number) => new Date(Date.now() - ms).toISOString();
 const MIN = 60_000;
 
-/** Seed an online machine (with a backdated last poll) + a loop. */
 async function seedMachineLoop(lastSeenAgoMs: number) {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
@@ -82,7 +69,6 @@ async function seedMachineLoop(lastSeenAgoMs: number) {
 
 test("(a) a running run reclaimed while asleep is reconciled to done by the late wake-report — message preserved", async () => {
   const gw = gateway();
-  // Laptop slept mid-run: no heartbeat for 21 min, run was claimed 21 min ago.
   const { machineId, loop } = (await seedMachineLoop(21 * MIN));
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: isoAgo(21 * MIN) }));
   const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId });
@@ -90,16 +76,12 @@ test("(a) a running run reclaimed while asleep is reconciled to done by the late
   // terminal report only contributes provider/process telemetry.
   await store.updateRun(run.id, { status: "keep", message: "opened PR #42" });
 
-  // Sweep reclaims the stuck run and records its lifecycle facts.
   (await gw.sweep());
   const swept = (await store.getRun(run.id))!;
   expect(swept.phase).toBe("error");
   expect(swept.error).toBe("machine timed out / disconnected");
-  // The lease was NOT retired (terminalized to grace for the wake-report) — it still
-  // resolves, now in terminal-grace.
   expect((await tokens.resolveLease(rt))?.state).toBe("terminal-grace");
 
-  // Laptop wakes: claude finished successfully, daemon reports late.
   const res = (await gw.report(rt, { result: "success" as const, durationMs: 1234, sessionId: "sess-1", finalText: "opened PR #42" }));
   expect(res.status).toBe(200);
   const final = (await store.getRun(run.id))!;
@@ -107,9 +89,6 @@ test("(a) a running run reclaimed while asleep is reconciled to done by the late
   expect(final.error).toBeNull();
   expect(final.message).toBe("opened PR #42");
   expect(final.durationMs).toBe(1234);
-  // The false failure no longer counts against the streak (derived from rows).
-  // Reconciliation updates only the durable run and cadence facts.
-  // Single-shot: the lease is now retired — a second late report is rejected.
   expect(await tokens.resolveLease(rt)).toBeUndefined();
   expect((await gw.report(rt, { result: "success" as const, finalText: "again" })).status).toBe(401);
 });
@@ -214,7 +193,7 @@ test("(a') a late FAILURE report records the real error honestly", async () => {
   expect(res.status).toBe(200);
   const final = (await store.getRun(run.id))!;
   expect(final.phase).toBe("error");
-  expect(final.error).toBe("claude reported an error"); // real reason replaces the generic reclaim reason
+  expect(final.error).toBe("claude reported an error");
 });
 
 test("a cancellation report that races timeout reclaim remains canceled", async () => {
@@ -243,7 +222,6 @@ test("(b) a pending run on an unreachable machine is deferred and remains claima
   const held = (await store.getRun(run.id))!;
   expect(held.phase).toBe("pending");
   expect(held.error).toBeNull();
-  // The machine itself was flipped offline by the sweep.
   expect((await store.getMachine(machineId))!.online).toBe(false);
 });
 
@@ -265,13 +243,12 @@ test("a ready pending row gets a fresh claim window after a 21-minute blocker en
 
 test("(c) a long-running run with a fresh heartbeat survives the sweep", async () => {
   const gw = gateway();
-  const { machineId, loop } = (await seedMachineLoop(5_000)); // machine polled 5s ago (online)
-  // Claimed 30 min ago, but heartbeat stamped 10s ago — still actively working.
+  const { machineId, loop } = (await seedMachineLoop(5_000));
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: isoAgo(30 * MIN) }));
   (await store.updateRun(run.id, { heartbeatAt: isoAgo(10_000) }));
 
   (await gw.sweep());
-  expect((await store.getRun(run.id))!.phase).toBe("running"); // inactivity timeout keyed off the fresh stamp
+  expect((await store.getRun(run.id))!.phase).toBe("running");
 });
 
 test("run-token CLI verbs are refused for a reclaimed run (only the final report reconciles)", async () => {
@@ -281,7 +258,6 @@ test("run-token CLI verbs are refused for a reclaimed run (only the final report
   const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId });
 
   (await gw.sweep());
-  // The CLI verbs live on CliGateway (over the same core instance, like boot).
   const out = await new cliMod.CliGateway(gw).cli(rt, ["reschedule", "1h"]);
   expect(out.status).toBe(409);
   expect(String((out.body as any).text)).toMatch(/terminal|no longer accepts/i);

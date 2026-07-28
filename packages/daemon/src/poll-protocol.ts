@@ -1,4 +1,3 @@
-/** Strict runtime decoder for the protocol-v4 poll response. */
 import path from "node:path";
 
 import type { Delivery } from "./runner.js";

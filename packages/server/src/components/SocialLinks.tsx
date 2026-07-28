@@ -1,4 +1,3 @@
-/** The project's source repository, shared by public UI surfaces. */
 export const GITHUB_URL = 'https://github.com/kky42/pievo'
 
 export function GitHubIcon({ className }: { className?: string }) {

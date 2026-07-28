@@ -7,8 +7,6 @@ import { CODING_AGENTS, coerceCodingAgent } from '../types.js'
 import { validateLoopEdit } from '../gateway/loopConfig.js'
 import { testStore, type TestStore } from '../../test/store.js'
 
-/** The shared coding-agent enum and canonical web/CLI edit validation. */
-
 let tmp: string
 let store: TestStore
 

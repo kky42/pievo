@@ -29,11 +29,8 @@ type Logger = typeof logger;
 export interface DbWatchdogDeps {
   /** Runs the liveness query (e.g. `db.execute(sql\`select 1\`)`). May hang. */
   probe: () => Promise<unknown>;
-  /** Terminates the process (real: `process.exit`; tests: a spy). */
   exit: (code: number) => void;
-  /** Hard per-ping deadline in ms — a ping exceeding it is a failure. */
   timeoutMs: number;
-  /** Consecutive failures before exit. A healthy ping resets the streak. */
   failureThreshold: number;
   /** Injectable timer for the deadline race (default `setTimeout`). */
   setTimer?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
@@ -65,9 +62,7 @@ function withDeadline<T>(
 }
 
 export interface DbWatchdog {
-  /** Run one probe cycle; updates the failure streak and exits at the threshold. */
   tick: () => Promise<void>;
-  /** Current consecutive-failure count (test/observability). */
   failures: () => number;
 }
 

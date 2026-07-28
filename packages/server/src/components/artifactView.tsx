@@ -24,7 +24,6 @@ import { MarkdownView } from './MarkdownView'
  * no synced bytes to render, so it says so rather than showing an empty pane.
  */
 
-/** A small monospace caption strip above a file's content (path · meta [· action]). */
 export function ViewerHead({
   path,
   meta,
@@ -43,7 +42,6 @@ export function ViewerHead({
   )
 }
 
-/** The binary / oversize body - download affordance or the metadata-only note. */
 export function BinaryNotice({
   loopId,
   path,
@@ -75,8 +73,6 @@ export function BinaryNotice({
 
 type ViewMode = 'preview' | 'source'
 
-/** The viewer's action strip: a Preview/Source toggle (renderable types only)
- *  plus an always-present Download. Sits just under the content head. */
 function ViewerActions({
   loopId,
   path,
@@ -140,8 +136,6 @@ function HtmlPreview({ html }: { html: string }) {
   )
 }
 
-/** An image artifact, rendered from the hardened inline route (never inlined
- *  into the app DOM). Falls back to a download prompt if the bytes won't load. */
 function ImageView({ loopId, file }: { loopId: string; file: ArtifactSummary }) {
   const [failed, setFailed] = useState(false)
   return (
@@ -175,8 +169,6 @@ function ImageView({ loopId, file }: { loopId: string; file: ArtifactSummary }) 
 
 type Loaded = ArtifactContent | { loading: true }
 
-/** A text-bearing artifact (html / markdown / plain text): fetch the bytes, then
- *  render per its kind with a Preview/Source toggle (html + markdown) + download. */
 function TextArtifactView({ loopId, file, kind }: { loopId: string; file: ArtifactSummary; kind: ArtifactKind }) {
   const [loaded, setLoaded] = useState<Loaded>({ loading: true })
   const [mode, setMode] = useState<ViewMode>('preview')
@@ -193,7 +185,6 @@ function TextArtifactView({ loopId, file, kind }: { loopId: string; file: Artifa
   }, [loopId, file.path, file.updatedAt])
 
   if ('loading' in loaded) return <div className="px-5 py-6 text-body text-disabled">Loading…</div>
-  // A pending/absent-blob text file (mid-sync) or an unexpected binary marker.
   if ('binary' in loaded) return <BinaryNotice loopId={loopId} path={file.path} oversize={loaded.oversize} />
   if ('error' in loaded) return <div className="px-5 py-6 text-body text-accent">Couldn't load this file - {loaded.error}</div>
 
@@ -223,23 +214,15 @@ function TextArtifactView({ loopId, file, kind }: { loopId: string; file: Artifa
   )
 }
 
-/**
- * One artifact's content body, dispatched by display kind (see `artifactKind`).
- * Oversize → metadata-only note (no bytes); image → hardened <img>; other binary
- * → download; text-bearing → the fetch-and-render viewer.
- */
 export function ArtifactBody({ loopId, file }: { loopId: string; file: ArtifactSummary }) {
   const kind = artifactKind(file.path)
 
-  // Oversize is metadata-only regardless of type: no synced bytes to render.
   if (file.oversize) return <BinaryNotice loopId={loopId} path={file.path} oversize />
   // Images (incl. SVG) render via the inline route, never inlined into the DOM.
   // Key by path AND updatedAt so a new file resets the inner state (failed) and a
   // re-synced same-path image (no-store, unchanged src URL) remounts to refetch.
   if (kind === 'image')
     return <ImageView key={`${file.path}:${file.updatedAt ?? ''}`} loopId={loopId} file={file} />
-  // A genuinely binary non-image (NUL bytes, no renderer) → download only.
   if (file.binary) return <BinaryNotice loopId={loopId} path={file.path} oversize={false} />
-  // html / markdown / plain text.
   return <TextArtifactView key={file.path} loopId={loopId} file={file} kind={kind} />
 }

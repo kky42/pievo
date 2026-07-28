@@ -5,20 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 import { testStore, type TestStore } from '../../test/store.js'
 
-/**
- * End-to-end proof of the Phase-2 team-URL intent at the data boundary the
- * dashboard tabs render: for ONE signed-in member of teams A and B, the
- * explicit-`teamId` resolution returns DIFFERENT, correctly-scoped loop sets for
- * `/t/A` vs `/t/B` SIMULTANEOUSLY — the explicit route team beats the last-used
- * cookie, and a non-member team is rejected enumeration-safe (indistinguishable
- * from a missing loop).
- *
- * The `/t/<id>` server fns (`listLoops`/`canViewTeam`/`getDefaultTeam`) are thin
- * `createServerFn` wrappers around exactly this composition — `requestScope(teamId)`
- * then a `store` read — so this drives the SAME code path they run, over a real
- * pglite store with the Better Auth session + cookie mocked (the auth.test.ts
- * harness). Each block is annotated with the wrapper it mirrors.
- */
+// Explicit route scope must beat the last-used cookie without revealing non-member teams.
 
 const reqHolder = { headers: new Headers() }
 vi.mock('@tanstack/react-start/server', () => ({
@@ -31,9 +18,9 @@ let store: TestStore
 let authMod: typeof import('../auth.js')
 
 const MEMBER = 'u_member'
-let TEAM_A = '' // MEMBER's personal team (owner)
-const TEAM_B = 'team-b' // MEMBER joined as a plain member
-const TEAM_C = 'team-c' // MEMBER is NOT a member
+let TEAM_A = ''
+const TEAM_B = 'team-b'
+const TEAM_C = 'team-c'
 
 function signInAs(id: string | null, email: string | null) {
   vi.spyOn(authMod.auth.api, 'getSession').mockResolvedValue(
@@ -45,13 +32,10 @@ function setCookie(teamId: string | null) {
   reqHolder.headers = new Headers(teamId ? { cookie: `pievo.team=${teamId}` } : {})
 }
 
-/** Seed a loop into a team so the two tabs have distinguishable content. */
 async function seedLoop(teamId: string, name: string) {
   await store.createLoop({ workdir: "/work", userId: MEMBER, teamId, machineId: 'm_x', name, cron: '0 6 * * *' })
 }
 
-/** listLoops' body, verbatim: resolve the explicit team, then list that team's
- *  loops. Returns loop names for readable evidence. */
 async function listLoopsFor(explicitTeam?: string): Promise<string[]> {
   const { enforce, userId, teamId: active } = await authMod.requestScope(explicitTeam)
   if (enforce && !userId) return []
@@ -59,7 +43,6 @@ async function listLoopsFor(explicitTeam?: string): Promise<string[]> {
   return loops.map((l) => l.name).sort()
 }
 
-/** canViewTeam's body, verbatim: the `/t/<id>` loader membership gate. */
 async function canViewTeam(explicitTeam: string): Promise<boolean> {
   const scope = await authMod.requestScope(explicitTeam)
   if (!scope.enforce) return true
@@ -67,7 +50,6 @@ async function canViewTeam(explicitTeam: string): Promise<boolean> {
   return scope.teamId === explicitTeam
 }
 
-/** getDefaultTeam's body, verbatim: the bare-"/" redirect target. */
 async function getDefaultTeam(): Promise<string> {
   const scope = await authMod.requestScope()
   return scope.teamId
@@ -115,23 +97,20 @@ beforeEach(() => {
 describe('two tabs on /t/A and /t/B render different teams at once (explicit teamId)', () => {
   it('listLoops is scoped by the explicit route team, independent of the cookie', async () => {
     signInAs(MEMBER, 'member@example.com')
-    // The last-used cookie points at team A, but the /t/B tab passes B explicitly.
     setCookie(TEAM_A)
 
     const namesA = await listLoopsFor(TEAM_A)
     const namesB = await listLoopsFor(TEAM_B)
 
-
     expect(namesA).toEqual(['Alpha loop (team A)'])
-    expect(namesB).toEqual(['Bravo loop (team B)']) // cookie=A did NOT leak into the /t/B tab
+    expect(namesB).toEqual(['Bravo loop (team B)'])
   })
 
   it('canViewTeam gates the /t/<id> loader: member ok, non-member rejected (no leak)', async () => {
     signInAs(MEMBER, 'member@example.com')
     const okA = await canViewTeam(TEAM_A)
     const okB = await canViewTeam(TEAM_B)
-    const okC = await canViewTeam(TEAM_C) // never joined
-
+    const okC = await canViewTeam(TEAM_C)
 
     expect(okA).toBe(true)
     expect(okB).toBe(true)
@@ -140,7 +119,7 @@ describe('two tabs on /t/A and /t/B render different teams at once (explicit tea
 
   it('getDefaultTeam backs the bare-/ redirect (last-used cookie, validated)', async () => {
     signInAs(MEMBER, 'member@example.com')
-    setCookie(TEAM_B) // last used team B
+    setCookie(TEAM_B)
     const target = await getDefaultTeam()
     expect(target).toBe(TEAM_B)
   })

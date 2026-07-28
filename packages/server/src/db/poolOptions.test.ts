@@ -45,9 +45,7 @@ describe("poolOptionsFor", () => {
   });
 
   it("honors the explicit transactionPooler override in both directions", () => {
-    // Force transaction mode on a session-looking URL (nonstandard-port pooler).
     expect(poolOptionsFor(SESSION_URL, true).prepare).toBe(false);
-    // Force session mode on a :6543-looking URL.
     expect(poolOptionsFor(TXN_URL, false).prepare).toBe(true);
   });
 

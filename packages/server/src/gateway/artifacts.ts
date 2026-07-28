@@ -1,4 +1,3 @@
-/** Server-side artifact-sync helpers: path safety, byte caps, and hashing. */
 import { createHash } from "node:crypto";
 
 /** Per-file byte cap. At or under ⇒ bytes sync; over ⇒ metadata-only (no bytes). */
@@ -31,7 +30,6 @@ export function sha256Buf(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-/** A 64-char lowercase hex sha256. */
 export function isValidHash(hash: unknown): hash is string {
   return typeof hash === "string" && /^[0-9a-f]{64}$/.test(hash);
 }

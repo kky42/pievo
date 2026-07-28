@@ -1,18 +1,8 @@
-/**
- * `buildPatch` / `parseFlags` — the `pievo edit` canonical JSON patch.
- * Proves the whole envelope travels via a single `--json '<obj>'`, and any
- * unknown flag fails loudly with "unknown flag … try --help". The server is the
- * sole validator, so these tests only assert the SHAPE the daemon sends.
- */
 import { describe, expect, test } from "vitest";
 
 import { buildPatch, type InteractiveDeps, parseFlags, runInteractive } from "./interactive.js";
 
 
-/**
- * `runInteractive` fetch path with the token/server/fetch INJECTED so nothing touches
- * ~/.pievo. Proves `loops`/`edit` use canonical `/api/machine/cli` dispatch.
- */
 function capture(extra: InteractiveDeps = {}): InteractiveDeps & { stdout: () => string; stderr: () => string } {
   let out = "";
   let err = "";
@@ -27,7 +17,6 @@ function capture(extra: InteractiveDeps = {}): InteractiveDeps & { stdout: () =>
   };
 }
 
-/** A fetch stub recording each {url, method, argv?, body?}; unified when argv present. */
 function stub(handler: (req: { url: string; method: string; argv: string[]; parsedBody: any }) => { ok: boolean; status?: number; body: unknown }) {
   const calls: Array<{ url: string; method: string; argv: string[]; parsedBody: any }> = [];
   const fetchFn = (async (url: string, init: any) => {
@@ -65,7 +54,6 @@ describe("runInteractive — text sink (new server renders TOON in `text`)", () 
     expect(await runInteractive(["loops"], cap)).toBe(0);
     expect(calls[0]!.url).toBe("https://srv.test/api/machine/cli");
     expect(calls[0]!.argv).toEqual(["loops"]);
-    // The daemon is a dumb sink: it prints the server's `text`, not its own render.
     expect(cap.stdout()).toBe(toon + "\n");
   });
 
@@ -121,7 +109,7 @@ describe("runInteractive — loops flag forwarding", () => {
     const cap = capture({ fetchImpl: fetchFn });
     expect(await runInteractive(["loops", "--json"], cap)).toBe(0);
     expect(calls[0]!.argv).toEqual(["loops", "--json"]);
-    expect(cap.stdout().trimStart()[0]).toBe("["); // real JSON, not TOON
+    expect(cap.stdout().trimStart()[0]).toBe("[");
   });
 
   test("extra positional arguments on loops are rejected before fetch", async () => {

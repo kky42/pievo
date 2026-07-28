@@ -5,10 +5,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 import { testStore, type TestStore } from '../../test/store.js'
 
-/** Team CRUD integration coverage over PGlite: lifecycle, loop deletion guards,
- * personal-team rules, owner invariants, authorization, invites, and explicit
- * cross-team management. */
-
 let tmp: string
 let db: typeof import('../db/index.js')
 let store: TestStore
@@ -54,7 +50,6 @@ beforeAll(async () => {
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
 
-/** A fresh non-personal team owned by Alice, for tests that mutate membership. */
 async function freshTeam(name = 'Growth Squad'): Promise<string> {
   const r = await team.createTeam(ALICE, name)
   expect(r.ok).toBe(true)
@@ -93,7 +88,6 @@ describe('create / rename / delete lifecycle', () => {
     const blocked = await team.deleteTeam(ALICE, id)
     expect(blocked.ok).toBe(false)
     expect((blocked as { error: string }).error).toMatch(/still owns 1 loop/)
-    // Move/delete the loop, then delete succeeds.
     const loops = await store.listLoops(id)
     await store.deleteLoop(loops[0]!.id)
     const ok = await team.deleteTeam(ALICE, id)
@@ -109,7 +103,6 @@ describe('create / rename / delete lifecycle', () => {
     await team.deleteTeam(ALICE, id)
     expect(await store.getTeamMember(id, BOB)).toBeUndefined()
     expect((await store.listPendingInvites(id)).length).toBe(0)
-    // Bob's own personal team is untouched.
     expect(await store.getTeam(store.teamIdForUser(BOB))).toBeDefined()
   })
 })
@@ -145,12 +138,10 @@ describe('last-owner guard + multi-owner', () => {
     expect(await team.setMemberRole(ALICE, id, ALICE, 'member')).toMatchObject({ ok: false })
     expect(await team.leaveTeam(ALICE, id)).toMatchObject({ ok: false })
 
-    // Promote Bob to owner → now multi-owner, so Alice may leave.
     expect((await team.setMemberRole(ALICE, id, BOB, 'owner')).ok).toBe(true)
     expect(await store.countTeamOwners(id)).toBe(2)
     expect((await team.leaveTeam(ALICE, id)).ok).toBe(true)
     expect(await store.getTeamMember(id, ALICE)).toBeUndefined()
-    // Bob is now the last owner and is protected again.
     expect(await team.leaveTeam(BOB, id)).toMatchObject({ ok: false })
   })
 
@@ -181,7 +172,7 @@ describe('member management authorization', () => {
 describe('add-by-email fast path', () => {
   it('adds an existing account; rejects unknown email and double-add', async () => {
     const id = await freshTeam('Emails')
-    const ok = await team.addMemberByEmail(ALICE, id, 'BOB@example.com', 'member') // case-insensitive
+    const ok = await team.addMemberByEmail(ALICE, id, 'BOB@example.com', 'member')
     expect(ok.ok).toBe(true)
     expect(await store.getTeamMember(id, BOB)).toBeDefined()
 
@@ -205,7 +196,6 @@ describe('invite links', () => {
     expect(redeemed).toMatchObject({ ok: true, teamId: id, alreadyMember: false })
     expect((await store.getTeamMember(id, CAROL))?.role).toBe('owner')
 
-    // Single-use: a second redeem (even by a different user) is refused.
     const reuse = await team.redeemInvite(BOB, token, Date.now())
     expect(reuse).toEqual({ ok: false, error: 'This invite link has already been used.' })
     expect(await store.getTeamMember(id, BOB)).toBeUndefined()
@@ -228,9 +218,7 @@ describe('invite links', () => {
     const token = (minted as { ok: true; token: string }).token
     const redeemed = await team.redeemInvite(CAROL, token, Date.now())
     expect(redeemed).toMatchObject({ ok: true, alreadyMember: true })
-    // Role is NOT escalated by an already-member redeem.
     expect((await store.getTeamMember(id, CAROL))?.role).toBe('member')
-    // Link is spent.
     expect((await store.getInvite(token))?.redeemedAt).toBeTruthy()
   })
 
@@ -245,7 +233,6 @@ describe('invite links', () => {
     expect((await store.listPendingInvites(id)).length).toBe(1)
     expect((await team.revokeInvite(ALICE, id, token)).ok).toBe(true)
     expect((await store.listPendingInvites(id)).length).toBe(0)
-    // A revoked (deleted) invite no longer redeems.
     expect(await team.redeemInvite(CAROL, token, Date.now())).toMatchObject({ ok: false })
   })
 })
@@ -266,7 +253,6 @@ describe('explicit-teamId cross-team management', () => {
     // consults the EXPLICIT teamId's membership.
     expect((await team.renameTeam(ALICE, teamB, 'Team B Renamed')).ok).toBe(true)
     expect((await team.getTeamDetail(ALICE, teamB))?.name).toBe('Team B Renamed')
-    // A is unaffected.
     expect((await team.getTeamDetail(ALICE, teamA))?.name).toBe('Team A')
   })
 })

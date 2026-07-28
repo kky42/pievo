@@ -1,15 +1,3 @@
-/**
- * `pievo show [<loop>] [--json] [--full]` OUT of a run — the owner reads a loop's
- * full editable config. Like `pievo log`, it resolves the target loop
- * CLIENT-side (an explicit id/name wins; else the loop whose folder contains the cwd),
- * because the server's `show` dispatch needs an explicit loop id. Then it forwards
- * `show <id> [--json] [--full]` to the unified `/api/machine/cli` on the device
- * credential and prints the server's rendered `text` (the full editable envelope TOON,
- * or — under `--json` — the exact `edit --json` envelope for the read/write roundtrip).
- *
- * The daemon is a text sink here too: the server owns the render. Every external touch
- * is an injectable seam so tests need no real process/network/~.pievo.
- */
 import type { PostCliDeps } from "./cli-client.js";
 import { postCli, printCliResponse } from "./cli-client.js";
 import { parseLongOptions } from "./long-options.js";
@@ -24,8 +12,6 @@ export type ShowDeps = {
   token?: string;
 };
 
-/** The value-taking flags `pievo show` tolerates (consumed separately) — anything
- *  else that isn't a bare `--json`/`--full` is an unknown flag (exit 2). */
 const SHOW_VALUE_FLAGS = new Set(["server-url"]);
 
 const SHOW_BOOLEAN_FLAGS = new Set(["json", "full", "help"]);
@@ -54,14 +40,12 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
   const notConnected = () =>
     err("pievo: this machine isn't connected yet — run `pievo daemon connect`\n");
 
-  // 1. List the machine's loops and resolve the target client-side.
   const resolution = await resolveOwnerLoop(positional[0], cwd(), cliDeps);
   if (resolution.kind === "not-configured") return notConnected(), 2;
   if (resolution.kind === "network-error") return err(`pievo: ${resolution.message}\n`), 1;
   if (resolution.kind === "list-error") return err(`pievo: ${resolution.message}\n`), 1;
   if (resolution.kind === "resolve-error") return renderResolveError(resolution.error, out, err);
 
-  // 2. Forward `show <id> [--json] [--full]`; the server renders the result.
   const showArgv = [
     "show",
     resolution.loop.id,

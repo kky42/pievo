@@ -112,7 +112,6 @@ describe("concurrent persistence boundary", () => {
     const box = new PendingReportOutbox(path.join(root, "outbox.sqlite"));
     const runtime = new ConcurrentRuntime(box, async (d, _server, _roots, signal) => {
       await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
-      // Report construction/cleanup can outlive the old fixed drain deadline.
       await new Promise((resolve) => setTimeout(resolve, 30));
       const reportId = d.runId === "run-1"
         ? "33333333-3333-4333-8333-333333333333"

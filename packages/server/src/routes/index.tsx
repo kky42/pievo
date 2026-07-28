@@ -19,7 +19,6 @@ export const Route = createFileRoute('/')({
     const auth = await getAuthState()
     if (auth.enabled) {
       const { data: session } = await authClient.getSession()
-      // Signed out under the gate ⇒ render the sign-in CTA (no team to redirect to).
       if (!session) return { mode: 'signin', auth }
       // Signed in ⇒ hand off to the explicit team URL. getDefaultTeam validates the
       // last-used cookie (else the personal team) server-side; a single-team user
@@ -27,7 +26,6 @@ export const Route = createFileRoute('/')({
       const teamId = await getDefaultTeam()
       throw redirect({ to: '/t/$teamId', params: { teamId } })
     }
-    // Open mode: one shared workspace, no team segment. Render the dashboard here.
     const initial = await fetchLiveData()
     return { mode: 'dashboard', auth, initial }
   },
@@ -47,8 +45,6 @@ function LoadError({ error }: ErrorComponentProps) {
   )
 }
 
-/** Open mode renders the dashboard; the gated signed-out case renders SignIn. The
- *  gated signed-in case never reaches here (the loader threw a redirect). */
 function Home() {
   const loaded = Route.useLoaderData()
   const { data: session, isPending } = useSession()

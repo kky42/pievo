@@ -27,8 +27,6 @@ describe('mergeRuns', () => {
   })
 
   it('dedups by id with the first (fresher) occurrence winning', () => {
-    // The same run id in both lists — the primary (fresh poll) carries the live
-    // status, so its row must survive the merge, not the stale older copy.
     const fresh = run('b', '2026-06-30T02:00:00Z', { phase: 'running' })
     const stale = run('b', '2026-06-30T02:00:00Z', { phase: 'done' })
     const out = mergeRuns([fresh], [run('a', '2026-06-30T01:00:00Z'), stale])

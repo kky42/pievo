@@ -1,7 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { machineRouteLimit } from '../gateway/rateLimit'
 
-/** GET /api/machine/status — is this machine's daemon live? (Bearer device token) */
 export const Route = createFileRoute('/api/machine/status')({
   server: {
     handlers: {

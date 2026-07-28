@@ -8,7 +8,6 @@ import { Pill, useHydrated } from './ui'
 const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi' }
 const titleCls = 'rounded-sm text-left text-[17px] font-semibold tracking-[-0.01em] text-display outline-none'
 
-/** Shared recent-usage presentation for dashboard cards and loop details. */
 function RecentUsage({ usage }: { usage: LoopSummary['recentUsage'] }) {
   return (
     <span className="ml-auto whitespace-nowrap">
@@ -17,7 +16,6 @@ function RecentUsage({ usage }: { usage: LoopSummary['recentUsage'] }) {
   )
 }
 
-/** The shared loop summary shown on both the dashboard and loop detail page. */
 export function LoopOverview({
   loop,
   runs,

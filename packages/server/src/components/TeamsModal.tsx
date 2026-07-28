@@ -57,7 +57,6 @@ export function TeamsModal({
 }: {
   open: boolean
   onClose: () => void
-  /** The dashboard's current team — deleting it navigates home. */
   activeTeamId?: string
 }) {
   const navigate = useNavigate()
@@ -67,14 +66,10 @@ export function TeamsModal({
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  // Create-team form.
   const [newName, setNewName] = useState('')
-  // Rename field (seeded from the selected team).
   const [renameVal, setRenameVal] = useState('')
-  // Add-by-email form.
   const [email, setEmail] = useState('')
   const [addRole, setAddRole] = useState<Role>('member')
-  // Invite generation.
   const [inviteRole, setInviteRole] = useState<Role>('member')
   const [freshInvite, setFreshInvite] = useState<string | null>(null)
 
@@ -82,7 +77,7 @@ export function TeamsModal({
     try {
       setTeams(await listManagedTeams())
     } catch {
-      /* keep what we have */
+
     }
   }, [])
 
@@ -108,7 +103,6 @@ export function TeamsModal({
     void loadTeams()
   }, [open, loadTeams])
 
-  // Load a team's detail when selected.
   useEffect(() => {
     if (!open || !selected) return
     setFreshInvite(null)
@@ -133,7 +127,7 @@ export function TeamsModal({
       if (!r.ok) return setErr(r.error)
       setNewName('')
       await loadTeams()
-      setSelected(r.id) // open the new team so the owner can add members
+      setSelected(r.id)
     })
   }
 
@@ -160,7 +154,7 @@ export function TeamsModal({
       await loadTeams()
       if (removed === activeTeamId) {
         onClose()
-        void navigate({ to: '/' }) // active team is gone — back to the default dashboard
+        void navigate({ to: '/' })
       }
     })
   }
@@ -245,7 +239,6 @@ export function TeamsModal({
       {err && <ErrorBanner message={err} onDismiss={() => setErr(null)} className="mb-2 mt-3" />}
 
       <div className="mt-3 grid gap-6 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
-        {/* ---- master: my teams ---- */}
         <div className="min-w-0">
           <ModalSection>My teams</ModalSection>
           {teams.length === 0 && <div className="py-2 text-body text-secondary">No teams yet.</div>}
@@ -287,7 +280,6 @@ export function TeamsModal({
           </div>
         </div>
 
-        {/* ---- detail: selected team ---- */}
         <div className="min-w-0">
           {!detail ? (
             <div className="flex h-full items-center justify-center py-10 text-body text-secondary">
@@ -313,7 +305,6 @@ export function TeamsModal({
                 {detail.personal ? ' · personal' : ''}
               </ModalSection>
 
-              {/* Rename (owner-only). */}
               {isOwner && (
                 <div className="mb-4">
                   <label className={labelCls}>Team name</label>
@@ -330,7 +321,6 @@ export function TeamsModal({
                 </div>
               )}
 
-              {/* Members. */}
               <ModalSection>Members</ModalSection>
               <ul className="flex flex-col gap-2">
                 {detail.members.map((m) => (
@@ -368,7 +358,6 @@ export function TeamsModal({
                 ))}
               </ul>
 
-              {/* Add + invite (owner-only). */}
               {isOwner && (
                 <>
                   <div className="mt-4 rounded-control border border-hairline bg-raised px-3 py-3">
@@ -444,7 +433,6 @@ export function TeamsModal({
                 </>
               )}
 
-              {/* Danger zone: leave + delete. */}
               <div className="mt-6 flex items-center justify-between gap-3 border-t border-hairline pt-4">
                 {!detail.personal ? (
                   <button className={btn} disabled={busy} onClick={() => void doLeave()}>

@@ -1,4 +1,3 @@
-/** Canonical client projections for persisted loops and runs. */
 import * as store from "../db/store.js";
 import type { ArtifactFile, Loop, Machine, Run } from "../db/schema.js";
 import type { ArtifactSummary, LoopDetail, LoopFull, LoopSummary, RunSummary } from "../types.js";
@@ -59,7 +58,6 @@ export async function toRunSummaries(loopId: string, rows: Run[]): Promise<RunSu
   return rows.map((run) => toRunSummary(run, states.get(run.id)));
 }
 
-/** One live artifact_files row → compact UI metadata. */
 export function toArtifactSummary(row: ArtifactFile): ArtifactSummary {
   return {
     path: row.path,

@@ -7,17 +7,15 @@
  */
 
 export type DiffLineKind =
-  | 'add' // an inserted line ("+…", not the "+++" file header)
-  | 'del' // a removed line ("-…", not the "---" file header)
-  | 'hunk' // a hunk header ("@@ -a,b +c,d @@")
-  | 'meta' // file headers / index lines ("--- a/…", "+++ b/…", "diff …", "index …")
-  | 'context' // an unchanged context line
+  | 'add'
+  | 'del'
+  | 'hunk'
+  | 'meta'
+  | 'context'
 
 export interface DiffLine {
   kind: DiffLineKind
-  /** The line WITHOUT its leading +/-/space marker (meta/hunk keep their text). */
   text: string
-  /** The gutter glyph: "+", "-", or "" (blank for context/meta/hunk). */
   gutter: string
 }
 
@@ -32,7 +30,6 @@ export interface DiffLine {
 function classify(line: string, inHunk: boolean): DiffLine {
   if (line.startsWith('@@')) return { kind: 'hunk', text: line, gutter: '' }
   if (!inHunk) {
-    // Preamble headers (jsdiff / createTwoFilesPatch) — never content.
     if (
       line.startsWith('---') ||
       line.startsWith('+++') ||
@@ -42,15 +39,11 @@ function classify(line: string, inHunk: boolean): DiffLine {
       line.startsWith('===')
     )
       return { kind: 'meta', text: line, gutter: '' }
-    // Any other pre-hunk line is neutral context.
     return { kind: 'context', text: line, gutter: '' }
   }
-  // Inside a hunk every line is content — classify by its first char ONLY.
   if (line.startsWith('+')) return { kind: 'add', text: line.slice(1), gutter: '+' }
   if (line.startsWith('-')) return { kind: 'del', text: line.slice(1), gutter: '-' }
-  // A leading space is the unified-diff context marker; strip exactly one.
   if (line.startsWith(' ')) return { kind: 'context', text: line.slice(1), gutter: '' }
-  // "\ No newline at end of file" and any stray line → neutral context.
   return { kind: 'context', text: line, gutter: '' }
 }
 
@@ -69,7 +62,6 @@ export function parseUnifiedDiff(diff: string): DiffLine[] {
   })
 }
 
-/** Counts of added/removed content lines — for a compact per-file "+N −M" tally. */
 export function diffStat(lines: DiffLine[]): { added: number; removed: number } {
   let added = 0
   let removed = 0

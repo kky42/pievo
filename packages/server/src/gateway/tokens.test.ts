@@ -1,13 +1,3 @@
-/**
- * Run-lease lifecycle + connect-key binding, DB-backed (durable across deploys).
- * Exercises the lease state machine in `tokens.ts` against the real `run_leases`
- * table — mint (`rk_` prefix), lazy expiry, the active→terminal-grace terminalize
- * transition, single-shot retire, pruning, strict token shape, and that only
- * the token's hash ever lands in a row. The gateway-level 409
- * fencing + reconcile are covered end-to-end by `sleep-reclaim.test.ts` /
- * `index.test.ts`; this pins the primitives. The connect-key section pins the
- * `connect_keys` upsert and TTL.
- */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -132,8 +122,6 @@ test("pruneExpiredLeases retires expired grace while preserving active, in-windo
   await tokens.pruneExpiredLeases(now + tokens.TERMINAL_GRACE_MS);
   expect((await tokens.resolveLease(alreadyRetired))?.state).toBe("retired");
 });
-
-// ---- connect keys (owner + team binding, durable) ----
 
 test("rememberConnectKey binds minter + team; readClaimIntent and getDeviceOwner both read it", async () => {
   const key = tokens.mintDeviceToken();

@@ -2,7 +2,6 @@ import { humanBytes } from '../lib/format'
 import { diffStat, parseUnifiedDiff, type DiffLine } from '../lib/diff'
 import type { RunDiffFile } from '../types'
 
-/** Per-file status word + its ink (reused from the old Changes list). */
 const STATUS_LABEL: Record<RunDiffFile['status'], string> = { added: 'Added', modified: 'Changed', removed: 'Removed' }
 const STATUS_CLS: Record<RunDiffFile['status'], string> = {
   added: 'text-success',
@@ -10,13 +9,11 @@ const STATUS_CLS: Record<RunDiffFile['status'], string> = {
   removed: 'text-accent',
 }
 
-/** Signed byte delta — "+1.8 KB", "−240 B", "" when unknown/zero. */
 function fmtDelta(n: number | null): string {
   if (n == null || n === 0) return ''
   return `${n > 0 ? '+' : '−'}${humanBytes(n)}`
 }
 
-/** A diff line's row classes — line-level tint + gutter ink per kind. */
 const LINE_CLS: Record<DiffLine['kind'], string> = {
   add: 'bg-[color:var(--color-diff-add-bg)] text-primary',
   del: 'bg-[color:var(--color-diff-del-bg)] text-primary',
@@ -32,13 +29,7 @@ const GUTTER_CLS: Record<DiffLine['kind'], string> = {
   context: 'text-disabled',
 }
 
-/**
- * The colored diff body for one file. Each physical line becomes a row with a
- * `+`/`-`/` ` gutter and a line-level background tint (add=green, del=red, hunk
- * de-emphasized). Long lines DON'T wrap — the pane scrolls them horizontally
- * (`overflow-x-auto min-w-0`) so a wide line never widens the page. Height is
- * capped so a long diff scrolls inside its own box.
- */
+/* Wide or long diffs scroll within this pane instead of widening the page. */
 function DiffBody({ lines }: { lines: DiffLine[] }) {
   return (
     <div className="min-w-0 max-h-[420px] overflow-auto border-t border-hairline bg-raised font-mono text-label leading-[1.55]">
@@ -56,7 +47,6 @@ function DiffBody({ lines }: { lines: DiffLine[] }) {
   )
 }
 
-/** One file row header — status word, path, size delta, and binary/too-large markers. */
 function FileHead({ f, lines }: { f: RunDiffFile; lines: DiffLine[] | null }) {
   const delta = fmtDelta(f.sizeDelta)
   const stat = lines ? diffStat(lines) : null
@@ -78,16 +68,8 @@ function FileHead({ f, lines }: { f: RunDiffFile; lines: DiffLine[] | null }) {
   )
 }
 
-/** Small enough to auto-open; larger diffs start collapsed. */
 const AUTO_OPEN_LINES = 40
 
-/**
- * The Changes diff view — a list of changed files, each collapsible, its unified
- * diff rendered as colored add/remove/context lines. Files with no inline diff
- * (binary / oversize / too-large) render just the header row. Small diffs default
- * open, large ones collapsed. Built entirely from theme tokens — no external diff
- * library.
- */
 export function DiffView({ files }: { files: RunDiffFile[] }) {
   return (
     <div className="space-y-1.5">

@@ -31,7 +31,6 @@ interface Booted {
   artifactSync: ArtifactSync;
   cliGateway: CliGateway;
   abort: AbortController;
-  /** Stop schedulers and wait for the runtime DB client to drain. */
   shutdown: () => Promise<void>;
 }
 
@@ -79,7 +78,6 @@ async function boot(): Promise<Booted> {
   const blobStore = createBlobStore();
   gateway = new MachineGateway(scheduler, blobStore);
   const artifactSync = new ArtifactSync(blobStore);
-  // Canonical CLI dispatch over the same core gateway instance.
   const cliGateway = new CliGateway(gateway);
 
   await scheduler.start(abort.signal);

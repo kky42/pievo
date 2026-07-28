@@ -26,8 +26,6 @@ export const Route = createFileRoute('/t/$teamId')({
     const auth = await getAuthState()
     if (auth.enabled) {
       const { data: session } = await authClient.getSession()
-      // Signed out under the gate ⇒ the sign-in CTA (the loader runs in the browser,
-      // so the session cookie rides along once signed in).
       if (!session) return { mode: 'signin', auth, teamId }
       // Enumeration-safe gate: a team the caller can't view throws the same generic
       // message as a missing loop — existence never leaks to a non-member.

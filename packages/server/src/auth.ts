@@ -47,20 +47,17 @@ export function emailAllowed(email: string | null | undefined): boolean {
   const e = (email || "").toLowerCase();
   const at = e.indexOf("@");
   if (at < 0) return false;
-  const domain = e.slice(at); // includes the leading "@"
+  const domain = e.slice(at);
   return allowlist.some(
     (entry) => entry === e || entry === domain || (entry.startsWith("*@") && entry.slice(1) === domain),
   );
 }
 
-/** A user's personal-team display name from their email's local part:
- *  "you@example.com" → "you's Team". Falls back when no email. */
 export function teamNameForEmail(email: string | null | undefined): string {
   const local = (email || "").split("@")[0]?.trim();
   return local ? `${local}'s Team` : "Personal Team";
 }
 
-/** Cookie (client-set, server-validated) carrying the active team selection. */
 const TEAM_COOKIE = "pievo.team";
 
 /**
@@ -79,7 +76,6 @@ export async function currentUserId(): Promise<string | null> {
   return (await currentUser())?.id ?? null;
 }
 
-/** Read the active-team cookie off the current request (raw; unvalidated). */
 async function selectedTeam(): Promise<string | null> {
   const { getRequest } = await import("@tanstack/react-start/server");
   const raw = getRequest().headers.get("cookie") || "";
@@ -88,11 +84,8 @@ async function selectedTeam(): Promise<string | null> {
 }
 
 export interface RequestScope {
-  /** True only when the GitHub gate is on. */
   enforce: boolean;
-  /** Signed-in user (creator-attribution column on writes); null ⇒ no access. */
   userId: string | null;
-  /** The active team — what reads filter and writes authorize against. */
   teamId: string;
 }
 
@@ -155,10 +148,10 @@ export async function requestScope(explicitTeam?: string | null): Promise<Reques
  */
 export async function canAccessLoop(loopTeamId: string | null, scope: RequestScope): Promise<boolean> {
   const { enforce, teamId, userId } = scope;
-  if (!enforce) return true; // open mode: no gate
-  if (loopTeamId === teamId) return true; // active team (already validated by requestScope)
+  if (!enforce) return true;
+  if (loopTeamId === teamId) return true;
   if (!loopTeamId || !userId) return false;
-  return store.isTeamMember(loopTeamId, userId); // membership in the loop's own team
+  return store.isTeamMember(loopTeamId, userId);
 }
 
 export const auth = betterAuth({
@@ -181,7 +174,6 @@ export const auth = betterAuth({
           }
           return { data: user };
         },
-        // Give every new user a personal team for their machines and loops.
         after: async (user) => {
           try {
             const teamId = store.teamIdForUser(user.id);

@@ -7,7 +7,6 @@ import { randomUUID } from "node:crypto";
 import * as store from "../db/store.js";
 import type { TeamInvite } from "../db/schema.js";
 
-/** Invite link lifetime. */
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const NAME_MAX = 80;
@@ -27,12 +26,9 @@ function isRole(v: unknown): v is Role {
   return v === "owner" || v === "member";
 }
 
-/** Resolve the actor's role in a team (null ⇒ not a member). */
 export async function roleOf(teamId: string, userId: string): Promise<Role | null> {
   return (await store.getTeamMember(teamId, userId))?.role ?? null;
 }
-
-// ---- team summaries / detail (read surfaces the settings UI renders) ----
 
 export interface TeamAdminSummary {
   id: string;
@@ -80,7 +76,6 @@ export interface TeamAdminDetail {
   name: string;
   role: Role;
   personal: boolean;
-  /** Loops the team owns; non-zero blocks deletion. */
   loopCount: number;
   members: TeamMemberView[];
   /** Pending invite links — owner-only (empty for a plain member). */
@@ -125,10 +120,8 @@ async function assertOwner(teamId: string, userId: string): Promise<{ ok: false;
   const role = await roleOf(teamId, userId);
   if (!role) return { ok: false, error: "This team does not exist, or you do not have access to it." };
   if (role !== "owner") return { ok: false, error: "Only a team owner can manage this team." };
-  return null; // authorized
+  return null;
 }
-
-// ---- lifecycle mutations ----
 
 export async function createTeam(userId: string, name: string): Promise<Result<{ id: string }>> {
   const clean = cleanName(name);
@@ -169,8 +162,6 @@ export async function deleteTeam(userId: string, teamId: string): Promise<Result
   }
   return { ok: true };
 }
-
-// ---- members ----
 
 /** Add an existing account directly; otherwise direct the owner to an invite. */
 export async function addMemberByEmail(
@@ -244,9 +235,6 @@ export async function leaveTeam(userId: string, teamId: string): Promise<Result>
   return { ok: true };
 }
 
-// ---- invites (invite-link mint / redeem / revoke) ----
-
-/** Mint a single-use, short-lived, owner-authorized invite link. */
 export async function createInvite(
   userId: string,
   teamId: string,

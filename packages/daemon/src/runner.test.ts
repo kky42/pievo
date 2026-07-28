@@ -1,4 +1,3 @@
-/** Runner tests for provider spawn, telemetry collection, and terminal reports. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -51,8 +50,6 @@ describe("terminal JSONL collectors", () => {
     expect(c.result()).toMatchObject({
       sessionId: "thread-1",
       finalText: "codex final",
-      // Raw resumed delta is input=25 including cached=12, so normalized
-      // uncached input is 13 rather than double-counting cached tokens.
       usage: { inputTokens: 13, outputTokens: 11, cacheReadTokens: 12, cacheCreationTokens: 0 },
       isError: false,
     });
@@ -172,7 +169,6 @@ describe("buildAgentSpawn", () => {
       "-c", "shell_environment_policy.inherit=all",
       "do it",
     ]);
-    // Never emit Claude-shaped flags on the codex arm.
     expect(args).not.toContain("-p");
     expect(args).not.toContain("--verbose");
     expect(args).not.toContain("stream-json");
@@ -236,20 +232,16 @@ describe("buildAgentSpawn", () => {
   });
 });
 
-// ---- runner integration fixtures ----
 
 let root: string;
 let workdir: string;
 
-/** A fake `claude` that records the `-p` task (argv $2) to cwd/captured-task.txt and
- *  emits one stream-json result line so the runner parses a clean success. */
 function writeFakeClaude(): string {
   const p = path.join(root, "fake-claude.sh");
   fs.writeFileSync(
     p,
     [
       "#!/bin/sh",
-      // args are: -p <task> --output-format stream-json ...
       'printf "%s" "$2" > captured-task.txt',
       `echo '{"type":"result","is_error":false,"subtype":"success","result":"delivered","session_id":"sess-test"}'`,
       "exit 0",
@@ -310,9 +302,6 @@ describe("resolveExecTimeoutMs", () => {
   });
 });
 
-/** A fake claude that records EVERY arg it was handed (one per line) to
- *  cwd/argv.txt, then emits a clean success — so a test can assert which flags the
- *  runner did (or did not) pass. */
 function writeArgvClaude(): string {
   const p = path.join(root, "argv-claude.sh");
   fs.writeFileSync(

@@ -15,7 +15,6 @@
  *   - `offline` : never seen, or last seen beyond the asleep window (treat as gone).
  */
 
-/** Mirrors gateway's ONLINE_TTL_MS — a machine is "online" only if it polled recently. */
 export const MACHINE_ONLINE_TTL_MS = 30_000;
 
 /**
@@ -39,7 +38,7 @@ export function machinePresence(
   now: number = Date.now(),
 ): MachinePresence {
   const seenAt = lastSeen ? Date.parse(lastSeen) : NaN;
-  if (!Number.isFinite(seenAt)) return 'offline'; // never seen
+  if (!Number.isFinite(seenAt)) return 'offline';
   const age = now - seenAt;
   if (!!online && age < MACHINE_ONLINE_TTL_MS) return 'online';
   if (age < MACHINE_ASLEEP_TTL_MS) return 'asleep';

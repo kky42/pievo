@@ -9,12 +9,10 @@ import path from "node:path";
 
 import { expandTilde } from "./loopdir.js";
 
-/** Absolute, tilde-expanded form of a configured root. */
 function resolveRoot(root: string): string {
   return path.resolve(expandTilde(root));
 }
 
-/** Absolute, tilde-expanded forms of a configured root list. */
 export function resolveRoots(roots: string[]): string[] {
   return roots.map(resolveRoot);
 }
@@ -30,7 +28,6 @@ export function isWithinResolvedRoots(abs: string, resolvedRoots: string[]): boo
   return resolvedRoots.some((r) => a === r || a.startsWith(r + path.sep));
 }
 
-/** Is `abs` at/under any of the given (possibly unresolved) roots? */
 export function isWithinRoots(abs: string, roots: string[]): boolean {
   return isWithinResolvedRoots(abs, resolveRoots(roots));
 }

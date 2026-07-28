@@ -70,7 +70,6 @@ export const ONLINE_TTL_MS = 30_000;
  *  zero disables the breaker. */
 const AUTOPAUSE_STREAK = Math.max(0, Number(process.env.PIEVO_FAILURE_AUTOPAUSE_STREAK ?? 3));
 
-/** How long pending system work on an offline machine stays claimable. */
 const DEFERRED_MAX_MS = 7 * 86_400_000;
 /** A claimed run that never reports within this window is reclaimed as timed out. */
 const configuredRunTimeoutMs = Number(process.env.PIEVO_RUN_TIMEOUT_MS || 20 * 60_000);
@@ -87,9 +86,9 @@ export const EDITABLE_LOOP_FIELDS = LOOP_EDIT_FIELDS;
  *  it never satisfies the successful-run reporting protocol. Run errors share
  *  this cap. Exported for `cli.ts` so the report verb uses the same budget. */
 export const MESSAGE_CAP = 2000;
-/** A claude-code session id is a UUID-ish token — anything longer is garbage. */
+/** Provider session IDs are opaque short tokens; this rejects malformed payloads
+ *  without constraining known provider formats. */
 const SESSION_ID_CAP = 200;
-/** Keep heartbeat throttling safely inside custom short timeout windows. */
 export function heartbeatRefreshMs(runTimeoutMs: number): number {
   if (!Number.isFinite(runTimeoutMs) || runTimeoutMs <= 0) return 1;
   return Math.max(1, Math.min(60_000, runTimeoutMs / 3));
@@ -114,7 +113,6 @@ export interface MachineReportBody {
   finalText?: string;
 }
 
-/** Exact top-level JSON contract accepted by POST /machine/report. */
 export const MACHINE_REPORT_FIELDS = [
   "reportId", "runId", "result", "exitCode", "durationMs",
   "sessionId", "usage", "error", "finalText",
@@ -127,7 +125,6 @@ const MACHINE_REPORT_USAGE_FIELDS = new Set<string>([
  *  Bounded under the daemon's 30s fetch timeout AND under ONLINE_TTL_MS
  *  (with the end-of-wait re-stamp) so a parked long-poll never looks offline. */
 const LONG_POLL_WAIT_MS = 20_000;
-/** `pievo log` recent-history window. */
 export const LOG_RUNS_DEFAULT = 8;
 const USAGE_MAX = 1e12;
 const REPORT_ID_CAP = 200;
@@ -307,7 +304,6 @@ export class MachineGateway {
    *  simply re-polls. */
   private readonly pollWaiters = new Map<string, (woken: boolean) => void>();
 
-  /** Resolve (and disarm) a machine's parked long-poll waiter, if any. */
   private wakeMachine(machineId: string): void {
     this.pollWaiters.get(machineId)?.(true);
   }
@@ -442,8 +438,6 @@ export class MachineGateway {
     }
   }
 
-  // ---- POST /api/machine/poll ----
-
   private async pollCore(
     deviceToken: string,
     info?: { host?: string; platform?: string; arch?: string; version?: string },
@@ -543,7 +537,6 @@ export class MachineGateway {
     return { status: 200, body: { delivery } };
   }
 
-  /** Protocol-v4 poll: plural local state, one new delivery per poll. */
   async pollV4(deviceToken: string, request: PollV4Request): Promise<HttpResult> {
     const rawRequest = request as unknown as Record<string, unknown>;
     if (request === null || typeof request !== "object" || Array.isArray(request)
@@ -599,7 +592,6 @@ export class MachineGateway {
     };
   }
 
-  /** Idle v4 polls long-poll; active/reporting polls return immediately. */
   async pollV4Wait(deviceToken: string, request: Parameters<MachineGateway["pollV4"]>[1], waitMs = LONG_POLL_WAIT_MS): Promise<HttpResult> {
     if (request.currentRuns?.length || request.protocolVersion !== DAEMON_PROTOCOL_VERSION) return this.pollV4(deviceToken, request);
     const auth = await authenticateDeviceToken(deviceToken, { allowUnknown: true });
@@ -620,8 +612,6 @@ export class MachineGateway {
       waiter.cancel();
     }
   }
-
-  // ---- GET /api/machine/status ----
 
   /**
    * Whether this machine (by device token) currently has a live daemon — so
@@ -655,10 +645,6 @@ export class MachineGateway {
     };
   }
 
-  // ---- owner loop creation ----
-
-  /** Create a validated loop through device authority, bind it to that machine,
-   * and schedule it immediately. */
   async createLoop(
     deviceToken: string,
     body: {
@@ -672,7 +658,6 @@ export class MachineGateway {
       reasoningEffort?: unknown;
       workdir?: unknown;
       agent?: unknown;
-      /** Optional connect key that selects its authenticated team intent. */
       claim?: unknown;
       /** Validate-only (`pievo new --dry-run`): run every check, persist NOTHING,
        *  and return the normalized config + fire preview. Zero-exec preserved. */
@@ -739,17 +724,11 @@ export class MachineGateway {
 
   }
 
-  // ---- owner loop reads and edits ----
-
-  /** List loops bound to this machine. `--fields` extends the minimal default
-   *  columns and rejects unknown names. `--json` returns full structured records
-   *  (first byte `[`), mirroring `show --json` — the daemon prints `text` either way. */
   async listLoops(deviceToken: string, fieldsFlag?: string, json?: boolean): Promise<HttpResult> {
     const auth = await authenticateDeviceToken(deviceToken);
     if (!auth.ok) return auth.response;
     const { machineId } = auth;
 
-    // Extend defaults with known optional fields and reject unknown names.
     const extras: string[] = [];
     if (fieldsFlag !== undefined) {
       const requested = String(fieldsFlag).split(",").map((s) => s.trim()).filter(Boolean);
@@ -757,7 +736,6 @@ export class MachineGateway {
       if (unknown.length) {
         return { status: 400, body: { error: `unknown field(s): ${unknown.join(", ")} — available: ${LIST_OPTIONAL_FIELDS.join(", ")}` } };
       }
-      // Preserve request order and dedup.
       for (const f of requested) if (!extras.includes(f)) extras.push(f);
     }
     const fields = [...LIST_DEFAULT_FIELDS, ...extras];
@@ -770,10 +748,7 @@ export class MachineGateway {
     const loops: LoopListRecord[] = await Promise.all(
       loopRows.map(async (l) => {
         const schedule = scheduleFromLoop(l);
-        // Derive the next cron fire in the loop's timezone.
-        // A paused loop has no next fire.
         const nextFire = l.enabled && schedule.mode === "cron" ? (nextFires(schedule.cron, schedule.timezone, 1)[0] ?? null) : null;
-        // The last-result cell tracks the newest ordinary run, aligning with `show`.
         const last = wantLastResult ? await store.lastRun(l.id) : undefined;
         return {
           id: l.id,
@@ -799,7 +774,6 @@ export class MachineGateway {
     return { status: 200, body: { ok: true, loops: envelopes, text } };
   }
 
-  /** Edit a loop through owner authority, scoped to loops bound to this machine. */
   async editLoop(
     deviceToken: string,
     id: unknown,
@@ -849,8 +823,6 @@ export class MachineGateway {
     }
 
   }
-
-  // ---- POST /machine/report ----
 
   private async rejectRetiredConflict(
     runToken: string,
@@ -1213,20 +1185,13 @@ export class MachineGateway {
 
 }
 
-// ---- shared gateway helpers ----
-
-/** Compact result shape for gateway validation and atomic report mutations. */
 export interface Applied {
   ok: boolean;
   detail?: string;
-  /** An explicit axi error slug for a rejection (else the caller derives it from the
-   *  HTTP status). */
   code?: string;
-  /** Optional HTTP status for atomic authorization/conflict rejections. */
   status?: number;
 }
 
-// ---- TOON render helpers ------------------------------------------------------
 // Each builds the `text` a CLI verb carries; the CLI-only renders live with their
 // verbs in `cli.ts` (whose `finalizeCli` strips non-transport fields at the
 // `/api/machine/cli` boundary). Pure — no I/O,
@@ -1265,10 +1230,7 @@ export function fmtTimeZoned(iso: string, timezone: string, opts: { seconds?: bo
   }
 }
 
-/** Minimal default columns for `pievo loops`. */
 const LIST_DEFAULT_FIELDS: string[] = ["id", "name", "cron", "enabled", "nextFire"];
-/** The optional columns `--fields` may add (the "available" set an unknown field is
- *  measured against). `runs`/`lastResult` are derived per loop. */
 const LIST_OPTIONAL_FIELDS: string[] = ["timezone", "model", "reasoningEffort", "runs", "lastResult"];
 
 /** A loop's row for `pievo loops`: every renderable cell precomputed once (so the
@@ -1283,15 +1245,11 @@ interface LoopListRecord {
   model: string | null;
   reasoningEffort: string | null;
   workdir: string | null;
-  /** Derived: the next cron fire in the loop's tz (ISO), or null when paused. */
   nextFire: string | null;
-  /** Derived: total run count. */
   runs: number;
-  /** Derived: the most recent run's result token, or null (no runs yet). */
   lastResult: string | null;
 }
 
-/** One `loops` cell for a named column (scalar-rendered by `listBlock`). */
 function loopCell(rec: LoopListRecord, field: string): Scalar {
   switch (field) {
     case "id": return rec.id;
@@ -1308,8 +1266,6 @@ function loopCell(rec: LoopListRecord, field: string): Scalar {
   }
 }
 
-/** Render the typed loop list. Columns are the default set
- *  plus any `--fields` extras (validated + resolved by `listLoops`). */
 function renderLoopsText(loops: LoopListRecord[], fields: string[]): string {
   if (!loops.length) {
     return doc(
@@ -1332,7 +1288,6 @@ function renderLoopsText(loops: LoopListRecord[], fields: string[]): string {
   );
 }
 
-/** One run's result cell, derived from phase + status. */
 export function runResultToken(r: { phase: string; status: string | null }): string {
   if (r.status === "block") return `block/${r.phase}`;
   if (r.phase === "canceled") return "canceled";
@@ -1340,11 +1295,8 @@ export function runResultToken(r: { phase: string; status: string | null }): str
   return r.status ? `${base}/${r.status}` : `${base}/missing-status`;
 }
 
-/** How many chars of a run message the log cell inlines before the size hint. */
 export const LOG_MESSAGE_CELL_CAP = 100;
 
-/** Trim a value to a non-empty string, or null (NUL stripped). Shared by
- *  createLoop/editLoop. */
 function str(v: unknown): string | null {
   if (typeof v !== "string") return null;
   const t = stripNul(v).trim();

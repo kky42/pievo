@@ -36,7 +36,6 @@ if (!fs.existsSync(outputRoot)) {
 const require = createRequire(import.meta.url);
 const pgliteDist = path.dirname(require.resolve("@electric-sql/pglite"));
 
-// Copy every WASM/data asset present (pglite.wasm, pglite.data, initdb.wasm, ...).
 const assets = fs
   .readdirSync(pgliteDist)
   .filter((f) => f.endsWith(".wasm") || f.endsWith(".data"));

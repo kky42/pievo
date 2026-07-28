@@ -1,8 +1,3 @@
-/**
- * Bare `pievo` outside a run renders the machine home. The daemon is a text
- * sink: it posts local context to the server `home` verb and prints `body.text`. All
- * network/process touches are injected; nothing hits ~/.pievo or the network.
- */
 import { describe, expect, test } from "vitest";
 
 import { runHome, type HomeDeps } from "./home.js";
@@ -69,7 +64,6 @@ describe("runHome", () => {
     );
     const cap = capture({ fetchImpl: fetchFn });
     expect(await runHome(cap.deps)).toBe(0);
-    // The context the SERVER can't know is passed as flags on the home argv.
     expect(calls[0]!.argv).toEqual([
       "home",
       "--cwd", "/work/here",

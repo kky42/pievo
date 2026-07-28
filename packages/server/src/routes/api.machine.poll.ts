@@ -36,7 +36,6 @@ export function parsePollBody(value: unknown): PollBody | null {
   return body as PollBody
 }
 
-/** Keep the HTTP adapter's protocol forwarding independently testable. */
 export function gatewayPollRequest(body: PollBody) {
   return {
     protocolVersion: body.protocolVersion,
@@ -52,7 +51,6 @@ export function gatewayPollRequest(body: PollBody) {
   }
 }
 
-/** POST /api/machine/poll — daemon claims this machine's pending runs (Bearer device token). */
 export const Route = createFileRoute('/api/machine/poll')({
   server: {
     handlers: {

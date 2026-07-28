@@ -1,6 +1,3 @@
-/** Daemon start/restart lifecycle. `start` is detached and idempotent by default;
- * `--foreground` runs the same poller attached. `restart` stops this installed
- * version's daemon and starts it again from persisted configuration. */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -14,7 +11,6 @@ import { type InstallOutcome, installSkill } from "./skill-install.js";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** Private re-entry marker for the detached child. Not a CLI flag or route. */
 const INTERNAL_DAEMON_CHILD = "PIEVO_INTERNAL_DAEMON_CHILD";
 
 /**
@@ -29,12 +25,6 @@ export function buildDaemonSpawn(token: string): { args: string[]; env: NodeJS.P
   return { args, env: { ...process.env, PIEVO_TOKEN: token, [INTERNAL_DAEMON_CHILD]: "1" } };
 }
 
-/**
- * Spawn the daemon detached so it outlives `pievo daemon start`. Re-execs THIS
- * CLI through `daemon start --foreground`, replaying the exact launcher.
- * stdio is redirected to ~/.pievo/daemon.log. Returns the child pid so a
- * readiness timeout can kill exactly what it started.
- */
 function spawnDaemonDefault(server: string, token: string, logFile: string): number | undefined {
   const out = fs.openSync(logFile, "a");
   const { args, env } = buildDaemonSpawn(token);
@@ -68,14 +58,10 @@ export type DaemonStartDeps = {
   spawnDaemon?: (server: string, token: string, logFile: string) => number | undefined;
   kill?: (pid: number, signal: NodeJS.Signals) => void;
   sleep?: (ms: number) => Promise<void>;
-  /** The local pidfile check (verified alive + start-time match). */
   localPid?: () => number | undefined;
   readConnection?: () => SavedConnection | undefined;
-  /** Refresh the user-scope skill (best-effort, announced). Injected in tests. */
   installSkill?: () => Promise<InstallOutcome>;
-  /** Install/refresh the `pievo` PATH shim (best-effort). Injected in tests. */
   ensureBinShim?: () => void;
-  /** Override the private detached-child marker in tests. */
   internalChild?: boolean;
   foreground?: (args: string[]) => Promise<number>;
   out?: (s: string) => void;
@@ -102,7 +88,6 @@ export async function runDaemonStart(args: string[], injected: DaemonStartDeps =
     err: injected.err ?? ((s: string) => process.stderr.write(s)),
   };
 
-  /** Best-effort user-scope skill and PATH refresh. */
   const refreshSkill = async (): Promise<void> => {
     try {
       const r = await d.installSkill();

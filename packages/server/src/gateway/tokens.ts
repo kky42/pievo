@@ -24,12 +24,10 @@ export function sha256(s: string): string {
   return createHash("sha256").update(s).digest("hex");
 }
 
-/** Mint a fresh device token (`dk_…`) — the one wire format `machineIdFromToken` consumes. */
 export function mintDeviceToken(): string {
   return `dk_${randomBytes(15).toString("hex")}`;
 }
 
-/** Derive the stable machine id from its device token. */
 export function machineIdFromToken(token: string): string {
   return `m-${sha256(token).slice(0, 16)}`;
 }
@@ -43,22 +41,18 @@ export function isDeviceTokenShape(token: string): boolean {
   return DEVICE_TOKEN_RE.test(token);
 }
 
-// ---- connect keys (minted device token → owner + team binding, durable) ----
 // A connect-key/claim is minted from a SPECIFIC team's dashboard session; we bind
 // the minter and the VALIDATED active team to the key so (a) the daemon's first
 // poll self-registers the machine under the minting user, and (b) `createLoop`
 // lands the loop in that team — this is what lets ONE machine/daemon serve MANY
 // teams. The teamId is captured server-side from the authenticated session (never
 // from client input); the gateway re-validates membership at create time.
-//
 // Bindings are keyed by the derived machine id, so the key itself is never stored.
 // They are not single-read: one paste may create several loops, and enrollment
 // reads the binding too.
 
 export interface ClaimIntent {
-  /** The user who minted the key (the authenticated dashboard session). */
   userId: string;
-  /** The validated active team the key was minted under. */
   teamId: string;
 }
 
@@ -83,7 +77,6 @@ export async function rememberConnectKey(connectKey: string, intent: ClaimIntent
   await db.insert(connectKeys).values(row).onConflictDoUpdate({ target: connectKeys.machineId, set: row });
 }
 
-/** Peek (NON-evicting) the team/minter a connect-key was minted under, if still live. */
 export async function readClaimIntent(connectKey: string | null | undefined, now: number = Date.now()): Promise<ClaimIntent | undefined> {
   if (!connectKey) return undefined;
   const row = (await db.select().from(connectKeys).where(eq(connectKeys.machineId, machineIdFromToken(connectKey))))[0];
@@ -91,7 +84,6 @@ export async function readClaimIntent(connectKey: string | null | undefined, now
   return { userId: row.userId, teamId: row.teamId };
 }
 
-/** The remembered owner of a self-registering machine, if any (still-live key). */
 export async function getDeviceOwner(machineId: string, now: number = Date.now()): Promise<string | undefined> {
   const row = (await db.select().from(connectKeys).where(eq(connectKeys.machineId, machineId)))[0];
   if (!row || !connectKeyFresh(row.mintedAt, now)) return undefined;
@@ -215,7 +207,6 @@ export async function pruneExpiredLeases(now: number = Date.now()): Promise<void
     .where(and(inArray(runLeases.state, ["terminal-grace", "reconciliation-only"]), isNotNull(runLeases.expiresAt), lt(runLeases.expiresAt, new Date(now).toISOString())));
 }
 
-// ---- `new` idempotency (content-hash → the loop it created) ----
 // A create with no dedupe makes a fresh loop every call. The daemon sends a stable
 // content key over the machine id and canonical config; this bounded in-memory map
 // returns the existing loop for retries within the window. A server restart loses
@@ -240,7 +231,6 @@ function pruneNewIdempotency(now: number): void {
   }
 }
 
-/** Remember that `key` (from THIS machine) created `loopId`. Pruned on write. */
 export function recordNewIdempotency(key: string, machineId: string, loopId: string, now: number = Date.now()): void {
   pruneNewIdempotency(now);
   newIdempotency.set(key, { loopId, machineId, at: now });

@@ -1,7 +1,3 @@
-/**
- * Run one delivery on this machine: resolve the workdir, spawn the selected
- * coding agent once, collect provider telemetry, and return a terminal report.
- */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -27,28 +23,21 @@ export interface Delivery {
     name: string;
     workdir: string;
     model: string | null;
-    /** Null delegates to the provider CLI default. */
     reasoningEffort: string | null;
-    /** Coding agent to execute this loop with. */
     agent: CodingAgent;
   };
   /** Server-configured workdir jail — may only NARROW the daemon's local env
    *  PIEVO_ROOTS jail, never widen it (see roots.effectiveRoots). */
   roots: string[];
-  /** Server-composed user prompt plus the complete status/report contract. */
   task: string;
-  /** Exact paths relative to workdir; no glob support. */
   artifacts: string[];
 }
 
 export interface ReportBody {
   runId: string;
-  /** Coding-agent subprocess exit code. A spawn, timeout, signal, or pre-spawn
-   * failure has no numeric exit and reports null. */
   exitCode: number | null;
   durationMs: number;
   sessionId?: string;
-  /** Provider-normalized token usage, summed across every subprocess attempt. */
   usage?: TokenUsage;
   error?: string;
   finalText?: string;
@@ -56,32 +45,18 @@ export interface ReportBody {
 
 const SELF_SCHEDULING_TOOLS = "ScheduleWakeup,CronCreate,CronList,CronDelete";
 
-/** The spawn command (executable + argv) for one coding-agent pass. */
 export interface AgentSpawn {
   bin: string;
   args: string[];
-  /** Exact provider stdin, used only by agents whose CLI accepts the task there. */
   stdin?: string;
 }
 
 /**
- * Build the coding-agent spawn command (bin + argv) for one run pass.
- *
- * Two arms (BYOA — each agent's real CLI surface):
- *   - `claude-code`: `claude -p … --output-format stream-json --verbose …`
- *   - `codex`: a DIFFERENT surface — `codex exec`, not `-p`.
- *     Flags verified against codex-cli 0.143.0: `--json` (JSONL on stdout),
- *     `--dangerously-bypass-approvals-and-sandbox` (unattended BYOA), optional
- *     `-m` / `--model`, `--skip-git-repo-check` so non-git loop workdirs are not
- *     rejected, and full child-env inheritance so the run-scoped `pievo` callback
- *     shim at the front of PATH survives Codex's shell environment policy.
- *
- *   - `pi`: print-mode JSONL with normal Pi session persistence; task text is stdin.
- *
- * Escape hatches: `PIEVO_CLAUDE_BIN` / `PIEVO_CODEX_BIN` / `PIEVO_PI_BIN`.
- *
- * Each arm's JSONL is consumed by its provider-specific terminal collector;
- * neither provider emits tool/text live progress through the daemon protocol.
+ * Provider CLIs intentionally keep distinct argument surfaces. Codex flags were
+ * verified against codex-cli 0.143.0; inheriting the complete allowlisted child
+ * environment preserves the run-scoped callback shim through Codex's shell policy.
+ * Provider JSONL remains
+ * terminal-only and is never exposed as live progress through the daemon protocol.
  */
 export function buildAgentSpawn(opts: {
   agent: CodingAgent;
@@ -102,8 +77,6 @@ export function buildAgentSpawn(opts: {
     };
   }
   if (agent === "codex") {
-    // Codex surface is `codex exec [OPTIONS] [PROMPT]` — never Claude's
-    // `-p` / stream-json flags and never a session resume.
     const modelArgs = model ? ["-m", model] : [];
     const reasoningArgs = reasoningEffort ? ["-c", `model_reasoning_effort=${JSON.stringify(reasoningEffort)}`] : [];
     const unattended = [
@@ -183,7 +156,6 @@ export async function executeDelivery(
   let finalText: string | undefined;
   let usage: TokenUsage | undefined;
   let exitCode: number | null = null;
-  // Spawn + credential set branch on the explicitly configured agent.
   const agent: CodingAgent = d.loop.agent;
   const agentLabel = agent === "claude-code" ? "claude" : agent;
   try {

@@ -6,7 +6,6 @@ export const DAEMON_UPGRADE_REQUIRED = 'Daemon upgrade required to stop a runnin
 export type LoopLifecycle = 'deleting' | 'stopping' | 'paused-finishing' | 'paused' | 'active'
 export type LoopLifecycleTone = 'neutral' | 'success' | 'attention' | 'accent'
 
-/** Derive product lifecycle state only from durable server facts. */
 export function deriveLoopLifecycle(loop: LoopSummary): LoopLifecycle {
   if (loop.deleteRequestedAt != null) return 'deleting'
   const running = loop.runs.find((run) => run.phase === 'running')
@@ -34,7 +33,6 @@ export function daemonStopSupport(protocol: number | null | undefined): { suppor
     : { supported: false, label: `Daemon protocol ${protocol ?? 'unknown'} · upgrade required` }
 }
 
-/** Exact user-facing lifecycle wording, including uncertainty boundaries. */
 export function lifecycleDisplay(detail: LoopDetail): string {
   return lifecyclePresentation(detail.summary).label
 }

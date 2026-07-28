@@ -4,11 +4,6 @@ export type ParsedLongOptions = {
   occurrences: Array<{ key: string; value: string | boolean }>;
 };
 
-/**
- * Parse GNU-style long options without deciding which option names a command accepts.
- * The caller controls whether a bare option consumes the following token; inline
- * `--key=value` values are always retained for command-specific validation.
- */
 export function parseLongOptions(
   args: string[],
   takesNextValue: (key: string) => boolean,

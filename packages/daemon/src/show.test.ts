@@ -1,8 +1,3 @@
-/**
- * `pievo show` resolves the loop client-side, then
- * forwards `show <id>` to the unified dispatch on the device credential and prints the
- * server's rendered envelope `text`. Every touch is injected.
- */
 import { describe, expect, test } from "vitest";
 
 import { runShow, type ShowDeps } from "./show.js";
@@ -60,7 +55,6 @@ describe("runShow", () => {
   test("--server-url <url> is consumed as a flag value, not the positional loop id", async () => {
     const { fetchFn, calls } = stub([{ id: "loop-x", name: "X", workdir: "/elsewhere" }], () => ({ ok: true, body: { ok: true, text: "loop:\n  id: loop-x", exitCode: 0 } }));
     const cap = capture({ fetchFn });
-    // The URL must NOT be mistaken for the loop id; `loop-x` still resolves.
     expect(await runShow(["--server-url", "https://srv.test", "loop-x"], cap.deps)).toBe(0);
     expect(calls[1]!.argv).toEqual(["show", "loop-x"]);
   });
@@ -96,7 +90,7 @@ describe("runShow", () => {
     const cap = capture({ fetchFn });
     expect(await runShow(["loop-x", "--bogus"], cap.deps)).toBe(2);
     expect(cap.stderr()).toContain("unknown flag --bogus");
-    expect(calls).toHaveLength(0); // rejected before any fetch
+    expect(calls).toHaveLength(0);
   });
 
   test("a value-bearing boolean stays unknown even if a later bare flag repeats it", async () => {

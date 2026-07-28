@@ -1,4 +1,3 @@
-/** CLI subprocess and pure routing tests. */
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -130,13 +129,6 @@ describe("classify lifecycle routing", () => {
   });
 });
 
-/**
- * The shared CLI client (`postCli`) is what makes the one-grammar convergence work:
- * it selects the credential by env (run token wins, else device) and POSTs `{argv}`
- * to /api/machine/cli. These unit the
- * credential selection + endpoint choice directly (the subprocess dispatch above proves
- * the local fast-paths still exit without the daemon).
- */
 describe("postCli credential selection", () => {
   test("resolveCredential: the run token (env) wins over the device token", () => {
     const cred = resolveCredential({ env: { PIEVO_RUN_TOKEN: "run-1" }, deviceToken: "dk_dev" });

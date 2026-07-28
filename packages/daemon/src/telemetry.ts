@@ -1,6 +1,5 @@
-/** Provider-specific terminal JSONL collectors.
- *
- * They intentionally collect only terminal telemetry: session identity, final
+/**
+ * Collect only terminal telemetry: session identity, final
  * assistant text, and normalized token usage. Tool/text activity is not exposed
  * as live progress and no on-disk provider transcript is read.
  */
@@ -52,7 +51,6 @@ function parseClaudeUsage(value: unknown): TokenUsage | undefined {
   };
 }
 
-/** Claude result.modelUsage is keyed by model and uses camelCase token fields. */
 function parseClaudeModelUsage(value: unknown): TokenUsage | undefined {
   const modelUsage = record(value);
   if (!modelUsage) return undefined;

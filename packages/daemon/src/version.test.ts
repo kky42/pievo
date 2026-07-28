@@ -1,6 +1,3 @@
-/**
- * Version resolution from both src/ and dist/ via `../package.json`.
- */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,7 +15,6 @@ describe("package runtime floor", () => {
 
 describe("daemonVersion", () => {
   test("resolves this package's real version", () => {
-    // ../package.json from src/ (this test's dir) is the daemon package.json.
     const v = daemonVersion();
     expect(v).toMatch(/^\d+\.\d+\.\d+/);
   });
@@ -37,7 +33,7 @@ describe("daemonVersion", () => {
   test("missing/garbage package.json → undefined (never throws)", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-ver-"));
     try {
-      expect(daemonVersion(path.join(dir, "sub"))).toBeUndefined(); // no package.json
+      expect(daemonVersion(path.join(dir, "sub"))).toBeUndefined();
       fs.writeFileSync(path.join(dir, "package.json"), "{ not json");
       expect(daemonVersion(path.join(dir, "sub"))).toBeUndefined();
     } finally {

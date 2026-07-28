@@ -1,10 +1,4 @@
-/**
- * Web artifact reads. Drives the booted local blob store
- * (no R2/creds) through `getArtifactSync()` so the read helpers resolve the same
- * bytes the sync wrote. Covers the list/text/binary/oversize/not-found server-fn
- * core, the download route's byte resolver (path-safety + 404s), and the shared
- * canAccessLoop authorization predicate (membership-based, cross-team-link fix).
- */
+// Use the booted local store so read helpers resolve the same bytes sync wrote.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -57,7 +51,6 @@ async function seed() {
   return { token, machineId, loop };
 }
 
-/** Sync one exact file through manifest negotiation and raw blob PUT. */
 async function syncFile(token: string, loopId: string, p: string, bytes: Buffer, binary = false) {
   const hash = sha256(bytes);
   await art.sync(token, {
@@ -70,7 +63,6 @@ async function syncFile(token: string, loopId: string, p: string, bytes: Buffer,
 
 test("listLoopArtifacts returns path-sorted summaries; readLoopArtifact decodes text", async () => {
   const { token, loop } = await seed();
-  // One full-manifest sync (each sync is a complete reconciliation, not append).
   const z = Buffer.from("# Z");
   const b = Buffer.from("hello");
   await art.sync(token, {
@@ -84,7 +76,7 @@ test("listLoopArtifacts returns path-sorted summaries; readLoopArtifact decodes 
   expect((await art.putBlob(token, sha256(b), b)).status).toBe(200);
 
   const list = await artifacts.listLoopArtifacts(loop.id);
-  expect(list.map((f) => f.path)).toEqual(["a/b.txt", "z.md"]); // path-sorted
+  expect(list.map((f) => f.path)).toEqual(["a/b.txt", "z.md"]);
   expect(list[0]).toMatchObject({ path: "a/b.txt", size: 5, binary: false, oversize: false });
   expect(typeof list[0]!.updatedAt).toBe("string");
 
@@ -114,7 +106,6 @@ test("readLoopArtifact reports not-found for unknown + tombstoned paths", async 
   await syncFile(token, loop.id, "keep.md", Buffer.from("a"));
   expect(await artifacts.readLoopArtifact(loop.id, "nope.md")).toEqual({ error: "file not found" });
 
-  // Re-sync without keep.md → it tombstones → no longer readable inline.
   await art.sync(token, { loopId: loop.id, manifest: [] });
   expect(await artifacts.readLoopArtifact(loop.id, "keep.md")).toEqual({ error: "file not found" });
 });
@@ -124,17 +115,14 @@ test("readLoopArtifactBytes: path-safe (400), oversize/missing (404), valid byte
   const bytes = Buffer.from("downloadable");
   await syncFile(token, loop.id, "data/raw.json", bytes, false);
 
-  // Traversal / absolute → rejected before any blob lookup.
   expect((await artifacts.readLoopArtifactBytes(loop.id, "../../etc/passwd")).status).toBe(400);
   expect((await artifacts.readLoopArtifactBytes(loop.id, "/abs")).status).toBe(400);
 
-  // Valid file → bytes stream with the basename as filename.
   const ok = await artifacts.readLoopArtifactBytes(loop.id, "data/raw.json");
   expect(ok.status).toBe(200);
   expect(ok.bytes!.toString()).toBe("downloadable");
   expect(ok.filename).toBe("raw.json");
 
-  // Oversize has no stored bytes → 404.
   await art.sync(token, {
     loopId: loop.id,
     manifest: [
@@ -148,25 +136,20 @@ test("readLoopArtifactBytes: path-safe (400), oversize/missing (404), valid byte
 });
 
 test("canAccessLoop authorizes by MEMBERSHIP, not the active team (cross-team-link fix)", async () => {
-  // Seed: u1 is a member of two teams (their active team A + a second team B), and
-  // NOT a member of team C. ensureTeam(id, name, ownerUserId) adds ownerUserId as a
-  // member, which is exactly "u1 can access this team".
-  await store.ensureTeam("team-cas-a", "A", "u1"); // active team
-  await store.ensureTeam("team-cas-b", "B", "u1"); // other team u1 belongs to
-  await store.ensureTeam("team-cas-c", "C", "u2"); // a team u1 is NOT in
+  await store.ensureTeam("team-cas-a", "A", "u1");
+  await store.ensureTeam("team-cas-b", "B", "u1");
+  await store.ensureTeam("team-cas-c", "C", "u2");
 
   const open = { enforce: false, userId: null, teamId: "team-shared" };
-  expect(await auth.canAccessLoop("team-x", open)).toBe(true); // open mode ⇒ all visible
+  expect(await auth.canAccessLoop("team-x", open)).toBe(true);
 
   const scoped = { enforce: true, userId: "u1", teamId: "team-cas-a" };
-  expect(await auth.canAccessLoop("team-cas-a", scoped)).toBe(true); // active team (fast path)
+  expect(await auth.canAccessLoop("team-cas-a", scoped)).toBe(true);
   // The reported bug: a loop in team B, opened while active team = A. u1 IS a member
   // of B, so it must OPEN — not return not-found.
-  expect(await auth.canAccessLoop("team-cas-b", scoped)).toBe(true); // cross-team MEMBER
-  // A team u1 does not belong to stays denied — indistinguishable from a missing loop.
-  expect(await auth.canAccessLoop("team-cas-c", scoped)).toBe(false); // non-member
+  expect(await auth.canAccessLoop("team-cas-b", scoped)).toBe(true);
+  expect(await auth.canAccessLoop("team-cas-c", scoped)).toBe(false);
 
-  // A signed-out request (no userId) can't fall through to a membership check.
   const anon = { enforce: true, userId: null, teamId: "team-cas-a" };
   expect(await auth.canAccessLoop("team-cas-b", anon)).toBe(false);
 });

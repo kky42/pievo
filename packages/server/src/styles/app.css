@@ -1,6 +1,5 @@
 @import "tailwindcss";
 
-/* Geist Pixel - self-hosted (public/fonts), used via the --font-pixel token. */
 @font-face {
   font-family: "Geist Pixel";
   src: url("/fonts/GeistPixel-Square.woff2") format("woff2");
@@ -34,10 +33,8 @@
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
   --font-display: ui-serif, "New York", Georgia, "Times New Roman", serif;
-  /* Pixel display face for the brand wordmark only. */
   --font-pixel: "Geist Pixel", ui-monospace, "SF Mono", Menlo, monospace;
 
-  /* Apple-scale radii -> rounded-control / rounded-card / rounded-sheet */
   --radius-control: 10px;
   --radius-card: 16px;
   --radius-sheet: 20px;
@@ -67,15 +64,15 @@
      from both the warm-cream AI default and stock Apple gray; the faint blue
      cast keys to the rubik-blue interactive ink and lets glass read clean).
      Dark overrides live in the media query below. */
-  --color-paper: #f3f4f7;        /* page background - cool engineering paper */
-  --color-surface: #ffffff;      /* cards / dialogs */
-  --color-raised: #eceef2;       /* insets: code blocks, textareas, active rows */
-  --color-hairline: #e3e5ea;     /* subtle dividers (decorative) */
-  --color-wire: #cfd3db;         /* intentional borders */
-  --color-disabled: #9aa0ab;     /* disabled text, hints */
-  --color-secondary: #666c78;    /* labels, captions, metadata */
-  --color-primary: #1c1e24;      /* body text */
-  --color-display: #0d0f14;      /* headlines, hero numbers, primary fills */
+  --color-paper: #f3f4f7;
+  --color-surface: #ffffff;
+  --color-raised: #eceef2;
+  --color-hairline: #e3e5ea;
+  --color-wire: #cfd3db;
+  --color-disabled: #9aa0ab;
+  --color-secondary: #666c78;
+  --color-primary: #1c1e24;
+  --color-display: #0d0f14;
 
   /*
    * Rubik signal lights - the raw cube hues. Fills and dots ONLY (never text);
@@ -99,15 +96,13 @@
   --color-accent-soft: rgba(183, 18, 52, 0.08);
   --color-success: #00813c;
   --color-success-soft: rgba(0, 155, 72, 0.1);
-  --color-interactive: var(--color-rubik-blue); /* the logo's blue IS the interactive ink */
+  --color-interactive: var(--color-rubik-blue);
   --color-interactive-soft: rgba(0, 70, 173, 0.08);
   --color-warn: #c44700;
   --color-warn-soft: rgba(255, 88, 0, 0.1);
-  --color-running: #8a6d00;      /* yellow's text-safe ink; the dot uses rubik-yellow */
+  --color-running: #8a6d00;
   --color-running-soft: rgba(255, 213, 0, 0.16);
 
-  /* Functional run-result ramp: green keep, gray no-change, yellow block,
-   * red infrastructure error, and amber protocol warning. */
   --color-run-keep: var(--color-success);
   --color-run-no-change: var(--color-secondary);
   --color-run-block: var(--color-running);
@@ -202,7 +197,6 @@
 .glass-strong {
   background: var(--glass-bg-strong);
 }
-/* Edge-to-edge variant for the sticky top bar: bottom hairline only, square. */
 .glass-bar {
   border-width: 0 0 1px;
   border-radius: 0;
@@ -248,7 +242,7 @@
   background: var(--color-surface);
   padding: 0.1em 0.35em;
   border-radius: 4px;
-  overflow-wrap: anywhere; /* long inline URLs/tokens wrap instead of overflowing */
+  overflow-wrap: anywhere;
 }
 .artifact-markdown pre {
   font-family: var(--font-mono);
@@ -257,7 +251,6 @@
   background: var(--color-surface);
   padding: 12px 14px;
   border-radius: 8px;
-  /* Wrap long code lines (no runaway horizontal scrollbar); break unbreakable URLs. */
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   margin: 0.6em 0;
@@ -308,7 +301,6 @@
 ::-webkit-scrollbar-thumb {
   background: var(--color-wire);
   border-radius: 9999px;
-  /* Inset the thumb so it reads as a slim pill, not a full-width bar. */
   border: 2px solid transparent;
   background-clip: padding-box;
 }
@@ -334,8 +326,6 @@
   padding-right: 2rem;
 }
 
-/* Dot-matrix paper texture - a faint grid the glass layer refracts nicely;
- * opaque cards sit on top. */
 .dot-grid-subtle {
   background-image: radial-gradient(circle, var(--color-hairline) 0.5px, transparent 0.5px);
   background-size: 12px 12px;
@@ -418,7 +408,6 @@
   0%, 9% { fill: var(--color-interactive); }
   16%, 100% { fill: var(--ring-base); }
 }
-/* The runner parks at its home sticker instead of chasing. */
 @media (prefers-reduced-motion: reduce) {
   .ring-logo-animated .ring-cell { animation: none; }
 }

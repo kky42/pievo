@@ -1,18 +1,3 @@
-/** `pievo daemon status` and `pievo daemon stop` inspect and stop this
- * machine's detached daemon.
- *
- * Both are built on the local pidfile (`pidfile.ts`): the daemon records its pid
- * on boot, so status can report it and stop can signal it — no
- * round-trip to the server required. `status` ALSO reports what's locally
- * knowable about identity (the configured server URL, whether a device token is
- * stored) and, best-effort, the server's view (online + machine name) when both
- * a server and token are available. Nothing is fabricated: an unreachable server
- * or absent pidfile simply degrades to "unknown / can't tell locally".
- *
- * Every external touch (pidfile read, liveness probe, start-time lookup, kill,
- * server fetch, output) is an injectable seam so the tests need no real process
- * or network.
- */
 import path from "node:path";
 
 import { activeConnection, PIEVO_DIR, serverOutboxPath } from "./config.js";
@@ -25,7 +10,6 @@ export type MachineStatus = {
   /** False when the supplied saved identity has no machine on this server. Older
    * servers omit this field, which remains compatible with a registered identity. */
   registered?: boolean;
-  /** For an unregistered identity, whether this token is a live enrollment claim. */
   claimValid?: boolean;
   online: boolean;
   name: string | null;
@@ -64,8 +48,6 @@ export type DaemonControlDeps = {
   err?: (s: string) => void;
   reportDiagnostics?: () => ReportDiagnostics;
   runtimeDiagnostics?: () => RuntimeDiagnostics | undefined;
-  // The local config inputs `status` reports — overridable so tests are isolated
-  // from the ambient ~/.pievo. Omitted ⇒ read from disk.
   server?: string;
   token?: string;
 };
@@ -97,7 +79,6 @@ export async function runDaemonStatus(args: string[], injected: DaemonControlDep
   const active = activeConnection();
   const server = "server" in injected ? (injected.server ?? "") : (active?.serverUrl ?? "");
   const token = "token" in injected ? injected.token : active?.deviceToken;
-  // The shared pidfile.verifiedRunningPid check (reused-pid safe), fed our seams.
   const pid = verifiedRunningPid(d);
 
   d.out("pievo daemon status:\n");

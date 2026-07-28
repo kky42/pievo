@@ -1,7 +1,3 @@
-/**
- * spawn helpers — the child-env allowlists (allowlistEnv / execEnv) and the
- * process-GROUP kill: a timed-out child's grandchildren must not survive the timeout.
- */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,7 +7,6 @@ import { afterEach, describe, expect, test } from "vitest";
 import { isAlive } from "./pidfile.js";
 import { allowlistEnv, execEnv, runProcess } from "./spawn.js";
 
-// Save/restore every env key a test touches so nothing leaks across tests.
 const saved = new Map<string, string | undefined>();
 function setEnv(k: string, v: string): void {
   if (!saved.has(k)) saved.set(k, process.env[k]);
@@ -32,9 +27,9 @@ describe("execEnv", () => {
 
   test("keeps claude auth/config keys — incl. the ANTHROPIC_* proxy family and CLAUDE_CONFIG_DIR", () => {
     setEnv("ANTHROPIC_API_KEY", "sk-x");
-    setEnv("ANTHROPIC_BASE_URL", "https://gw.example"); // proxy/gateway users
+    setEnv("ANTHROPIC_BASE_URL", "https://gw.example");
     setEnv("ANTHROPIC_AUTH_TOKEN", "tok");
-    setEnv("CLAUDE_CONFIG_DIR", "/tmp/claude-config"); // relocated Claude config
+    setEnv("CLAUDE_CONFIG_DIR", "/tmp/claude-config");
     const env = execEnv("claude-code");
     expect(env.ANTHROPIC_API_KEY).toBe("sk-x");
     expect(env.ANTHROPIC_BASE_URL).toBe("https://gw.example");
@@ -46,7 +41,7 @@ describe("execEnv", () => {
   test("drops unrelated shell secrets", () => {
     setEnv("AWS_SECRET_ACCESS_KEY", "leak-me-not");
     setEnv("GITHUB_TOKEN", "leak-me-not");
-    setEnv("PIEVO_TOKEN", "dk_secret"); // the device token never reaches claude
+    setEnv("PIEVO_TOKEN", "dk_secret");
     const env = execEnv("claude-code");
     expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
     expect(env.GITHUB_TOKEN).toBeUndefined();
@@ -65,7 +60,6 @@ describe("execEnv", () => {
     expect(env.CODEX_HOME).toBe("/tmp/codex-home");
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
-    // OAuth/session files under ~/.codex stay reachable via HOME (BASE_ALLOW).
     expect(env.HOME).toBe(process.env.HOME);
   });
 
@@ -152,9 +146,7 @@ describe("runProcess — process-group kill (posix)", () => {
   });
 
   test("a timed-out child's grandchild dies with it", async () => {
-    if (process.platform === "win32") return; // no process groups on win32 (plain kill fallback)
-    // The child spawns a long-sleeping grandchild, prints its pid, then idles
-    // until the runProcess timeout SIGTERMs the whole group.
+    if (process.platform === "win32") return;
     const script = [
       'const { spawn } = require("node:child_process");',
       'const g = spawn("sleep", ["120"], { stdio: "ignore" });',

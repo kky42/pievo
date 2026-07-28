@@ -52,7 +52,6 @@ async function ownedLoop(id: string) {
   return { loop, enforce: scope.enforce, teamId: scope.teamId }
 }
 
-/** Whether the auth gate is active (a GitHub OAuth app is configured). */
 export const getAuthState = createServerFn({ method: 'GET' }).handler(async () => {
   const { authEnabled } = await import('../auth.js')
   return { enabled: authEnabled }
@@ -139,7 +138,6 @@ export const listLoops = createServerFn({ method: 'GET' })
     return sortLoopSummariesByRecentRun(await toLoopSummaries(loops, machines))
   })
 
-/** GET — full detail (loop + summary + reversed runs). */
 export const getLoopDetail = createServerFn({ method: 'GET' })
   .validator((id: string) => id)
   .handler(async ({ data: id }): Promise<LoopDetail> => {
@@ -162,8 +160,6 @@ export const getLoopDetail = createServerFn({ method: 'GET' })
     return detail
   })
 
-/** GET — one older page of a loop's runs (cursor = `beforeTs`), for the card
- *  timeline's lazy "+N" paging. Chronological (oldest-first), capped. */
 export const loadOlderRuns = createServerFn({ method: 'GET' })
   .validator((d: { loopId: string; beforeTs: string; limit?: number }) => d)
   .handler(async ({ data }): Promise<RunSummary[]> => {
@@ -173,7 +169,6 @@ export const loadOlderRuns = createServerFn({ method: 'GET' })
     return toRunSummaries(data.loopId, await store.listRunsBefore(data.loopId, data.beforeTs, limit))
   })
 
-/** GET — the loop's current live-synced files (metadata only; path-sorted). */
 export const getArtifacts = createServerFn({ method: 'GET' })
   .validator((d: { loopId: string }) => d)
   .handler(async ({ data }): Promise<ArtifactSummary[]> => {
@@ -183,8 +178,6 @@ export const getArtifacts = createServerFn({ method: 'GET' })
     return listLoopArtifacts(data.loopId)
   })
 
-/** GET — one artifact's content: decoded text, or a binary/oversize marker the
- *  UI turns into a download link (bytes stream from the /api/artifact route). */
 export const getArtifact = createServerFn({ method: 'GET' })
   .validator((d: { loopId: string; path: string }) => d)
   .handler(async ({ data }): Promise<ArtifactContent> => {
@@ -207,8 +200,6 @@ export const getRunDiff = createServerFn({ method: 'GET' })
     const { computeRunDiff } = await import('./runDiff.js')
     return computeRunDiff(data.runId)
   })
-
-// ---- writes (apply via the live in-process Scheduler) ----
 
 export const patchLoop = createServerFn({ method: 'POST' })
   .validator((d: { id: string; patch: LoopPayload }) => d)
@@ -332,8 +323,6 @@ export const stopRun = createServerFn({ method: 'POST' })
     const result = await store.requestRunCancel(run.loopId, id)
     return result ? { ok: true, waiting: result.phase === 'running' } : { error: 'run not found' }
   })
-
-// ---- New-loop connection key (no machine picker) ----
 
 /** Mint the key shown in the New-loop daemon connection command. It may enroll
  * a new machine and remains valid as an optional team-bound create claim. */

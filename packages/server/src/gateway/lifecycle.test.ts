@@ -49,7 +49,6 @@ async function seedLoop(machineId: string, enabled = true) {
   return store.createLoop({ workdir: "/work", userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled });
 }
 
-
 test("pause leaves a running run and lease intact, preserving its queued owner follow-up", async () => {
   const machine = await seedMachine();
   const loop = await seedLoop(machine.id);
@@ -75,7 +74,6 @@ test("start clears an owner pause cause", async () => {
   await store.startLoop(loop.id);
   expect((await store.getLoop(loop.id))?.pauseCause).toBeNull();
 });
-
 
 test("stop atomically pauses, clears facts, cancels all pending work, and only requests running cancellation", async () => {
   const machine = await seedMachine();
@@ -151,7 +149,6 @@ test("protocol v4 rejects old protocols and repeats per-run cancellation", async
   expect(first.body).toMatchObject({ delivery: null, cancelRunIds: [run.id] });
   expect(second.body).toMatchObject({ delivery: null, cancelRunIds: [run.id] });
 });
-
 
 test("a complete recovery snapshot keeps a reclaimed run blocking while it is executing or reporting", async () => {
   for (const stage of ["executing", "reporting"] as const) {
@@ -265,7 +262,6 @@ test("report authentication precedes invalid handling; uncorrelatable ids stay n
   expect((await tokens.resolveLease(token))?.state).toBe("active");
   expect(await store.countTerminalReportIncidents()).toBe(0);
 });
-
 
 test.each([
   ["missing runId", { result: "success" }, "runId is required"],
@@ -404,7 +400,6 @@ test("invalid terminal-grace telemetry preserves a canceled result", async () =>
   expect(await store.getRun(run.id)).toMatchObject({ phase: "canceled", reportIncident: { code: "REPORT_INVALID" } });
   expect(await tokens.resolveLease(token)).toBeUndefined();
 });
-
 
 test("delete completes after terminal report and leaves its durable receipt", async () => {
   const machine = await seedMachine();

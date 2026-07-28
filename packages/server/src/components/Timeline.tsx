@@ -18,10 +18,10 @@ import { runPulseAnim, useHydrated } from './ui'
  * runs, fetches the next older page via onLoadMore before sliding. The "+N"
  * counts reflect the loop's TRUE total (`total`), not just what's loaded.
  */
-export const WINDOW = 16 // max blocks per row - also the lazy-load page size
-const PAGE = WINDOW // a pager click steps a full window left/right
-const RAD = 'rounded-[4px]' // cube-sticker corner (the Rubik's-sticker motif)
-const SEG = `h-5 w-[18px] shrink-0 ${RAD}` // one run block
+export const WINDOW = 16
+const PAGE = WINDOW
+const RAD = 'rounded-[4px]'
+const SEG = `h-5 w-[18px] shrink-0 ${RAD}`
 
 function RunSeg({ run, onClick }: { run: RunSummary; onClick: () => void }) {
   const body = run.error || run.message || ''
@@ -46,7 +46,6 @@ function RunSeg({ run, onClick }: { run: RunSummary; onClick: () => void }) {
         <Tooltip.Positioner sideOffset={8}>
           <Tooltip.Popup className="glass-strong pointer-events-none max-w-[340px] rounded-control px-3.5 py-2.5 text-meta leading-snug text-primary">
             <div className="flex items-center gap-1.5 font-medium">
-              {/* swatch - matches the run blocks (circle is reserved for the next-dot) */}
               <span className="size-2 shrink-0 rounded-[2px]" style={{ background: dotColor(run) }} />
               {dotLabel(run)}
               <span className="ml-auto whitespace-nowrap pl-3 font-mono text-caption font-normal text-secondary">
@@ -101,12 +100,8 @@ export function Timeline({
   onPickRun,
 }: {
   loop: LoopSummary
-  /** The loaded runs, chronological (oldest-first). The card owns this list and
-   *  grows it on the left via onLoadMore. */
   runs: RunSummary[]
-  /** The loop's true run total — drives the "+N" counts beyond what's loaded. */
   total: number
-  /** Fetch+prepend the next older page; resolves with how many were added. */
   onLoadMore: () => Promise<number>
   onPickRun: (run: RunSummary) => void
 }) {
@@ -126,8 +121,8 @@ export function Timeline({
   const start = winStart < 0 ? maxStart : Math.min(winStart, maxStart)
   const end = Math.min(start + WINDOW, L)
   const visible = all.slice(start, end)
-  const olderHidden = unloaded + start // off the left edge (loaded + not-yet-fetched)
-  const newerHidden = L - end // off the right edge (always loaded)
+  const olderHidden = unloaded + start
+  const newerHidden = L - end
   const atLatest = newerHidden === 0
 
   const pageBack = async () => {
@@ -145,7 +140,7 @@ export function Timeline({
   }
   const pageFwd = () => {
     const next = start + PAGE
-    setWinStart(next >= maxStart ? -1 : next) // snap back to follow-latest at the edge
+    setWinStart(next >= maxStart ? -1 : next)
   }
 
   // An in-flight run is just the newest run with `running: true` — it renders as a

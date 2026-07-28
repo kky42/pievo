@@ -34,7 +34,6 @@ describe('artifactKind', () => {
     expect(imageMime('a.jpeg')).toBe('image/jpeg')
     expect(imageMime('a.svg')).toBe('image/svg+xml')
     expect(imageMime('a.webp')).toBe('image/webp')
-    // Not an image → no inline MIME (the route keeps it a download).
     expect(imageMime('a.html')).toBeNull()
     expect(imageMime('a.md')).toBeNull()
     expect(imageMime('a.exe')).toBeNull()

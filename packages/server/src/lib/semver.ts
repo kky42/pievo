@@ -28,15 +28,12 @@ function validIdentifiers(value: string, rejectNumericLeadingZero: boolean): boo
   });
 }
 
-/** Parse the leading numeric core `x.y.z` of a version, ignoring any pre-release
- *  / build suffix. Returns null when it isn't a recognizable version. */
 function core(v: string): [number, number, number] | null {
   const m = /^\s*v?(\d+)\.(\d+)\.(\d+)/.exec(v);
   if (!m) return null;
   return [Number(m[1]), Number(m[2]), Number(m[3])];
 }
 
-/** Does `v` carry a pre-release suffix (e.g. "1.2.3-rc.1")? */
 function isPre(v: string): boolean {
   return /^\s*v?\d+\.\d+\.\d+-/.test(v);
 }
@@ -57,6 +54,5 @@ export function isOutdated(current: string | null | undefined, latest: string | 
     if (ai < bi) return true;
     if (ai > bi) return false;
   }
-  // Equal numeric core: a pre-release current is behind a release latest.
   return isPre(current) && !isPre(latest);
 }

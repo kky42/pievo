@@ -1,5 +1,3 @@
-/** Client-safe domain and API shapes shared by the Pievo server and web UI. */
-
 import type { MachinePresence } from './lib/machinePresence'
 export type { MachinePresence } from './lib/machinePresence'
 
@@ -17,8 +15,6 @@ export type { MachinePresence } from './lib/machinePresence'
 export const CODING_AGENTS = ['claude-code', 'codex', 'pi'] as const
 export type CodingAgent = (typeof CODING_AGENTS)[number]
 
-/** Coerce an unknown value to a known `CodingAgent`, or null when unrecognized.
- *  Canonical loop validation and the web agent select share this enum source. */
 export function coerceCodingAgent(value: unknown): CodingAgent | null {
   return typeof value === 'string' && (CODING_AGENTS as readonly string[]).includes(value) ? (value as CodingAgent) : null
 }
@@ -57,12 +53,9 @@ export interface StatusDefinitions {
 }
 
 export interface RunSummary {
-  /** Run row id — lets the detail view fetch this run's trace directly. */
   id: string
-  /** The loop this run belongs to — lets the run-detail view resolve its files. */
   loopId: string
   ts: string
-  /** Canonical durable lifecycle state. */
   phase: RunPhase
   /** Interrupted terminal report authority: blocking waits for daemon recovery;
    * report-only no longer fences queued work. */
@@ -89,13 +82,11 @@ export interface RunSummary {
   reportIncident?: ReportIncident | null
 }
 
-/** A connected machine (a teammate's daemon) for the Machines panel. */
 export interface MachineSummary {
   id: string
   name: string
   online: boolean
   lastSeen: string | null
-  /** Daemon-reported identity (captured on connect). */
   hostname: string | null
   platform: string | null
   arch: string | null
@@ -107,9 +98,7 @@ export interface MachineSummary {
    *  npm is unreachable. Same for every machine — the web compares it against
    *  `daemonVersion` to show an "upgrade available" hint. */
   latestDaemonVersion: string | null
-  /** True when this server will not dispatch runs to the machine until its daemon is upgraded. */
   needsUpdate: boolean
-  /** Minimum daemon version required before this server will dispatch runs. */
   requiredDaemonVersion: string
   /** Plaintext device token (so the UI can re-show the connect command). Under
    *  the auth gate it is serialized ONLY to the machine's owner — null for
@@ -150,7 +139,6 @@ export interface LoopSummary {
   recentUsage: { runCount: number; tokenCount: number }
 }
 
-/** The final editable loop configuration plus server lifecycle metadata. */
 export interface LoopFull {
   id: string
   name: string
@@ -184,16 +172,11 @@ export interface LoopDetail {
   runs: RunSummary[]
 }
 
-// ---- exact artifacts: the loop's current synced files ----
-
-/** One live file in a loop's current artifact set (metadata only; bytes are
- *  fetched lazily via getArtifact / the download route). */
 export interface ArtifactSummary {
   /** Normalized, loop-folder-relative path. */
   path: string
   /** Byte size (null when unknown). */
   size: number | null
-  /** When this file last synced from the machine (ISO). */
   updatedAt: string
   /** The bytes contain a NUL → download-only (no inline text render). */
   binary: boolean
@@ -201,16 +184,11 @@ export interface ArtifactSummary {
   oversize: boolean
 }
 
-/** getArtifact result: a text file's decoded content, a marker for a
- *  binary/oversize file (download via the route instead), or an error. */
 export type ArtifactContent =
   | { text: string }
   | { binary: true; size: number | null; oversize: boolean }
   | { error: string }
 
-// ---- per-run artifact diff ----
-
-/** One file's change between a run and the previous run. */
 export interface RunDiffFile {
   path: string
   status: 'added' | 'modified' | 'removed'
@@ -222,7 +200,6 @@ export interface RunDiffFile {
   tooLarge?: boolean
   /** newSize − oldSize (added ⇒ +newSize, removed ⇒ −oldSize); null when unknown. */
   sizeDelta: number | null
-  /** Unified text diff (text files only); absent for binary/oversize/too-large. */
   diff?: string
   /** Bounded callers may omit work before reading blobs or running jsdiff. */
   diffOmitted?: 'input-budget' | 'diff-budget'
@@ -243,9 +220,6 @@ export interface RunDiffResult {
   work?: { filesProcessed: number; inputBytes: number; emittedDiffChars: number }
 }
 
-// ---- canonical loop writes ----
-
-/** The canonical create/edit envelope used by the web and owner CLI. */
 export interface LoopPayload {
   name?: string
   schedule?: LoopSchedule
@@ -272,9 +246,7 @@ export interface MutationResult {
   error?: string
 }
 
-/** The team switcher's data: the teams this user may view + the active selection. */
 export interface TeamsView {
   teams: { id: string; name: string }[]
-  /** The active team id. */
   activeTeamId: string
 }

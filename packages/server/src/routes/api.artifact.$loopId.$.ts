@@ -35,8 +35,6 @@ export const Route = createFileRoute('/api/artifact/$loopId/$')({
         // Malformed percent-encoding must be a clean 400, never a thrown 500.
         const loopId = safeDecode(after.slice(0, slash))
         if (loopId === null) return Response.json({ error: 'bad loop id' }, { status: 400 })
-        // Decode each segment so a path like `data/raw.json` round-trips intact;
-        // ANY malformed segment is a 400 (same policy as the loop id).
         const segments = after
           .slice(slash + 1)
           .split('/')
@@ -44,7 +42,6 @@ export const Route = createFileRoute('/api/artifact/$loopId/$')({
         if (segments.some((s) => s === null)) return Response.json({ error: 'bad path' }, { status: 400 })
         const relPath = segments.join('/')
 
-        // Session auth + team scope (the same gate as the server fns' ownedLoop).
         const store = await import('../db/store.js')
         const loop = await store.getLoop(loopId)
         if (!loop) return Response.json({ error: 'not found' }, { status: 404 })

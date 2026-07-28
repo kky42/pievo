@@ -1,4 +1,3 @@
-/** Side-effect-free global, nested-command, and version help. */
 import { daemonVersion } from "./version.js";
 
 const HELP_BODY = ` connects this machine to a Pievo server and runs scheduled prompts locally.

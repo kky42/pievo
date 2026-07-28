@@ -1,5 +1,4 @@
-# Pievo server (TanStack Start + in-process scheduler + machine gateway).
-# Single always-on container on Fly. External Postgres is fully stateless only
+# External Postgres is fully stateless only
 # with R2; otherwise local artifact bytes use /data. To run embedded pglite there,
 # opt in with PIEVO_DB=pglite - without either DB, prestart refuses to boot (exit 1)
 # so a lost DATABASE_URL secret can't silently start an empty ephemeral database.
@@ -10,13 +9,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 RUN corepack enable
 WORKDIR /app
 
-# Install deps (cache on manifests).
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/server/package.json packages/server/
 COPY packages/daemon/package.json packages/daemon/
 RUN pnpm install --frozen-lockfile
 
-# Build the server (nitro → .output/server/index.mjs).
 COPY . .
 RUN pnpm --filter @kky42/pievo-server build
 
@@ -34,7 +31,4 @@ ENV PIEVO_DATA_DIR=/data
 ENV PORT=3000
 EXPOSE 3000
 WORKDIR /app/packages/server
-# `start` = prestart.mjs (config gate + postgres-js migrator over DIRECT_DATABASE_URL
-# when hosted; in-process pglite migration when opted in via PIEVO_DB=pglite,
-# else exit 1) → node .output/server/index.mjs
 CMD ["pnpm", "start"]

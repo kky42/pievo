@@ -1,22 +1,9 @@
-/**
- * `pievo skill {status,install}` — a thin verb wrapping the same best-effort
- * user-scope install path that `pievo daemon start` / `pievo new` run. It lets a
- * user refresh the skill on demand or check where it is installed.
- *
- * The install targets EVERY agent in `SKILL_TARGET_AGENTS` (Claude Code + Codex
- * today), and `status` reports each user's install location honestly.
- *
- *   pievo skill              # same as `pievo skill install`
- *   pievo skill install      # install for each known agent at user scope (~/…)
- *   pievo skill status       # report each agent's install location + bundle state
- */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { bundledSkillAvailable, installSkill, SKILL_TARGET_AGENTS } from "./skill-install.js";
 
-/** The `pievo` skill dir for one agent, under a scope root. */
 function skillDirFor(root: string, skillsRoot: readonly string[]): string {
   return path.join(root, ...skillsRoot, "pievo");
 }

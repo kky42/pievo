@@ -1,4 +1,3 @@
-/** All filesystem/env touches are injected, so tests never write into a real home or bin. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -61,7 +60,7 @@ describe("ensureBinShim", () => {
     });
     expect(wrote).toEqual([path.join("/opt/node", "bin")]);
     expect(r).toEqual({ path: path.join("/opt/node", "bin", "pievo"), onPath: true, written: true });
-    expect(out.join("")).toBe(""); // on PATH → no guidance
+    expect(out.join("")).toBe("");
   });
 
   test("falls back to ~/.local/bin when the global bin is unwritable (EACCES), with PATH guidance", () => {
@@ -113,7 +112,7 @@ describe("ensureBinShim", () => {
       writeShim: (dir) => void wrote.push(dir),
       out: (s) => out.push(s),
     });
-    expect(wrote).toEqual([]); // never wrote
+    expect(wrote).toEqual([]);
     expect(r).toEqual({ path: null, onPath: false, written: false });
     expect(out.join("")).toContain("npx cache");
     expect(out.join("")).toContain("npm install -g @kky42/pievo@latest");
@@ -156,12 +155,11 @@ describe("ensureBinShim", () => {
       env: { npm_config_prefix: "/opt/node", PATH: `/opt/node/bin${path.delimiter}/home/u/.local/bin` },
       homedir: () => "/home/u",
       entry: () => "/opt/node/lib/node_modules/@kky42/pievo/dist/cli.js",
-      // A real installed binary at the global bin — not our shim.
       readShim: (p) => (p === globalBin ? "#!/usr/bin/env node\nconsole.log('real bin')" : null),
       writeShim: (dir) => void wrote.push(dir),
       out: (s) => out.push(s),
     });
-    expect(wrote).toEqual([path.join("/home/u", ".local", "bin")]); // skipped the foreign one
+    expect(wrote).toEqual([path.join("/home/u", ".local", "bin")]);
     expect(r.path).toBe(path.join("/home/u", ".local", "bin", "pievo"));
     expect(r.written).toBe(true);
   });
@@ -176,7 +174,7 @@ describe("ensureBinShim", () => {
       readShim: (p) => (p === globalBin ? "#!/bin/sh\nexec '/usr/bin/node' '/old/cli.js' \"$@\"\n" : null),
       writeShim: (dir) => void wrote.push(dir),
     });
-    expect(wrote).toEqual([path.join("/opt/node", "bin")]); // overwrote our own shim
+    expect(wrote).toEqual([path.join("/opt/node", "bin")]);
     expect(r).toEqual({ path: globalBin, onPath: true, written: true });
   });
 });

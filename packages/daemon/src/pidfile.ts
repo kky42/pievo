@@ -1,17 +1,3 @@
-/**
- * Daemon pidfile — the local liveness/identity record `pievo daemon status` and
- * `pievo daemon stop` need to find THIS machine's detached daemon.
- *
- * `daemon start` spawns detached (it outlives the launching session) and relies
- * on the server's `/api/machine/status` for online-ness, but that says nothing
- * about the LOCAL process — `daemon stop` needs local process identity. So the
- * daemon itself writes its pid here on boot (`daemon.pid` under the same
- * `~/.pievo` state dir as the device token / server URL) and removes it on a
- * clean exit. `daemon status`/`daemon stop` read it back and probe the pid with signal 0.
- *
- * All writes are best-effort: a missing/unwritable pidfile degrades `daemon status`
- * to "can't tell locally" and `daemon stop` to a clean no-op — never a crash.
- */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -20,16 +6,12 @@ import { PIEVO_DIR } from "./config.js";
 
 export const PID_FILE = path.join(PIEVO_DIR, "daemon.pid");
 
-/** A pidfile record: the daemon's pid plus its process identity marker. */
 export type PidRecord = { pid: number; startTime: string };
 
 /**
- * Best-effort process start time, used as a second identity field so a REUSED
- * pid (after an unclean crash left the pidfile behind) can't be mistaken for our
- * daemon. `ps -p <pid> -o lstart=` prints the process's start timestamp on both
- * macOS and Linux; one shared helper is used at write-time AND check-time so the
- * two strings compare byte-for-byte. Returns undefined when `ps` is unavailable,
- * the pid is gone, or anything else fails — callers degrade to alive-only.
+ * Pair the PID with its start time so an unclean exit cannot make a reused PID
+ * look like our daemon. macOS and Linux both support this `ps` timestamp; using
+ * the same helper for writes and checks keeps the identity comparison exact.
  */
 export function processStartTime(pid: number): string | undefined {
   try {
@@ -43,7 +25,6 @@ export function processStartTime(pid: number): string | undefined {
   }
 }
 
-/** Record the running daemon's pid + start-time identity (best-effort, 0600). */
 export function writePidFile(pid: number = process.pid): void {
   try {
     fs.mkdirSync(PIEVO_DIR, { recursive: true });
@@ -55,7 +36,6 @@ export function writePidFile(pid: number = process.pid): void {
   }
 }
 
-/** The pid + start-time recorded in the pidfile, or undefined if absent/invalid. */
 export function readPidFile(): PidRecord | undefined {
   try {
     const raw = fs.readFileSync(PID_FILE, "utf8").trim();
@@ -69,9 +49,7 @@ export function readPidFile(): PidRecord | undefined {
   }
 }
 
-/** Remove the pidfile (on clean daemon exit, or when found stale). When
- *  `onlyIfPid` is given, remove it ONLY if it still records that pid — a daemon
- *  exiting must never delete a pidfile another daemon has since claimed. */
+/** An exiting daemon must not clear a pidfile another daemon has since claimed. */
 export function clearPidFile(onlyIfPid?: number): void {
   try {
     if (onlyIfPid !== undefined && readPidFile()?.pid !== onlyIfPid) return;
@@ -95,7 +73,6 @@ export function isAlive(pid: number): boolean {
   }
 }
 
-/** Injectable seams for verifiedRunningPid (control.ts and tests reuse them). */
 export type PidCheckDeps = {
   readPid?: () => PidRecord | undefined;
   alive?: (pid: number) => boolean;
@@ -103,12 +80,7 @@ export type PidCheckDeps = {
   clearPid?: () => void;
 };
 
-/**
- * The pid of a daemon that is ACTUALLY ours and alive, or undefined. A pid is
- * "our daemon" iff it is alive and the live process start-time equals the recorded
- * value. A reused pid is never signaled. A dead pid or identity mismatch is cleared;
- * an unavailable live identity is left untouched and treated as uncertain.
- */
+/** Never signal a PID unless its live start time matches the recorded identity. */
 export function verifiedRunningPid(deps: PidCheckDeps = {}): number | undefined {
   const readPid = deps.readPid ?? readPidFile;
   const alive = deps.alive ?? isAlive;

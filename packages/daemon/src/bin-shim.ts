@@ -1,27 +1,3 @@
-/**
- * The durable `pievo` PATH shim for source/custom launches. `pievo
- * daemon start` (and `pievo new`) write a tiny exec wrapper named `pievo` into a user
- * bin dir on PATH so subsequent calls resolve to a durable binary.
- *
- * The wrapper RE-EXECS this daemon's own launcher (execPath + execArgv + entry),
- * exactly like `callback-bin.ts` — so it stays version-consistent with whatever
- * `pievo daemon start`/`new` was invoked as (`node dist/cli.js`,
- * `tsx src/cli.ts`). Writing the shim is BEST-EFFORT: any failure degrades to the
- * source launcher and never fails daemon start.
- *
- * Because a durable on-PATH shim outlives the process that wrote it, it is hardened
- * against fragile targets and destructive replacement:
- *   1. It ONLY lands from a DURABLE install — when the re-exec entry lives inside an
- *      npx / npm cache (`/_npx/`, `/_cacache/`), the shim would re-exec a prunable
- *      path, so we SKIP it and print one line of guidance (`npm install -g @kky42/pievo@latest`).
- *   2. It NEVER clobbers a foreign `pievo` — before writing a candidate we read any
- *      existing `pievo` there and skip it unless it is our OWN prior shim (starts
- *      with the re-exec marker); a real global npm binary is left untouched. Refreshing
- *      our own shim is idempotent.
- *
- * Every external touch (write, mkdir, read, homedir, PATH, entry) is an injectable
- * seam so tests never write into the real home dir.
- */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -42,31 +18,21 @@ export function isEphemeralEntry(entry: string): boolean {
   return p.includes("/_npx/") || p.includes("/_cacache/");
 }
 
-/** The re-exec wrapper body (same shape as `callback-bin.ts`'s callback shim). */
 export const shimContents = reexecWrapperContents;
 
 export interface BinShimDeps {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
-  /** The re-exec entry (defaults to `process.argv[1]`) — checked for npx-cache staleness. */
   entry?: () => string;
-  /** Read an existing `pievo` file's contents, or null when absent — used to refuse
-   *  overwriting a foreign binary. */
   readShim?: (p: string) => string | null;
-  /** Whether an existing bin entry resolves to this process's CLI entry. This accepts
-   *  npm's normal global symlink without mistaking it for a foreign binary. */
   sameFile?: (binEntry: string, cliEntry: string) => boolean;
-  /** Write the shim; throws (e.g. EACCES) → the caller falls back to ~/.local/bin. */
   writeShim?: (dir: string) => void;
   out?: (s: string) => void;
 }
 
 export interface BinShimResult {
-  /** Absolute path to the installed `pievo` shim, or null if none was written. */
   path: string | null;
-  /** Whether the shim's dir is on PATH (drives the one-line guidance). */
   onPath: boolean;
-  /** True only when a shim was actually written this call (false on any skip/failure). */
   written: boolean;
 }
 
@@ -81,20 +47,17 @@ export function binDirCandidates(env: NodeJS.ProcessEnv, homedir: string): strin
   return dirs;
 }
 
-/** Is `dir` on `PATH` (exact segment match, normalized)? */
 export function dirOnPath(dir: string, pathVar: string | undefined): boolean {
   if (!pathVar) return false;
   const target = path.resolve(dir);
   return pathVar.split(path.delimiter).some((p) => p && path.resolve(p) === target);
 }
 
-/** Default writer: mkdir + write the 0755 shim into `dir`. */
 function defaultWriteShim(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "pievo"), shimContents(), { mode: 0o755 });
 }
 
-/** Default reader: existing `pievo` contents, or null when absent/unreadable. */
 function defaultReadShim(p: string): string | null {
   try {
     return fs.readFileSync(p, "utf8");
@@ -103,7 +66,6 @@ function defaultReadShim(p: string): string | null {
   }
 }
 
-/** True when both paths resolve to the same installed CLI (including npm symlinks). */
 function defaultSameFile(binEntry: string, cliEntry: string): boolean {
   try {
     return fs.realpathSync(binEntry) === fs.realpathSync(cliEntry);
@@ -112,13 +74,6 @@ function defaultSameFile(binEntry: string, cliEntry: string): boolean {
   }
 }
 
-/**
- * Write (idempotently) the `pievo` shim to the best writable bin dir and, when that
- * dir is not on PATH, print one copy-pasteable line of guidance. Best-effort and
- * hardened (see the file header): SKIPS entirely when the re-exec entry is an
- * ephemeral npx/npm cache path, and never overwrites a foreign `pievo`. Returns
- * `{path:null,onPath:false,written:false}` (announced) on any skip or total failure.
- */
 export function ensureBinShim(injected: BinShimDeps = {}): BinShimResult {
   const env = injected.env ?? process.env;
   const homedir = (injected.homedir ?? os.homedir)();
@@ -167,8 +122,6 @@ export function ensureBinShim(injected: BinShimDeps = {}): BinShimResult {
   return { path: null, onPath: false, written: false };
 }
 
-/** The installed shim's path (for the home view's `bin:` line) WITHOUT writing it —
- *  the first candidate that already has an executable `pievo`. Null when none. */
 export function existingBinShim(injected: { env?: NodeJS.ProcessEnv; homedir?: () => string; exists?: (p: string) => boolean } = {}): string | null {
   const env = injected.env ?? process.env;
   const homedir = (injected.homedir ?? os.homedir)();
@@ -195,12 +148,6 @@ function pievoPathBin(pathVar: string | undefined, exists: (p: string) => boolea
   return null;
 }
 
-/**
- * The absolute path of a DURABLE `pievo` executable: our installed shim
- * (`existingBinShim`) else the first non-ephemeral PATH directory that holds a
- * `pievo`. Null when only a BARE, non-PATH (or ephemeral npx) `pievo` would result.
- * Supplies the home view's durable `bin:` path when known.
- */
 export function resolveDurableBinPath(injected: { env?: NodeJS.ProcessEnv; homedir?: () => string; exists?: (p: string) => boolean } = {}): string | null {
   const shim = existingBinShim(injected);
   if (shim) return shim;

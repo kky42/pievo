@@ -1,4 +1,3 @@
-/** `pievo daemon start/restart`, with external touches injected. */
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { describe, expect, test } from "vitest";
@@ -12,8 +11,6 @@ type Cap = DaemonStartDeps & {
   skillInstalls: () => number;
 };
 
-/** Baseline seams: nothing running, server unreachable, spawn returns pid 555. The
- *  skill refresh is stubbed so no test spawns npx / hits the network. */
 function seams(extra: DaemonStartDeps = {}): Cap {
   let out = "";
   let err = "";
@@ -28,7 +25,6 @@ function seams(extra: DaemonStartDeps = {}): Cap {
     localPid: () => undefined,
     readConnection: () => ({ serverUrl: "http://srv", deviceToken: "dk_stored" }),
     installSkill: async () => { skillInstalls += 1; return { ok: true, line: "pievo skill: installed → ~/.claude/skills/pievo" }; },
-    // No-op the PATH shim so no test writes the real ~/.local/bin.
     ensureBinShim: () => {},
     out: (s) => { out += s; },
     err: (s) => { err += s; },
@@ -95,7 +91,6 @@ describe("runDaemonStart — readiness", () => {
   test("daemon comes online with a fresh heartbeat → success, spawned once, never killed", async () => {
     let calls = 0;
     const cap = seams({
-      // Pre-spawn check is offline, then the spawned daemon advances lastSeen.
       fetchStatus: async () => (++calls >= 2
         ? { online: true, name: "MacBook", lastSeen: "2026-07-19T10:00:01.000Z" }
         : { online: false, name: null, lastSeen: "2026-07-19T10:00:00.000Z" }),
@@ -148,11 +143,11 @@ describe("runDaemonStart — readiness", () => {
   });
 
   test("readiness timeout → kills exactly the daemon it spawned, exits 1", async () => {
-    const cap = seams(); // server never reports online
+    const cap = seams();
     const code = await runDaemonStart([], cap);
     expect(code).toBe(1);
     expect(cap.spawned()).toBe(1);
-    expect(cap.killed()).toEqual([[555, "SIGTERM"]]); // no orphaned detached daemon
+    expect(cap.killed()).toEqual([[555, "SIGTERM"]]);
     expect(cap.stderr()).toContain("did not come online");
   });
 
@@ -406,7 +401,7 @@ describe("runDaemonStart — user-scope skill refresh on every success path", ()
   });
 
   test("readiness timeout (start FAILS) → does NOT refresh the skill", async () => {
-    const cap = seams(); // never online
+    const cap = seams();
     const code = await runDaemonStart([], cap);
     expect(code).toBe(1);
     expect(cap.skillInstalls()).toBe(0);
@@ -421,14 +416,14 @@ describe("runDaemonStart — user-scope skill refresh on every success path", ()
       installSkill: async () => { throw new Error("npx ENOENT"); },
     });
     const code = await runDaemonStart([], cap);
-    expect(code).toBe(0); // start still succeeds
+    expect(code).toBe(0);
   });
 });
 
 describe("buildDaemonSpawn — nested re-exec with env-only token", () => {
   test("argv uses daemon start --foreground and the token rides PIEVO_TOKEN", () => {
     const { args, env } = buildDaemonSpawn("dk_secret_token");
-    expect(args.join(" ")).not.toContain("dk_secret_token"); // never visible in `ps`
+    expect(args.join(" ")).not.toContain("dk_secret_token");
     expect(env.PIEVO_TOKEN).toBe("dk_secret_token");
     expect(env.PIEVO_INTERNAL_DAEMON_CHILD).toBe("1");
     expect(args).toContain("daemon");

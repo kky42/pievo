@@ -1,4 +1,3 @@
-/** Resolve this installed daemon package's version for help and poll telemetry. */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

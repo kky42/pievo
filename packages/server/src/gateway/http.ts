@@ -79,7 +79,6 @@ export async function readJsonBody(request: Request, maxBytes: number): Promise<
   }
 }
 
-// ---- shared wire-egress shape + string discipline ----
 // Generic plumbing shared by every gateway module (index / cli / sync). It lives
 // here - a leaf module with no gateway imports - so index.ts stays pure
 // run-lifecycle core instead of doubling as the toolbox (pinned by layout.test.ts).
@@ -91,7 +90,6 @@ export interface HttpResult {
   body: unknown;
 }
 
-/** Shared clipping cap for large prompt and terminal telemetry strings. */
 export const WIRE_TEXT_CAP = 512 * 1024;
 /** Poll identity strings use the normal wire-text budget; package versions have
  * a tighter existing budget because canonical SemVer is necessarily short. */
@@ -116,7 +114,6 @@ export function stripNul(s: string): string {
   return s.replace(/\u0000/g, "");
 }
 
-/** Clip a free-text wire field and strip NUL before persistence. */
 export function clipText(s: string, cap: number): string {
   return stripNul(s.slice(0, cap));
 }

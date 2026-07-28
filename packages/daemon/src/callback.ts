@@ -1,9 +1,3 @@
-/**
- * Callback mode — `pievo <verb> [...flags]` invoked by claude (via the PATH
- * wrapper) inside a run. Delegates to the shared CLI client (`postCli`): it picks the
- * run token from the env and POSTs `{argv}` to
- * `/api/machine/cli`. This module renders the `{text, exitCode}` reply.
- */
 import { postCli, printCliResponse } from "./cli-client.js";
 
 export async function runCallback(argv: string[]): Promise<number> {

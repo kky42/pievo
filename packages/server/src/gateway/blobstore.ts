@@ -22,11 +22,8 @@ import { logger } from "../logger.js";
 const log = logger.child({ mod: "blobstore" });
 
 export interface BlobStore {
-  /** Does the store already hold bytes for this hash? (drives needHashes dedupe). */
   has(hash: string): Promise<boolean>;
-  /** Persist bytes under the hash (caller has already verified sha256(bytes)===hash). */
   put(hash: string, bytes: Buffer): Promise<void>;
-  /** Fetch bytes for a hash, or null when absent. */
   get(hash: string): Promise<Buffer | null>;
   /** Reclaim a blob's bytes (GC). Idempotent — deleting an absent hash is a no-op. */
   delete(hash: string): Promise<void>;
@@ -154,7 +151,6 @@ export class LocalBlobStore implements BlobStore {
   }
 }
 
-/** In-memory blob store — injectable test adapter. */
 export class MemoryBlobStore implements BlobStore {
   private readonly map = new Map<string, Buffer>();
   async has(hash: string): Promise<boolean> {
@@ -171,12 +167,10 @@ export class MemoryBlobStore implements BlobStore {
   }
 }
 
-/** Object key for a blob hash. Flat namespace under a prefix — hashes are unique. */
 function blobKey(hash: string): string {
   return `blobs/${hash}`;
 }
 
-/** Cloudflare R2 blob store over the S3-compatible API (AWS SDK v3). */
 export class R2BlobStore implements BlobStore {
   // Lazily-constructed S3 client (dynamic import keeps the SDK out of tests/bundle).
   private client: unknown;
@@ -238,7 +232,6 @@ export class R2BlobStore implements BlobStore {
   }
 }
 
-/** S3 "object absent" maps to a 404 / NoSuchKey / NotFound error shape. */
 function isNotFound(err: unknown): boolean {
   const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
   return e?.name === "NotFound" || e?.name === "NoSuchKey" || e?.$metadata?.httpStatusCode === 404;

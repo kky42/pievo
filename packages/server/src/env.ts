@@ -109,7 +109,6 @@ export function r2Config(): R2Config | null {
  * the bias is "keep storage bounded without ever surprising a healthy loop".
  */
 
-/** A positive env integer, or `fallback` when unset / unparseable / non-positive. */
 function posIntEnv(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
   if (!raw) return fallback;
@@ -167,12 +166,10 @@ export function dbWatchdogEnabled(): boolean {
   return Boolean(databaseUrl());
 }
 
-/** How often the DB watchdog pings `select 1`. Default 20s. */
 export function dbWatchdogIntervalMs(): number {
   return posIntEnv("PIEVO_DB_WATCHDOG_INTERVAL_MS", 20_000);
 }
 
-/** Hard per-ping deadline; a ping that exceeds it counts as a failure. Default 5s. */
 export function dbWatchdogTimeoutMs(): number {
   return posIntEnv("PIEVO_DB_WATCHDOG_TIMEOUT_MS", 5_000);
 }

@@ -51,7 +51,6 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-/** First cron occurrence strictly after `after`, interpreted in the loop's zone. */
 export function nextCronAt(cron: string, timezone: string | null, after: string): string {
   if (!timezone) throw new Error("invariant: cron schedule has no timezone");
   const probe = new Cron(cron, { paused: true, timezone });
@@ -68,15 +67,11 @@ function runTimes(at = nowIso()): Pick<NewRun, "ts" | "createdAt" | "updatedAt">
   return { ts: at, createdAt: at, updatedAt: at };
 }
 
-// ---- loops ----
-
 export async function listLoops(teamId?: string): Promise<Loop[]> {
   const q = db.select().from(loops);
   return teamId ? await q.where(eq(loops.teamId, teamId)) : await q;
 }
 
-/** Count a team's loops without materializing their (large) rows — the
- *  delete-block guard + settings-detail badge only need the tally. */
 export async function countLoopsForTeam(teamId: string): Promise<number> {
   const r = (await db.select({ n: sql<number>`count(*)` }).from(loops).where(eq(loops.teamId, teamId)))[0];
   return Number(r?.n ?? 0);
@@ -86,7 +81,6 @@ export async function getLoop(id: string): Promise<Loop | undefined> {
   return (await db.select().from(loops).where(eq(loops.id, id)))[0];
 }
 
-/** Loops bound to a machine — used by machine cascade authorization and UI counts. */
 export async function loopsForMachine(machineId: string): Promise<Loop[]> {
   return db.select().from(loops).where(eq(loops.machineId, machineId));
 }
@@ -250,7 +244,6 @@ async function updateLoopTx(tx: StoreTx, current: Loop, patch: Partial<NewLoop>,
   return loop;
 }
 
-/** Partial owner/system update under the loop lifecycle lock. */
 export async function updateLoop(id: string, patch: Partial<NewLoop>): Promise<Loop | undefined> {
   return db.transaction(async (tx) => {
     const current = (await tx.select().from(loops).where(eq(loops.id, id)).for("update"))[0];
@@ -290,12 +283,10 @@ export async function pauseLoopState(id: string): Promise<PauseLoopResult | unde
   });
 }
 
-/** Pause a loop and return its updated row. */
 export async function pauseLoop(id: string): Promise<Loop | undefined> {
   return (await pauseLoopState(id))?.loop;
 }
 
-/** Start a paused loop unless deletion has begun. */
 export async function startLoop(id: string): Promise<Loop | undefined> {
   return db.transaction(async (tx) => {
     const current = (await tx.select().from(loops).where(eq(loops.id, id)).for("update"))[0];
@@ -317,7 +308,6 @@ async function stopLoopTx(tx: StoreTx, current: Loop, at: string): Promise<StopL
   return { loop, running: marked };
 }
 
-/** Stop is one loop-locked write: Pause + cancel all queue + mark current run. */
 export async function stopLoop(id: string): Promise<StopLoopResult | undefined> {
   return db.transaction(async (tx) => {
     const current = (await tx.select().from(loops).where(eq(loops.id, id)).for("update"))[0];
@@ -325,7 +315,6 @@ export async function stopLoop(id: string): Promise<StopLoopResult | undefined> 
   });
 }
 
-/** Stop-run preserves loop lifecycle; running cancellation waits for daemon proof. */
 export async function requestRunCancel(loopId: string, runId: string): Promise<Run | undefined> {
   return db.transaction(async (tx) => {
     const loop = (await tx.select({ id: loops.id }).from(loops).where(eq(loops.id, loopId)).for("update"))[0];
@@ -382,8 +371,6 @@ async function forceDeleteLoopTx(tx: StoreTx, id: string): Promise<boolean> {
 export async function forceDeleteLoop(id: string): Promise<boolean> {
   return db.transaction((tx) => forceDeleteLoopTx(tx, id));
 }
-
-// ---- runs ----
 
 async function enqueueRunTx(
   tx: StoreTx,
@@ -589,7 +576,6 @@ export async function getReportReceipt(reportId: string) {
   return (await db.select().from(runReportReceipts).where(eq(runReportReceipts.reportId, reportId)))[0];
 }
 
-/** Deterministic primary key for exact rejected-payload replay evidence. */
 export function terminalIncidentReceiptId(reportId: string, payloadDigest: string): string {
   return createHash("sha256").update(reportId + payloadDigest).digest("hex");
 }
@@ -719,7 +705,6 @@ type ActiveRunCheck =
   | { state: "active"; run: Run }
   | { state: "invalid-lease" | "run-not-running" };
 
-/** Validate the report-only authority for one currently running run. */
 async function activeRunForReportTx(
   tx: StoreTx,
   loopId: string,
@@ -796,7 +781,6 @@ export interface FinalizeRunningRunResult {
   loop: Loop;
   failureStreak: number;
   autoPaused: boolean;
-  /** The daemon had already removed execution exclusion before this report. */
   reportOnly?: boolean;
 }
 
@@ -1330,8 +1314,6 @@ export async function claimReadyRunForMachine(
   });
 }
 
-
-/** Newest-last run history for a loop (chronological), capped. */
 export async function listRuns(loopId: string, limit = 30): Promise<Run[]> {
   const rows = await db
     .select()
@@ -1342,7 +1324,6 @@ export async function listRuns(loopId: string, limit = 30): Promise<Run[]> {
   return rows.reverse();
 }
 
-/** Live reconciliation projection for dashboard/run-detail reads. */
 export async function reconciliationStatesForRuns(
   loopId: string,
   runIds: string[],
@@ -1382,7 +1363,6 @@ export async function countRuns(loopId: string): Promise<number> {
   return Number(r?.n ?? 0);
 }
 
-/** Run count and reported input + output tokens in a bounded recent window. */
 export async function recentLoopUsage(loopId: string, since: string): Promise<{ runCount: number; tokenCount: number }> {
   const row = (await db
     .select({
@@ -1400,7 +1380,6 @@ export async function recentLoopUsage(loopId: string, since: string): Promise<{ 
   };
 }
 
-/** Open runs (pending/running) — used by the timeout-reclaim sweep. */
 export async function openRuns(): Promise<Run[]> {
   return db.select().from(runs).where(inArray(runs.phase, ["pending", "running"]));
 }
@@ -1419,7 +1398,6 @@ export async function hasPendingRun(loopId: string): Promise<boolean> {
   return !!r;
 }
 
-/** Is a run for this loop still open (drives the "skip overlapping tick" guard)? */
 export async function openRunsForLoop(loopId: string): Promise<Run[]> {
   return db.select().from(runs).where(and(eq(runs.loopId, loopId), inArray(runs.phase, ["pending", "running"])));
 }
@@ -1470,8 +1448,6 @@ export async function expirePendingRun(
     return canceled.length > 0;
   });
 }
-
-// ---- machines ----
 
 export async function listMachines(teamId?: string): Promise<Machine[]> {
   return teamId
@@ -1543,9 +1519,6 @@ export async function setMachineOnline(id: string, online: boolean): Promise<voi
   await db.update(machines).set({ online, lastSeen: nowIso() }).where(eq(machines.id, id));
 }
 
-// ---- teams ----
-
-/** Deterministic personal-team id for a user (open mode ⇒ the shared "team-shared"). */
 export function teamIdForUser(userId: string | null | undefined): string {
   return `team-${userId ?? "shared"}`;
 }
@@ -1579,7 +1552,6 @@ export function newTeamId(): string {
   return `team-${randomUUID().slice(0, 12)}`;
 }
 
-/** Whether this is the user's renamable but undeletable personal team. */
 export function isPersonalTeam(team: Team): boolean {
   return !!team.ownerUserId && team.id === teamIdForUser(team.ownerUserId);
 }
@@ -1598,12 +1570,10 @@ export async function createTeam(name: string, ownerUserId: string): Promise<Tea
   });
 }
 
-/** Rename a team (no name-sync fights this — see ensureTeam). */
 export async function renameTeam(teamId: string, name: string): Promise<void> {
   await db.update(teams).set({ name }).where(eq(teams.id, teamId));
 }
 
-/** A user's membership row in a team (undefined ⇒ not a member). */
 export async function getTeamMember(teamId: string, userId: string): Promise<TeamMember | undefined> {
   return (
     await db
@@ -1613,7 +1583,6 @@ export async function getTeamMember(teamId: string, userId: string): Promise<Tea
   )[0];
 }
 
-/** Owner-role member count for a team (drives the last-owner invariant). */
 export async function countTeamOwners(teamId: string): Promise<number> {
   const r = (
     await db
@@ -1629,8 +1598,6 @@ export interface TeamMemberWithUser extends TeamMember {
   displayName: string | null;
 }
 
-/** A team's members joined with their user email/name (owners first, then by
- *  join order). The member-list surface in the team settings UI. */
 export async function listTeamMembers(teamId: string): Promise<TeamMemberWithUser[]> {
   const rows = await db
     .select({
@@ -1645,13 +1612,11 @@ export async function listTeamMembers(teamId: string): Promise<TeamMemberWithUse
     .from(teamMembers)
     .leftJoin(user, eq(teamMembers.userId, user.id))
     .where(eq(teamMembers.teamId, teamId));
-  // Owners first, then oldest-first — a stable, readable order.
   return rows
     .map((r) => ({ ...r, email: r.email ?? null, displayName: r.displayName ?? null }))
     .sort((a, b) => (a.role === b.role ? (a.createdAt < b.createdAt ? -1 : 1) : a.role === "owner" ? -1 : 1));
 }
 
-/** Resolve a user by email for direct membership; undefined means no account yet. */
 export async function userByEmail(email: string): Promise<{ id: string; email: string } | undefined> {
   const r = (
     await db
@@ -1771,9 +1736,6 @@ export async function deleteTeamCascade(teamId: string): Promise<"ok" | "has-loo
   return outcome;
 }
 
-// ---- team invites (short-lived, single-use membership links) ----
-
-/** Mint an invite for a team. `token` is the caller-supplied wire token. */
 export async function createInvite(input: {
   token: string;
   teamId: string;
@@ -1788,7 +1750,6 @@ export async function getInvite(token: string): Promise<TeamInvite | undefined> 
   return (await db.select().from(teamInvites).where(eq(teamInvites.token, token)))[0];
 }
 
-/** A team's still-live invites (unredeemed, unexpired), newest first. */
 export async function listPendingInvites(teamId: string): Promise<TeamInvite[]> {
   const now = nowIso();
   return db
@@ -1837,7 +1798,6 @@ export async function redeemInviteAtomic(
   });
 }
 
-/** Revoke a pending invite (owner action). */
 export async function deleteInvite(token: string): Promise<void> {
   await db.delete(teamInvites).where(eq(teamInvites.token, token));
 }
@@ -1846,8 +1806,6 @@ export async function getTeam(id: string): Promise<Team | undefined> {
   return (await db.select().from(teams).where(eq(teams.id, id)))[0];
 }
 
-/** Teams the user belongs to (membership join), newest first. Drives the team
- *  switcher — a regular user has just their personal team (no dropdown). */
 export async function listTeamsForUser(userId: string): Promise<Team[]> {
   const rows = await db
     .select({ t: teams })
@@ -1858,7 +1816,6 @@ export async function listTeamsForUser(userId: string): Promise<Team[]> {
   return rows.map((r) => r.t);
 }
 
-/** Whether the user is a member of the team (authorizes a team-switch request). */
 export async function isTeamMember(teamId: string, userId: string): Promise<boolean> {
   return !!(
     await db
@@ -1868,9 +1825,6 @@ export async function isTeamMember(teamId: string, userId: string): Promise<bool
   )[0];
 }
 
-// ---- blobs (content-addressed metadata; bytes live in the configured BlobStore) ----
-
-/** Does the server already have metadata for this blob hash? (drives needHashes). */
 export async function blobExists(hash: string): Promise<boolean> {
   return !!(await db.select({ hash: blobs.hash }).from(blobs).where(eq(blobs.hash, hash)))[0];
 }
@@ -1883,7 +1837,6 @@ export async function blobSizes(hashes: string[]): Promise<Map<string, number>> 
   return new Map(rows.map((row) => [row.hash, row.size]));
 }
 
-/** Record verified blob metadata idempotently. */
 export async function recordBlob(hash: string, size: number): Promise<void> {
   await db.insert(blobs).values({ hash, size, createdAt: nowIso() }).onConflictDoNothing();
 }
@@ -1907,8 +1860,6 @@ export async function machineReferencesBlob(machineId: string, hash: string): Pr
       .limit(1)
   )[0];
 }
-
-// ---- artifact_files (the current file set of each loop) ----
 
 export interface ArtifactFileInput {
   loopId: string;
@@ -1985,7 +1936,6 @@ export async function reconcileConfiguredArtifacts(
   });
 }
 
-/** The loop's current (non-deleted) file set, path-sorted. */
 export async function listArtifacts(loopId: string): Promise<ArtifactFile[]> {
   return db
     .select()
@@ -1994,12 +1944,10 @@ export async function listArtifacts(loopId: string): Promise<ArtifactFile[]> {
     .orderBy(artifactFiles.path);
 }
 
-/** Every artifact row for a loop, including tombstones. */
 export async function listAllArtifactFiles(loopId: string): Promise<ArtifactFile[]> {
   return db.select().from(artifactFiles).where(eq(artifactFiles.loopId, loopId)).orderBy(artifactFiles.path);
 }
 
-/** One file row by loop + path (live or tombstoned). */
 export async function getArtifactFile(loopId: string, path: string): Promise<ArtifactFile | undefined> {
   return (
     await db
@@ -2009,8 +1957,6 @@ export async function getArtifactFile(loopId: string, path: string): Promise<Art
   )[0];
 }
 
-/** The loop's CURRENT live file set as a snapshot manifest (path → metadata) —
- *  what report() captures as the terminal run's artifact state. */
 export async function buildLoopManifest(loopId: string): Promise<SnapshotManifest> {
   const manifest: SnapshotManifest = {};
   for (const f of await listArtifacts(loopId)) {
@@ -2018,8 +1964,6 @@ export async function buildLoopManifest(loopId: string): Promise<SnapshotManifes
   }
   return manifest;
 }
-
-// ---- exact-artifact snapshots captured at run boundaries ----
 
 /** Write/overwrite a run's snapshot (path → file metadata). Idempotent on runId
  *  so a re-report of the same run just refreshes the captured artifact state. */
@@ -2030,7 +1974,6 @@ export async function putRunSnapshot(runId: string, loopId: string, manifest: Sn
     .onConflictDoUpdate({ target: runSnapshots.runId, set: { loopId, manifest, createdAt: nowIso() } });
 }
 
-/** A run's captured snapshot, or undefined when the run predates the feature. */
 export async function getRunSnapshot(runId: string): Promise<RunSnapshot | undefined> {
   return (await db.select().from(runSnapshots).where(eq(runSnapshots.runId, runId)))[0];
 }
@@ -2049,8 +1992,6 @@ export async function prevRunSnapshot(loopId: string, beforeRunIndex: number): P
   )[0];
   return row?.snap;
 }
-
-// ---- retention / GC accounting (see gateway/retention.ts) ----
 
 /**
  * Prune a loop's run snapshots down to the `keep` most recent (by createdAt),
@@ -2081,7 +2022,6 @@ export async function pruneRunSnapshots(loopId: string, keep: number): Promise<n
   return deleted.length;
 }
 
-/** Distinct loop ids that currently have at least one run snapshot. */
 export async function loopIdsWithSnapshots(): Promise<string[]> {
   return (
     await db.selectDistinct({ loopId: runSnapshots.loopId }).from(runSnapshots)

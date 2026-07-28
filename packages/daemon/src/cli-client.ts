@@ -1,11 +1,3 @@
-/**
- * The canonical CLI transport client. Both CLI
- * worlds — the in-run callback (`pievo report …`, run token) and the owner's
- * out-of-run verbs (`pievo loops`/`edit`/`log`/`new`, device token) — use this
- * module to pick the active credential and POST `{argv}` to
- * `/api/machine/cli`.
- */
-
 import { activeConnection, connectionFor, resolveServerUrl } from "./config.js";
 import { boundedFetch } from "./http.js";
 
@@ -20,13 +12,9 @@ export interface CliResponse {
 
 export interface PostCliDeps {
   fetchImpl?: typeof fetch;
-  /** Env carrying the run token (defaults to process.env). */
   env?: NodeJS.ProcessEnv;
-  /** Test override for the active connection's device token. */
   deviceToken?: string | undefined;
-  /** Fully-resolved server url override (tests) — bypasses resolveServerUrl. */
   server?: string;
-  /** A `--server-url` flag value the caller extracted from its argv, if any. */
   serverFlag?: string | undefined;
 }
 
@@ -35,10 +23,6 @@ export type PostCliResult =
   | { kind: "not-configured" }
   | { kind: "network-error"; message: string };
 
-/**
- * Resolve the credential: the in-run run token wins, otherwise use the persisted
- * device token. Undefined means neither is available.
- */
 export function resolveCredential(deps: PostCliDeps = {}, server?: string): { token: string } | undefined {
   const env = deps.env ?? process.env;
   const runToken = env.PIEVO_RUN_TOKEN;
@@ -50,11 +34,6 @@ export function resolveCredential(deps: PostCliDeps = {}, server?: string): { to
   return undefined;
 }
 
-/**
- * POST `{argv}` to the unified `/api/machine/cli` with whatever credential the env
- * carries. Never throws — a missing credential/server and a network fault map to
- * distinct results so callers render their own message.
- */
 export async function postCli(argv: string[], deps: PostCliDeps = {}): Promise<PostCliResult> {
   const server = "server" in deps ? (deps.server ?? "") : resolveServerUrl(deps.serverFlag);
   const cred = resolveCredential(deps, server);
@@ -74,13 +53,6 @@ export async function postCli(argv: string[], deps: PostCliDeps = {}): Promise<P
   }
 }
 
-/**
- * The text-sink primary path: print the server's pre-rendered `text` and return its
- * `exitCode`. The server owns the render and the daemon is a dumb sink. Returns
- * null when the response violates the current transport contract. Never used for the
- * not-configured/network-error results (those carry no server body) —
- * callers handle those first.
- */
 export function printText(
   body: Record<string, unknown>,
   status: number,
@@ -94,7 +66,6 @@ export function printText(
   return null;
 }
 
-/** Print a canonical server render or fail loudly on an invalid response. */
 export function printCliResponse(
   body: Record<string, unknown>,
   status: number,

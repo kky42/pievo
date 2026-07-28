@@ -17,7 +17,6 @@ export const MD_SANITIZE: Config = {
   ALLOWED_ATTR: ['href', 'title', 'target', 'rel', 'src', 'alt'],
 }
 
-/** Markdown string → sanitized HTML string (safe for dangerouslySetInnerHTML). */
 export function renderMarkdown(content: string): string {
   return DOMPurify.sanitize(marked.parse(content, { async: false, gfm: true }) as string, MD_SANITIZE)
 }

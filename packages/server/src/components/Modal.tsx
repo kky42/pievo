@@ -2,7 +2,6 @@ import { Dialog } from '@base-ui/react/dialog'
 import type { ReactNode } from 'react'
 import { sectionHeadCls } from './ui'
 
-/** Shared modal shell — Base UI Dialog handles focus trap, Esc, and scroll lock. */
 export function Modal({
   open,
   onClose,
@@ -12,16 +11,12 @@ export function Modal({
   open: boolean
   onClose: () => void
   children: ReactNode
-  /** Content-heavy dialogs may opt into a wider shell. */
   wide?: boolean
 }) {
-  // Small dialogs sit optically high; wide content centers vertically and scrolls.
   const pos = `-translate-y-1/2 max-h-[calc(100dvh-4rem)] ${wide ? 'top-1/2 max-w-[62rem]' : 'top-[46%] max-w-160'}`
   return (
     <Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
-        {/* Depth-of-field scrim: a light dim + real backdrop blur, so the page
-            recedes behind the glass instead of going black. */}
         <Dialog.Backdrop className="fixed inset-0 z-[900] bg-black/25 backdrop-blur-[8px] transition-opacity duration-200 data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 dark:bg-black/45" />
         <Dialog.Popup
           className={`glass-strong fixed left-1/2 z-[901] w-full -translate-x-1/2 overflow-auto rounded-sheet px-[26px] pb-7 pt-6 outline-none transition-opacity duration-200 data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 ${pos}`}
@@ -52,10 +47,6 @@ export function ModalHead({ title, sub }: { title: string; sub?: ReactNode }) {
   )
 }
 
-/**
- * Section divider heading - sentence case, hierarchy from weight + color.
- * `action` drops an optional control (e.g. Copy) flush-right on the divider.
- */
 export function ModalSection({ children, action }: { children: ReactNode; action?: ReactNode }) {
   return (
     <div className="mb-2.5 mt-6 flex items-end justify-between gap-3 border-b border-hairline pb-1.5">

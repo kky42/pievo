@@ -89,7 +89,6 @@ export async function gcBlobs(blobStore: BlobStore, graceMs: number = blobGcGrac
 
   let reclaimed = 0;
   for (const hash of garbage) {
-    // Pre-delete guard: re-referenced before we touched it → keep bytes + metadata.
     const count = await store.countRunSnapshots();
     if (count !== snapCount) {
       snapCount = count;
@@ -97,9 +96,8 @@ export async function gcBlobs(blobStore: BlobStore, graceMs: number = blobGcGrac
     }
     if ((await store.artifactFileReferencesHash(hash)) || snapRefs.has(hash)) continue;
     try {
-      // Bytes first…
       await blobStore.delete(hash);
-      // …then metadata, unconditionally. If a sync raced the await and re-referenced
+      // Delete metadata unconditionally after bytes. If a sync raced the await and re-referenced
       // the hash, dropping the (possibly sync-recreated) blobs row forces blobExists()
       // false so the bytes self-heal on the next sync; if not, this is plain cleanup.
       // No post-delete recheck: deleteBlob runs regardless, so re-scanning snapshots

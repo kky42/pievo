@@ -5,7 +5,6 @@ export function downloadHref(loopId: string, path: string): string {
   return `/api/artifact/${encodeURIComponent(loopId)}/${encodedPath}`
 }
 
-/** Hardened inline image URL for the same artifact bytes. */
 export function inlineHref(loopId: string, path: string): string {
   return `${downloadHref(loopId, path)}?view=inline`
 }

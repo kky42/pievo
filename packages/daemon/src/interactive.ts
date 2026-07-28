@@ -1,10 +1,3 @@
-/**
- * Interactive owner mode — loop reads/edits plus Pause/Start/Stop/Delete and
- * `run stop`, run OUTSIDE an agent run. Goes through the shared CLI client
- * (`postCli`), which reuses the device token + server URL the daemon persisted under
- * ~/.pievo and POSTs `{argv}` to `/api/machine/cli`. No run token, no re-auth, no
- * claim — the machine is already connected, so editing an existing loop needs none.
- */
 import { createInterface } from "node:readline/promises";
 
 import type { PostCliDeps } from "./cli-client.js";
@@ -14,8 +7,6 @@ import { parseLongOptions } from "./long-options.js";
 type Flags = Record<string, string | boolean>;
 const BOOLEAN_FLAGS = new Set(["dry-run", "force", "help"]);
 
-/** Injectable seams so tests exercise the fetch path without a real ~/.pievo or
- *  network (mirrors LogDeps). Absent ⇒ postCli resolves the real token/server. */
 export interface InteractiveDeps {
   fetchImpl?: typeof fetch;
   server?: string;
@@ -25,7 +16,6 @@ export interface InteractiveDeps {
   confirmForceDelete?: () => Promise<boolean>;
 }
 
-/** Preserve the interactive parser interface while sharing long-option scanning. */
 export function parseFlags(
   args: string[],
   booleanFlags: ReadonlySet<string> = BOOLEAN_FLAGS,
@@ -34,13 +24,9 @@ export function parseFlags(
   return { positional, flags };
 }
 
-/** `pievo edit` accepts one canonical JSON patch. The schedule value is the
- * same discriminated union used by create/show. */
 const EDIT_FLAGS = new Set(["json", "dry-run", "server-url"]);
 
-/** The flags `pievo loops` accepts: `--fields <set>`, the `--json` escape hatch,
- *  `--help`, plus the optional server target override (consumed separately). An unknown flag is a
- *  usage error (exit 2) — the server validates unknown `--fields` VALUES separately. */
+/** Parse option syntax locally, but leave `--fields` value semantics to the server. */
 const LOOPS_FLAGS = new Set(["fields", "json", "help", "server-url"]);
 const LIFECYCLE_VERBS = new Set(["pause", "start", "stop", "delete", "run"]);
 const FORCE_DELETE_CONFIRMATION = "delete-server-data-anyway";
@@ -56,10 +42,7 @@ async function confirmForceDeleteInteractive(): Promise<boolean> {
   }
 }
 
-/**
- * Assemble the canonical `pievo edit --json '<patch>'` body. The server remains
- * the sole semantic validator; the daemon rejects only unknown flags and malformed JSON.
- */
+/** Keep semantic validation on the server; reject only syntax and malformed JSON here. */
 export function buildPatch(flags: Flags): Record<string, unknown> {
   const unknown = Object.keys(flags).filter((k) => !EDIT_FLAGS.has(k));
   if (unknown.length) {
@@ -99,9 +82,6 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     const i = process.argv.indexOf("--server-url");
     return i >= 0 ? process.argv[i + 1] : undefined;
   })();
-  // Shared postCli deps: the injected server/token override the persisted ones so
-  // tests need no real ~/.pievo; production leaves them undefined and postCli
-  // resolves the device token + server url itself (same values as before).
   const cliDeps: PostCliDeps = {
     fetchImpl: injected.fetchImpl,
     serverFlag: flagServer,
@@ -117,7 +97,6 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     err("pievo: this machine isn't connected yet — run `pievo daemon connect --server-url … --connect-key …` first\n");
 
   if (verb === "loops") {
-    // Forward supported flags and reject unknown ones locally as usage errors.
     const unknown = Object.keys(flags).filter((k) => !LOOPS_FLAGS.has(k));
     if (unknown.length) return err(`pievo: unknown flag --${unknown[0]} — try \`pievo loops --help\`\n`), 2;
     if (positional.length !== 0
@@ -170,7 +149,6 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     try {
       patch = buildPatch(flags);
     } catch (e) {
-      // A removed/unknown flag or an unreadable file/JSON — fail loudly with guidance.
       return err(`pievo: ${e instanceof Error ? e.message : String(e)}\n`), 2;
     }
     // Bare `pievo edit <id>` with no edit inputs is a usage error. But `--json '{}'`
@@ -179,7 +157,6 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     // instead of short-circuiting to the usage screen client-side.
     const gaveInput = flags["json"] !== undefined;
     if (!gaveInput) return err(USAGE), 2;
-    // The whole edit travels as one unified verb: `edit <id> --json <patch> [--dry-run]`.
     const cliArgv = ["edit", id, "--json", JSON.stringify(patch), ...(dryRun ? ["--dry-run"] : [])];
     const r = await postCli(cliArgv, cliDeps);
     if (r.kind === "not-configured") return notConnected(), 2;

@@ -15,7 +15,6 @@ import { getArtifactSync } from "./boot.js";
 import { toArtifactSummary } from "./loopProjection.js";
 import type { ArtifactContent, ArtifactSummary } from "../types.js";
 
-/** The loop's current (non-deleted) file set as compact UI rows, path-sorted. */
 export async function listLoopArtifacts(loopId: string): Promise<ArtifactSummary[]> {
   return (await store.listArtifacts(loopId)).map(toArtifactSummary);
 }
@@ -43,12 +42,10 @@ export async function readLoopArtifact(loopId: string, rawPath: string): Promise
   return { text: bytes.toString("utf8") };
 }
 
-/** What the download route needs to stream one artifact's raw bytes. */
 export interface ArtifactBytes {
   status: number;
   bytes?: Buffer;
   binary?: boolean;
-  /** Basename for the Content-Disposition filename. */
   filename?: string;
 }
 

@@ -75,8 +75,6 @@ export class CliGateway {
     this.destructiveLog = deps.destructiveLog ?? ((event) => cliLog.warn(event, "force-delete: destructive server authority removal"));
   }
 
-  // ---- POST /api/machine/cli — one CLI dispatch, keyed by credential ----
-
   /**
    * The unified CLI endpoint. It is a ROUTER in front of the gateway logic that
    * already exists — never a rewrite — that keys authority on the credential type:
@@ -91,7 +89,6 @@ export class CliGateway {
     return finalizeCli(res);
   }
 
-  /** DEVICE-credential branch of the unified CLI. */
   private async deviceCli(deviceToken: string, argv: string[]): Promise<HttpResult> {
     const auth = await authenticateDeviceToken(deviceToken, { allowUnknown: true });
     if (!auth.ok) return auth.response;
@@ -104,8 +101,6 @@ export class CliGateway {
     const flags = parseFlags(argv.slice(1));
     const loopArg = typeof flags["loop"] === "string" ? (flags["loop"] as string) : typeof flags["_"] === "string" ? (flags["_"] as string) : "";
 
-    // Device credentials receive owner-facing per-verb help. Unknown verbs fall
-    // through to the switch's normal unknown-command response.
     if (flags["help"] === true) {
       const h = verbHelpText(verb);
       if (h) return { status: 200, body: { ok: true, text: h } };
@@ -151,8 +146,6 @@ export class CliGateway {
         // check mirrors loopLog/editLoop (flat 404, existence never leaks).
         const loop = loopArg ? await store.getLoop(loopArg) : undefined;
         if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };
-        // `--json` emits the exact editable envelope; otherwise render TOON
-        // detail view (size hints by default, full bodies under `--full`).
         if (flags["json"] === true) {
           const env = loopEnvelope(loop);
           return { status: 200, body: { ok: true, loop: env, text: JSON.stringify(env, null, 2) } };
@@ -256,7 +249,6 @@ export class CliGateway {
     return { status: 200, body: { text: `run already finished: ${runResultToken(stopped)}` } };
   }
 
-  /** RUN-credential branch of the unified CLI: report and its help only. */
   private async runCli(runToken: string, argv: string[]): Promise<HttpResult> {
     const lease = await resolveLease(runToken);
     if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
@@ -279,8 +271,6 @@ export class CliGateway {
     const out = await this.dispatch(lease, createHash("sha256").update(runToken).digest("hex"), argv);
     return { status: out.code, body: { text: out.text, exitCode: out.code === 200 ? 0 : 1 } };
   }
-
-  // ---- report-only agent callback ----
 
   private async dispatch(lease: RunLease, leaseTokenHash: string, argv: string[]): Promise<{ code: number; text: string }> {
     const verb = argv[0];
@@ -317,7 +307,6 @@ export class CliGateway {
       : derr(applied.status ?? 409, applied.detail ?? "this run is no longer active", applied.code);
   }
 
-  /** The complete run-token command surface: report plus help for report. */
   private helpText(_lease: RunLease): string {
     return doc(
       listBlock("verbs", ["verb", "syntax"], [
@@ -349,8 +338,6 @@ export class CliGateway {
     return { ok: false, detail: "this run is no longer active", code: "CONFLICT", status: 409 };
   }
 
-  // Device-owner show uses the same canonical editable envelope as edit.
-  // `--json` is emitted by the callers, not here.
   private async describe(loopId: string, opts: { full?: boolean } = {}): Promise<string> {
     const loop = await store.getLoop(loopId);
     if (!loop) return "loop not found";
@@ -397,14 +384,10 @@ export class CliGateway {
     return renderHomeText(ctx, presence, here, scoped.elsewhere, await recentMachineRuns(loops, 3));
   }
 
-
 }
-
-// ---- helpers ----
 
 type Flags = Record<string, string | boolean>;
 
-/** Shared refusal for terminal-report-only grace after reclaim. */
 const TERMINAL_GRACE_MSG =
   "this run is terminal and no longer accepts commands; its final result is delivered via the terminal report";
 
@@ -480,7 +463,6 @@ function finalizeCli(res: HttpResult): HttpResult {
   return res;
 }
 
-/** Render the compact run-status confirmation. */
 function renderReportedText(status: string | undefined, hasMessage: boolean): string {
   const parts: string[] = [];
   if (status) parts.push(`status=${status}`);
@@ -488,7 +470,6 @@ function renderReportedText(status: string | undefined, hasMessage: boolean): st
   return `reported: ${parts.length ? parts.join(" · ") : "recorded"}`;
 }
 
-// ---- per-verb `--help` --------------------------------------------------------
 // `<verb> --help` prints syntax, a summary, and concrete examples. Run credentials
 // expose report help only; device credentials receive the owner command surface. A
 // verb absent from the relevant map falls through to unknown-command handling.
@@ -497,11 +478,9 @@ interface VerbHelpSpec {
   syntax: string;
   summary: string;
   help: string[];
-  /** Availability line for a RUN lease; omitted for owner verbs. */
   avail?: (lease: RunLease) => string;
 }
 
-/** RUN-credential verb help (in-run `rk_` lease). */
 const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
   report: {
     syntax: "report --status keep|no-change|block --message <text>",
@@ -514,7 +493,6 @@ const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
   },
 };
 
-/** DEVICE-credential verb help (owner `dk_` device token). */
 const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
   new: {
     syntax: "new --json '<config>' [--dry-run] [--connect-key <dk_…>] [--server-url <url>]",
@@ -574,9 +552,6 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
   },
 };
 
-/** Render per-verb help. A run lease selects the report-only help;
- *  no lease means the device (owner) surface. Returns undefined for a verb
- *  with no help spec, so the caller falls back to its unknown-command handling. */
 function verbHelpText(verb: string, lease?: RunLease): string | undefined {
   const spec = lease ? RUN_VERB_HELP[verb] : DEVICE_VERB_HELP[verb];
   if (!spec) return undefined;
@@ -589,19 +564,16 @@ function verbHelpText(verb: string, lease?: RunLease): string | undefined {
   );
 }
 
-/** The canonical editable config emitted by `show --json`. */
 function loopEnvelope(loop: Loop): Record<string, unknown> {
   return { ...canonicalLoopEnvelope(loop) };
 }
 
-/** Render a large prompt in full or as a compact presence hint. */
 function contentField(value: string | null, full: boolean): Scalar | { raw: string } {
   if (value == null) return "absent";
   if (full) return value; // scalar() quotes the full body (newlines escaped to one line)
   return { raw: `present, ${value.length} bytes — use --full to see` };
 }
 
-/** The next cadence fire, formatted in the loop's timezone. */
 function nextFireDisplay(loop: Loop): string {
   const schedule = scheduleFromLoop(loop);
   if (schedule.mode === "continuous") return `after exec terminal + ${schedule.delayMinutes}m`;
@@ -610,7 +582,6 @@ function nextFireDisplay(loop: Loop): string {
   return fmtTimeZoned(iso, schedule.timezone, { seconds: true });
 }
 
-/** `pievo show` renders the editable envelope followed by derived read-only state. */
 function renderShowText(
   loop: Loop,
   env: Record<string, unknown>,
@@ -659,13 +630,11 @@ function renderShowText(
   );
 }
 
-// ---- content-first home -------------------------------------------------------
 // Bare `pievo` renders a live machine dashboard for a device credential. The
 // server owns the TOON render; the daemon passes local facts it alone knows
 // (`--bin`/`--pid`/`--server`/`--cwd`/`--home`) as context flags. Everything
 // below is pure so it is exercised in verb tests.
 
-/** The daemon-supplied local context for the device home header + cwd scoping. */
 interface HomeContext {
   bin: string | null;
   pid: string | null;
@@ -674,7 +643,6 @@ interface HomeContext {
   home: string | null;
 }
 
-/** One loop row in the device home (a minimal, scan-friendly subset of `loops`). */
 interface HomeLoop {
   id: string;
   name: string;
@@ -684,7 +652,6 @@ interface HomeLoop {
   lastResult: string | null;
 }
 
-/** The static one-line description in the home header. */
 const HOME_DESCRIPTION = "Run your scheduled Pievo agent loops on this machine with your own coding agent.";
 
 /** Expand a leading `~/` against the daemon-supplied home dir (the SERVER's own home
@@ -693,7 +660,6 @@ function expandHome(p: string, home: string | null): string {
   return home && p.startsWith("~/") ? path.join(home, p.slice(2)) : p;
 }
 
-/** A loop's folder on the daemon machine is its configured workdir. */
 function scopeLoopDir(workdir: string, home: string | null): string {
   return path.resolve(expandHome(workdir, home));
 }
@@ -719,8 +685,6 @@ export function scopeLoopsByCwd(
   return { here: matched, elsewhere: loops.length - matched.length };
 }
 
-/** The most recent runs across ALL of a machine's loops, newest-first, for the home
- *  `recent[]` block. Merges each loop's newest few then globally sorts by ts. */
 async function recentMachineRuns(loops: Loop[], n: number): Promise<Array<{ ts: string; loop: string; result: string }>> {
   const rows: Array<{ ts: string; loop: string; result: string }> = [];
   for (const l of loops) {
@@ -746,7 +710,6 @@ function renderHomeText(
     presence === null
       ? "machine: not connected — run `pievo daemon connect`"
       : `machine: ${[presence, ctx.pid ? `daemon pid ${ctx.pid}` : null, ctx.server].filter(Boolean).join(" · ")}`;
-  // Lead with the durable bin path or an explicit global-install fallback.
   const binLineText = ctx.bin ? kvLine("bin", ctx.bin) : "bin: (not on PATH — run `npm install -g @kky42/pievo@latest`)";
   // Not connected: the header + the definitive state + how to connect. No loop/run
   // blocks (there's nothing to show), but never empty output.
@@ -761,8 +724,6 @@ function renderHomeText(
       ]),
     );
   }
-  // When some loops live elsewhere, label the scoped block `loops here[N]`.
-  // An unscoped full-machine view stays the plain `loops[N]`.
   const loopsName = elsewhere > 0 ? "loops here" : "loops";
   const loopsBlock = here.length
     ? listBlock(

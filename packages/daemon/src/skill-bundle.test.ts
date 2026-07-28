@@ -1,4 +1,3 @@
-/** The committed npm bundle contains exactly the installed owner-facing skill. */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

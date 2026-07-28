@@ -48,7 +48,6 @@ export function bundledSkillDir(base = moduleDir): string {
   return path.join(base, "..", "skill");
 }
 
-/** Whether the bundled skill is actually present (its SKILL.md exists). */
 export function bundledSkillAvailable(dir = bundledSkillDir()): boolean {
   try {
     return fs.statSync(path.join(dir, "SKILL.md")).isFile();
@@ -59,11 +58,9 @@ export function bundledSkillAvailable(dir = bundledSkillDir()): boolean {
 
 export interface InstallOutcome {
   ok: boolean;
-  /** One human-facing line to print (announced, best-effort). */
   line: string;
 }
 
-/** Result of running the installer command. Injected in tests so no network/npx. */
 export interface RunResult {
   code: number;
   stdout: string;
@@ -71,8 +68,6 @@ export interface RunResult {
 }
 export type Runner = (cmd: string, args: string[]) => Promise<RunResult>;
 
-/** Spawn `npx skills …`, capture output, bounded by INSTALL_TIMEOUT_MS. Resolves
- *  (never rejects) with code -1 when the binary can't be spawned or times out. */
 const defaultRunner: Runner = (cmd, args) =>
   new Promise<RunResult>((resolve) => {
     let stdout = "";
@@ -105,9 +100,7 @@ const defaultRunner: Runner = (cmd, args) =>
   });
 
 export interface InstallOpts {
-  /** Override the bundled skill dir (tests). */
   dir?: string;
-  /** Override the command runner (tests) so nothing spawns npx / hits the network. */
   runner?: Runner;
 }
 
@@ -124,16 +117,12 @@ export interface InstallOpts {
 export const SKILL_TARGET_AGENTS: ReadonlyArray<{
   id: string;
   label: string;
-  /** Path segments under the scope root, before the `pievo` skill dir. */
   skillsRoot: readonly string[];
 }> = [
   { id: "claude-code", label: "Claude Code", skillsRoot: [".claude", "skills"] },
   { id: "codex", label: "Codex", skillsRoot: [".agents", "skills"] },
 ];
 
-/** The argv (after `npx`) for the user-scope install — pure, so tests can
- *  assert it. Targets every agent in `SKILL_TARGET_AGENTS` via repeated `-a <id>`
- *  flags (the comma form `-a a,b` is rejected as one bogus agent name). */
 export function installArgs(dir: string): string[] {
   const args = ["--yes", "skills", "add", dir];
   for (const t of SKILL_TARGET_AGENTS) args.push("-a", t.id);
@@ -141,16 +130,10 @@ export function installArgs(dir: string): string[] {
   return args;
 }
 
-/** The user-scope skill directories written for display. */
 export function targetSkillDirs(): string[] {
   return SKILL_TARGET_AGENTS.map((t) => path.join("~", ...t.skillsRoot, "pievo"));
 }
 
-/**
- * Install/refresh the pievo skill. NEVER throws — returns an outcome with a
- * one-line status to print. Idempotent: `skills add -y` overwrites an existing
- * install with the bundled (current) content every time.
- */
 export async function installSkill(opts: InstallOpts = {}): Promise<InstallOutcome> {
   const dir = opts.dir ?? bundledSkillDir();
   if (!bundledSkillAvailable(dir)) {

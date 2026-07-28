@@ -67,7 +67,7 @@ export function MachinesModal({
 
   useEffect(() => {
     if (!open) {
-      setDelErr(null) // don't carry a stale delete error into the next open
+      setDelErr(null)
       return
     }
     let active = true
@@ -90,11 +90,10 @@ export function MachinesModal({
       // the list, and use a canonical order so database row order never moves cards.
       if (request === loadRequest.current) setMachines([...next].sort(machineOrder))
     } catch {
-      /* ignore */
+
     }
   }, [teamId])
 
-  // Poll the machine list (online dots) while idle.
   const openRef = useRef(open)
   openRef.current = open
   useEffect(() => {
@@ -107,7 +106,6 @@ export function MachinesModal({
     }
   }, [open, pending, load])
 
-  // Poll the pending machine's status while the connect dialog is open.
   useEffect(() => {
     if (!pending) return
     let active = true
@@ -165,7 +163,7 @@ export function MachinesModal({
       const r = await deleteMachine({ data: id })
       if (!r.ok) {
         setDelErr(r.error ?? 'Could not delete this machine.')
-        await load() // refresh counts in case they changed under us
+        await load()
         return
       }
       setConfirmDelete(null)
@@ -177,7 +175,6 @@ export function MachinesModal({
 
   const connected = !!status?.online
 
-  // ---- Connect dialog (two acts) ----
   if (pending) {
     return (
       <Modal open={open} onClose={cancel}>
@@ -238,7 +235,6 @@ export function MachinesModal({
     )
   }
 
-  // ---- Machine list ----
   return (
     <Modal open={open} onClose={onClose}>
       <ModalHead title="Machines" sub="Each machine runs a pievo daemon that executes your loops via your local coding agent." />

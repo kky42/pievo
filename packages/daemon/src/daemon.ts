@@ -1,4 +1,3 @@
-/** Protocol-v4 concurrent per-loop daemon runtime. */
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -220,6 +219,8 @@ export async function runDaemon(args: string[] = []): Promise<number> {
   const info = { host: os.hostname(), platform: process.platform, arch: process.arch, version: daemonVersion() };
   const daemonInstanceId = randomUUID();
   const existing = verifiedRunningPid();
+  // A second daemon would replace the first daemon's pidfile, then clear it on exit,
+  // leaving the original invisible to status/stop while both poll the server.
   if (existing !== undefined) { logger.error({ pid: existing }, "daemon already running — use `pievo daemon stop` first"); return 1; }
 
   ensureCallbackBin();

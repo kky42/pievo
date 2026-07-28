@@ -12,7 +12,6 @@ export interface LoopRow {
 
 export type ResolveError = { error: string; code?: "NOT_FOUND" };
 
-/** Resolve an explicit loop id/name, or infer the most specific containing workdir. */
 export function resolveLoopId(
   loops: LoopRow[],
   explicit: string | undefined,
@@ -46,7 +45,6 @@ export type OwnerLoopResolution =
   | { kind: "list-error"; message: string }
   | { kind: "resolve-error"; error: ResolveError };
 
-/** List the machine's loops through the owner transport, then resolve one locally. */
 export async function resolveOwnerLoop(
   explicit: string | undefined,
   cwd: string,
@@ -66,7 +64,6 @@ export async function resolveOwnerLoop(
     : { kind: "ok", loop: resolved };
 }
 
-/** Preserve the owner CLI's structured-vs-usage resolution diagnostics. */
 export function renderResolveError(
   error: ResolveError,
   out: (text: string) => void,

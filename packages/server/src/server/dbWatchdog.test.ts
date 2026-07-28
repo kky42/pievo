@@ -14,7 +14,6 @@ function immediateTimers() {
       return fns.length as unknown as ReturnType<typeof setTimeout>;
     },
     clearTimer: () => {},
-    // Fire every armed deadline timer (simulates timeouts elapsing).
     fireAll: () => {
       const pending = fns.splice(0);
       for (const fn of pending) fn();
@@ -60,7 +59,7 @@ describe("makeDbWatchdog", () => {
     });
 
     const t1 = wd.tick();
-    timers.fireAll(); // deadline elapses → ping rejects
+    timers.fireAll();
     await t1;
     expect(wd.failures()).toBe(1);
 
@@ -81,16 +80,15 @@ describe("makeDbWatchdog", () => {
       log: quietLog,
     });
 
-    await wd.tick(); // fail 1
-    await wd.tick(); // fail 2
+    await wd.tick();
+    await wd.tick();
     expect(wd.failures()).toBe(2);
 
     outcome = "ok";
-    await wd.tick(); // healthy → reset
+    await wd.tick();
     expect(wd.failures()).toBe(0);
     expect(exit).not.toHaveBeenCalled();
 
-    // A fresh streak must again reach the threshold before exit.
     outcome = "fail";
     await wd.tick();
     await wd.tick();
@@ -110,7 +108,6 @@ describe("makeDbWatchdog", () => {
 
     await wd.tick();
     await wd.tick();
-    // No further probes once latched — process is on its way down.
     expect(probe.mock.calls.length).toBe(callsAfterExit);
     expect(exit).toHaveBeenCalledOnce();
   });

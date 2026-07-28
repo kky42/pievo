@@ -1,9 +1,3 @@
-/**
- * Per-run artifact snapshot and diff. Runs the real path: gateway sync (stores
- * blobs + reconciles artifact_files) → gateway report (writes the run snapshot at
- * finalize) → computeRunDiff (lazily diffs run N vs N-1 with a pure-string text
- * diff). All against the booted gateway's local blob store (no R2/creds).
- */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -63,7 +57,6 @@ interface FileSpec {
   oversize?: boolean;
 }
 
-/** One full run cycle: create the run, sync its files, report, then snapshot. */
 async function doRun(token: string, machineId: string, loopId: string, ts: string, files: FileSpec[]) {
   const run = await store.addRun({ loopId, machineId, phase: "running", ts });
   const runToken = await tokens.registerRunLease({
@@ -104,16 +97,15 @@ test("getRunDiff: added / modified / removed / unchanged across two runs", async
     { path: "gone.md", bytes: Buffer.from("bye") },
   ]);
   const run2 = await doRun(token, machineId, loop.id, "2026-06-02T00:00:00.000Z", [
-    { path: "a.md", bytes: Buffer.from("line one\nline TWO changed\n") }, // modified
-    { path: "keep.md", bytes: Buffer.from("unchanged") }, // unchanged → skipped
-    { path: "new.md", bytes: Buffer.from("brand new") }, // added
-    // gone.md omitted → removed
+    { path: "a.md", bytes: Buffer.from("line one\nline TWO changed\n") },
+    { path: "keep.md", bytes: Buffer.from("unchanged") },
+    { path: "new.md", bytes: Buffer.from("brand new") },
   ]);
 
   const diff = await runDiff.computeRunDiff(run2.id);
   expect(diff.hasSnapshot).toBe(true);
   const byPath = Object.fromEntries(diff.files.map((f) => [f.path, f]));
-  expect(Object.keys(byPath).sort()).toEqual(["a.md", "gone.md", "new.md"]); // keep.md skipped
+  expect(Object.keys(byPath).sort()).toEqual(["a.md", "gone.md", "new.md"]);
 
   expect(byPath["a.md"]!.status).toBe("modified");
   expect(byPath["a.md"]!.diff).toContain("line TWO changed");
@@ -141,7 +133,7 @@ test("getRunDiff: binary/oversize change emits a size-delta marker, no inline di
 
 test("getRunDiff: a large text file (over the diff cap, under oversize) is tooLarge, not binary", async () => {
   const { token, machineId, loop } = await seed();
-  const big = Buffer.from("x".repeat(600 * 1024)); // > 512KB diff cap, plain text
+  const big = Buffer.from("x".repeat(600 * 1024));
   const bigger = Buffer.from("y".repeat(601 * 1024));
   await doRun(token, machineId, loop.id, "2026-06-01T00:00:00.000Z", [{ path: "huge.txt", bytes: big }]);
   const run2 = await doRun(token, machineId, loop.id, "2026-06-02T00:00:00.000Z", [{ path: "huge.txt", bytes: bigger }]);

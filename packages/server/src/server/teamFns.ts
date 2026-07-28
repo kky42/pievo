@@ -19,7 +19,6 @@ const SIGNIN_REQUIRED: { ok: false; error: string } = {
   error: "Team management requires signing in.",
 };
 
-/** Resolve the signed-in user id, or null when the gate is off / no session. */
 async function actor(): Promise<string | null> {
   if (!authEnabled) return null;
   return currentUserId();

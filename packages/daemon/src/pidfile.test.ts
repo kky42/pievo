@@ -1,10 +1,3 @@
-/**
- * pidfile — the shared verifiedRunningPid check (seams injected, no real
- * process/`ps`) and the ownership-checked clearPidFile: a daemon exiting must
- * never delete a pidfile another daemon has since claimed. The fs-touching test
- * relocates ~/.pievo via PIEVO_HOME and re-imports the module so PIEVO_DIR
- * (computed at load) points at a temp dir.
- */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -83,17 +76,14 @@ describe("clearPidFile ownership (real fs under a temp PIEVO_HOME)", () => {
     process.env.PIEVO_HOME = home;
     const mod = await import("./pidfile.js");
 
-    // Daemon #2 owns the file (pid 222); an exiting daemon #1 (pid 111) must not delete it.
     fs.mkdirSync(home, { recursive: true });
     fs.writeFileSync(mod.PID_FILE, "222:start-two\n");
     mod.clearPidFile(111);
     expect(fs.existsSync(mod.PID_FILE)).toBe(true);
 
-    // The recorded owner may clear it…
     mod.clearPidFile(222);
     expect(fs.existsSync(mod.PID_FILE)).toBe(false);
 
-    // …and the unconditional form (stale-file cleanup) still clears anything.
     fs.writeFileSync(mod.PID_FILE, "333:start-three\n");
     mod.clearPidFile();
     expect(fs.existsSync(mod.PID_FILE)).toBe(false);

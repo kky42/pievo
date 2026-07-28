@@ -1,10 +1,3 @@
-/**
- * Machine-route rate limiting (audit H-01 / M2 — "no rate limiting anywhere").
- * Unit-covers the token bucket + client-IP extraction, then proves the shared
- * per-IP limiter trips a real machine route (poll) with a 429 once its burst is
- * spent. Rate limiting is OFF by default under vitest, so this file opts in via env
- * BEFORE importing the module (the limiters read their sizing at construction).
- */
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 // Opt in + shrink the per-IP burst so the wiring test needs only a few requests.
@@ -30,12 +23,11 @@ afterAll(() => {
 describe("TokenBucketLimiter", () => {
   test("allows up to capacity, then denies until refill", async () => {
     const { TokenBucketLimiter } = await import("./rateLimit.js");
-    const b = new TokenBucketLimiter(2, 1); // 2 burst, 1 token/sec
+    const b = new TokenBucketLimiter(2, 1);
     const t0 = 1_000_000;
     expect(b.allow("k", t0)).toBe(true);
     expect(b.allow("k", t0)).toBe(true);
-    expect(b.allow("k", t0)).toBe(false); // dry
-    // One token refills after ~1s.
+    expect(b.allow("k", t0)).toBe(false);
     expect(b.allow("k", t0 + 1000)).toBe(true);
     expect(b.allow("k", t0 + 1000)).toBe(false);
   });
@@ -46,16 +38,15 @@ describe("TokenBucketLimiter", () => {
     const t = 5_000;
     expect(b.allow("a", t)).toBe(true);
     expect(b.allow("a", t)).toBe(false);
-    expect(b.allow("b", t)).toBe(true); // a different key has its own bucket
+    expect(b.allow("b", t)).toBe(true);
   });
 
   test("bounds memory by evicting the stalest key", async () => {
     const { TokenBucketLimiter } = await import("./rateLimit.js");
-    const b = new TokenBucketLimiter(1, 1, 2); // hold at most 2 keys
+    const b = new TokenBucketLimiter(1, 1, 2);
     b.allow("old", 1);
     b.allow("mid", 2);
-    b.allow("new", 3); // over cap ⇒ "old" (stalest) evicted
-    // "old" was evicted ⇒ it gets a fresh full bucket again.
+    b.allow("new", 3);
     expect(b.allow("old", 4)).toBe(true);
   });
 });
@@ -67,7 +58,7 @@ describe("clientIp", () => {
     expect(clientIp(mk({ "fly-client-ip": "1.1.1.1", "x-forwarded-for": "2.2.2.2" }))).toBe("1.1.1.1");
     expect(clientIp(mk({ "x-forwarded-for": "3.3.3.3, 4.4.4.4" }))).toBe("3.3.3.3");
     expect(clientIp(mk({ "x-real-ip": "5.5.5.5" }))).toBe("5.5.5.5");
-    expect(clientIp(mk({}))).toBe("unknown"); // fail closed: unknown origins share one bucket
+    expect(clientIp(mk({}))).toBe("unknown");
   });
 });
 
@@ -76,7 +67,6 @@ describe("machineRouteLimit", () => {
     rl.__resetMachineRateLimiters();
     const req = () => new Request("http://x/api/machine/poll", { method: "POST", headers: { "x-forwarded-for": "7.7.7.7" } });
     const now = 2_000_000;
-    // Burst 3 ⇒ three allowed, fourth limited (frozen clock ⇒ no refill).
     expect(rl.machineRouteLimit(req(), undefined, { now })).toBeNull();
     expect(rl.machineRouteLimit(req(), undefined, { now })).toBeNull();
     expect(rl.machineRouteLimit(req(), undefined, { now })).toBeNull();
@@ -90,7 +80,7 @@ describe("machineRouteLimit", () => {
     const from = (ip: string) => new Request("http://x/api/machine/poll", { method: "POST", headers: { "x-forwarded-for": ip } });
     for (let i = 0; i < 5; i++) rl.machineRouteLimit(from("8.8.8.8"), undefined, { now });
     expect(rl.machineRouteLimit(from("8.8.8.8"), undefined, { now })?.status).toBe(429);
-    expect(rl.machineRouteLimit(from("9.9.9.9"), undefined, { now })).toBeNull(); // fresh bucket
+    expect(rl.machineRouteLimit(from("9.9.9.9"), undefined, { now })).toBeNull();
   });
 
   test("the per-token tier always applies when a credential is present", () => {
