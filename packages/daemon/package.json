@@ -24,11 +24,11 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "build": "node scripts/clean-dist.mjs && node scripts/sync-skill.mjs && tsc",
+    "build": "node scripts/clean-dist.mjs && tsc",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "node scripts/clean-dist.mjs && node scripts/sync-skill.mjs && tsc"
+    "prepublishOnly": "node scripts/clean-dist.mjs && tsc"
   },
   "dependencies": {
     "pino": "^10.3.1",
