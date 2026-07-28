@@ -24,7 +24,7 @@ import type {
 import * as store from '../db/store.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
-import { toLoopDetail, toLoopSummary, toRunSummaries } from './loopProjection.js'
+import { sortLoopSummariesByRecentRun, toLoopDetail, toLoopSummary, toRunSummaries } from './loopProjection.js'
 import { validateLoopEdit } from '../gateway/loopConfig.js'
 import { machinePresence } from '../lib/machinePresence.js'
 import { DAEMON_PROTOCOL_VERSION } from '../gateway/protocol.js'
@@ -118,7 +118,8 @@ export const getDefaultTeam = createServerFn({ method: 'GET' }).handler(async ()
   return scope.teamId
 })
 
-/** GET — the signed-in user's loops as compact summaries (newest first).
+/** GET — the signed-in user's loops as compact summaries (most recently run first;
+ *  never-run loops remain newest-created first).
  *  Gate on ⇒ only the given/active team's loops; open mode ⇒ the full shared list.
  *  An explicit `teamId` (the `/t/<id>` route) scopes this request independent of
  *  the cookie, so different tabs on /t/A and /t/B list different teams at once. */
@@ -133,7 +134,8 @@ export const listLoops = createServerFn({ method: 'GET' })
     const loops = (await store.listLoops(enforce ? active : undefined)).sort((a, b) =>
       a.createdAt < b.createdAt ? 1 : -1,
     )
-    return (await Promise.all(loops.map(toLoopSummary))) as LoopSummary[]
+    const summaries = (await Promise.all(loops.map(toLoopSummary))) as LoopSummary[]
+    return sortLoopSummariesByRecentRun(summaries)
   })
 
 /** GET — full detail (loop + summary + reversed runs). */

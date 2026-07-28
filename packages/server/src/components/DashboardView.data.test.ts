@@ -83,6 +83,7 @@ describe('DashboardView loader and live data ordering', () => {
   it('renders a refreshed loader result instead of retaining its one-time seed', async () => {
     await render(initial([loopSummary('deleted', 'Deleted loop')]))
     expect(findLoop('deleted')).not.toBeNull()
+    expect(host!.querySelector('h2')?.textContent).toBe('Loops')
 
     await render(initial([]))
 

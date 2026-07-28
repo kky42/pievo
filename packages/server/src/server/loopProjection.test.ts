@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 
 import { testStore, type TestStore } from "../../test/store.js";
+import type { LoopSummary } from "../types.js";
 
 let tmp: string;
 let db: typeof import("../db/index.js");
@@ -41,6 +42,23 @@ async function seed(agent: "claude-code" | "codex") {
     enabled: true,
   });
 }
+
+test("dashboard summaries put recently run loops first and preserve never-run order", () => {
+  const summaries = [
+    { id: "never-new", lastRunTs: null },
+    { id: "older-run", lastRunTs: "2026-01-01T00:00:00.000Z" },
+    { id: "newer-run", lastRunTs: "2026-02-01T00:00:00.000Z" },
+    { id: "never-old", lastRunTs: null },
+  ] as LoopSummary[];
+
+  expect(projection.sortLoopSummariesByRecentRun(summaries).map((loop) => loop.id)).toEqual([
+    "newer-run",
+    "older-run",
+    "never-new",
+    "never-old",
+  ]);
+  expect(summaries.map((loop) => loop.id)).toEqual(["never-new", "older-run", "newer-run", "never-old"]);
+});
 
 test("a loop's recorded agent maps onto detail and summary", async () => {
   const loop = await seed("codex");

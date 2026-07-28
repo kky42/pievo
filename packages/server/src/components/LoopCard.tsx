@@ -78,9 +78,11 @@ export function LoopCard({
         ) : loop.queued ? (
           <Pill tone="outline">Queued</Pill>
         ) : null}
-        {lifecycle === 'paused' && (
+        {lifecycle === 'paused' ? (
           <Pill tone={loop.pauseCause?.kind === 'blocked' ? 'accent' : undefined}>{loop.pauseCause?.kind === 'blocked' ? 'Paused — blocked' : loop.pauseCause?.kind === 'failure-streak' ? 'Paused automatically' : loop.pauseCause?.kind === 'owner' ? 'Paused by owner' : 'Paused'}</Pill>
-        )}
+        ) : lifecycle === 'active' && !loop.running && !loop.queued ? (
+          <Pill>Active</Pill>
+        ) : null}
         <div className="ml-auto min-w-0 text-right text-meta text-secondary">
           <div className="whitespace-nowrap">
             <span className="text-primary" title={loop.schedule.mode === 'cron' ? loop.schedule.cron : undefined}>

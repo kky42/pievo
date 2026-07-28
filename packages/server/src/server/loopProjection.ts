@@ -8,6 +8,18 @@ import { scheduleFromLoop, statusDefinitionsFromLoop } from "../gateway/loopConf
 
 const SUMMARY_RUNS = 18;
 
+/** Dashboard order: loops with runs first, most recent run first. The incoming
+ * order remains the tie-breaker, so never-run loops keep listLoops' newest-created
+ * ordering and equal timestamps do not make cards jump between polls. */
+export function sortLoopSummariesByRecentRun(summaries: LoopSummary[]): LoopSummary[] {
+  return summaries.toSorted((a, b) => {
+    if (a.lastRunTs && b.lastRunTs) return b.lastRunTs.localeCompare(a.lastRunTs);
+    if (a.lastRunTs) return -1;
+    if (b.lastRunTs) return 1;
+    return 0;
+  });
+}
+
 function nextRun(loop: Loop): string | null {
   return [loop.nextRunAt, loop.nextCadenceAt].filter((v): v is string => v != null).sort()[0] ?? null;
 }

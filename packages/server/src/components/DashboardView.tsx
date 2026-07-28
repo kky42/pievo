@@ -137,7 +137,7 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
         </section>
 
         <div className="mb-5 mt-12 flex items-baseline gap-2.5">
-          <h2 className="text-body font-semibold text-display">Active loops</h2>
+          <h2 className="text-body font-semibold text-display">Loops</h2>
           <span className="text-label text-secondary">
             {loops.length ? `${activeOn} scheduled · ${loops.length} total` : ''}
           </span>
