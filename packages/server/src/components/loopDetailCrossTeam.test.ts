@@ -59,6 +59,7 @@ const detailWithTeam = (team: LoopDetail['team']): LoopDetail =>
       lastRunTs: null,
       runs: [],
       runCount: 0,
+      recentUsage: { runCount: 0, tokenCount: 0 },
     },
     machine: { id: 'm1', name: 'repro-box', online: true, presence: 'online', lastSeen: null, daemonProtocol: 4 },
     team,
