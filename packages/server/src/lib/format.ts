@@ -69,8 +69,18 @@ export const tsShort = (t: string | null | undefined): string => {
   return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
-export const fnum = (n: number): string =>
-  Math.abs(n) >= 1000 ? `${Math.round(n / 100) / 10}k` : `${Math.round(n * 100) / 100}`
+/** Compact decimal magnitude — "1.2k", "3.4m", "5.6b". */
+export const fnum = (n: number): string => {
+  const abs = Math.abs(n)
+  const [divisor, suffix] = abs >= 1_000_000_000
+    ? [1_000_000_000, 'b']
+    : abs >= 1_000_000
+      ? [1_000_000, 'm']
+      : abs >= 1_000
+        ? [1_000, 'k']
+        : [1, '']
+  return `${Math.round((n / divisor) * 10) / 10}${suffix}`
+}
 
 /** Duration in ms → "Ns" (empty for null/0). */
 export const dur = (ms: number | null | undefined): string => (ms ? `${Math.round(ms / 1000)}s` : '')

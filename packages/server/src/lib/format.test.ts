@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dotColor, dotLabel, scheduleText } from './format'
+import { dotColor, dotLabel, fnum, scheduleText } from './format'
 import type { RunSummary } from '../types'
 
 const run = (over: Partial<RunSummary>): RunSummary => ({
@@ -23,6 +23,22 @@ describe('schedule summaries', () => {
     const text = scheduleText({ mode: 'continuous', delayMinutes: 5 })
     expect(text).toBe('continuous · 5m after completion')
     expect(text).not.toContain('overlap')
+  })
+})
+
+describe('compact numbers', () => {
+  it('uses decimal k, m, and b magnitudes', () => {
+    expect(fnum(999)).toBe('999')
+    expect(fnum(1_234)).toBe('1.2k')
+    expect(fnum(1_234_567)).toBe('1.2m')
+    expect(fnum(1_234_567_890)).toBe('1.2b')
+  })
+
+  it('changes suffix only at the corresponding magnitude threshold', () => {
+    expect(fnum(999_999)).toBe('1000k')
+    expect(fnum(1_000_000)).toBe('1m')
+    expect(fnum(999_999_999)).toBe('1000m')
+    expect(fnum(1_000_000_000)).toBe('1b')
   })
 })
 
