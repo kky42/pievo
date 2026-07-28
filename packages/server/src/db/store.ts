@@ -1474,8 +1474,9 @@ export async function expirePendingRun(
 // ---- machines ----
 
 export async function listMachines(teamId?: string): Promise<Machine[]> {
-  const q = db.select().from(machines);
-  return teamId ? await q.where(eq(machines.teamId, teamId)) : await q;
+  return teamId
+    ? await db.select().from(machines).where(eq(machines.teamId, teamId)).orderBy(asc(machines.name), asc(machines.id))
+    : await db.select().from(machines).orderBy(asc(machines.name), asc(machines.id));
 }
 
 /**
@@ -1489,7 +1490,8 @@ export async function listMachinesForTeam(teamId: string): Promise<Machine[]> {
     .select({ m: machines })
     .from(machines)
     .innerJoin(teamMembers, eq(machines.userId, teamMembers.userId))
-    .where(eq(teamMembers.teamId, teamId));
+    .where(eq(teamMembers.teamId, teamId))
+    .orderBy(asc(machines.name), asc(machines.id));
   return rows.map((r) => r.m);
 }
 

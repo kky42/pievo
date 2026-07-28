@@ -40,6 +40,11 @@ function CopyButton({ text }: { text: string }) {
 
 type Pending = { id: string; token: string }
 
+function machineOrder(a: MachineSummary, b: MachineSummary): number {
+  return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+    || a.id.localeCompare(b.id)
+}
+
 export function MachinesModal({
   open,
   onClose,
@@ -74,11 +79,16 @@ export function MachinesModal({
     return () => { active = false }
   }, [open])
 
+  const loadRequest = useRef(0)
   const load = useCallback(async () => {
+    const request = ++loadRequest.current
     try {
       // Scope to the tab's explicit team (the `/t/<id>` route) so the modal lists
       // the same machines the header count reflects, independent of the cookie.
-      setMachines(await listMachines({ data: teamId }))
+      const next = await listMachines({ data: teamId })
+      // Poll responses can arrive out of order. Only the newest request may update
+      // the list, and use a canonical order so database row order never moves cards.
+      if (request === loadRequest.current) setMachines([...next].sort(machineOrder))
     } catch {
       /* ignore */
     }
@@ -91,7 +101,10 @@ export function MachinesModal({
     if (!open || pending) return
     void load()
     const t = setInterval(() => openRef.current && void load(), 3000)
-    return () => clearInterval(t)
+    return () => {
+      clearInterval(t)
+      loadRequest.current += 1
+    }
   }, [open, pending, load])
 
   // Poll the pending machine's status while the connect dialog is open.

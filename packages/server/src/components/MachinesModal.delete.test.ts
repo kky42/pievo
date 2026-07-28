@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { MachineSummary } from '../types'
 
 const h = vi.hoisted(() => ({
+  listMachines: vi.fn(),
   deleteMachine: vi.fn(async () => ({ ok: true })),
 }))
 
@@ -27,7 +28,7 @@ const machine: MachineSummary = {
 
 vi.mock('../server/loopApi', () => ({ getConfig: vi.fn(async () => ({ pievoCli: 'pievo', customCli: false })) }))
 vi.mock('../server/machineFns', () => ({
-  listMachines: vi.fn(async () => [machine]),
+  listMachines: h.listMachines,
   createMachine: vi.fn(),
   machineStatus: vi.fn(),
   finalizeMachine: vi.fn(),
@@ -42,6 +43,7 @@ let host: HTMLDivElement
 let root: Root
 beforeEach(() => {
   vi.clearAllMocks()
+  h.listMachines.mockReset().mockResolvedValue([machine])
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
@@ -58,6 +60,36 @@ async function settle() {
 
 const bodyText = () => document.body.textContent ?? ''
 const button = (label: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent === label) as HTMLButtonElement
+
+describe('MachinesModal list UX', () => {
+  test('keeps machine order stable when polling returns rows in a different order', async () => {
+    vi.useFakeTimers()
+    const alpha = { ...machine, id: 'machine-a', name: 'Alpha' }
+    const zulu = { ...machine, id: 'machine-z', name: 'Zulu' }
+    h.listMachines
+      .mockResolvedValueOnce([zulu, alpha])
+      .mockResolvedValueOnce([alpha, zulu])
+
+    try {
+      await act(async () => root.render(createElement(MachinesModal, { open: true, onClose: () => {} })))
+      await settle()
+
+      const names = () => [...document.body.querySelectorAll('ul > li')].map((node) => node.textContent)
+      expect(names()).toEqual([
+        expect.stringContaining('Alpha'),
+        expect.stringContaining('Zulu'),
+      ])
+
+      await act(async () => { vi.advanceTimersByTime(3000); await Promise.resolve() })
+      expect(names()).toEqual([
+        expect.stringContaining('Alpha'),
+        expect.stringContaining('Zulu'),
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
 
 describe('MachinesModal deletion UX', () => {
   test('permits machines with loops to be deleted only after a count-specific warning', async () => {
