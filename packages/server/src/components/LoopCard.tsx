@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react'
-import type { LoopSummary, RunSummary } from '../types'
+import type { CodingAgent, LoopSummary, RunSummary } from '../types'
 import { cronText, dotLabel, lastRunOf, rel } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { deriveLoopLifecycle } from '../lib/lifecycleUi'
 import { loadOlderRuns } from '../server/loopApi'
 import { Timeline, WINDOW } from './Timeline'
 import { Pill, useHydrated } from './ui'
+
+const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
 
 export function LoopCard({
   loop,
@@ -83,6 +85,7 @@ export function LoopCard({
         ) : lifecycle === 'active' && !loop.running && !loop.queued ? (
           <Pill>Active</Pill>
         ) : null}
+        <Pill tone="outline">{AGENT_LABEL[loop.agent]}</Pill>
         <div className="ml-auto min-w-0 text-right text-meta text-secondary">
           <div className="whitespace-nowrap">
             <span className="text-primary" title={loop.schedule.mode === 'cron' ? loop.schedule.cron : undefined}>
@@ -90,8 +93,6 @@ export function LoopCard({
                 ? `continuous · ${loop.schedule.delayMinutes}m`
                 : `${cronText(loop.schedule.cron)} · ${loop.schedule.timezone} · ${loop.schedule.overlap}`}
             </span>
-            <span className="mx-2.5 text-wire">·</span>
-            {loop.agent}
           </div>
           <div className="mt-1 truncate text-caption text-disabled" title={loop.workdir}>
             {loop.workdir} · Model: {loop.model || 'default'} · Reasoning: {loop.reasoningEffort || 'default'}

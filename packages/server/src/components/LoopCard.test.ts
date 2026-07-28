@@ -35,7 +35,7 @@ afterEach(async () => {
   root = null
 })
 
-test('shows Active beside the name for an idle enabled loop', async () => {
+test('shows lifecycle and agent labels beside the loop name', async () => {
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
@@ -44,5 +44,8 @@ test('shows Active beside the name for an idle enabled loop', async () => {
   })
 
   expect(host.textContent).toContain('Active loop')
-  expect([...host.querySelectorAll('span')].some((element) => element.textContent === 'Active')).toBe(true)
+  const labels = [...host.querySelectorAll('span')].map((element) => element.textContent)
+  expect(labels).toContain('Active')
+  expect(labels).toContain('Claude Code')
+  expect(host.textContent).not.toContain('·claude-code')
 })
