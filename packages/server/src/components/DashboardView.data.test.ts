@@ -43,6 +43,7 @@ function loopSummary(id: string, name: string): LoopSummary {
     deleteRequestedAt: null,
     runs: [],
     runCount: 0,
+    recentUsage: { runCount: 0, tokenCount: 0 },
   }
 }
 

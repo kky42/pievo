@@ -146,6 +146,8 @@ export interface LoopSummary {
   pauseCause?: PauseCause | null
   runs: RunSummary[]
   runCount: number
+  /** Runs and reported input + output tokens during the trailing seven days. */
+  recentUsage: { runCount: number; tokenCount: number }
 }
 
 /** The final editable loop configuration plus server lifecycle metadata. */

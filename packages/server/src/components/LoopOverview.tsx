@@ -1,5 +1,5 @@
 import type { CodingAgent, LoopSummary, RunSummary } from '../types'
-import { dotLabel, lastRunOf, rel } from '../lib/format'
+import { dotLabel, fnum, lastRunOf, rel } from '../lib/format'
 import { lifecyclePresentation } from '../lib/lifecycleUi'
 import { LoopMeta } from './LoopMeta'
 import { Timeline } from './Timeline'
@@ -7,6 +7,15 @@ import { Pill, useHydrated } from './ui'
 
 const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
 const titleCls = 'rounded-sm text-left text-[17px] font-semibold tracking-[-0.01em] text-display outline-none'
+
+/** Shared recent-usage presentation for dashboard cards and loop details. */
+function RecentUsage({ usage }: { usage: LoopSummary['recentUsage'] }) {
+  return (
+    <span className="ml-auto whitespace-nowrap">
+      Last 7 days · {fnum(usage.tokenCount)} tokens · {usage.runCount} runs
+    </span>
+  )
+}
 
 /** The shared loop summary shown on both the dashboard and loop detail page. */
 export function LoopOverview({
@@ -79,6 +88,7 @@ export function LoopOverview({
             {hydrated && ` · ${rel(last.ts)}`}
           </span>
         )}
+        <RecentUsage usage={loop.recentUsage} />
       </div>
 
       {latestIncidentRun?.reportIncident && (

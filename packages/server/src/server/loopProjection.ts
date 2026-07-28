@@ -7,6 +7,7 @@ import { MIN_DAEMON_VERSION, daemonNeedsUpdate } from "../gateway/protocol.js";
 import { scheduleFromLoop, statusDefinitionsFromLoop } from "../gateway/loopConfig.js";
 
 const SUMMARY_RUNS = 18;
+const RECENT_USAGE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Dashboard order: loops with runs first, most recent run first. The incoming
  * order remains the tie-breaker, so never-run loops keep listLoops' newest-created
@@ -71,6 +72,7 @@ export function toArtifactSummary(row: ArtifactFile): ArtifactSummary {
 
 async function toLoopSummaryWithMachine(loop: Loop, machine: Machine | undefined): Promise<LoopSummary> {
   const runs = await toRunSummaries(loop.id, await store.listRuns(loop.id, SUMMARY_RUNS));
+  const recentUsage = await store.recentLoopUsage(loop.id, new Date(Date.now() - RECENT_USAGE_WINDOW_MS).toISOString());
   const presence = machinePresence(machine?.online, machine?.lastSeen);
   return {
     id: loop.id,
@@ -97,6 +99,7 @@ async function toLoopSummaryWithMachine(loop: Loop, machine: Machine | undefined
     pauseCause: loop.pauseCause ?? null,
     runs,
     runCount: await store.countRuns(loop.id),
+    recentUsage,
   };
 }
 

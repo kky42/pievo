@@ -65,6 +65,20 @@ test("dashboard summaries include the loop's machine presentation", async () => 
   expect(summary.machine).toMatchObject({ id: "m-a", name: "M", online: false, presence: "offline" });
 });
 
+test("summaries aggregate run count and input plus output tokens from the last seven days", async () => {
+  const loop = await seed("codex");
+  const machineId = loop.machineId;
+  const recentTs = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+  const oldTs = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+
+  await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: recentTs, usage: { inputTokens: 1_200, outputTokens: 34, cacheReadTokens: 999 } });
+  await store.addRun({ loopId: loop.id, machineId, phase: "error", ts: recentTs, usage: { outputTokens: 6 } });
+  await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: oldTs, usage: { inputTokens: 50_000, outputTokens: 50_000 } });
+
+  const summary = await projection.toLoopSummary(loop);
+  expect(summary.recentUsage).toEqual({ runCount: 2, tokenCount: 1_240 });
+});
+
 test("a loop's recorded agent maps onto detail and summary", async () => {
   const loop = await seed("codex");
   const detail = await projection.toLoopDetail(loop);

@@ -24,6 +24,7 @@ const loop: LoopSummary = {
   lastRunTs: null,
   runs: [],
   runCount: 0,
+  recentUsage: { runCount: 0, tokenCount: 0 },
 }
 
 let host: HTMLDivElement | null = null
@@ -63,6 +64,12 @@ test('shows the shared schedule, next run, machine, and execution metadata', asy
   expect(host!.textContent).toContain('next —')
   expect(host!.textContent).toContain('nex.local')
   expect(host!.textContent).toContain('/tmp/project · Model: default · Reasoning: default')
+})
+
+test('shows the trailing seven-day token usage and run count', async () => {
+  await renderLoop({ ...loop, recentUsage: { tokenCount: 1_234_567, runCount: 12 } })
+
+  expect(host!.textContent).toContain('Last 7 days · 1.2m tokens · 12 runs')
 })
 
 test('keeps Active as the loop lifecycle while execution is queued or running', async () => {

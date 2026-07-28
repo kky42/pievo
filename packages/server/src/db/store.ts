@@ -1372,6 +1372,24 @@ export async function countRuns(loopId: string): Promise<number> {
   return Number(r?.n ?? 0);
 }
 
+/** Run count and reported input + output tokens in a bounded recent window. */
+export async function recentLoopUsage(loopId: string, since: string): Promise<{ runCount: number; tokenCount: number }> {
+  const row = (await db
+    .select({
+      runCount: sql<number>`count(*)`,
+      tokenCount: sql<number>`coalesce(sum(
+        coalesce((${runs.usage} ->> 'inputTokens')::bigint, 0) +
+        coalesce((${runs.usage} ->> 'outputTokens')::bigint, 0)
+      ), 0)`,
+    })
+    .from(runs)
+    .where(and(eq(runs.loopId, loopId), sql`${runs.ts} >= ${since}`)))[0];
+  return {
+    runCount: Number(row?.runCount ?? 0),
+    tokenCount: Number(row?.tokenCount ?? 0),
+  };
+}
+
 /** Open runs (pending/running) — used by the timeout-reclaim sweep. */
 export async function openRuns(): Promise<Run[]> {
   return db.select().from(runs).where(inArray(runs.phase, ["pending", "running"]));
