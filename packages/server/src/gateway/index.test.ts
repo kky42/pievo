@@ -245,6 +245,23 @@ test("minimal report protocol accepts only canonical status, message, and help f
   expect(await store.getRun(run.id)).toMatchObject({ status: "keep", message: "completed" });
 });
 
+test("a valid report callback after force deletion succeeds as a discarded retired-run no-op", async () => {
+  const { loop, run, rt } = await seededExecRun();
+  expect(await store.forceDeleteLoop(loop.id)).toBe(true);
+
+  const gw = gateway();
+  expect((await gw.runCli(rt, ["report", "--status", "keep"])).status).toBe(400);
+  const response = await gw.runCli(rt, ["report", "--status", "keep", "--message", "completed before deletion"]);
+
+  expect(response).toEqual({
+    status: 200,
+    body: { text: "reported: run retired · result discarded", exitCode: 0 },
+  });
+  expect(await store.getLoop(loop.id)).toBeUndefined();
+  expect(await store.getRun(run.id)).toBeUndefined();
+  expect(await tokens.resolveLease(rt)).toMatchObject({ state: "retired" });
+});
+
 test("report callback is exactly once under the loop lock", async () => {
   const { run, rt } = await seededExecRun();
   const gw = gateway();

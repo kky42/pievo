@@ -301,6 +301,11 @@ export class CliGateway {
     const acceptedFlags = ["status", "message", "help"];
     const unknown = Object.keys(flags).filter((key) => !acceptedFlags.includes(key));
     if (unknown.length) return derr(400, `report does not accept --${unknown[0]}`, "VALIDATION_ERROR");
+    // Owner force-deletion retires the run lease before removing loop/run data.
+    // Treat the model-facing required callback as a successful idempotent sink:
+    // deletion already decided the result is irrelevant, and surfacing an error
+    // invites the provider to retry or otherwise react to an unfixable race.
+    if (lease.state === "retired") return { code: 200, text: "reported: run retired · result discarded" };
     const applied = await this.applyReportMutation(
       lease,
       leaseTokenHash,
