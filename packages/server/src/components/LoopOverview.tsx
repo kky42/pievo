@@ -62,8 +62,6 @@ export function LoopOverview({
         <div className="ml-auto min-w-0">
           <LoopMeta
             schedule={loop.schedule}
-            nextRun={loop.nextRun}
-            enabled={loop.enabled}
             machine={loop.machine}
             workdir={loop.workdir}
             model={loop.model}

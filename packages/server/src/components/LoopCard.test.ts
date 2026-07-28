@@ -57,11 +57,11 @@ test('shows lifecycle and agent labels beside the loop name', async () => {
   expect([...host!.querySelectorAll('span')].find((element) => element.textContent === 'Active')?.className).toContain('bg-success-soft')
 })
 
-test('shows the shared schedule, next run, machine, and execution metadata', async () => {
-  await renderLoop(loop)
+test('shows the shared schedule, machine, and execution metadata without duplicating the next run', async () => {
+  await renderLoop({ ...loop, nextRun: '2026-07-29T01:00:00.000Z' })
 
   expect(host!.textContent).toContain('daily 06:00 · UTC · overlap queue-one')
-  expect(host!.textContent).toContain('next —')
+  expect(host!.textContent).not.toContain('next 7/29/2026')
   expect(host!.textContent).toContain('nex.local')
   expect(host!.textContent).toContain('/tmp/project · Model: default · Reasoning: default')
 })
