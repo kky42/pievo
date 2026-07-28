@@ -177,6 +177,18 @@ export function LoopDetailView({ id }: { id: string }) {
         </div>
       </header>
 
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
+        <LoopFilesPanel loopId={id} configuredPaths={loop.artifacts} running={running} />
+        <RunsSection loopId={id} summary={summary} runs={runs} older={older} onPickRun={(run) => navigate({ to: '/loops/$loopId/runs/$runId', params: { loopId: id, runId: run.id } })} onMore={async () => {
+          const seed = older.length ? mergeRuns(summary.runs, older) : summary.runs
+          const oldest = seed[0]
+          if (!oldest) return 0
+          const more = await loadOlderRuns({ data: { loopId: id, beforeTs: oldest.ts, limit: WINDOW } })
+          if (more.length) setOlder((current) => mergeRuns(current, more))
+          return more.length
+        }} />
+      </div>
+
       <section className="mt-6 min-w-0 rounded-card border border-hairline bg-surface px-6 py-5 shadow-card">
         <h2 className={`mb-4 border-b border-hairline pb-1.5 ${sectionHeadCls}`}>Configuration</h2>
         <dl className="grid min-w-0 gap-x-6 gap-y-4 md:grid-cols-[180px_minmax(0,1fr)]">
@@ -190,17 +202,6 @@ export function LoopDetailView({ id }: { id: string }) {
         </dl>
       </section>
 
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
-        <LoopFilesPanel loopId={id} configuredPaths={loop.artifacts} running={running} />
-        <RunsSection loopId={id} summary={summary} runs={runs} older={older} onPickRun={(run) => navigate({ to: '/loops/$loopId/runs/$runId', params: { loopId: id, runId: run.id } })} onMore={async () => {
-          const seed = older.length ? mergeRuns(summary.runs, older) : summary.runs
-          const oldest = seed[0]
-          if (!oldest) return 0
-          const more = await loadOlderRuns({ data: { loopId: id, beforeTs: oldest.ts, limit: WINDOW } })
-          if (more.length) setOlder((current) => mergeRuns(current, more))
-          return more.length
-        }} />
-      </div>
       <MachinesModal open={machinesOpen} onClose={() => setMachinesOpen(false)} />
     </Shell>
   )
