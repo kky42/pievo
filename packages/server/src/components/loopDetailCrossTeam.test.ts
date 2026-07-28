@@ -52,6 +52,7 @@ const detailWithTeam = (team: LoopDetail['team']): LoopDetail =>
       id: 'l1', name: 'Daily react-doctor triage',
       schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' },
       workdir: '/tmp/react-doctor', agent: 'claude-code', model: null, reasoningEffort: null,
+      machine: { id: 'm1', name: 'repro-box', online: true, presence: 'online', lastSeen: null },
       enabled: true,
       nextRun: '2026-07-08T13:00:00.000Z',
       running: false,

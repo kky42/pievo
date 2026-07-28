@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 import type { CodingAgent, LoopSummary, RunSummary } from '../types'
-import { cronText, dotLabel, lastRunOf, rel } from '../lib/format'
+import { dotLabel, lastRunOf, rel } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { lifecyclePresentation } from '../lib/lifecycleUi'
 import { loadOlderRuns } from '../server/loopApi'
 import { Timeline, WINDOW } from './Timeline'
+import { LoopMeta } from './LoopMeta'
 import { Pill, useHydrated } from './ui'
 
 const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex' }
@@ -69,17 +70,16 @@ export function LoopCard({
         </button>
         <Pill tone={lifecycle.tone}>{lifecycle.label}</Pill>
         <Pill tone="outline">{AGENT_LABEL[loop.agent]}</Pill>
-        <div className="ml-auto min-w-0 text-right text-meta text-secondary">
-          <div className="whitespace-nowrap">
-            <span className="text-primary" title={loop.schedule.mode === 'cron' ? loop.schedule.cron : undefined}>
-              {loop.schedule.mode === 'continuous'
-                ? `continuous · ${loop.schedule.delayMinutes}m`
-                : `${cronText(loop.schedule.cron)} · ${loop.schedule.timezone} · ${loop.schedule.overlap}`}
-            </span>
-          </div>
-          <div className="mt-1 truncate text-caption text-disabled" title={loop.workdir}>
-            {loop.workdir} · Model: {loop.model || 'default'} · Reasoning: {loop.reasoningEffort || 'default'}
-          </div>
+        <div className="ml-auto min-w-0">
+          <LoopMeta
+            schedule={loop.schedule}
+            nextRun={loop.nextRun}
+            enabled={loop.enabled}
+            machine={loop.machine}
+            workdir={loop.workdir}
+            model={loop.model}
+            reasoningEffort={loop.reasoningEffort}
+          />
         </div>
       </div>
 

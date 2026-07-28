@@ -24,7 +24,7 @@ import type {
 import * as store from '../db/store.js'
 import { canAccessLoop, requestScope } from '../auth.js'
 import { ensureServer } from './boot.js'
-import { sortLoopSummariesByRecentRun, toLoopDetail, toLoopSummary, toRunSummaries } from './loopProjection.js'
+import { sortLoopSummariesByRecentRun, toLoopDetail, toLoopSummaries, toRunSummaries } from './loopProjection.js'
 import { validateLoopEdit } from '../gateway/loopConfig.js'
 import { machinePresence } from '../lib/machinePresence.js'
 import { DAEMON_PROTOCOL_VERSION } from '../gateway/protocol.js'
@@ -131,11 +131,12 @@ export const listLoops = createServerFn({ method: 'GET' })
     if (enforce && !userId) return [] as LoopSummary[]
     // Scope to the resolved active team (open mode ⇒ no team filter, the single
     // shared workspace).
-    const loops = (await store.listLoops(enforce ? active : undefined)).sort((a, b) =>
-      a.createdAt < b.createdAt ? 1 : -1,
-    )
-    const summaries = (await Promise.all(loops.map(toLoopSummary))) as LoopSummary[]
-    return sortLoopSummariesByRecentRun(summaries)
+    const [loopRows, machines] = await Promise.all([
+      store.listLoops(enforce ? active : undefined),
+      enforce ? store.listMachinesForTeam(active) : store.listMachines(),
+    ])
+    const loops = loopRows.sort((a, b) => a.createdAt < b.createdAt ? 1 : -1)
+    return sortLoopSummariesByRecentRun(await toLoopSummaries(loops, machines))
   })
 
 /** GET — full detail (loop + summary + reversed runs). */

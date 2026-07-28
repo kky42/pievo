@@ -36,7 +36,7 @@ function makeDetail(over: { state?: DetailState; online?: boolean; protocol?: nu
   const deleteRequestedAt = state === 'deleting' ? '2026-01-01T00:01:00Z' : null
   return {
     loop: { id: 'l1', name: 'Lifecycle loop', schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' }, workdir: '/tmp/project', agent: 'claude-code', model: null, reasoningEffort: null, prompt: 'Do the work.', statusDefinitions: { keep: 'keep it', noChange: 'nothing needed', block: 'needs help' }, artifacts: [], enabled },
-    summary: { id: 'l1', name: 'Lifecycle loop', schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' }, workdir: '/tmp/project', agent: 'claude-code', model: null, reasoningEffort: null, enabled, nextRun: null, running, lastRunTs: running ? r.ts : null, deleteRequestedAt, runs: running ? [r] : [], runCount: running ? 1 : 0 },
+    summary: { id: 'l1', name: 'Lifecycle loop', schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' }, workdir: '/tmp/project', agent: 'claude-code', model: null, reasoningEffort: null, machine: { id: 'm1', name: 'MacBook Pro', online: over.online ?? true, presence: (over.online ?? true) ? 'online' : 'offline', lastSeen: null }, enabled, nextRun: null, running, lastRunTs: running ? r.ts : null, deleteRequestedAt, runs: running ? [r] : [], runCount: running ? 1 : 0 },
     runs: running ? [r] : [],
     machine: { id: 'm1', name: 'MacBook Pro', online: over.online ?? true, presence: (over.online ?? true) ? 'online' : 'offline', lastSeen: null, daemonProtocol: over.protocol === undefined ? 4 : over.protocol, daemonVersion: '2.4.0', needsUpdate: false, requiredDaemonVersion: '2.4.0' },
   }

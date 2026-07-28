@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import type { CodingAgent, LoopDetail, RunSummary } from '../types'
-import { dotColor, dotLabel, dur, fmt, rel, tsShort, until } from '../lib/format'
+import { dotColor, dotLabel, dur, rel, tsShort } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { DAEMON_UPGRADE_REQUIRED, daemonStopSupport, deriveLoopLifecycle, lifecycleDisplay, lifecyclePresentation } from '../lib/lifecycleUi'
 import { setActiveTeamCookie } from '../lib/teamCookie'
 import { deleteLoop, getLoopDetail, loadOlderRuns, patchLoop, pauseLoop, runLoop, startLoop, stopLoop } from '../server/loopApi'
 import { LoopFilesPanel } from './LoopFilesPanel'
 import { LoopForm, type LoopFormHandle } from './LoopForm'
+import { LoopMeta } from './LoopMeta'
 import { MachinesModal } from './MachinesModal'
 import { Timeline, WINDOW } from './Timeline'
 import { btn, btnDanger, btnPrimary, btnQuiet, ErrorBanner, Loading, Pill, runPulseStyle, sectionHeadCls } from './ui'
@@ -133,7 +134,7 @@ export function LoopDetailView({ id }: { id: string }) {
     )
   }
 
-  const scheduleText = loop.schedule.mode === 'cron'
+  const configurationScheduleText = loop.schedule.mode === 'cron'
     ? `${loop.schedule.cron} · ${loop.schedule.timezone} · overlap ${loop.schedule.overlap}`
     : `continuous · ${loop.schedule.delayMinutes}m after terminal`
   const model = loop.model || 'default'
@@ -143,20 +144,21 @@ export function LoopDetailView({ id }: { id: string }) {
     <Shell back={back}>
       <header className="rounded-card border border-hairline bg-surface px-6 pb-5 pt-[22px] shadow-card">
         <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.015em] text-display">{summary.name}</h1>
-              <Pill tone={lifecycleBadge.tone}>{lifecycleDisplay(detail)}</Pill>
-              <Pill tone="outline">{AGENT_LABEL[loop.agent]}</Pill>
-              {crossTeam && <Pill tone="outline">{crossTeam.name}</Pill>}
-            </div>
-            <div className="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-meta text-secondary">
-              <span className="font-mono text-primary">{scheduleText}</span><span className="text-wire">·</span>
-              <span>next {fmt(summary.nextRun)}</span>{summary.nextRun && summary.enabled && <span className="text-disabled">({until(summary.nextRun)})</span>}
-              <span className="text-wire">·</span>
-              <span className="inline-flex items-center gap-1.5"><span className={`size-1.5 rounded-full ${online ? 'bg-rubik-green' : asleep ? 'bg-rubik-yellow' : 'bg-disabled'}`} />{detail.machine.name || 'machine'}</span>
-            </div>
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
+            <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.015em] text-display">{summary.name}</h1>
+            <Pill tone={lifecycleBadge.tone}>{lifecycleDisplay(detail)}</Pill>
+            <Pill tone="outline">{AGENT_LABEL[loop.agent]}</Pill>
+            {crossTeam && <Pill tone="outline">{crossTeam.name}</Pill>}
           </div>
+          <LoopMeta
+            schedule={loop.schedule}
+            nextRun={summary.nextRun}
+            enabled={summary.enabled}
+            machine={summary.machine}
+            workdir={loop.workdir}
+            model={loop.model}
+            reasoningEffort={loop.reasoningEffort}
+          />
         </div>
 
         <div className="mt-5 border-t border-hairline pt-4">
@@ -192,7 +194,7 @@ export function LoopDetailView({ id }: { id: string }) {
       <section className="mt-6 min-w-0 rounded-card border border-hairline bg-surface px-6 py-5 shadow-card">
         <h2 className={`mb-4 border-b border-hairline pb-1.5 ${sectionHeadCls}`}>Configuration</h2>
         <dl className="grid min-w-0 gap-x-6 gap-y-4 md:grid-cols-[180px_minmax(0,1fr)]">
-          <Config label="Schedule"><code className="break-all font-mono">{scheduleText}</code></Config>
+          <Config label="Schedule"><code className="break-all font-mono">{configurationScheduleText}</code></Config>
           <Config label="Working directory"><code className="break-all font-mono">{loop.workdir}</code></Config>
           <Config label="Agent">{AGENT_LABEL[loop.agent]}</Config>
           <Config label="Model / effort">{model} / {effort}</Config>

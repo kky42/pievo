@@ -16,6 +16,7 @@ const loop: LoopSummary = {
   agent: 'claude-code',
   model: null,
   reasoningEffort: null,
+  machine: { id: 'machine-1', name: 'nex.local', online: true, presence: 'online', lastSeen: null },
   enabled: true,
   nextRun: null,
   running: false,
@@ -53,6 +54,15 @@ test('shows lifecycle and agent labels beside the loop name', async () => {
   expect(labels).toContain('Claude Code')
   expect(host!.textContent).not.toContain('·claude-code')
   expect([...host!.querySelectorAll('span')].find((element) => element.textContent === 'Active')?.className).toContain('bg-success-soft')
+})
+
+test('shows the shared schedule, next run, machine, and execution metadata', async () => {
+  await renderLoop(loop)
+
+  expect(host!.textContent).toContain('daily 06:00 · UTC · overlap queue-one')
+  expect(host!.textContent).toContain('next —')
+  expect(host!.textContent).toContain('nex.local')
+  expect(host!.textContent).toContain('/tmp/project · Model: default · Reasoning: default')
 })
 
 test('keeps Active as the loop lifecycle while execution is queued or running', async () => {

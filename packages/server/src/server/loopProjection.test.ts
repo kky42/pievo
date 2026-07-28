@@ -60,6 +60,11 @@ test("dashboard summaries put recently run loops first and preserve never-run or
   expect(summaries.map((loop) => loop.id)).toEqual(["never-new", "older-run", "newer-run", "never-old"]);
 });
 
+test("dashboard summaries include the loop's machine presentation", async () => {
+  const summary = await projection.toLoopSummary(await seed("codex"));
+  expect(summary.machine).toMatchObject({ id: "m-a", name: "M", online: false, presence: "offline" });
+});
+
 test("a loop's recorded agent maps onto detail and summary", async () => {
   const loop = await seed("codex");
   const detail = await projection.toLoopDetail(loop);

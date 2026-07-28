@@ -1,5 +1,5 @@
 /** Display helpers and the semantic run-status palette. */
-import type { LoopSummary, RunSummary } from '../types'
+import type { LoopSchedule, LoopSummary, RunSummary } from '../types'
 
 export const fmt = (t: string | null | undefined): string =>
   t ? new Date(t).toLocaleString() : '—'
@@ -20,16 +20,16 @@ const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 /**
  * Humanize common crontab patterns ("m h dom mon dow") into a readable phrase —
  * "every 3h", "every 15m", "hourly :07", "daily 07:00", "Mon 09:00". Anything
- * outside these common shapes falls back to the raw expression (shown verbatim,
- * with the literal cron always available on hover at the call site).
+ * outside these common shapes is labeled as a custom schedule; the literal cron
+ * remains available on hover and in Configuration.
  */
 export function cronText(cron: string): string {
   const p = (cron || '').trim().split(/\s+/)
-  if (p.length !== 5) return cron
+  if (p.length !== 5) return 'custom schedule'
   const [mi, ho, dom, mon, dow] = p as [string, string, string, string, string]
   const dateWild = dom === '*' && mon === '*'
   const everyH = ho.match(/^\*\/(\d+)$/)
-  if (everyH && dateWild && dow === '*') return `every ${everyH[1]}h`
+  if (everyH && mi === '0' && dateWild && dow === '*') return `every ${everyH[1]}h`
   const everyM = mi.match(/^\*\/(\d+)$/)
   if (everyM && ho === '*' && dateWild && dow === '*') return `every ${everyM[1]}m`
   if (ho === '*' && /^\d+$/.test(mi) && dateWild && dow === '*')
@@ -39,7 +39,14 @@ export function cronText(cron: string): string {
     if (dow === '*') return `daily ${hhmm}`
     if (/^[0-6]$/.test(dow)) return `${DOW[Number(dow)]} ${hhmm}`
   }
-  return cron
+  return 'custom schedule'
+}
+
+/** Human-readable schedule summary shared by dashboard and detail headers. */
+export function scheduleText(schedule: LoopSchedule): string {
+  return schedule.mode === 'cron'
+    ? `${cronText(schedule.cron)} · ${schedule.timezone} · overlap ${schedule.overlap}`
+    : `continuous · ${schedule.delayMinutes}m after completion`
 }
 
 /** Compact time-until-future: "due" / "in 50m" / "in 2h" / "in 3d". */

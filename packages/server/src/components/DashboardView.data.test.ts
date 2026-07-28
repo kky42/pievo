@@ -35,6 +35,7 @@ function loopSummary(id: string, name: string): LoopSummary {
     agent: 'claude-code',
     model: null,
     reasoningEffort: null,
+    machine: { id: 'machine-1', name: 'Test machine', online: true, presence: 'online', lastSeen: null },
     enabled: true,
     nextRun: null,
     running: false,

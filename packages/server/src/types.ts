@@ -119,6 +119,14 @@ export interface MachineSummary {
   loopCount: number
 }
 
+export interface LoopMachineSummary {
+  id: string
+  name: string
+  online: boolean
+  presence: MachinePresence
+  lastSeen: string | null
+}
+
 export interface LoopSummary {
   id: string
   name: string
@@ -127,6 +135,7 @@ export interface LoopSummary {
   agent: CodingAgent
   model: string | null
   reasoningEffort: string | null
+  machine: LoopMachineSummary
   enabled: boolean
   nextRun: string | null
   running?: boolean
@@ -164,7 +173,7 @@ export interface LoopDetail {
    *  claim immediately, but manual work remains queued; `presence` distinguishes a calm
    *  "asleep" (recently seen, likely just idle) from a hard "offline", and
    *  `lastSeen` (ISO) feeds the "last seen 3m ago" hint. */
-  machine: { id: string; name: string; online: boolean; presence: MachinePresence; lastSeen: string | null; daemonProtocol: number | null; daemonVersion: string | null; needsUpdate: boolean; requiredDaemonVersion: string }
+  machine: LoopMachineSummary & { daemonProtocol: number | null; daemonVersion: string | null; needsUpdate: boolean; requiredDaemonVersion: string }
   /** The loop's owning team + whether it is the caller's active team. Present only
    *  when the auth gate is on (open mode has a single workspace, so no chip). Lets
    *  the loop header show which team owns the loop and, when a member opens it from

@@ -1,6 +1,6 @@
 /** Canonical client projections for persisted loops and runs. */
 import * as store from "../db/store.js";
-import type { ArtifactFile, Loop, Run } from "../db/schema.js";
+import type { ArtifactFile, Loop, Machine, Run } from "../db/schema.js";
 import type { ArtifactSummary, LoopDetail, LoopFull, LoopSummary, RunSummary } from "../types.js";
 import { machinePresence } from "../lib/machinePresence.js";
 import { MIN_DAEMON_VERSION, daemonNeedsUpdate } from "../gateway/protocol.js";
@@ -69,8 +69,9 @@ export function toArtifactSummary(row: ArtifactFile): ArtifactSummary {
   };
 }
 
-export async function toLoopSummary(loop: Loop): Promise<LoopSummary> {
+async function toLoopSummaryWithMachine(loop: Loop, machine: Machine | undefined): Promise<LoopSummary> {
   const runs = await toRunSummaries(loop.id, await store.listRuns(loop.id, SUMMARY_RUNS));
+  const presence = machinePresence(machine?.online, machine?.lastSeen);
   return {
     id: loop.id,
     name: loop.name,
@@ -79,6 +80,13 @@ export async function toLoopSummary(loop: Loop): Promise<LoopSummary> {
     agent: loop.agent,
     model: loop.model ?? null,
     reasoningEffort: loop.reasoningEffort ?? null,
+    machine: {
+      id: loop.machineId,
+      name: machine?.name || "",
+      online: presence === "online",
+      presence,
+      lastSeen: machine?.lastSeen ?? null,
+    },
     enabled: loop.enabled,
     nextRun: nextRun(loop),
     running: await store.hasRunningRun(loop.id),
@@ -90,6 +98,17 @@ export async function toLoopSummary(loop: Loop): Promise<LoopSummary> {
     runs,
     runCount: await store.countRuns(loop.id),
   };
+}
+
+export async function toLoopSummary(loop: Loop): Promise<LoopSummary> {
+  return toLoopSummaryWithMachine(loop, await store.getMachine(loop.machineId));
+}
+
+/** Batch dashboard projection: machine rows are preloaded once, avoiding a
+ * machine lookup per loop on every dashboard poll. */
+export async function toLoopSummaries(loops: Loop[], machines: Machine[]): Promise<LoopSummary[]> {
+  const byId = new Map(machines.map((machine) => [machine.id, machine]));
+  return Promise.all(loops.map((loop) => toLoopSummaryWithMachine(loop, byId.get(loop.machineId))));
 }
 
 function toLoopFull(loop: Loop): LoopFull {
@@ -117,7 +136,7 @@ export async function toLoopDetail(loop: Loop): Promise<LoopDetail> {
   const presence = machinePresence(m?.online, m?.lastSeen);
   return {
     loop: toLoopFull(loop),
-    summary: await toLoopSummary(loop),
+    summary: await toLoopSummaryWithMachine(loop, m),
     // Presence drives calm asleep-vs-offline copy. Manual work may queue while
     // offline and is claimed after reconnect.
     machine: {

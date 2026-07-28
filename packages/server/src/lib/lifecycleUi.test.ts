@@ -9,7 +9,8 @@ const run = (patch: Partial<RunSummary> = {}): RunSummary => ({
 })
 const loop = (patch: Partial<LoopSummary> = {}): LoopSummary => ({
   id: 'l1', name: 'Loop', schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' },
-  workdir: '/tmp/project', agent: 'claude-code', model: null, reasoningEffort: null, enabled: true,
+  workdir: '/tmp/project', agent: 'claude-code', model: null, reasoningEffort: null,
+  machine: { id: 'm1', name: 'MacBook Pro', online: true, presence: 'online', lastSeen: null }, enabled: true,
   nextRun: null, lastRunTs: null, runs: [], runCount: 0,
   ...patch,
 })
