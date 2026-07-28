@@ -1,107 +1,54 @@
 # Create a loop
 
-A Pievo loop runs one server-stored prompt with one selected coding agent in a fixed
-working directory. Use the **pievo-cli** prefix supplied by the user (default `pievo`).
-If this machine is not connected, follow `connect.md` first.
+Use the Pievo command prefix supplied by the user; otherwise use `pievo`. Connect the
+machine first when needed.
 
-## 1 · Identify the prompt
+## Author the loop
 
-Start from concrete evidence in the current session:
+Turn the user's task into a standalone prompt grounded in the real project: include
+relevant paths, commands, constraints, and expected result. The scheduled agent starts
+fresh, so do not rely on this conversation. Store only the task prompt; Pievo appends
+the runtime status definitions and required report instruction.
 
-- If the user just completed or described a recurring task, turn that task into a
-  standalone prompt grounded in its real paths, commands, URLs, constraints, and
-  expected result.
-- If there is no task yet, inspect the project, propose a few useful scheduled prompts,
-  and let the user choose. Do not invent and create one silently.
+Propose and confirm missing choices:
 
-The stored `prompt` is sent unchanged. Make it self-contained for a fresh coding-agent
-process, but do not add Pievo runtime instructions: the server appends the complete
-status definitions and required `pievo report` command.
+- **Schedule:** cron for wall-clock work; continuous for a delay after the prior run
+  ends. For cron, confirm timezone and whether a busy occurrence should skip or
+  coalesce one follow-up.
+- **Statuses:** define task-specific `keep`, `no-change`, and `block` outcomes. Block
+  means owner attention is required; a successfully completed block report pauses the
+  loop.
+- **Artifacts:** choose only stable, exact files the user intends to upload. Do not
+  configure secrets, directories, scans, or globs.
+- **Execution:** confirm the machine workdir, coding agent, optional provider settings,
+  and initial enabled state.
 
-## 2 · Confirm schedule and outcomes
+## Canonical operation
 
-Before creating, propose any missing choices in one short message and get confirmation:
+Consult the current schema before constructing the config. Prefer stdin for a large
+prompt:
 
-- **Schedule:** use cron for wall-clock work or continuous for a fixed delay after the
-  prior run finishes. For cron, confirm the timezone and whether an occurrence while a
-  run is still open should `skip` or `queue-one` coalesced follow-up. Continuous never
-  overlaps.
-- **Statuses:** define what `keep`, `no-change`, and `block` mean for this task. All
-  three definitions are required and must be non-empty. `block` means owner attention
-  is required and pauses the loop.
-- **Artifacts:** if the user wants files visible in Pievo, list exact paths relative to
-  `workdir`. Use stable filenames. Globs, absolute paths, traversal, and directories
-  are not supported. Missing or unreadable files do not fail a run.
-
-## 3 · Author the canonical config
-
-Cron example:
-
-```json
+```bash
+<pievo-cli> new --help
+<pievo-cli> new --json - --dry-run <<'JSON'
 {
-  "name": "Daily dependency check",
-  "schedule": {
-    "mode": "cron",
-    "cron": "0 9 * * *",
-    "timezone": "America/Los_Angeles",
-    "overlap": "skip"
-  },
+  "name": "Daily project check",
+  "schedule": {"mode":"cron","cron":"0 9 * * *","timezone":"UTC","overlap":"skip"},
   "workdir": "/absolute/path/to/project",
   "agent": "claude-code",
-  "model": null,
-  "reasoningEffort": null,
-  "prompt": "Inspect the repository's open dependency updates. Verify each update against its exact diff and current checks, then write any safe action or reason to defer it to dependency-check.md.",
+  "prompt": "Run the project-specific check and record the verified result.",
   "statusDefinitions": {
-    "keep": "A verified action or useful finding was produced.",
-    "noChange": "The check completed and found no actionable change.",
-    "block": "Owner input or unavailable access prevents a safe decision."
+    "keep": "A verified useful result was produced.",
+    "noChange": "The check completed with nothing actionable.",
+    "block": "Owner input is required to continue safely."
   },
-  "artifacts": ["dependency-check.md"],
+  "artifacts": [],
   "enabled": true
 }
+JSON
 ```
 
-Continuous schedule shape:
-
-```json
-{
-  "mode": "continuous",
-  "delayMinutes": 30
-}
-```
-
-Rules:
-
-- Required: `name`, `schedule`, absolute `workdir`, `agent`, non-empty `prompt`, and
-  all three `statusDefinitions`.
-- `agent` is `claude-code` or `codex`.
-- `model` and `reasoningEffort` are optional strings. Omit them or use `null` to let
-  the selected coding-agent CLI use its default.
-- `artifacts` is optional and contains only exact workdir-relative file paths.
-- `enabled` is optional and defaults to `true`.
-- Cron and continuous are exclusive shapes. Do not mix their fields.
-
-## 4 · Validate, then create
-
-Preview the exact config first:
-
-```bash
-<pievo-cli> new --json '<config>' --dry-run
-```
-
-Fix every rejection. Then create it:
-
-```bash
-<pievo-cli> new --json '<config>'
-```
-
-When the dashboard connection command is present in this session, reuse the same
-executable prefix it used for `daemon start` (`pievo` or the custom command) as
-**pievo-cli**, and include its connect key so the loop lands in the selected team:
-
-```bash
-<pievo-cli> new --json '<config>' --connect-key <connect-key>
-```
-
-On success, tell the user the loop name, schedule, working directory, selected agent,
-and whether any artifact files were configured.
+Inspect the normalized preview and fix every rejection. Then run the same command
+without `--dry-run`, preserving any supplied server/connect options. Finally use the
+created loop identifier with `show --json` and summarize the actual schedule, workdir,
+agent, enabled state, and artifact uploads.

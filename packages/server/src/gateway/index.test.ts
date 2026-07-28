@@ -635,7 +635,25 @@ test("createLoop --dry-run still validates (bad cron → 400, nothing created)",
   expect((await store.loopsForMachine(machineId))).toHaveLength(0);
 });
 
+test("editLoop --dry-run returns canonical before and after without persisting", async () => {
+  const { token, machineId } = await seededMachine();
+  const loop = await createLoop({ userId: "u1", machineId, name: "Before", cron: "0 8 * * *", enabled: true });
 
+  const res = await gateway().editLoop(token, loop.id, { name: "  After  ", model: "  opus  " }, true);
+
+  expect(res.status).toBe(200);
+  const body = res.body as Record<string, unknown>;
+  expect(body).toMatchObject({
+    dryRun: true,
+    applied: ["name", "model"],
+    before: { id: loop.id, name: "Before", model: null },
+    after: { id: loop.id, name: "After", model: "opus" },
+    config: { name: "After", model: "opus" },
+  });
+  expect(body.config).not.toHaveProperty("id");
+  expect(JSON.parse(String(body.text))).toMatchObject({ before: { name: "Before" }, after: { name: "After" } });
+  expect(await store.getLoop(loop.id)).toMatchObject({ name: "Before", model: null });
+});
 
 
 

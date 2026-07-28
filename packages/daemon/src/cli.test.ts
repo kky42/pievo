@@ -39,6 +39,44 @@ describe("pievo CLI dispatch", () => {
     expect(r.stdout).toContain("pievo daemon start");
   });
 
+  test("new help owns the canonical config contract", async () => {
+    const r = await runCli(["new", "--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("Canonical config");
+    expect(r.stdout).toContain("--json -");
+    expect(r.stdout).toContain("mode: cron");
+    expect(r.stdout).toContain("mode: continuous");
+    expect(r.stdout).toContain("keep, noChange, block");
+    expect(r.stdout).toContain("unknown fields are rejected");
+  });
+
+  test("edit help explains patch and replacement semantics", async () => {
+    const r = await runCli(["edit", "--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("pievo show <loop> --json");
+    expect(r.stdout).toContain("complete replacement");
+    expect(r.stdout).toContain("--dry-run");
+    expect(r.stdout).toContain("Unknown fields are rejected");
+  });
+
+  test("lifecycle help states effects that matter before mutation", async () => {
+    const [pause, start, stop, del, run] = await Promise.all([
+      runCli(["pause", "--help"]),
+      runCli(["start", "--help"]),
+      runCli(["stop", "--help"]),
+      runCli(["delete", "--help"]),
+      runCli(["run", "--help"]),
+    ]);
+    expect(pause.stdout).toContain("current run continues");
+    expect(start.stdout).toContain("queued work becomes eligible immediately");
+    expect(stop.stdout).toContain("cancel queued work");
+    expect(stop.stdout).toContain("daemon confirms cancellation");
+    expect(del.stdout).toContain("Local project files are never deleted");
+    expect(del.stdout).toContain("prior Delete request");
+    expect(del.stdout).toContain("team-owner authority");
+    expect(run.stdout).toContain("without pausing its loop");
+  });
+
   test("bare pievo opens the machine home", async () => {
     const r = await runCli([]);
     expect(r.code).toBe(0);

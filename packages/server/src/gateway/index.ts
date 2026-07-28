@@ -832,7 +832,11 @@ export class MachineGateway {
       const update = validated.value;
       const applied = Object.keys(patch ?? {});
       if (dryRun) {
-        return { status: 200, body: { ok: true, dryRun: true, id: loop.id, applied, config: { ...patch }, text: JSON.stringify({ id: loop.id, applied }, null, 2) } };
+        const before = canonicalLoopEnvelope(loop);
+        const after = canonicalLoopEnvelope({ ...loop, ...update } as Loop);
+        const { id: _readOnlyId, ...config } = after;
+        const preview = { id: loop.id, applied, before, after };
+        return { status: 200, body: { ok: true, dryRun: true, ...preview, config, text: JSON.stringify(preview, null, 2) } };
       }
       if (Object.keys(update).length === 0) {
         return { status: 200, body: { ok: true, id: loop.id, name: loop.name, applied: [], nothingToChange: true, text: `loop: ${loop.name}\nid: ${loop.id}\napplied[0]:` } };
