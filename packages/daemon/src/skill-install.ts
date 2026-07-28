@@ -3,11 +3,10 @@
  * (vercel-labs/skills). Installed at USER scope to match the daemon's per-machine
  * scope: coding agents discover user-level skills from ANY workdir, so a loop agent
  * still discovers the connection/create/update references from any workdir — no
- * per-workdir copies scattering. It's fired at `pievo daemon start` (refreshing the install
- * to whatever daemon version just launched) and again after a successful
- * `pievo new`, and it NEVER blocks: any failure (no network, no npx, no write
- * permission, bundled skill absent) prints one diagnostic line and leaves
- * `pievo skill install` as the manual retry path.
+ * per-workdir copies scattering. It's fired at `pievo daemon start` (refreshing the
+ * install to whatever daemon version just launched), and it NEVER blocks: any
+ * failure (no network, no npx, no write permission, bundled skill absent) prints
+ * one diagnostic line and leaves `pievo skill install` as the manual retry path.
  *
  * MULTI-AGENT: the skill is installed for every coding agent pievo knows about
  * (`SKILL_TARGET_AGENTS` — currently Claude Code and Codex, the two `CodingAgent`

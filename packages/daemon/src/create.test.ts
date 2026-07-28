@@ -1,19 +1,10 @@
 /**
- * Canonical `pievo new` envelope checks, retry idempotency, and the skill-install
- * trigger after a confirmed create. The required agent is always explicit.
- *
- * The USER-scope install fires only
- * after a confirmed create, never blocking it (both with the fetch + installer seams
- * injected, so nothing hits the network or spawns npx).
+ * Canonical `pievo new` envelope checks and retry idempotency. The required agent
+ * is always explicit.
  */
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { canonicalJson, coerceAgent, cronLooksValid, idempotencyKey, runCreate } from "./create.js";
-import type { InstallOutcome } from "./skill-install.js";
 
 const okResponse = (body: unknown) => ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
 const errResponse = (status: number, body: unknown) =>
@@ -35,13 +26,6 @@ const validConfig = (overrides: Record<string, unknown> = {}) => ({
   enabled: true,
   ...overrides,
 });
-
-/** An absolute path under a fresh temp dir that does NOT yet exist — so a test can
- *  prove the installer's cwd is created before the install spawns (the ENOENT fix). */
-function tmpWorkdir(): string {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-workdir-"));
-  return path.join(base, "loop", "run");
-}
 
 describe("cronLooksValid (local pre-check only — the server/croner is the sole validator)", () => {
   test("accepts the 5-field, 6-field (seconds), and @-shortcut forms croner supports", () => {
@@ -136,7 +120,6 @@ describe("runCreate — sends the idempotency key on a real create, omits it on 
           sent.push(JSON.parse((init as any).body as string));
           return okResponse({ ok: true, id: "loop-1", name: "X", text: "created: X (loop-1)", exitCode: 0 });
         },
-        installer: async () => ({ ok: true, line: "" }),
         stdout: () => {},
       });
     expect(await run(cfg)).toBe(0);
@@ -171,7 +154,6 @@ describe("runCreate — sends the idempotency key on a real create, omits it on 
         payload = JSON.parse(JSON.parse((init as any).body as string).argv[2]);
         return okResponse({ ok: true, dryRun: true, text: "dry-run:\n  cron: 0 5 * * *", exitCode: 0 });
       },
-      installer: async () => ({ ok: true, line: "" }),
       stdout: () => {},
     });
     expect(code).toBe(0);

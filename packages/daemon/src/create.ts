@@ -13,7 +13,6 @@ import fs from "node:fs";
 
 import { postCli, printCliResponse } from "./cli-client.js";
 import { DEVICE_FILE, flag, readStored, resolveServerUrl } from "./config.js";
-import { type InstallOutcome, installSkill } from "./skill-install.js";
 
 /** Local pre-check only — the server (croner) is the SOLE validator. Croner
  *  accepts 5- and 6-field expressions plus @-shortcuts (@daily …), so reject
@@ -72,16 +71,13 @@ export function coerceAgent(v: unknown): CodingAgent | null {
   return v === "claude-code" || v === "codex" ? v : null;
 }
 
-/** Tests inject these to assert the post-create skill install without network/npx. */
 export interface CreateDeps {
   fetchImpl?: typeof fetch;
-  installer?: () => Promise<InstallOutcome>;
   stdout?: (s: string) => void;
 }
 
 export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<number> {
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const installer = deps.installer ?? installSkill;
   const write = deps.stdout ?? ((s: string) => void process.stdout.write(s));
   const valueFlags = new Set(["--json", "--connect-key", "--server-url"]);
   for (let i = 0; i < args.length; i++) {
@@ -171,31 +167,9 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
       process.stderr.write(`pievo: ${detail}\n`);
       return 1;
     }
-    const code = printCliResponse(r.body, r.status, write);
-    if (code !== 0) return code;
-    if (dryRun) return 0;
-    // Best-effort: after a confirmed create, refresh the owner-facing skill at
-    // user scope so future coding-agent sessions can discover its connect/create/
-    // update guidance from any workdir. Failure is announced but never blocks;
-    // the owner may retry with `pievo skill install`.
-    await announceSkillInstall(installer, write);
-    return 0;
+    return printCliResponse(r.body, r.status, write);
   } catch (err) {
     process.stderr.write(`pievo: ${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
-  }
-}
-
-/** Best-effort, announced USER-scope install (`~/.claude/skills/pievo`). Swallows
- *  every error and prints one line — loop creation must never fail on the skill. */
-async function announceSkillInstall(
-  installer: () => Promise<InstallOutcome>,
-  write: (s: string) => void,
-): Promise<void> {
-  try {
-    const r = await installer();
-    write(r.line + "\n");
-  } catch {
-    /* truly never block create */
   }
 }

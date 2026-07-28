@@ -123,9 +123,9 @@ Useful binary overrides are `PIEVO_CLAUDE_BIN` and `PIEVO_CODEX_BIN`.
 ## Owner skill
 
 The package bundles a small owner-facing skill for connection, creation, and editing.
-`daemon start` and successful `new` best-effort install it at user scope for Claude Code
-and Codex. Installation failure never blocks execution, and runtime prompts do not
-depend on the skill. Inspect or refresh it with `pievo skill status|install`.
+`daemon start` best-effort installs it at user scope for Claude Code and Codex.
+Installation failure never blocks execution, and runtime prompts do not depend on the
+skill. Inspect or refresh it with `pievo skill status|install`.
 
 ## Provider schema validation
 
