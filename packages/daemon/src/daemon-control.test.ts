@@ -172,6 +172,20 @@ describe("runDaemonStatus", () => {
     expect(cap.stdout()).toContain("affected runs remain occupied");
   });
 
+  test("a deleted machine asks the user to connect to a server, not upgrade or reuse the saved server", async () => {
+    const cap = capture({
+      readPid: () => ({ pid: 12, startTime: "test-start" }), alive: () => true,
+      server: "https://old.example", token: "dk_deleted",
+      fetchOnline: async () => ({ registered: false, online: false, name: null, daemonProtocol: null }),
+    });
+    await runDaemonStatus([], cap);
+    expect(cap.stdout()).toContain("server connectivity: reachable");
+    expect(cap.stdout()).toContain("identity:  no longer registered");
+    expect(cap.stdout()).toContain("connect to a server with `pievo daemon connect --server-url <url> --connect-key <dk_…>`");
+    expect(cap.stdout()).not.toContain("upgrade required");
+    expect(cap.stdout()).not.toContain("connect to https://old.example");
+  });
+
   test("shows protocol and current runs from the server", async () => {
     const cap = capture({
       readPid: () => ({ pid: 12, startTime: "test-start" }), alive: () => true,

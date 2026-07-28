@@ -57,6 +57,12 @@ function heartbeatTime(value: unknown): number | null | undefined {
   return Number.isFinite(at) ? at : undefined;
 }
 
+function mustReconnect(status: import("./daemon-control.js").MachineStatus | undefined): boolean {
+  return status?.registered === false && status.claimValid === false;
+}
+
+const RECONNECT_GUIDANCE = "pievo: saved identity is no longer registered — connect to a server with `pievo daemon connect --server-url <url> --connect-key <dk_…>`\n";
+
 export type DaemonStartDeps = {
   fetchStatus?: (server: string, token: string) => Promise<import("./daemon-control.js").MachineStatus | undefined>;
   spawnDaemon?: (server: string, token: string, logFile: string) => number | undefined;
@@ -126,6 +132,12 @@ export async function runDaemonStart(args: string[], injected: DaemonStartDeps =
   }
 
   if (args.includes("--foreground")) {
+    // The detached parent already checked this identity. A direct foreground start
+    // still fails fast instead of entering an unauthorized polling loop.
+    if (!d.internalChild && mustReconnect(await d.fetchStatus(server, token))) {
+      d.err(RECONNECT_GUIDANCE);
+      return 1;
+    }
     // Start polling before any potentially 90s skill install. A detached child does
     // no refresh at all: its parent owns the single post-readiness refresh.
     const running = d.foreground([]);
@@ -137,6 +149,10 @@ export async function runDaemonStart(args: string[], injected: DaemonStartDeps =
   const localPid = d.localPid();
   if (localPid !== undefined) {
     const st = await d.fetchStatus(server, token);
+    if (mustReconnect(st)) {
+      d.err(RECONNECT_GUIDANCE);
+      return 1;
+    }
     if (st?.online) {
       d.out(`daemon already running for this machine${st.name ? ` (${st.name})` : ""}\n`);
     } else {
@@ -149,6 +165,10 @@ export async function runDaemonStart(args: string[], injected: DaemonStartDeps =
   // Server presence lingers after a daemon exits. Capture its heartbeat, but never
   // let it substitute for local liveness or satisfy the replacement's readiness.
   const before = await d.fetchStatus(server, token);
+  if (mustReconnect(before)) {
+    d.err(RECONNECT_GUIDANCE);
+    return 1;
+  }
   const initialHeartbeat = heartbeatTime(before?.lastSeen);
   let baselineKnown = before !== undefined && initialHeartbeat !== undefined;
   let baselineHeartbeat = initialHeartbeat ?? null;
@@ -205,7 +225,10 @@ async function probeSavedConnection(serverUrl: string, token: string): Promise<"
     const response = await boundedFetch(`${serverUrl}/api/machine/status`, {
       headers: { Authorization: `Bearer ${token}` },
     }, 3000);
-    if (response.ok) return "valid";
+    if (response.ok) {
+      const status = await response.json() as { registered?: unknown };
+      return status.registered === false ? "invalid" : "valid";
+    }
     return response.status === 401 || response.status === 403 || response.status === 404 ? "invalid" : "unreachable";
   } catch {
     return "unreachable";

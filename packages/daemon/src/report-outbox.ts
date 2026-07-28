@@ -1,9 +1,24 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 
 import { boundedFetch } from "./http.js";
+
+/** Node 22–24 labels its built-in SQLite API experimental even though Pievo uses
+ * only its stable synchronous surface. Suppress exactly that import-time warning;
+ * all other process warnings retain Node's default behavior. */
+const originalEmitWarning = process.emitWarning;
+process.emitWarning = ((warning: string | Error, ...args: unknown[]) => {
+  if (warning === "SQLite is an experimental feature and might change at any time" && args[0] === "ExperimentalWarning") return;
+  Reflect.apply(originalEmitWarning, process, [warning, ...args]);
+}) as typeof process.emitWarning;
+let DatabaseSync: typeof import("node:sqlite").DatabaseSync;
+try {
+  ({ DatabaseSync } = await import("node:sqlite"));
+} finally {
+  process.emitWarning = originalEmitWarning;
+}
 
 export type TerminalResult = "success" | "failure" | "canceled" | "timeout";
 export interface TerminalReport {
@@ -46,7 +61,7 @@ const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000] as const;
  * never caps execution/reporting for other loops. The database lives under
  * PIEVO_HOME, outside loop roots, and is owner-only even with a permissive umask. */
 export class PendingReportOutbox {
-  private readonly db: DatabaseSync;
+  private readonly db: DatabaseSyncType;
 
   constructor(readonly file: string) {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });

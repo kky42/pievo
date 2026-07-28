@@ -632,9 +632,12 @@ export class MachineGateway {
     const auth = await authenticateDeviceToken(deviceToken, { allowUnknown: true });
     if (!auth.ok) return auth.response;
     const { machineId, machine } = auth;
-    // Unknown token ⇒ not connected yet (the daemon self-registers on first poll),
-    // so report offline rather than erroring — keeps the skill's check uniform.
-    if (!machine) return { status: 200, body: { online: false, name: null, lastSeen: null, daemonProtocol: null } };
+    // Unknown or deleted identity: keep the response enumeration-safe while
+    // telling the local CLI that its saved identity must be replaced explicitly.
+    if (!machine) {
+      const claimValid = (await readClaimIntent(deviceToken)) !== undefined;
+      return { status: 200, body: { registered: false, claimValid, online: false, name: null, lastSeen: null, daemonProtocol: null } };
+    }
     const fresh = !!machine.lastSeen && Date.now() - Date.parse(machine.lastSeen) < ONLINE_TTL_MS;
     const online = !!machine.online && fresh;
     const running = await store.runningRunsForMachine(machineId);
@@ -642,6 +645,7 @@ export class MachineGateway {
     return {
       status: 200,
       body: {
+        registered: true,
         online,
         name: machine.name || null,
         lastSeen: machine.lastSeen ?? null,

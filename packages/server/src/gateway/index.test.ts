@@ -102,6 +102,26 @@ function pollV4(
   });
 }
 
+test("machine status distinguishes an unregistered identity without rejecting its token", async () => {
+  const unknown = await gateway().status(tokens.mintDeviceToken());
+  expect(unknown).toMatchObject({
+    status: 200,
+    body: { registered: false, claimValid: false, online: false, name: null, lastSeen: null, daemonProtocol: null },
+  });
+
+  const claim = tokens.mintDeviceToken();
+  await tokens.rememberConnectKey(claim, { userId: "u1", teamId: "team-personal-u1" });
+  expect(await gateway().status(claim)).toMatchObject({
+    status: 200,
+    body: { registered: false, claimValid: true },
+  });
+
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: false });
+  expect(await gateway().status(token)).toMatchObject({ status: 200, body: { registered: true } });
+});
+
 test("protocol rejection uses upgrade terminology and gives the restart flow", async () => {
   const res = await gateway().pollV4("not-a-device-token", { protocolVersion: 2, currentRuns: [] });
   expect(res.status).toBe(426);

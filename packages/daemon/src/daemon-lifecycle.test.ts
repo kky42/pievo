@@ -1,4 +1,6 @@
 /** `pievo daemon start/restart`, with external touches injected. */
+import { createServer } from "node:http";
+import { once } from "node:events";
 import { describe, expect, test } from "vitest";
 
 import { buildDaemonSpawn, runDaemonConnect, runDaemonConnections, runDaemonRestart, runDaemonStart, type DaemonStartDeps } from "./daemon-lifecycle.js";
@@ -57,6 +59,27 @@ describe("runDaemonStart — local pidfile first (no daemon leaks)", () => {
     expect(code).toBe(0);
     expect(cap.spawned()).toBe(0);
     expect(cap.stdout()).toContain("already running locally (pid 4242)");
+  });
+
+  test("a deleted saved identity fails fast with server-neutral reconnect guidance", async () => {
+    const cap = seams({
+      localPid: () => undefined,
+      fetchStatus: async () => ({ registered: false, claimValid: false, online: false, name: null }),
+    });
+    expect(await runDaemonStart([], cap)).toBe(1);
+    expect(cap.spawned()).toBe(0);
+    expect(cap.stderr()).toContain("connect to a server with `pievo daemon connect --server-url <url> --connect-key <dk_…>`");
+  });
+
+  test("a fresh valid connect key may register its machine", async () => {
+    let calls = 0;
+    const cap = seams({
+      fetchStatus: async () => (++calls === 1
+        ? { registered: false, claimValid: true, online: false, name: null, lastSeen: null }
+        : { registered: true, online: true, name: "MacBook", lastSeen: "2026-07-19T10:00:01.000Z" }),
+    });
+    expect(await runDaemonStart([], cap)).toBe(0);
+    expect(cap.spawned()).toBe(1);
   });
 
   test("a live local daemon that the server also sees online → the classic already-running message", async () => {
@@ -225,6 +248,32 @@ describe("runDaemonConnect", () => {
       "replaced saved identity for https://one.test",
       "start",
     ]);
+  });
+
+  test("an explicit key replaces a saved identity that the server says is no longer registered", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ registered: false, online: false, name: null, daemonProtocol: null }));
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("expected TCP test server");
+    const url = `http://127.0.0.1:${address.port}`;
+    const events: string[] = [];
+    try {
+      expect(await runDaemonConnect(["--server-url", url, "--connect-key", "dk_new"], {
+        readConfig: () => config(url, { [url]: { deviceToken: "dk_deleted" } }),
+        stop: async (args) => { events.push(`stop ${args.join(" ")}`); return 0; },
+        save: (_target, token) => { events.push(`save ${token}`); },
+        start: async () => { events.push("start"); return 0; },
+        out: (line) => { events.push(line.trim()); },
+      })).toBe(0);
+    } finally {
+      server.close();
+      await once(server, "close");
+    }
+    expect(events).toEqual(["stop --force", "save dk_new", `replaced saved identity for ${url}`, "start"]);
   });
 
   test("a new loop claim does not replace a valid saved machine identity", async () => {

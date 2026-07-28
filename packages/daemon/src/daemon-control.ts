@@ -22,6 +22,11 @@ import { readReportDiagnostics, type ReportDiagnostics } from "./report-outbox.j
 import { readRuntimeDiagnostics, type RuntimeDiagnostics } from "./runtime-diagnostics.js";
 
 export type MachineStatus = {
+  /** False when the supplied saved identity has no machine on this server. Older
+   * servers omit this field, which remains compatible with a registered identity. */
+  registered?: boolean;
+  /** For an unregistered identity, whether this token is a live enrollment claim. */
+  claimValid?: boolean;
   online: boolean;
   name: string | null;
   lastSeen?: string | null;
@@ -129,12 +134,18 @@ export async function runDaemonStatus(args: string[], injected: DaemonControlDep
   if (server && token) {
     const view = await d.fetchOnline(server, token);
     if (view) {
-      d.out(`  server connectivity: ${view.online ? "online" : "offline"}${view.name ? ` (${view.name})` : ""}\n`);
-      if (view.daemonProtocol === 4) d.out("  daemon protocol: 4\n");
-      else d.out(`  daemon upgrade required: protocol ${view.daemonProtocol ?? "unknown"} -> 4; run \`npm install -g @kky42/pievo@latest\`, then \`pievo daemon restart\`\n`);
-      const serverRuns = view.currentRuns ?? [];
-      if (!runtimeRuns.length) for (const run of serverRuns) if (!pendingSet.has(run.runId)) d.out(`  current run: ${run.runId} (${run.stage})\n`);
-      if (!runtime?.cancelPendingRunIds?.length && serverRuns.some((run) => run.cancelPending)) d.out("  cancel pending: stop requested; waiting for daemon confirmation\n");
+      if (view.registered === false) {
+        d.out("  server connectivity: reachable\n");
+        d.out("  identity:  no longer registered\n");
+        d.out("  action:    connect to a server with `pievo daemon connect --server-url <url> --connect-key <dk_…>`\n");
+      } else {
+        d.out(`  server connectivity: ${view.online ? "online" : "offline"}${view.name ? ` (${view.name})` : ""}\n`);
+        if (view.daemonProtocol === 4) d.out("  daemon protocol: 4\n");
+        else d.out(`  daemon upgrade required: protocol ${view.daemonProtocol ?? "unknown"} -> 4; run \`npm install -g @kky42/pievo@latest\`, then \`pievo daemon restart\`\n`);
+        const serverRuns = view.currentRuns ?? [];
+        if (!runtimeRuns.length) for (const run of serverRuns) if (!pendingSet.has(run.runId)) d.out(`  current run: ${run.runId} (${run.stage})\n`);
+        if (!runtime?.cancelPendingRunIds?.length && serverRuns.some((run) => run.cancelPending)) d.out("  cancel pending: stop requested; waiting for daemon confirmation\n");
+      }
     } else {
       d.out("  server connectivity: unknown — server unreachable\n");
       d.out("  daemon protocol: 4 locally; server support unknown\n");
