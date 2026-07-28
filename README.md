@@ -13,53 +13,29 @@ Codex locally with your credentials and tools.
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/kky42/pievo?style=flat)](https://github.com/kky42/pievo/stargazers)
 
-[Source](https://github.com/kky42/pievo) · [Daemon on npm](https://www.npmjs.com/package/@kky42/pievo) · [Contributing](CONTRIBUTING.md) · [Architecture](AGENTS.md)
+[Source](https://github.com/kky42/pievo) · [Daemon on npm](https://www.npmjs.com/package/@kky42/pievo)
 
 </div>
 
+![Pievo dashboard showing an active scheduled Codex loop and recent outcomes](docs/assets/pievo-dashboard.png)
+
+<p align="center"><sub>Example dashboard; machine and working-directory labels are anonymized.</sub></p>
+
 ## What Pievo does
 
-A loop contains:
+Each loop combines a stored prompt with:
 
-- one exclusive schedule: cron, or continuous delay after the previous terminal run;
-- one absolute working-directory path and coding agent (`claude-code` or `codex`);
-- a server-stored user prompt;
-- definitions for `keep`, `no-change`, and `block`;
-- optional exact artifact paths relative to the working directory.
+- a cron schedule or continuous delay;
+- a local working directory and Claude Code or Codex;
+- `keep`, `no-change`, and `block` outcomes;
+- optional exact artifact paths for viewing and diffing in the web UI.
 
-At run time, Pievo sends the stored prompt unchanged, then appends only the status
-definitions and this required contract:
+The daemon runs the selected coding agent once per delivery and reports the result
+through a durable local outbox. `keep` and `no-change` continue the schedule; `block`
+pauses it. **Run once** uses the same queue as scheduled work.
 
-```text
-Before finishing, call exactly once:
-pievo report --message "<summary>" --status <keep|no-change|block>
-```
-
-The daemon starts the selected coding-agent CLI once in the configured directory.
-The server never starts an LLM or executes user code: it schedules, authenticates,
-stores bytes, and computes database and display results. Execution is BYOA—on the
-machine you connected, using its local files, tools, and provider credentials.
-
-### Scheduling and outcomes
-
-- **Cron** requires an IANA timezone and an overlap policy. `skip` consumes an
-  occurrence if the prior run is still open; `queue-one` retains at most one
-  coalesced follow-up.
-- **Continuous** waits the configured number of minutes after a terminal run and
-  never overlaps itself.
-- **Run once** enters the same durable per-loop queue as scheduled work.
-- `keep` and `no-change` continue the schedule. `block` records the result and
-  pauses the loop. Consecutive execution errors also pause it at
-  `PIEVO_FAILURE_AUTOPAUSE_STREAK` (default `3`, `0` disables the breaker).
-
-Every run retains phase and timing, the agent report, process exit information,
-provider session ID, final assistant text, and normalized token usage. Pievo does not
-store provider event streams and never resumes a provider session.
-
-Configured artifacts are collected after the coding agent exits. Paths are exact—no
-globs—and are checked against lexical and symlink escapes. Missing files do not fail
-the run. Files over 10 MB are metadata-only; smaller files use content-addressed
-storage and per-run snapshots for the web viewer and diffs.
+The server never starts an LLM or executes user code. Execution stays on the connected
+machine and uses its local files, tools, and provider credentials.
 
 ## Quick start
 
@@ -93,15 +69,20 @@ pievo-server status
 ### 2. Connect the execution machine and create a loop
 
 1. Open <http://127.0.0.1:3000> and select **New Loop**.
-2. Paste the connect command shown in the modal into a foreground Claude Code or
-   Codex session in the project you want to schedule.
-3. In that same session, tell the agent: **“Create a Pievo loop.”**
+2. Run the connect command shown in the modal in a terminal. The `dk_…` value is a
+   persistent machine bearer credential and appears in that command, so treat the
+   command and your shell history as secrets.
+3. Confirm that the command prints `daemon online` and `pievo skill: installed`. If
+   skill installation was skipped, run `pievo skill install` and verify with
+   `pievo skill status`.
+4. Start a fresh Claude Code or Codex session in the project you want to schedule,
+   then tell the agent: **“Create a Pievo loop.”**
 
-The agent uses Pievo's installed owner skill to gather and confirm the prompt,
+The fresh session discovers Pievo's owner skill, gathers and confirms the prompt,
 schedule, status meanings, and optional artifact paths, then validates and creates the
 loop. Close the modal and the dashboard's normal refresh will show it. A continuous
-loop is immediately eligible; a cron loop shows its next occurrence. Use **Run once** to exercise either
-schedule immediately.
+loop is immediately eligible; a cron loop shows its next occurrence. Use **Run once**
+to exercise either schedule immediately.
 
 Useful commands:
 
@@ -125,26 +106,14 @@ pievo daemon restart
 
 ```mermaid
 flowchart LR
-  UI["Pievo web UI"] --> Server["Pievo server<br/>schedule · queue · auth · storage<br/>zero LLM · zero code execution"]
-  Server <-->|"authenticated HTTP poll/report"| Daemon["@kky42/pievo daemon<br/>your machine"]
-  Daemon -->|"one local process per run"| Agent["Claude Code or Codex"]
-  Daemon -->|"configured files only"| Server
+  UI["Pievo web UI"] --> Server["Pievo server<br/>schedule · queue · auth · storage"]
+  Server <-->|"authenticated polling and reports"| Daemon["Pievo daemon<br/>your machine"]
+  Daemon --> Agent["Claude Code or Codex"]
 ```
 
-1. The server keeps recurring schedule facts and pending run rows in Postgres.
-   In-process timers reduce latency, but database facts and daemon polls are
-   authoritative after restarts.
-2. A daemon poll atomically claims at most one ready run and creates a durable,
-   hashed run lease. Different loops may execute concurrently; each loop stays
-   serialized.
-3. The in-run `pievo` credential can only submit the required report. After the
-   provider exits, the daemon collects configured artifacts and commits the exact
-   terminal payload to a local SQLite outbox.
-4. The outbox retries until the server returns a definitive report-ID-bound receipt.
-   Machine sleep and server restarts are reconciled without discarding the saved
-   result or blocking unrelated loops.
-5. The web UI shows lifecycle, machine presence, run history, reports, provider
-   diagnostics, artifacts, and bounded per-run diffs.
+The server owns schedules and queued runs. The daemon polls for work, runs the coding
+agent locally, then durably retries its report until the server accepts it. Different
+loops may run concurrently, while each individual loop remains serialized.
 
 ## Run your own server
 
@@ -161,44 +130,21 @@ pievo-server stop
 
 The default bind is deliberately local-only. `--data-dir`, `--host`, and `--port`
 select the instance and bind; equivalent environment variables are
-`PIEVO_DATA_DIR`, `HOST`/`NITRO_HOST`, and `PORT`/`NITRO_PORT`. Restart preserves the
+`PIEVO_DATA_DIR`, `HOST`/`NITRO_HOST`, and
+`PORT`/`NITRO_PORT`/`PIEVO_PORT`. Restart preserves the
 recorded host and port unless flags or bind environment variables override them.
 Before binding to `0.0.0.0`, configure authentication and network controls.
 
-The launcher verifies pid plus process start time, runs migrations before readiness,
-and records `server.pid` and `server.log` in the data directory. It never updates npm:
+Upgrade explicitly; restart does not update npm:
 
 ```bash
 npm update -g @kky42/pievo-server
 pievo-server restart
 ```
 
-### Source development
-
-```bash
-git clone https://github.com/kky42/pievo
-cd pievo
-corepack enable
-pnpm install
-pnpm dev # http://127.0.0.1:3000
-```
-
-Development defaults to open access, embedded PGlite at `~/.pievo/pgdata`, and local
-artifact bytes at `~/.pievo/blobs`. For development-only environment settings, copy
-[`.env.example`](.env.example) to `packages/server/.env`. Production startup and Docker
-do not load that file; pass real environment variables through the host.
-
 ### Production database and storage
 
-Build and run the Nitro server with exactly one process:
-
-```bash
-pnpm install
-pnpm build
-pnpm start
-```
-
-Choose one database tier:
+Run exactly one server process and choose one database tier:
 
 - **External Postgres:** set `DATABASE_URL`. For a Supabase transaction pooler
   (`:6543`), also set `DIRECT_DATABASE_URL` to the direct/session (`:5432`) URL;
@@ -234,25 +180,14 @@ to the machine owner.
 
 ```bash
 docker build -t pievo .
-# Embedded database and local artifacts: persist /data.
-docker run -p 3000:3000 -e PIEVO_DB=pglite -v pievo-data:/data pievo
+# Embedded database and local artifacts: persist /data; publish locally only.
+docker run -p 127.0.0.1:3000:3000 -e PIEVO_DB=pglite -v pievo-data:/data pievo
 # External Postgres; local artifact bytes still require /data.
-docker run -p 3000:3000 -e DATABASE_URL=... -e DIRECT_DATABASE_URL=... -v pievo-data:/data pievo
+docker run -p 127.0.0.1:3000:3000 -e DATABASE_URL=... -e DIRECT_DATABASE_URL=... -v pievo-data:/data pievo
 ```
 
 External Postgres plus R2 needs no local data volume. [`fly.toml`](fly.toml) and
-[`fly.prod.toml`](fly.prod.toml) are reusable single-process examples; this repository
-owns no Fly app or origin and its deployment workflows are manual-only.
-
-## Development
-
-```bash
-pnpm -r test
-pnpm -r typecheck
-```
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contributor and release procedures, and
-[`AGENTS.md`](AGENTS.md) for architecture invariants and sharp edges.
+[`fly.prod.toml`](fly.prod.toml) are optional single-process deployment examples.
 
 ## License
 
