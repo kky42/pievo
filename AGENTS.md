@@ -34,6 +34,11 @@ server owns scheduling, queueing, auth, persistence, and byte serving; the
 - Exactly one server process owns a database. Production must explicitly select
   PGlite when `DATABASE_URL` is absent. Keep heavy/native server dependencies out of
   client bundles via dynamic imports.
+- Source development entrypoints use repo-local, mutually isolated server/daemon
+  state and a non-production port; published entrypoints retain user-level defaults.
+  Tests use temporary state and discard inherited deployment credentials. Explicit
+  environment overrides are intentional opt-outs. Never auto-start the daemon from
+  the development server.
 
 ## Comment standard
 

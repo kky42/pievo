@@ -33,7 +33,7 @@
     "start": "node scripts/prestart.mjs && node .output/server/index.mjs",
     "routes:generate": "tsr generate",
     "typecheck": "tsr generate && tsc --noEmit",
-    "test": "vitest run",
+    "test": "node --test ../../scripts/dev-profile.test.mjs && vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "verify:package": "node scripts/verify-package.mjs",

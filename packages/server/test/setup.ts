@@ -1,17 +1,42 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { afterAll } from "vitest";
 
-// Force the embedded pglite tier for all tests, never a real Postgres: a stray
-// DATABASE_URL in the dev/CI shell would otherwise point db/index.ts at a live
-// database.
-delete process.env.DATABASE_URL;
+const inheritedDeploymentKeys = [
+  "DATABASE_URL",
+  "DIRECT_DATABASE_URL",
+  "PIEVO_DB_POOL_MODE",
+  "PIEVO_BLOB_STORE",
+  "PIEVO_R2_ACCOUNT_ID",
+  "PIEVO_R2_BUCKET",
+  "PIEVO_R2_ACCESS_KEY_ID",
+  "PIEVO_R2_SECRET_ACCESS_KEY",
+  "PIEVO_R2_ENDPOINT",
+  "PIEVO_R2_REGION",
+  "GITHUB_CLIENT_ID",
+  "GITHUB_CLIENT_SECRET",
+  "PIEVO_AUTH_SECRET",
+  "PIEVO_ALLOWED_LOGINS",
+] as const;
+for (const key of inheritedDeploymentKeys) delete process.env[key];
+process.env.PIEVO_DB = "pglite";
 
-// Isolate the data dir per vitest worker: without this, any test that reaches
-// db/index.ts through a static import chain opens a PGlite on the developer's
-// REAL ~/.pievo/pgdata - the same
-// live data dir a running `pnpm dev` uses (pglite data dirs are single-instance,
-// so a concurrent open risks corrupting the dev database, and test rows would
-// pollute it either way). Test files that mkdtemp their own dir before
-// dynamically importing the db still override this per-file value.
-process.env.PIEVO_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-test-"));
+// A static import can open PGlite before a test's own hooks run. Per-worker state
+// prevents inherited deployment configuration from reaching a live database or
+// blob store; individual tests may still replace it before dynamic imports.
+const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-server-test-"));
+process.env.PIEVO_DATA_DIR = testDataDir;
+
+afterAll(async () => {
+  const client = (globalThis as typeof globalThis & {
+    __pievoClient?: { close?: () => Promise<void>; end?: (options?: { timeout?: number }) => Promise<void> };
+  }).__pievoClient;
+  try {
+    if (client?.close) await client.close();
+    else if (client?.end) await client.end({ timeout: 1 });
+  } catch {
+    // Cleanup still removes state for tests that already closed their client.
+  }
+  fs.rmSync(testDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+});

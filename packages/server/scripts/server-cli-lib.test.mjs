@@ -41,6 +41,13 @@ describe("pievo-server argument parser", () => {
 });
 
 describe("launcher environment plan", () => {
+  test("published defaults remain user-level and production-only", () => {
+    const plan = buildEnvPlan({ command: "start" }, {});
+    expect(plan.dataDir).toBe(path.join(os.homedir(), ".pievo"));
+    expect(plan.port).toBe(3000);
+    expect(plan.env.NODE_ENV).toBe("production");
+  });
+
   test("is local-only, persistent, and pglite by default", () => {
     const plan = buildEnvPlan({ command: "start", dataDir: "./state" }, {});
     expect(plan.host).toBe("127.0.0.1");

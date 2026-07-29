@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "pnpm --filter @kky42/pievo-server dev",
+    "dev:daemon": "pnpm --filter @kky42/pievo dev",
     "build": "pnpm --filter @kky42/pievo-server build",
     "start": "pnpm --filter @kky42/pievo-server start",
     "typecheck": "pnpm -r typecheck",

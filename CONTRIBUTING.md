@@ -32,11 +32,14 @@ pnpm install
 ## Run the server locally
 
 ```bash
-pnpm dev          # server on http://127.0.0.1:3000 (UI + scheduler + machine routes)
+pnpm dev          # isolated server on http://127.0.0.1:3001
+pnpm dev:daemon -- daemon status  # isolated source daemon CLI
 ```
 
-Copy `.env.example` to `packages/server/.env` if you need to configure auth,
-the artifact blob store, or other options. The app runs open (no auth) by default.
+Source development keeps server and daemon state under the repo's ignored
+`.pievo/development/` directory, separate from installed instances using `~/.pievo`.
+Copy `.env.example` to `packages/server/.env` only when you need to override the
+isolated defaults or configure auth and storage. The app runs open by default.
 
 > The fresh-deployment schema for this release is squashed into the single
 > reviewed `packages/server/drizzle/0000_baseline.sql`; removed product schemas

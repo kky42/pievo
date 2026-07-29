@@ -425,6 +425,7 @@ describe("buildDaemonSpawn — nested re-exec with env-only token", () => {
     const { args, env } = buildDaemonSpawn("dk_secret_token");
     expect(args.join(" ")).not.toContain("dk_secret_token");
     expect(env.PIEVO_TOKEN).toBe("dk_secret_token");
+    expect(env.PIEVO_HOME).toBe(process.env.PIEVO_HOME);
     expect(env.PIEVO_INTERNAL_DAEMON_CHILD).toBe("1");
     expect(args).toContain("daemon");
     expect(args).toContain("start");
