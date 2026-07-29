@@ -1,6 +1,7 @@
 ---
 name: pievo
-description: Use when the user asks to connect a machine to Pievo, create a scheduled coding-agent loop, or inspect or change an existing loop's configuration or lifecycle.
+description: Guided workflow for connecting a machine and creating, inspecting, editing, or operating Pievo scheduled coding-agent loops.
+disable-model-invocation: true
 ---
 
 # Pievo owner workflow

@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, describe, expect, test } from "vitest";
 
 import {
+  bundledSkillDir,
   installArgs,
   installSkill,
   targetSkillDirs,
@@ -15,6 +16,18 @@ const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-skill-"));
 fs.writeFileSync(path.join(fixtureDir, "SKILL.md"), "---\nname: pievo\n---\n# x\n");
 
 afterAll(() => fs.rmSync(fixtureDir, { recursive: true, force: true }));
+
+describe("bundled skill", () => {
+  test("requires explicit invocation for every supported agent", () => {
+    const dir = bundledSkillDir();
+    expect(fs.readFileSync(path.join(dir, "SKILL.md"), "utf8")).toMatch(
+      /^disable-model-invocation: true$/m,
+    );
+    expect(fs.readFileSync(path.join(dir, "agents", "openai.yaml"), "utf8")).toBe(
+      "policy:\n  allow_implicit_invocation: false\n",
+    );
+  });
+});
 
 describe("installArgs", () => {
   test("always uses user scope with a verified multi-agent invocation", () => {

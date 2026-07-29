@@ -82,18 +82,29 @@ export function ComposeModal({
           </div>
         </Step>
 
-        <Step number="2" title="Start a new agent session">
+        <Step number="2" title="Start a new session">
           <p className="mt-1.5 text-body leading-snug text-secondary">
-            After the command finishes, start a new Claude Code, Codex, or Pi session in the project where the loop should run, then say:
+            After the command finishes, start a new session in the project where the loop should run, then manually invoke the Pievo skill:
           </p>
-          <div className="mt-3 rounded-control border border-hairline bg-raised p-4 text-body font-medium text-display">
-            Create a Pievo loop.
+          <div className="mt-3 space-y-2 rounded-control border border-hairline bg-raised p-4 text-body text-display">
+            <SkillCommand agent="Claude Code" command="/pievo Create a Pievo loop." />
+            <SkillCommand agent="Codex" command="$pievo Create a Pievo loop." />
+            <SkillCommand agent="Pi" command="/skill:pievo Create a Pievo loop." />
           </div>
         </Step>
       </div>
 
       {error && <div className="mt-4 text-body text-accent">Error: {error}</div>}
     </Modal>
+  )
+}
+
+function SkillCommand({ agent, command }: { agent: string; command: string }) {
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <span className="w-24 shrink-0 text-label font-medium text-secondary">{agent}</span>
+      <code className="font-mono text-label font-medium text-display">{command}</code>
+    </div>
   )
 }
 

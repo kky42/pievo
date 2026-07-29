@@ -20,9 +20,10 @@ function listTree(dir: string): string[] {
   return out.sort();
 }
 
-test("skill bundle contains exactly SKILL/connect/create/update", () => {
+test("skill bundle contains exactly its invocation policy and owner workflow files", () => {
   expect(listTree(bundle)).toEqual([
     "SKILL.md",
+    "agents/openai.yaml",
     "references/connect.md",
     "references/create.md",
     "references/update.md",
