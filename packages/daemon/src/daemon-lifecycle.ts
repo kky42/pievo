@@ -123,8 +123,8 @@ export async function runDaemonStart(args: string[], injected: DaemonStartDeps =
       d.err(RECONNECT_GUIDANCE);
       return 1;
     }
-    // Start polling before any potentially 90s skill install. A detached child does
-    // no refresh at all: its parent owns the single post-readiness refresh.
+    // Start polling before the best-effort skill refresh. A detached child does no
+    // refresh at all: its parent owns the single post-readiness refresh.
     const running = d.foreground([]);
     if (!d.internalChild) void refreshSkill();
     return running;

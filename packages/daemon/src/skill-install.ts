@@ -1,43 +1,22 @@
 /**
- * Best-effort local install of the pievo agent skill via the `npx skills` CLI
- * (vercel-labs/skills). Installed at USER scope to match the daemon's per-machine
- * scope: coding agents discover user-level skills from ANY workdir, so a loop agent
- * still discovers the connection/create/update references from any workdir — no
- * per-workdir copies scattering. It's fired at `pievo daemon start` (refreshing the
- * install to whatever daemon version just launched), and it NEVER blocks: any
- * failure (no network, no npx, no write permission, bundled skill absent) prints
- * one diagnostic line and leaves `pievo skill install` as the manual retry path.
+ * Best-effort local install of the bundled Pievo owner skill. The current CLI's
+ * bundled copy is written directly to the two user-level skill directories, so
+ * installation is offline and does not invoke a package runner or skills CLI.
  *
- * MULTI-AGENT: the skill is installed for Claude Code and the universal `.agents`
- * target used by Codex and Pi. Pi therefore needs no separate installer target.
- * We deliberately DON'T pass `-a '*'`: empirically the `skills` CLI treats `'*'` as
- * "install to ALL ~72 supported agents regardless of presence", littering dozens of
- * home dirs (`~/.aider-desk`, `~/.astrbot`, …). Targeting the known agents explicitly
- * stays clean and is trivially extendable (add an entry to `SKILL_TARGET_AGENTS`).
- * NOTE: the comma form `-a claude-code,codex` is INVALID (the CLI parses it as a
- * single agent name); the list must be passed as repeated `-a <agent>` flags.
- *
- * Installs are explicitly user-scoped, so `daemon start` is the natural refresh
- * point, version-locked to the daemon it launches.
- *
- * We install from the skill BUNDLED INTO THIS PACKAGE at `skill/` — a LOCAL path
- * source, so end users never need the platform repo. Installation works offline
- * once `skills` itself is cached. The exact invocation
- *   npx --yes skills add <dir> -a claude-code -a codex -y --copy -g
- * was verified against the current `skills` CLI (`-g` targets each agent's user dir
- * → ~/.claude/skills/pievo/ for Claude Code, ~/.agents/skills/pievo/ for Codex;
- * `-y` is non-interactive + idempotent-overwrite; `--copy` makes a self-contained
- * copy, no symlink into this package's temp dir).
+ * Each target is refreshed independently through a sibling staging directory.
+ * The complete bundle (including SKILL.md) must reach staging before an existing
+ * target is removed. Any same-named Pievo skill is deliberately overwritten: the
+ * daemon and `pievo skill install` always publish the skill matching this CLI.
+ * Failures never block daemon startup and can be retried with
+ * `pievo skill install`.
  */
-import { spawn } from "node:child_process";
 import fs from "node:fs";
+import { access, cp, mkdir, rename, rm, stat } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-
-/** Hard ceiling on the `npx skills` call so a hung install can't wedge `pievo new`. */
-const INSTALL_TIMEOUT_MS = 90_000;
 
 /**
  * The skill dir bundled into this package. `../skill` resolves the same from both
@@ -61,58 +40,16 @@ export interface InstallOutcome {
   line: string;
 }
 
-export interface RunResult {
-  code: number;
-  stdout: string;
-  stderr: string;
-}
-export type Runner = (cmd: string, args: string[]) => Promise<RunResult>;
-
-const defaultRunner: Runner = (cmd, args) =>
-  new Promise<RunResult>((resolve) => {
-    let stdout = "";
-    let stderr = "";
-    let child;
-    try {
-      child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
-    } catch (err) {
-      resolve({ code: -1, stdout: "", stderr: err instanceof Error ? err.message : String(err) });
-      return;
-    }
-    const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        /* already gone */
-      }
-    }, INSTALL_TIMEOUT_MS);
-    timer.unref?.();
-    child.stdout?.on("data", (d) => (stdout += String(d)));
-    child.stderr?.on("data", (d) => (stderr += String(d)));
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      resolve({ code: -1, stdout, stderr: err instanceof Error ? err.message : String(err) });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code: code ?? -1, stdout, stderr });
-    });
-  });
-
 export interface InstallOpts {
+  /** Injectable bundled source for tests. */
   dir?: string;
-  runner?: Runner;
+  /** Injectable home directory for tests; production always defaults to the user home. */
+  home?: string;
 }
 
 /**
- * The two skill CLI targets. Each carries the `skills` CLI agent id (for
- * `-a <id>`), a human label,
- * and the skill dir layout that agent reads (relative to the scope root: `~` for a
- * global/user install, the cwd for a project install). Verified empirically against
- * the current `skills` CLI: Claude Code reads `.claude/skills`, Codex reads the
- * universal `.agents/skills`, which Pi also consumes. Extend this list only when a
- * new skill directory is required (installArgs and
- * `pievo skill status` both derive from it — they cannot drift).
+ * User-level skill directories refreshed by Pievo. Claude Code reads
+ * `.claude/skills`; Codex and Pi read the universal `.agents/skills` directory.
  */
 export const SKILL_TARGET_AGENTS: ReadonlyArray<{
   id: string;
@@ -123,40 +60,63 @@ export const SKILL_TARGET_AGENTS: ReadonlyArray<{
   { id: "codex", label: "Codex", skillsRoot: [".agents", "skills"] },
 ];
 
-export function installArgs(dir: string): string[] {
-  const args = ["--yes", "skills", "add", dir];
-  for (const t of SKILL_TARGET_AGENTS) args.push("-a", t.id);
-  args.push("-y", "--copy", "-g");
-  return args;
+export function targetSkillDirs(root = "~"): string[] {
+  return SKILL_TARGET_AGENTS.map((t) => path.join(root, ...t.skillsRoot, "pievo"));
 }
 
-export function targetSkillDirs(): string[] {
-  return SKILL_TARGET_AGENTS.map((t) => path.join("~", ...t.skillsRoot, "pievo"));
+async function assertSkillFile(dir: string): Promise<void> {
+  const skillFile = path.join(dir, "SKILL.md");
+  await access(skillFile);
+  if (!(await stat(skillFile)).isFile()) throw new Error(`${skillFile} is not a file`);
+}
+
+async function installTarget(source: string, target: string): Promise<void> {
+  const parent = path.dirname(target);
+  const staging = path.join(
+    parent,
+    `.pievo.staging-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  try {
+    await mkdir(parent, { recursive: true });
+    await cp(source, staging, { recursive: true });
+    await assertSkillFile(staging);
+    await rm(target, { recursive: true, force: true });
+    await rename(staging, target);
+  } finally {
+    await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 export async function installSkill(opts: InstallOpts = {}): Promise<InstallOutcome> {
-  const dir = opts.dir ?? bundledSkillDir();
-  if (!bundledSkillAvailable(dir)) {
+  const source = opts.dir ?? bundledSkillDir();
+  try {
+    await assertSkillFile(source);
+  } catch {
     return {
       ok: false,
       line: "pievo skill: skipped (bundled skill not found — run `pievo skill install` after reinstalling Pievo)",
     };
   }
-  const runner = opts.runner ?? defaultRunner;
-  let res: RunResult;
-  try {
-    res = await runner("npx", installArgs(dir));
-  } catch (err) {
-    return { ok: false, line: `pievo skill: skipped (${err instanceof Error ? err.message : String(err)})` };
+
+  const targets = targetSkillDirs(opts.home ?? os.homedir());
+  const shownTargets = targetSkillDirs();
+  const results = await Promise.allSettled(targets.map((target) => installTarget(source, target)));
+  const failures = results.flatMap((result, index) =>
+    result.status === "rejected"
+      ? [`${shownTargets[index]}: ${errorLine(result.reason)}`]
+      : [],
+  );
+
+  if (failures.length === 0) {
+    return { ok: true, line: `pievo skill: installed → ${shownTargets.join(", ")}` };
   }
-  if (res.code === 0) {
-    const where = targetSkillDirs().join(", ");
-    return { ok: true, line: `pievo skill: installed → ${where}` };
-  }
-  const why = firstLine(res.stderr) || firstLine(res.stdout) || `exit ${res.code}`;
-  return { ok: false, line: `pievo skill: skipped (${why}) — retry with \`pievo skill install\`` };
+  return {
+    ok: false,
+    line: `pievo skill: skipped (${failures.join("; ")}) — retry with \`pievo skill install\``,
+  };
 }
 
-function firstLine(s: string): string {
-  return (s || "").trim().split("\n")[0]?.trim() ?? "";
+function errorLine(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return message.trim().split("\n")[0]?.trim() || "unknown error";
 }

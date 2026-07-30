@@ -16,7 +16,13 @@ function isInstalledAt(dir: string): boolean {
   }
 }
 
-export async function runSkill(args: string[]): Promise<number> {
+export interface RunSkillOpts {
+  /** Injectable paths keep status/install tests away from the real user home. */
+  home?: string;
+  dir?: string;
+}
+
+export async function runSkill(args: string[], opts: RunSkillOpts = {}): Promise<number> {
   const sub = args[0] && !args[0].startsWith("-") ? args[0] : "install";
   const flags = args.filter((arg) => arg.startsWith("-"));
   const extraPositionals = args.filter((arg) => !arg.startsWith("-")).slice(1);
@@ -29,15 +35,15 @@ export async function runSkill(args: string[]): Promise<number> {
   if (sub === "status") {
     process.stdout.write(`pievo skill status:\n`);
     for (const t of SKILL_TARGET_AGENTS) {
-      const userDir = skillDirFor(os.homedir(), t.skillsRoot);
+      const userDir = skillDirFor(opts.home ?? os.homedir(), t.skillsRoot);
       process.stdout.write(`  ${t.label} user (${userDir}): ${isInstalledAt(userDir) ? "installed" : "not installed"}\n`);
     }
-    process.stdout.write(`  bundled source: ${bundledSkillAvailable() ? "available" : "missing"}\n`);
+    process.stdout.write(`  bundled source: ${bundledSkillAvailable(opts.dir) ? "available" : "missing"}\n`);
     return 0;
   }
 
   if (sub === "install") {
-    const r = await installSkill();
+    const r = await installSkill({ dir: opts.dir, home: opts.home });
     process.stdout.write(r.line + "\n");
     return r.ok ? 0 : 1;
   }

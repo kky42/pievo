@@ -1,21 +1,39 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { afterAll, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 
 import {
   bundledSkillDir,
-  installArgs,
   installSkill,
   targetSkillDirs,
-  type Runner,
 } from "./skill-install.js";
 
-const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-skill-"));
-fs.writeFileSync(path.join(fixtureDir, "SKILL.md"), "---\nname: pievo\n---\n# x\n");
+const tempDirs: string[] = [];
 
-afterAll(() => fs.rmSync(fixtureDir, { recursive: true, force: true }));
+function tempDir(name: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `pievo-${name}-`));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function makeSource(content = "new skill"): string {
+  const source = tempDir("skill-source");
+  fs.mkdirSync(path.join(source, "references"));
+  fs.writeFileSync(path.join(source, "SKILL.md"), content);
+  fs.writeFileSync(path.join(source, "references", "create.md"), "reference");
+  return source;
+}
+
+function installedDirs(home: string): string[] {
+  return targetSkillDirs(home);
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 describe("bundled skill", () => {
   test("requires explicit invocation for every supported agent", () => {
@@ -29,16 +47,8 @@ describe("bundled skill", () => {
   });
 });
 
-describe("installArgs", () => {
-  test("always uses user scope with a verified multi-agent invocation", () => {
-    expect(installArgs("/b/skill")).toEqual([
-      "--yes", "skills", "add", "/b/skill", "-a", "claude-code", "-a", "codex", "-y", "--copy", "-g",
-    ]);
-  });
-});
-
 describe("targetSkillDirs", () => {
-  test("returns each agent's user skill dir", () => {
+  test("returns the fixed user skill directories", () => {
     expect(targetSkillDirs()).toEqual([
       "~/.claude/skills/pievo",
       "~/.agents/skills/pievo",
@@ -47,46 +57,94 @@ describe("targetSkillDirs", () => {
 });
 
 describe("installSkill", () => {
-  test("success → user locations + -g passed", async () => {
-    let seen: string[] = [];
-    const runner: Runner = async (_cmd, args) => {
-      seen = args;
-      return { code: 0, stdout: "", stderr: "" };
-    };
-    const r = await installSkill({ dir: fixtureDir, runner });
-    expect(r.ok).toBe(true);
-    expect(r.line).toContain("~/.claude/skills/pievo");
-    expect(r.line).toContain("~/.agents/skills/pievo");
-    expect(seen).toEqual(installArgs(fixtureDir));
-    expect(seen).toContain("-g");
+  test("first install copies the complete bundle to both agents and Claude", async () => {
+    const source = makeSource();
+    const home = tempDir("home");
+
+    const result = await installSkill({ dir: source, home });
+
+    expect(result.ok).toBe(true);
+    for (const target of installedDirs(home)) {
+      expect(fs.readFileSync(path.join(target, "SKILL.md"), "utf8")).toBe("new skill");
+      expect(fs.readFileSync(path.join(target, "references", "create.md"), "utf8")).toBe("reference");
+    }
   });
 
-  test("bundled skill absent → skipped, never runs the command", async () => {
-    let ran = false;
-    const runner: Runner = async () => {
-      ran = true;
-      return { code: 0, stdout: "", stderr: "" };
-    };
-    const r = await installSkill({ dir: path.join(fixtureDir, "does-not-exist"), runner });
-    expect(r.ok).toBe(false);
-    expect(r.line).toMatch(/bundled skill not found/);
-    expect(ran).toBe(false);
+  test("overwrites an existing same-named skill", async () => {
+    const source = makeSource("current bundled skill");
+    const home = tempDir("home");
+    for (const target of installedDirs(home)) {
+      fs.mkdirSync(target, { recursive: true });
+      fs.writeFileSync(path.join(target, "SKILL.md"), "old user content");
+    }
+
+    const result = await installSkill({ dir: source, home });
+
+    expect(result.ok).toBe(true);
+    for (const target of installedDirs(home)) {
+      expect(fs.readFileSync(path.join(target, "SKILL.md"), "utf8")).toBe("current bundled skill");
+    }
   });
 
-  test("non-zero exit → skipped with the reason, never throws", async () => {
-    const runner: Runner = async () => ({ code: 1, stdout: "", stderr: "EACCES: permission denied\nmore" });
-    const r = await installSkill({ dir: fixtureDir, runner });
-    expect(r.ok).toBe(false);
-    expect(r.line).toContain("EACCES: permission denied");
-    expect(r.line).not.toContain("more");
+  test("replacement removes files left over from an older version", async () => {
+    const source = makeSource();
+    const home = tempDir("home");
+    for (const target of installedDirs(home)) {
+      fs.mkdirSync(path.join(target, "obsolete"), { recursive: true });
+      fs.writeFileSync(path.join(target, "SKILL.md"), "old");
+      fs.writeFileSync(path.join(target, "obsolete", "removed.md"), "stale");
+    }
+
+    await installSkill({ dir: source, home });
+
+    for (const target of installedDirs(home)) {
+      expect(fs.existsSync(path.join(target, "obsolete", "removed.md"))).toBe(false);
+    }
   });
 
-  test("runner that throws is swallowed → skipped, never throws", async () => {
-    const runner: Runner = async () => {
-      throw new Error("spawn npx ENOENT");
-    };
-    const r = await installSkill({ dir: fixtureDir, runner });
-    expect(r.ok).toBe(false);
-    expect(r.line).toContain("spawn npx ENOENT");
+  test("source without SKILL.md leaves every old target untouched", async () => {
+    const source = tempDir("invalid-source");
+    fs.writeFileSync(path.join(source, "other.md"), "not a skill");
+    const home = tempDir("home");
+    for (const target of installedDirs(home)) {
+      fs.mkdirSync(target, { recursive: true });
+      fs.writeFileSync(path.join(target, "SKILL.md"), "keep me");
+      fs.writeFileSync(path.join(target, "local.md"), "also keep me");
+    }
+
+    const result = await installSkill({ dir: source, home });
+
+    expect(result.ok).toBe(false);
+    expect(result.line).toContain("bundled skill not found");
+    for (const target of installedDirs(home)) {
+      expect(fs.readFileSync(path.join(target, "SKILL.md"), "utf8")).toBe("keep me");
+      expect(fs.readFileSync(path.join(target, "local.md"), "utf8")).toBe("also keep me");
+    }
+  });
+
+  test("one target failure does not prevent the other target from updating", async () => {
+    const source = makeSource("updated despite peer failure");
+    const home = tempDir("home");
+    fs.writeFileSync(path.join(home, ".claude"), "blocks the Claude directory");
+    const agentsTarget = path.join(home, ".agents", "skills", "pievo");
+    fs.mkdirSync(agentsTarget, { recursive: true });
+    fs.writeFileSync(path.join(agentsTarget, "SKILL.md"), "old");
+
+    const result = await installSkill({ dir: source, home });
+
+    expect(result.ok).toBe(false);
+    expect(result.line).toContain("~/.claude/skills/pievo");
+    expect(result.line).toContain("retry with `pievo skill install`");
+    expect(fs.readFileSync(path.join(agentsTarget, "SKILL.md"), "utf8")).toBe(
+      "updated despite peer failure",
+    );
+  });
+
+  test("implementation uses in-process filesystem operations, not an external process", () => {
+    const implementation = fs.readFileSync(
+      fileURLToPath(new URL("./skill-install.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(implementation).not.toMatch(/node:child_process|\bspawn\s*\(|\bnpx\b/);
   });
 });

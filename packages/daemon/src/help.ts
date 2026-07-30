@@ -33,7 +33,8 @@ Loop setup and management
   loops [--fields a,b] [--json]
   edit <loop> --json '<patch>' [--dry-run]
                           Patch schedule/prompt/status/artifact/provider config.
-  skill [status|install]  Install or inspect the owner-facing Pievo skill.
+  skill [status|install]  Install or inspect the bundled owner-facing Pievo skill.
+                          Install overwrites same-named user Pievo skills.
 
 In-run report
   report --status keep|no-change|block --message <text>
@@ -81,7 +82,7 @@ Canonical config
   not globs or directories; missing files are skipped and files over 10 MB are
   metadata-only. Top-level and nested unknown fields are rejected. Use --dry-run to
   validate and preview the normalized config without creating it.`,
-  skill: "pievo skill [status|install]\n  Install or inspect the owner-facing Pievo skill.",
+  skill: "pievo skill [status|install]\n  Install or inspect the bundled owner-facing Pievo skill. Install copies the current CLI bundle to the Claude and universal agent user directories, overwriting same-named Pievo skills.",
   pause: "pievo pause <loop>\n  Pause future runs; the current run continues.",
   start: "pievo start <loop>\n  Enable a paused loop and re-arm its existing schedule; preserved queued work becomes eligible immediately.",
   stop: `pievo stop <loop>

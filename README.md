@@ -72,9 +72,10 @@ pievo-server status
 2. Run the connect command shown in the modal in a terminal. The `dk_…` value is a
    persistent machine bearer credential and appears in that command, so treat the
    command and your shell history as secrets.
-3. Confirm that the command prints `daemon online` and `pievo skill: installed`. If
-   skill installation was skipped, run `pievo skill install` and verify with
-   `pievo skill status`.
+3. Confirm that the command prints `daemon online` and `pievo skill: installed`.
+   Pievo copies the current CLI's bundled skill to the Claude and universal agent
+   user directories, replacing any same-named `pievo` skill. If installation was
+   skipped, run `pievo skill install` and verify with `pievo skill status`.
 4. Start a fresh Claude Code, Codex, or Pi session in the project you want to schedule,
    then tell the agent: **“Create a Pievo loop.”**
 

@@ -115,9 +115,11 @@ Useful binary overrides are `PIEVO_CLAUDE_BIN`, `PIEVO_CODEX_BIN`, and `PIEVO_PI
 ## Owner skill
 
 The package bundles a small owner-facing skill for connection, creation, and editing.
-`daemon start` best-effort installs it for Claude Code and in `~/.agents/skills`,
-which Codex and Pi both consume. Installation failure never blocks execution, and
-runtime prompts do not depend on the skill. Inspect or refresh it with `pievo skill status|install`.
+`daemon start` best-effort copies it directly to `~/.claude/skills/pievo` and
+`~/.agents/skills/pievo` (used by Codex and Pi). Each refresh replaces any same-named
+`pievo` skill with the copy bundled in the current CLI. Installation failure never
+blocks execution, and runtime prompts do not depend on the skill. Inspect or refresh
+it with `pievo skill status|install`.
 
 ## License
 
