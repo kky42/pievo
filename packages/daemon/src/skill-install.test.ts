@@ -41,9 +41,12 @@ describe("bundled skill", () => {
     expect(fs.readFileSync(path.join(dir, "SKILL.md"), "utf8")).toMatch(
       /^disable-model-invocation: true$/m,
     );
-    expect(fs.readFileSync(path.join(dir, "agents", "openai.yaml"), "utf8")).toBe(
-      "policy:\n  allow_implicit_invocation: false\n",
-    );
+    const openai = fs.readFileSync(path.join(dir, "agents", "openai.yaml"), "utf8");
+    expect(openai).toMatch(/^interface:$/m);
+    expect(openai).toMatch(/^  display_name: "Pievo"$/m);
+    expect(openai).toMatch(/^  short_description: "Manage scheduled Pievo agent loops"$/m);
+    expect(openai).toMatch(/^policy:$/m);
+    expect(openai).toMatch(/^  allow_implicit_invocation: false$/m);
   });
 });
 

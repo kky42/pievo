@@ -1,2 +1,5 @@
+interface:
+  display_name: "Pievo"
+  short_description: "Manage scheduled Pievo agent loops"
 policy:
   allow_implicit_invocation: false
