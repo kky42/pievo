@@ -9,8 +9,8 @@
  *
  * Leases and connect-key bindings are DURABLE (run_leases / connect_keys
  * tables): they must survive a deploy, or every restart 401s the in-flight
- * runs' callbacks/finalize and silently mis-files a post-restart create into the
- * machine's home team. The 15-minute `new` idempotency window stays in-process;
+ * runs' callbacks/finalize and prevents a freshly connected machine from
+ * enrolling under its owner. The 15-minute `new` idempotency window stays in-process;
  * losing it only degrades retry deduplication, never persisted data.
  */
 import { createHash, randomBytes } from "node:crypto";
@@ -41,19 +41,10 @@ export function isDeviceTokenShape(token: string): boolean {
   return DEVICE_TOKEN_RE.test(token);
 }
 
-// A connect-key/claim is minted from a SPECIFIC team's dashboard session; we bind
-// the minter and the VALIDATED active team to the key so (a) the daemon's first
-// poll self-registers the machine under the minting user, and (b) `createLoop`
-// lands the loop in that team — this is what lets ONE machine/daemon serve MANY
-// teams. The teamId is captured server-side from the authenticated session (never
-// from client input); the gateway re-validates membership at create time.
-// Bindings are keyed by the derived machine id, so the key itself is never stored.
-// They are not single-read: one paste may create several loops, and enrollment
-// reads the binding too.
-
-export interface ClaimIntent {
+// The durable binding enrolls one machine under the minting user. Bindings are
+// keyed by the derived machine id, so the key itself is never stored.
+export interface ConnectKeyBinding {
   userId: string;
-  teamId: string;
 }
 
 /** Keep bindings long enough for a leisurely paste, then drop (bounded table). */
@@ -63,31 +54,23 @@ function connectKeyFresh(mintedAt: string, now: number): boolean {
   return now - Date.parse(mintedAt) <= CONNECT_KEY_TTL_MS;
 }
 
-/** Bind a freshly-minted connect-key to its minter and validated team.
- *  Prunes expired rows on write. */
-export async function rememberConnectKey(connectKey: string, intent: ClaimIntent): Promise<void> {
+/** Bind a freshly minted connect key to its owner and prune expired rows. */
+export async function rememberConnectKey(connectKey: string, binding: ConnectKeyBinding): Promise<void> {
   const now = new Date();
   await db.delete(connectKeys).where(lt(connectKeys.mintedAt, new Date(now.getTime() - CONNECT_KEY_TTL_MS).toISOString()));
   const row = {
     machineId: machineIdFromToken(connectKey),
-    userId: intent.userId,
-    teamId: intent.teamId,
+    userId: binding.userId,
     mintedAt: now.toISOString(),
   };
   await db.insert(connectKeys).values(row).onConflictDoUpdate({ target: connectKeys.machineId, set: row });
 }
 
-export async function readClaimIntent(connectKey: string | null | undefined, now: number = Date.now()): Promise<ClaimIntent | undefined> {
+export async function readConnectKeyBinding(connectKey: string | null | undefined, now: number = Date.now()): Promise<ConnectKeyBinding | undefined> {
   if (!connectKey) return undefined;
   const row = (await db.select().from(connectKeys).where(eq(connectKeys.machineId, machineIdFromToken(connectKey))))[0];
   if (!row || !connectKeyFresh(row.mintedAt, now)) return undefined;
-  return { userId: row.userId, teamId: row.teamId };
-}
-
-export async function getDeviceOwner(machineId: string, now: number = Date.now()): Promise<string | undefined> {
-  const row = (await db.select().from(connectKeys).where(eq(connectKeys.machineId, machineId)))[0];
-  if (!row || !connectKeyFresh(row.mintedAt, now)) return undefined;
-  return row.userId;
+  return { userId: row.userId };
 }
 
 /** Identity needed to seed a report-only lease outside the atomic claim path. */

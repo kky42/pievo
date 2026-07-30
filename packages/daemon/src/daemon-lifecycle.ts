@@ -270,7 +270,7 @@ export async function runDaemonConnect(args: string[], injected: DaemonConnectDe
     }
     identityChanged = state === "invalid";
     if (identityChanged) token = parsed.connectKey;
-    else out(`using saved identity for ${serverUrl}; the supplied key remains available for loop creation\n`);
+    else out(`using saved identity for ${serverUrl}; the supplied connect key was ignored\n`);
   }
   if (config.active !== null && (config.active !== serverUrl || identityChanged)) {
     const stopped = await (injected.stop ?? ((stopArgs) => runDaemonStop(stopArgs)))(["--force"]);

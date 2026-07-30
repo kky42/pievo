@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 
 import { postCli, printCliResponse } from "./cli-client.js";
-import { connectionFor, flag, resolveServerUrl } from "./config.js";
+import { activeConnection, flag, type SavedConnection } from "./config.js";
 
 /** Local pre-check only — the server (croner) is the SOLE validator. Croner
  *  accepts 5- and 6-field expressions plus @-shortcuts (@daily …), so reject
@@ -39,12 +39,10 @@ function machineIdFromToken(token: string): string {
 /**
  * The `new` idempotency key is `sha256(machineId + canonicalJSON(body))`
  * over the EXACT outgoing request body, minus the `idempotencyKey` nonce itself.
- * A timed-out retry of the SAME `pievo new` resolves to an identical body (same argv +
- * env ⇒ same config and connect-key/claim), so it sends the SAME key and
- * the server replays the existing loop instead of making a twin. ANY envelope difference —
- * a different `--connect-key` (target team) or config field — yields a
- * DISTINCT key, so genuinely-different creates never collapse (this closes the whole
- * envelope-collision class, not just the connect-key case).
+ * A timed-out retry of the SAME `pievo new` resolves to an identical body, so it
+ * sends the SAME key and the server replays the existing loop instead of making a
+ * twin. Any configuration or transport-envelope difference yields a DISTINCT key,
+ * so genuinely different creates never collapse.
  */
 export function idempotencyKey(token: string, resolvedBody: Record<string, unknown>): string {
   const { idempotencyKey: _nonce, ...rest } = resolvedBody;
@@ -62,12 +60,13 @@ export function coerceAgent(v: unknown): CodingAgent | null {
 export interface CreateDeps {
   fetchImpl?: typeof fetch;
   stdout?: (s: string) => void;
+  readActiveConnection?: () => SavedConnection | undefined;
 }
 
 export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<number> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const write = deps.stdout ?? ((s: string) => void process.stdout.write(s));
-  const valueFlags = new Set(["--json", "--connect-key", "--server-url"]);
+  const valueFlags = new Set(["--json"]);
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === "--dry-run") continue;
@@ -81,12 +80,13 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
   const jsonArg = flag(args, "json");
   const dryRun = args.includes("--dry-run");
   if (jsonArg === undefined) {
-    process.stderr.write("pievo: usage: pievo new --json '<config>' [--dry-run] [--connect-key dk_…] [--server-url <url>]\n");
+    process.stderr.write("pievo: usage: pievo new --json '<config>' [--dry-run]\n");
     return 2;
   }
 
-  const server = resolveServerUrl(flag(args, "server-url"));
-  const token = (server ? connectionFor(server)?.deviceToken : undefined) || process.env.PIEVO_TOKEN;
+  const connection = (deps.readActiveConnection ?? activeConnection)();
+  const server = connection?.serverUrl;
+  const token = connection?.deviceToken;
   if (!server || !token) {
     process.stderr.write("pievo: this machine isn't connected yet — run `pievo daemon connect --server-url … --connect-key …` first\n");
     return 2;
@@ -130,9 +130,7 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     return 2;
   }
 
-  const connectKey = flag(args, "connect-key");
   const body: Record<string, unknown> = { ...config };
-  if (connectKey) body.claim = connectKey;
   // Idempotency is a required create-transport field, including validate-only
   // requests. Hash the whole resolved envelope (minus the nonce itself) only
   // after adding dryRun so each exact request has one stable identity.

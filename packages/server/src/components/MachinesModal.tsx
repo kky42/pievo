@@ -45,15 +45,7 @@ function machineOrder(a: MachineSummary, b: MachineSummary): number {
     || a.id.localeCompare(b.id)
 }
 
-export function MachinesModal({
-  open,
-  onClose,
-  teamId,
-}: {
-  open: boolean
-  onClose: () => void
-  teamId?: string
-}) {
+export function MachinesModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [machines, setMachines] = useState<MachineSummary[]>([])
   const [pending, setPending] = useState<Pending | null>(null)
   const [status, setStatus] = useState<MachineSummary | null>(null)
@@ -83,16 +75,14 @@ export function MachinesModal({
   const load = useCallback(async () => {
     const request = ++loadRequest.current
     try {
-      // Scope to the tab's explicit team (the `/t/<id>` route) so the modal lists
-      // the same machines the header count reflects, independent of the cookie.
-      const next = await listMachines({ data: teamId })
+      const next = await listMachines()
       // Poll responses can arrive out of order. Only the newest request may update
       // the list, and use a canonical order so database row order never moves cards.
       if (request === loadRequest.current) setMachines([...next].sort(machineOrder))
     } catch {
 
     }
-  }, [teamId])
+  }, [])
 
   const openRef = useRef(open)
   openRef.current = open
@@ -129,7 +119,7 @@ export function MachinesModal({
     setBusy(true)
     setDelErr(null)
     try {
-      const r = await createMachine({ data: teamId })
+      const r = await createMachine()
       if ('error' in r) {
         setDelErr(r.error)
         return
@@ -297,9 +287,8 @@ export function MachinesModal({
             {!daemonStopSupport(m.daemonProtocol).supported && (
               <div className="text-label text-accent">Daemon upgrade required to stop a running process</div>
             )}
-            {/* Offline → offer the exact command to bring this machine back (same token).
-                The token is serialized only to the machine's OWNER (never a teammate),
-                so a null token quietly notes where the command lives instead. */}
+            {/* Offline machines can reconnect with the same token. In auth mode the
+                server serializes it only to the owning user. */}
             {!m.online && !m.token && (
               <div className="text-label text-secondary">Reconnect command available from the machine owner's account.</div>
             )}

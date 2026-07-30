@@ -7,21 +7,26 @@ import { DashboardView, type DashboardData } from './DashboardView'
 
 const h = vi.hoisted(() => ({
   listLoops: vi.fn(async () => [] as LoopSummary[]),
+  navigate: vi.fn(),
+  invalidate: vi.fn(),
+  signOut: vi.fn(async () => undefined),
 }))
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => () => {} }))
-vi.mock('../server/loopApi', () => ({
-  listLoops: h.listLoops,
-  listMyTeams: vi.fn(async () => undefined),
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => h.navigate,
+  useRouter: () => ({ invalidate: h.invalidate }),
 }))
+vi.mock('../lib/auth-client', () => ({
+  signOut: h.signOut,
+  useSession: () => ({ data: { user: { name: 'Alice', email: 'alice@example.com' } }, isPending: false }),
+}))
+vi.mock('../server/loopApi', () => ({ listLoops: h.listLoops }))
 vi.mock('../server/machineFns', () => ({ listMachines: vi.fn(async () => []) }))
 vi.mock('./LoopCard', () => ({
   LoopCard: ({ loop }: { loop: LoopSummary }) =>
     createElement('div', { 'data-testid': `loop-${loop.id}` }, loop.name),
 }))
-vi.mock('./TeamSwitcher', () => ({ TeamSwitcher: () => null }))
 vi.mock('./MachinesModal', () => ({ MachinesModal: () => null }))
-vi.mock('./TeamsModal', () => ({ TeamsModal: () => null }))
 vi.mock('./ComposeModal', () => ({ ComposeModal: () => null }))
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -50,20 +55,19 @@ function loopSummary(id: string, name: string): LoopSummary {
 const initial = (loops: LoopSummary[]): DashboardData => ({
   loops,
   machines: [],
-  teams: undefined,
 })
 
 let host: HTMLDivElement | null = null
 let root: Root | null = null
 
-async function render(data: DashboardData) {
+async function render(data: DashboardData, mode: 'auth' | 'open' = 'open') {
   if (!root) {
     host = document.createElement('div')
     document.body.appendChild(host)
     root = createRoot(host)
   }
   await act(async () => {
-    root!.render(createElement(DashboardView, { teamId: 'team-1', initial: data }))
+    root!.render(createElement(DashboardView, { initial: data, mode }))
     await Promise.resolve()
   })
 }
@@ -75,6 +79,9 @@ function findLoop(id: string) {
 afterEach(async () => {
   h.listLoops.mockReset()
   h.listLoops.mockResolvedValue([])
+  h.navigate.mockReset()
+  h.invalidate.mockReset()
+  h.signOut.mockClear()
   if (root) await act(async () => root!.unmount())
   host?.remove()
   host = null
@@ -82,6 +89,31 @@ afterEach(async () => {
 })
 
 describe('DashboardView loader and live data ordering', () => {
+  it('shows the shared-administration warning only in open mode', async () => {
+    await render(initial([]), 'open')
+    expect(host!.textContent).toContain('anyone who can reach this server can view and manage every loop')
+    expect(host!.textContent).toContain('authenticated reverse proxy')
+
+    await render(initial([]), 'auth')
+    expect(host!.textContent).not.toContain('Open mode:')
+  })
+
+  it('shows the signed-in account and invalidates the dashboard after logout', async () => {
+    await render(initial([]), 'auth')
+    expect(host!.textContent).toContain('alice@example.com')
+    const button = [...host!.querySelectorAll('button')].find((candidate) => candidate.textContent === 'Sign out')
+    expect(button).toBeDefined()
+
+    await act(async () => {
+      button!.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(h.signOut).toHaveBeenCalledOnce()
+    expect(h.navigate).toHaveBeenCalledWith({ to: '/' })
+    expect(h.invalidate).toHaveBeenCalledOnce()
+  })
+
   it('renders a refreshed loader result instead of retaining its one-time seed', async () => {
     await render(initial([loopSummary('deleted', 'Deleted loop')]))
     expect(findLoop('deleted')).not.toBeNull()

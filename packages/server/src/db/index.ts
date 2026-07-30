@@ -31,7 +31,7 @@ import postgres, { type Sql } from "postgres";
 import { dataDir, databaseUrl, dbPoolMode } from "../env.js";
 import { logger } from "../logger.js";
 import { isTransactionPooler, poolOptionsFor } from "./poolOptions.js";
-import { machines, loops, runs, teams, teamMembers, teamInvites, blobs, artifactFiles, runSnapshots, runLeases, runReportReceipts, terminalReportIncidents, connectKeys } from "./schema.js";
+import { machines, loops, runs, blobs, artifactFiles, runSnapshots, runLeases, runReportReceipts, terminalReportIncidents, connectKeys } from "./schema.js";
 import { user, session, account, verification } from "./auth-schema.js";
 
 // Business tables + Better Auth tables share one Drizzle instance (the auth
@@ -40,9 +40,6 @@ const schema = {
   machines,
   loops,
   runs,
-  teams,
-  teamMembers,
-  teamInvites,
   blobs,
   artifactFiles,
   runSnapshots,

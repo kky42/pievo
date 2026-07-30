@@ -56,7 +56,6 @@ export const machines = pgTable(
   {
     id: text("id").primaryKey(),
     userId: text("user_id").notNull(),
-    teamId: text("team_id").notNull(),
     name: text("name").notNull(),
     hostname: text("hostname"),
     platform: text("platform"),
@@ -68,7 +67,7 @@ export const machines = pgTable(
     /**
      * Plaintext device token. Stored so the UI can re-show the connect command
      * anytime (MVP convenience — deviates from "store only the hash"; acceptable
-     * for a self-hosted team tool where the DB is already the trust root).
+     * for a self-hosted control plane where the DB is already the trust root).
      */
     token: text("token"),
     roots: jsonb("roots").$type<string[]>(),
@@ -76,7 +75,7 @@ export const machines = pgTable(
     online: boolean("online").notNull().default(false),
     createdAt: text("created_at").notNull(),
   },
-  (t) => [index("machines_user_idx").on(t.userId), index("machines_team_idx").on(t.teamId)],
+  (t) => [index("machines_user_idx").on(t.userId)],
 );
 
 export const loops = pgTable(
@@ -84,7 +83,6 @@ export const loops = pgTable(
   {
     id: text("id").primaryKey(),
     userId: text("user_id").notNull(),
-    teamId: text("team_id").notNull(),
     /** Execution machine (set at creation; no cross-machine fallback). */
     machineId: text("machine_id").notNull(),
     name: text("name").notNull(),
@@ -124,7 +122,6 @@ export const loops = pgTable(
   },
   (t) => [
     index("loops_user_idx").on(t.userId),
-    index("loops_team_idx").on(t.teamId),
     index("loops_machine_idx").on(t.machineId),
     index("delete_requested_loops").on(t.deleteRequestedAt).where(sql`${t.deleteRequestedAt} IS NOT NULL`),
     check("loops_agent_check", sql`${t.agent} IN ('claude-code', 'codex', 'pi')`),
@@ -241,70 +238,16 @@ export const terminalReportIncidents = pgTable(
   ],
 );
 
-// One row per minted connect-key/claim token, keyed by the machine id DERIVED
-// from it (`m-sha256(token)[:16]`) so both consumers resolve without storing the
-// key itself: the self-register owner lookup (by machine id) and the createLoop
-// team binding (derives the id from the presented claim). Replaces the two
-// in-process maps (`deviceOwners` + `claimIntents`) whose loss on deploy made a
-// post-restart paste silently mis-file the loop into the machine's home team.
-// Rows expire after CONNECT_KEY_TTL_MS (lazy on read + pruned on write).
-
+// One row per minted connect key, keyed by the machine id derived from it
+// (`m-sha256(token)[:16]`) so enrollment can recover the owner without storing
+// the key itself. Rows expire after CONNECT_KEY_TTL_MS (lazy on read + pruned on
+// write).
 export const connectKeys = pgTable("connect_keys", {
   machineId: text("machine_id").primaryKey(),
   userId: text("user_id").notNull(),
-  teamId: text("team_id").notNull(),
   /** Mint time (ISO) — drives the TTL. */
   mintedAt: text("minted_at").notNull(),
 });
-
-export const teams = pgTable("teams", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  ownerUserId: text("owner_user_id"),
-  createdAt: text("created_at").notNull(),
-});
-
-export const teamMembers = pgTable(
-  "team_members",
-  {
-    id: text("id").primaryKey(),
-    teamId: text("team_id").notNull(),
-    userId: text("user_id").notNull(),
-    role: text("role", { enum: ["owner", "member"] }).notNull().default("member"),
-    createdAt: text("created_at").notNull(),
-  },
-  (t) => [
-    index("team_members_team_idx").on(t.teamId),
-    index("team_members_user_idx").on(t.userId),
-    check("team_members_role_check", sql`${t.role} IN ('owner', 'member')`),
-  ],
-);
-
-// An owner shares `/invite/<token>` and a signed-in recipient redeems membership.
-// Single-use (`redeemedAt`
-// stamps it spent), short TTL (`expiresAt`), and the granted `role` is baked in
-// (capped at the inviter's role at mint time). The token is stored plaintext as
-// the primary key — same trust model as `machines.token`/`connect_keys` (a
-// self-hosted small-team tool whose DB is already the trust root); the link only
-// grants membership within the app and never bypasses the login allowlist.
-export const teamInvites = pgTable(
-  "team_invites",
-  {
-    token: text("token").primaryKey(),
-    teamId: text("team_id").notNull(),
-    role: text("role", { enum: ["owner", "member"] }).notNull().default("member"),
-    invitedByUserId: text("invited_by_user_id").notNull(),
-    expiresAt: text("expires_at").notNull(),
-    /** Single-use stamp: set on redeem so the same link can't be reused. */
-    redeemedAt: text("redeemed_at"),
-    redeemedByUserId: text("redeemed_by_user_id"),
-    createdAt: text("created_at").notNull(),
-  },
-  (t) => [
-    index("team_invites_team_idx").on(t.teamId),
-    check("team_invites_role_check", sql`${t.role} IN ('owner', 'member')`),
-  ],
-);
 
 // After a run, the daemon reads only configured exact paths. Blob bytes live in
 // local or configured object storage keyed by sha256, not in the business DB.
@@ -389,9 +332,6 @@ export type Loop = typeof loops.$inferSelect;
 export type NewLoop = typeof loops.$inferInsert;
 export type Run = typeof runs.$inferSelect;
 export type NewRun = typeof runs.$inferInsert;
-export type Team = typeof teams.$inferSelect;
-export type TeamMember = typeof teamMembers.$inferSelect;
-export type TeamInvite = typeof teamInvites.$inferSelect;
 export type Blob = typeof blobs.$inferSelect;
 export type ArtifactFile = typeof artifactFiles.$inferSelect;
 export type RunSnapshot = typeof runSnapshots.$inferSelect;

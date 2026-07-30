@@ -12,6 +12,7 @@ import { runMigrations, closeClient, db } from "../db/index.js";
 import { repairTerminalRunLeases } from "../db/store.js";
 import { logger } from "../logger.js";
 import { MachineGateway, ONLINE_TTL_MS } from "../gateway/index.js";
+import { loginGateEnabled } from "../lib/loginGate.js";
 import { ArtifactSync } from "../gateway/sync.js";
 import { CliGateway } from "../gateway/cli.js";
 import { createBlobStore } from "../gateway/blobstore.js";
@@ -53,6 +54,7 @@ export function ensureServer(): Promise<Booted> {
 }
 
 async function boot(): Promise<Booted> {
+  loginGateEnabled();
   await runMigrations();
   await repairTerminalRunLeases();
 

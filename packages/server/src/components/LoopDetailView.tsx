@@ -4,14 +4,13 @@ import type { CodingAgent, LoopDetail, RunSummary } from '../types'
 import { dotColor, dotLabel, dur, rel, tsShort } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { DAEMON_UPGRADE_REQUIRED, daemonStopSupport, deriveLoopLifecycle } from '../lib/lifecycleUi'
-import { setActiveTeamCookie } from '../lib/teamCookie'
 import { deleteLoop, getLoopDetail, loadOlderRuns, patchLoop, pauseLoop, runLoop, startLoop, stopLoop } from '../server/loopApi'
 import { LoopFilesPanel } from './LoopFilesPanel'
 import { LoopForm, type LoopFormHandle } from './LoopForm'
 import { LoopOverview } from './LoopOverview'
 import { MachinesModal } from './MachinesModal'
 import { Timeline, WINDOW } from './Timeline'
-import { btn, btnDanger, btnPrimary, btnQuiet, ErrorBanner, Loading, Pill, runPulseStyle, sectionHeadCls } from './ui'
+import { btn, btnDanger, btnPrimary, btnQuiet, ErrorBanner, Loading, runPulseStyle, sectionHeadCls } from './ui'
 import { ConfirmBar, FlashLine, LoadErrorCard, useFlash } from './actionUi'
 
 const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi' }
@@ -113,7 +112,6 @@ export function LoopDetailView({ id }: { id: string }) {
   const canStop = !deleting && !!summary.running && stopSupport.supported
   const online = detail.machine.online
   const asleep = detail.machine.presence === 'asleep'
-  const crossTeam = detail.team && !detail.team.isActive ? detail.team : null
 
   if (editing) {
     return (
@@ -155,11 +153,9 @@ export function LoopDetailView({ id }: { id: string }) {
           runs={overviewRuns}
           onLoadMore={loadMore}
           onPickRun={(run) => navigate({ to: '/loops/$loopId/runs/$runId', params: { loopId: id, runId: run.id } })}
-          extraPill={crossTeam ? <Pill tone="outline">{crossTeam.name}</Pill> : undefined}
         />
 
         <div className="mt-5 border-t border-hairline pt-4">
-          {crossTeam && <TeamBanner team={crossTeam} onSwitch={() => { setActiveTeamCookie(crossTeam.id); void navigate({ to: '/t/$teamId', params: { teamId: crossTeam.id } }) }} />}
           {detail.machine.needsUpdate && <MachineBanner tone="warn" text={`Daemon update required · server requires v${detail.machine.requiredDaemonVersion}; machine reports ${detail.machine.daemonVersion ? `v${detail.machine.daemonVersion}` : 'an unknown version'}.`} action="Update daemon" onAction={() => setMachinesOpen(true)} />}
           {!online && <MachineBanner text={`Machine ${asleep ? 'seems asleep or offline' : 'is offline'}; queued work starts when it reconnects.${detail.machine.lastSeen ? ` Last seen ${rel(detail.machine.lastSeen)}.` : ''}`} action="Reconnect" onAction={() => setMachinesOpen(true)} />}
           {actionErr && <ErrorBanner message={actionErr} onDismiss={() => setActionErr(null)} className="mb-2.5" />}
@@ -201,10 +197,6 @@ export function LoopDetailView({ id }: { id: string }) {
 
 function Config({ label, children }: { label: string; children: React.ReactNode }) {
   return <><dt className="text-label font-medium text-secondary">{label}</dt><dd className="min-w-0 text-body text-primary">{children}</dd></>
-}
-
-function TeamBanner({ team, onSwitch }: { team: { name: string }; onSwitch: () => void }) {
-  return <div className="mb-2.5 flex flex-wrap items-center gap-3 rounded-control border border-hairline bg-raised px-4 py-2.5 text-meta text-secondary"><span>Viewing a loop in {team.name} - not your active team.</span><button onClick={onSwitch} className="ml-auto font-medium text-interactive underline">Switch to this team</button></div>
 }
 
 function MachineBanner({ text, action, onAction, tone }: { text: string; action: string; onAction: () => void; tone?: 'warn' }) {

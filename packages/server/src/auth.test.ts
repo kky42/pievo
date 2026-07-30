@@ -1,97 +1,71 @@
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 
-const reqHolder = { headers: new Headers() }
+const request = { headers: new Headers() }
 vi.mock('@tanstack/react-start/server', () => ({
-  getRequest: () => ({ headers: reqHolder.headers }),
+  getRequest: () => request,
 }))
 
-let tmp: string
-let db: typeof import('./db/index.js')
-let store: typeof import('./db/store.js')
 let authMod: typeof import('./auth.js')
 
-const MEMBER = 'u_member'
-let TEAM_PERSONAL: string
-const TEAM_B = 'team-b'
-const TEAM_C = 'team-c'
-
-function signInAs(id: string | null, email: string | null) {
+function signInAs(id: string | null, email = 'alice@example.com') {
   vi.spyOn(authMod.auth.api, 'getSession').mockResolvedValue(
     id ? ({ user: { id, email } } as unknown as Awaited<ReturnType<typeof authMod.auth.api.getSession>>) : null,
   )
 }
 
-function setCookie(teamId: string | null) {
-  reqHolder.headers = new Headers(teamId ? { cookie: `pievo.team=${teamId}` } : {})
-}
-
 beforeAll(async () => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pievo-auth-'))
-  process.env.PIEVO_DATA_DIR = tmp
   process.env.PIEVO_LOG_LEVEL = 'silent'
   process.env.GITHUB_CLIENT_ID = 'gh-id'
   process.env.GITHUB_CLIENT_SECRET = 'gh-secret'
   process.env.PIEVO_AUTH_SECRET = 'test-secret'
-
-  db = await import('./db/index.js')
-  await db.runMigrations()
-  store = await import('./db/store.js')
+  process.env.PIEVO_ALLOWED_LOGINS = 'alice@example.com,@trusted.test,*@wild.test'
   authMod = await import('./auth.js')
-
-  TEAM_PERSONAL = store.teamIdForUser(MEMBER)
-  await store.ensureTeam(TEAM_PERSONAL, "Member's Team", MEMBER)
-  await store.ensureTeam(TEAM_B, 'Team B', 'u_other')
-  await db.db.insert(db.teamMembers).values({
-    id: `${TEAM_B}:${MEMBER}`,
-    teamId: TEAM_B,
-    userId: MEMBER,
-    role: 'member',
-    createdAt: new Date(0).toISOString(),
-  })
-  await store.ensureTeam(TEAM_C, 'Team C', 'u_stranger')
-})
-
-afterAll(() => {
-  fs.rmSync(tmp, { recursive: true, force: true })
 })
 
 beforeEach(() => {
   vi.restoreAllMocks()
-  setCookie(null)
 })
 
-describe('requestScope explicit team (the /t/<teamId> route)', () => {
-  it('the gate is enforced in this suite', () => {
-    expect(authMod.authEnabled).toBe(true)
+describe('requestScope', () => {
+  test('auth mode scopes a signed-in request to its user id', async () => {
+    signInAs('user-a')
+    await expect(authMod.requestScope()).resolves.toEqual({ enforce: true, userId: 'user-a' })
   })
 
-  it('an explicit member team wins over a different cookie', async () => {
-    signInAs(MEMBER, 'member@example.com')
-    setCookie(TEAM_PERSONAL)
-    const scope = await authMod.requestScope(TEAM_B)
-    expect(scope.teamId).toBe(TEAM_B)
+  test('auth mode leaves a signed-out request unauthorized', async () => {
+    signInAs(null)
+    await expect(authMod.requestScope()).resolves.toEqual({ enforce: true, userId: null })
   })
 
-  it('an explicit team the user is NOT in falls back to the personal team (no leak)', async () => {
-    signInAs(MEMBER, 'member@example.com')
-    setCookie(TEAM_B)
-    const scope = await authMod.requestScope(TEAM_C)
-    expect(scope.teamId).toBe(TEAM_PERSONAL)
+  test('an established Better Auth session remains the request identity', async () => {
+    signInAs('existing-user', 'blocked@example.com')
+    expect(authMod.emailAllowed('blocked@example.com')).toBe(false)
+    await expect(authMod.currentUser()).resolves.toEqual({ id: 'existing-user', email: 'blocked@example.com' })
+    await expect(authMod.requestScope()).resolves.toEqual({ enforce: true, userId: 'existing-user' })
+  })
+})
+
+describe('loop ownership authorization', () => {
+  test('auth mode permits only the matching owner', () => {
+    const scope = { enforce: true, userId: 'user-a' }
+    expect(authMod.canAccessLoop('user-a', scope)).toBe(true)
+    expect(authMod.canAccessLoop('user-b', scope)).toBe(false)
+    expect(authMod.canAccessLoop(undefined, scope)).toBe(false)
   })
 
-  it('no explicit team ⇒ the cookie still resolves (last-used default)', async () => {
-    signInAs(MEMBER, 'member@example.com')
-    setCookie(TEAM_B)
-    const scope = await authMod.requestScope()
-    expect(scope.teamId).toBe(TEAM_B)
+  test('signed-out auth mode denies every owner', () => {
+    expect(authMod.canAccessLoop('user-a', { enforce: true, userId: null })).toBe(false)
   })
 
-  it("an explicit personal team is honored (matches canViewTeam's fast path)", async () => {
-    signInAs(MEMBER, 'member@example.com')
-    const scope = await authMod.requestScope(TEAM_PERSONAL)
-    expect(scope.teamId).toBe(TEAM_PERSONAL)
+  test('open mode deliberately ignores stored ownership', () => {
+    expect(authMod.canAccessLoop('user-b', { enforce: false, userId: null })).toBe(true)
   })
+})
+
+test('login allowlist keeps exact and domain matching', () => {
+  expect(authMod.emailAllowed('ALICE@example.com')).toBe(true)
+  expect(authMod.emailAllowed('person@trusted.test')).toBe(true)
+  expect(authMod.emailAllowed('person@wild.test')).toBe(true)
+  expect(authMod.emailAllowed('person@other.test')).toBe(false)
+  expect(authMod.emailAllowed(null)).toBe(false)
 })

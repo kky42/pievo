@@ -164,11 +164,6 @@ export interface LoopDetail {
    *  "asleep" (recently seen, likely just idle) from a hard "offline", and
    *  `lastSeen` (ISO) feeds the "last seen 3m ago" hint. */
   machine: LoopMachineSummary & { daemonProtocol: number | null; daemonVersion: string | null; needsUpdate: boolean; requiredDaemonVersion: string }
-  /** The loop's owning team + whether it is the caller's active team. Present only
-   *  when the auth gate is on (open mode has a single workspace, so no chip). Lets
-   *  the loop header show which team owns the loop and, when a member opens it from
-   *  outside their active team, offer a "switch to this team" affordance. */
-  team?: { id: string; name: string; isActive: boolean } | null
   runs: RunSummary[]
 }
 
@@ -244,9 +239,4 @@ export interface MutationResult {
   /** Server-side loop data was removed. Local files are never part of this action. */
   deleted?: boolean
   error?: string
-}
-
-export interface TeamsView {
-  teams: { id: string; name: string }[]
-  activeTeamId: string
 }

@@ -1,33 +1,19 @@
-import { createFileRoute, redirect, useRouter } from '@tanstack/react-router'
+import { createFileRoute, useRouter } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
-import { getAuthState, getDefaultTeam } from '../server/loopApi'
-import { authClient, useSession } from '../lib/auth-client'
+import { getAuthState } from '../server/loopApi'
+import { useSession } from '../lib/auth-client'
 import { DashboardView, fetchLiveData, type DashboardData } from '../components/DashboardView'
 import { SignIn } from '../components/SignIn'
 import { LoadErrorCard } from '../components/actionUi'
+import { Loading } from '../components/ui'
 
-/**
- * The home route. Under the auth gate it is now a THIN redirect to the explicit
- * team URL (`/t/<lastUsed|personal>`) so the dashboard's team lives in the path
- * (bookmarkable, multi-tab). `/` keeps working forever: a signed-out visitor gets
- * the sign-in CTA; open mode (no gate ⇒ a single shared workspace with no team to
- * expose in the URL) renders the dashboard right here, unchanged.
- */
+/** The dashboard route. Auth mode shows sign-in before loading owner-scoped data;
+ * open mode renders the server's shared administrative workspace. */
 export const Route = createFileRoute('/')({
   ssr: false,
-  loader: async (): Promise<{ mode: 'signin' | 'dashboard'; auth: { enabled: boolean }; initial?: DashboardData }> => {
+  loader: async (): Promise<{ auth: { enabled: boolean }; initial: DashboardData }> => {
     const auth = await getAuthState()
-    if (auth.enabled) {
-      const { data: session } = await authClient.getSession()
-      if (!session) return { mode: 'signin', auth }
-      // Signed in ⇒ hand off to the explicit team URL. getDefaultTeam validates the
-      // last-used cookie (else the personal team) server-side; a single-team user
-      // lands on their only team with zero friction.
-      const teamId = await getDefaultTeam()
-      throw redirect({ to: '/t/$teamId', params: { teamId } })
-    }
-    const initial = await fetchLiveData()
-    return { mode: 'dashboard', auth, initial }
+    return { auth, initial: await fetchLiveData() }
   },
   component: Home,
   errorComponent: LoadError,
@@ -48,7 +34,9 @@ function LoadError({ error }: ErrorComponentProps) {
 function Home() {
   const loaded = Route.useLoaderData()
   const { data: session, isPending } = useSession()
-  if (loaded?.auth?.enabled && !isPending && !session) return <SignIn />
-  if (loaded?.mode === 'signin') return <SignIn />
-  return <DashboardView initial={loaded!.initial!} />
+  if (loaded.auth.enabled && isPending) {
+    return <main className="mx-auto max-w-[1180px] px-8 pt-12"><Loading /></main>
+  }
+  if (loaded.auth.enabled && !session) return <SignIn />
+  return <DashboardView initial={loaded.initial} mode={loaded.auth.enabled ? 'auth' : 'open'} />
 }

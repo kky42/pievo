@@ -123,25 +123,32 @@ test("pruneExpiredLeases retires expired grace while preserving active, in-windo
   expect((await tokens.resolveLease(alreadyRetired))?.state).toBe("retired");
 });
 
-test("rememberConnectKey binds minter + team; readClaimIntent and getDeviceOwner both read it", async () => {
+test("rememberConnectKey durably binds only the machine owner", async () => {
   const key = tokens.mintDeviceToken();
-  await tokens.rememberConnectKey(key, { userId: "u-mint", teamId: "team-b" });
-  expect(await tokens.readClaimIntent(key)).toEqual({ userId: "u-mint", teamId: "team-b" });
-  // NON-evicting: one paste may create several loops.
-  expect(await tokens.readClaimIntent(key)).toEqual({ userId: "u-mint", teamId: "team-b" });
-  expect(await tokens.getDeviceOwner(tokens.machineIdFromToken(key))).toBe("u-mint");
+  await tokens.rememberConnectKey(key, { userId: "u-mint" });
+  expect(await tokens.readConnectKeyBinding(key)).toEqual({ userId: "u-mint" });
+  expect(await tokens.readConnectKeyBinding(key)).toEqual({ userId: "u-mint" });
+
+  const { connectKeys } = await import("../db/schema.js");
+  const { eq } = await import("drizzle-orm");
+  const row = (await db.db.select().from(connectKeys)
+    .where(eq(connectKeys.machineId, tokens.machineIdFromToken(key))))[0];
+  expect(row).toEqual({
+    machineId: tokens.machineIdFromToken(key),
+    userId: "u-mint",
+    mintedAt: expect.any(String),
+  });
 });
 
 test("connect-key bindings expire after the TTL (lazy on read)", async () => {
   const key = tokens.mintDeviceToken();
-  await tokens.rememberConnectKey(key, { userId: "u-ttl", teamId: "team-ttl" });
+  await tokens.rememberConnectKey(key, { userId: "u-ttl" });
   const past = Date.now() + tokens.CONNECT_KEY_TTL_MS + 1;
-  expect(await tokens.readClaimIntent(key, past)).toBeUndefined();
-  expect(await tokens.getDeviceOwner(tokens.machineIdFromToken(key), past)).toBeUndefined();
+  expect(await tokens.readConnectKeyBinding(key, past)).toBeUndefined();
 });
 
-test("readClaimIntent tolerates an absent/blank key", async () => {
-  expect(await tokens.readClaimIntent(null)).toBeUndefined();
-  expect(await tokens.readClaimIntent(undefined)).toBeUndefined();
-  expect(await tokens.readClaimIntent("never-minted-key")).toBeUndefined();
+test("readConnectKeyBinding tolerates an absent or unknown key", async () => {
+  expect(await tokens.readConnectKeyBinding(null)).toBeUndefined();
+  expect(await tokens.readConnectKeyBinding(undefined)).toBeUndefined();
+  expect(await tokens.readConnectKeyBinding("never-minted-key")).toBeUndefined();
 });

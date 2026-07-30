@@ -12,14 +12,10 @@ import { Cron } from "croner";
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
 
 import { db } from "./index.js";
-import { user } from "./auth-schema.js";
 import {
   loops,
   machines,
   runs,
-  teams,
-  teamMembers,
-  teamInvites,
   blobs,
   artifactFiles,
   runSnapshots,
@@ -37,9 +33,6 @@ import {
   type RunRequester,
   type RunSnapshot,
   type SnapshotManifest,
-  type Team,
-  type TeamMember,
-  type TeamInvite,
 } from "./schema.js";
 import type { ReportIncident, ReportIncidentDisposition } from "../types.js";
 
@@ -67,14 +60,12 @@ function runTimes(at = nowIso()): Pick<NewRun, "ts" | "createdAt" | "updatedAt">
   return { ts: at, createdAt: at, updatedAt: at };
 }
 
-export async function listLoops(teamId?: string): Promise<Loop[]> {
-  const q = db.select().from(loops);
-  return teamId ? await q.where(eq(loops.teamId, teamId)) : await q;
+export async function listLoops(): Promise<Loop[]> {
+  return db.select().from(loops);
 }
 
-export async function countLoopsForTeam(teamId: string): Promise<number> {
-  const r = (await db.select({ n: sql<number>`count(*)` }).from(loops).where(eq(loops.teamId, teamId)))[0];
-  return Number(r?.n ?? 0);
+export async function listLoopsForUser(userId: string): Promise<Loop[]> {
+  return db.select().from(loops).where(eq(loops.userId, userId));
 }
 
 export async function getLoop(id: string): Promise<Loop | undefined> {
@@ -124,9 +115,12 @@ export async function createLoop(input: CreateLoopInput): Promise<Loop> {
   return db.transaction(async (tx) => {
     // Fence machine deletion: a loop can only commit while its machine exists,
     // and forceDeleteMachine's UPDATE lock waits for this key-share lock.
-    const machine = (await tx.select({ id: machines.id }).from(machines)
+    const machine = (await tx.select({ id: machines.id, userId: machines.userId }).from(machines)
       .where(eq(machines.id, input.machineId)).for("key share"))[0];
     if (!machine) throw new Error(`machine ${input.machineId} does not exist`);
+    if (machine.userId !== input.userId) {
+      throw new Error(`machine ${input.machineId} is owned by a different user`);
+    }
     return (await tx.insert(loops).values(row).returning())[0]!;
   });
 }
@@ -1449,26 +1443,14 @@ export async function expirePendingRun(
   });
 }
 
-export async function listMachines(teamId?: string): Promise<Machine[]> {
-  return teamId
-    ? await db.select().from(machines).where(eq(machines.teamId, teamId)).orderBy(asc(machines.name), asc(machines.id))
-    : await db.select().from(machines).orderBy(asc(machines.name), asc(machines.id));
+export async function listMachines(): Promise<Machine[]> {
+  return db.select().from(machines).orderBy(asc(machines.name), asc(machines.id));
 }
 
-/**
- * Machines usable/visible in a team, MEMBERSHIP-scoped: every machine whose owner
- * belongs to the team (join `machines.userId` → a `team_members` row for this
- * team). One machine therefore appears in every team its owner belongs to.
- * A user has at most one membership row per team, so no machine is duplicated.
- */
-export async function listMachinesForTeam(teamId: string): Promise<Machine[]> {
-  const rows = await db
-    .select({ m: machines })
-    .from(machines)
-    .innerJoin(teamMembers, eq(machines.userId, teamMembers.userId))
-    .where(eq(teamMembers.teamId, teamId))
+export async function listMachinesForUser(userId: string): Promise<Machine[]> {
+  return db.select().from(machines)
+    .where(eq(machines.userId, userId))
     .orderBy(asc(machines.name), asc(machines.id));
-  return rows.map((r) => r.m);
 }
 
 export async function getMachine(id: string): Promise<Machine | undefined> {
@@ -1484,27 +1466,23 @@ export async function updateMachine(id: string, patch: Partial<NewMachine>): Pro
   return getMachine(id);
 }
 
-export async function deleteMachine(id: string): Promise<boolean> {
-  const deleted = await db.delete(machines).where(eq(machines.id, id)).returning({ id: machines.id });
-  return deleted.length > 0;
-}
-
 export type ForceDeleteMachineResult =
   | { state: "deleted"; loopIds: string[] }
   | { state: "not-found" }
   | { state: "forbidden" };
 
 /** Atomically retire all loop authority, remove server-owned machine data, revoke
- * enrollment, and delete the machine. `allowedTeamIds` is supplied by the
- * authenticated owner flow; a concurrent loop from another team aborts safely. */
-export async function forceDeleteMachine(id: string, allowedTeamIds?: readonly string[]): Promise<ForceDeleteMachineResult> {
+ * enrollment, and delete the machine. Auth-mode callers pass `ownerUserId` so
+ * ownership is rechecked under the same lock as deletion; open/server callers omit it. */
+export async function forceDeleteMachine(id: string, ownerUserId?: string): Promise<ForceDeleteMachineResult> {
   return db.transaction(async (tx) => {
-    const machine = (await tx.select({ id: machines.id }).from(machines).where(eq(machines.id, id)).for("update"))[0];
+    const machine = (await tx.select({ id: machines.id, userId: machines.userId })
+      .from(machines).where(eq(machines.id, id)).for("update"))[0];
     if (!machine) return { state: "not-found" };
+    if (ownerUserId !== undefined && machine.userId !== ownerUserId) return { state: "forbidden" };
     const ownedLoops = await tx.select().from(loops).where(eq(loops.machineId, id)).for("update");
-    if (allowedTeamIds) {
-      const allowed = new Set(allowedTeamIds);
-      if (ownedLoops.some((loop) => !allowed.has(loop.teamId))) return { state: "forbidden" };
+    if (ownerUserId !== undefined && ownedLoops.some((loop) => loop.userId !== ownerUserId)) {
+      return { state: "forbidden" };
     }
     for (const loop of ownedLoops) {
       if (!(await forceDeleteLoopTx(tx, loop.id))) throw new Error(`failed to delete loop ${loop.id}`);
@@ -1517,312 +1495,6 @@ export async function forceDeleteMachine(id: string, allowedTeamIds?: readonly s
 
 export async function setMachineOnline(id: string, online: boolean): Promise<void> {
   await db.update(machines).set({ online, lastSeen: nowIso() }).where(eq(machines.id, id));
-}
-
-export function teamIdForUser(userId: string | null | undefined): string {
-  return `team-${userId ?? "shared"}`;
-}
-
-// Per-process memo so the hot path (every requestScope) doesn't re-issue an
-// INSERT OR IGNORE once a team is known to exist.
-const ensuredTeams = new Set<string>();
-
-/** Idempotently create a team (+ owner membership) if absent. The email-derived
- *  `name` seeds only a new personal team, so later owner renames persist.
- *  Memoized ⇒ at most one reconcile per team per process. The team insert +
- *  membership insert are one atomic transaction. */
-export async function ensureTeam(id: string, name: string, ownerUserId: string | null): Promise<void> {
-  if (ensuredTeams.has(id)) return;
-  const ts = nowIso();
-  await db.transaction(async (tx) => {
-    await tx.insert(teams).values({ id, name, ownerUserId, createdAt: ts }).onConflictDoNothing();
-    if (ownerUserId) {
-      await tx
-        .insert(teamMembers)
-        .values({ id: `${id}:${ownerUserId}`, teamId: id, userId: ownerUserId, role: "owner", createdAt: ts })
-        .onConflictDoNothing();
-    }
-  });
-  ensuredTeams.add(id);
-}
-
-/** A fresh non-personal team id. Random (never `team-<userId>`, which is reserved
- *  for the personal team the requestScope fallback depends on). */
-export function newTeamId(): string {
-  return `team-${randomUUID().slice(0, 12)}`;
-}
-
-export function isPersonalTeam(team: Team): boolean {
-  return !!team.ownerUserId && team.id === teamIdForUser(team.ownerUserId);
-}
-
-/** Create a non-personal team owned by `ownerUserId` (creator = owner in both
- *  `teams.ownerUserId` and a `team_members` owner row), transactionally. */
-export async function createTeam(name: string, ownerUserId: string): Promise<Team> {
-  const ts = nowIso();
-  const id = newTeamId();
-  return db.transaction(async (tx) => {
-    const [team] = await tx.insert(teams).values({ id, name, ownerUserId, createdAt: ts }).returning();
-    await tx
-      .insert(teamMembers)
-      .values({ id: `${id}:${ownerUserId}`, teamId: id, userId: ownerUserId, role: "owner", createdAt: ts });
-    return team!;
-  });
-}
-
-export async function renameTeam(teamId: string, name: string): Promise<void> {
-  await db.update(teams).set({ name }).where(eq(teams.id, teamId));
-}
-
-export async function getTeamMember(teamId: string, userId: string): Promise<TeamMember | undefined> {
-  return (
-    await db
-      .select()
-      .from(teamMembers)
-      .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, userId)))
-  )[0];
-}
-
-export async function countTeamOwners(teamId: string): Promise<number> {
-  const r = (
-    await db
-      .select({ n: sql<number>`count(*)` })
-      .from(teamMembers)
-      .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.role, "owner")))
-  )[0];
-  return Number(r?.n ?? 0);
-}
-
-export interface TeamMemberWithUser extends TeamMember {
-  email: string | null;
-  displayName: string | null;
-}
-
-export async function listTeamMembers(teamId: string): Promise<TeamMemberWithUser[]> {
-  const rows = await db
-    .select({
-      id: teamMembers.id,
-      teamId: teamMembers.teamId,
-      userId: teamMembers.userId,
-      role: teamMembers.role,
-      createdAt: teamMembers.createdAt,
-      email: user.email,
-      displayName: user.name,
-    })
-    .from(teamMembers)
-    .leftJoin(user, eq(teamMembers.userId, user.id))
-    .where(eq(teamMembers.teamId, teamId));
-  return rows
-    .map((r) => ({ ...r, email: r.email ?? null, displayName: r.displayName ?? null }))
-    .sort((a, b) => (a.role === b.role ? (a.createdAt < b.createdAt ? -1 : 1) : a.role === "owner" ? -1 : 1));
-}
-
-export async function userByEmail(email: string): Promise<{ id: string; email: string } | undefined> {
-  const r = (
-    await db
-      .select({ id: user.id, email: user.email })
-      .from(user)
-      .where(sql`lower(${user.email}) = lower(${email})`)
-  )[0];
-  return r ? { id: r.id, email: r.email } : undefined;
-}
-
-/** Add a member (idempotent — a re-add is a no-op, not a duplicate row). */
-export async function addTeamMember(teamId: string, userId: string, role: "owner" | "member"): Promise<void> {
-  await db
-    .insert(teamMembers)
-    .values({ id: `${teamId}:${userId}`, teamId, userId, role, createdAt: nowIso() })
-    .onConflictDoNothing();
-}
-
-/**
- * Remove a member, but REFUSE if they are the team's LAST owner (the ≥1-owner
- * invariant, checked in the SAME transaction as the delete so two concurrent
- * self-removals can't both win and strand a memberless team). Returns:
- *  - `not-member` — no membership row;
- *  - `last-owner` — refused (they are the sole owner; transfer/promote first);
- *  - `ok` — removed.
- */
-export async function removeTeamMemberGuarded(
-  teamId: string,
-  userId: string,
-): Promise<"ok" | "last-owner" | "not-member"> {
-  return db.transaction(async (tx) => {
-    const m = (
-      await tx.select().from(teamMembers).where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, userId)))
-    )[0];
-    if (!m) return "not-member";
-    if (m.role === "owner") {
-      // Lock the team's owner rows so two concurrent owner removals serialize:
-      // the second txn blocks here until the first commits, then sees the reduced
-      // set and is refused — the plain count(*) alone would let both win.
-      const owners = (
-        await tx
-          .select({ id: teamMembers.id })
-          .from(teamMembers)
-          .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.role, "owner")))
-          .for("update")
-      ).length;
-      if (owners <= 1) return "last-owner";
-    }
-    await tx.delete(teamMembers).where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, userId)));
-    return "ok";
-  });
-}
-
-/**
- * Change a member's role, guarding the last-owner invariant transactionally: a
- * demote owner→member that would zero the owner set is refused. Returns
- * `not-member` / `last-owner` / `ok`. A no-op (same role) is `ok`.
- */
-export async function setTeamMemberRoleGuarded(
-  teamId: string,
-  userId: string,
-  role: "owner" | "member",
-): Promise<"ok" | "last-owner" | "not-member"> {
-  return db.transaction(async (tx) => {
-    const m = (
-      await tx.select().from(teamMembers).where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, userId)))
-    )[0];
-    if (!m) return "not-member";
-    if (m.role === "owner" && role === "member") {
-      // Lock the owner rows so a concurrent demote/removal serializes (see
-      // removeTeamMemberGuarded) — a bare count(*) would let both zero the set.
-      const owners = (
-        await tx
-          .select({ id: teamMembers.id })
-          .from(teamMembers)
-          .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.role, "owner")))
-          .for("update")
-      ).length;
-      if (owners <= 1) return "last-owner";
-    }
-    await tx
-      .update(teamMembers)
-      .set({ role })
-      .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, userId)));
-    return "ok";
-  });
-}
-
-/**
- * Delete a team and its dependents, transactionally. The CALLER enforces the
- * policy guards first (personal-team undeletable; blocked while the team owns loops).
- * The transaction rechecks the loop count and aborts (`has-loops`) if one exists,
- * closing the check-then-cascade gap where a loop created between the caller's
- * guard and here would be orphaned at a now-deleted team. On success we cascade
- * the team's own resources: pending invites, memberships, and reassign
- * every machine whose cosmetic home-team was this team back to its owner's
- * personal team (machines are user-owned; the team pointer is only a home hint).
- */
-export async function deleteTeamCascade(teamId: string): Promise<"ok" | "has-loops"> {
-  const outcome = await db.transaction(async (tx) => {
-    const loopCount = Number(
-      (await tx.select({ n: sql<number>`count(*)` }).from(loops).where(eq(loops.teamId, teamId)))[0]?.n ?? 0,
-    );
-    if (loopCount > 0) return "has-loops" as const;
-    // Reassign machine home-team pointers (cosmetic) to each machine owner's
-    // personal team, so no row dangles at a deleted team.
-    const homed = await tx.select().from(machines).where(eq(machines.teamId, teamId));
-    for (const m of homed) {
-      await tx.update(machines).set({ teamId: teamIdForUser(m.userId) }).where(eq(machines.id, m.id));
-    }
-    await tx.delete(teamInvites).where(eq(teamInvites.teamId, teamId));
-    await tx.delete(teamMembers).where(eq(teamMembers.teamId, teamId));
-    await tx.delete(teams).where(eq(teams.id, teamId));
-    return "ok" as const;
-  });
-  if (outcome === "ok") ensuredTeams.delete(teamId);
-  return outcome;
-}
-
-export async function createInvite(input: {
-  token: string;
-  teamId: string;
-  role: "owner" | "member";
-  invitedByUserId: string;
-  expiresAt: string;
-}): Promise<TeamInvite> {
-  return (await db.insert(teamInvites).values({ ...input, createdAt: nowIso() }).returning())[0]!;
-}
-
-export async function getInvite(token: string): Promise<TeamInvite | undefined> {
-  return (await db.select().from(teamInvites).where(eq(teamInvites.token, token)))[0];
-}
-
-export async function listPendingInvites(teamId: string): Promise<TeamInvite[]> {
-  const now = nowIso();
-  return db
-    .select()
-    .from(teamInvites)
-    .where(and(eq(teamInvites.teamId, teamId), isNull(teamInvites.redeemedAt), gt(teamInvites.expiresAt, now)))
-    .orderBy(desc(teamInvites.createdAt));
-}
-
-/**
- * Atomically redeem a single-use invite: in ONE transaction, stamp
- * `redeemedAt`/`redeemedByUserId` ONLY if the invite is still unredeemed and,
- * when this call won the stamp, grant the membership in the SAME transaction so
- * the two commit together (a crash between them can't burn the link without
- * granting membership). The `redeemed_at IS NULL` guard makes the stamp the
- * single-use chokepoint, so two concurrent redeems can't both add a member.
- * Pass `grant: null` for an already-member redeem (still burns the link, no
- * double-add / no role change). Returns false when the invite was already spent
- * (a losing race, or a stale re-redeem).
- */
-export async function redeemInviteAtomic(
-  token: string,
-  userId: string,
-  grant: { teamId: string; role: "owner" | "member" } | null,
-): Promise<boolean> {
-  return db.transaction(async (tx) => {
-    const won = await tx
-      .update(teamInvites)
-      .set({ redeemedAt: nowIso(), redeemedByUserId: userId })
-      .where(and(eq(teamInvites.token, token), isNull(teamInvites.redeemedAt)))
-      .returning({ token: teamInvites.token });
-    if (won.length === 0) return false;
-    if (grant) {
-      await tx
-        .insert(teamMembers)
-        .values({
-          id: `${grant.teamId}:${userId}`,
-          teamId: grant.teamId,
-          userId,
-          role: grant.role,
-          createdAt: nowIso(),
-        })
-        .onConflictDoNothing();
-    }
-    return true;
-  });
-}
-
-export async function deleteInvite(token: string): Promise<void> {
-  await db.delete(teamInvites).where(eq(teamInvites.token, token));
-}
-
-export async function getTeam(id: string): Promise<Team | undefined> {
-  return (await db.select().from(teams).where(eq(teams.id, id)))[0];
-}
-
-export async function listTeamsForUser(userId: string): Promise<Team[]> {
-  const rows = await db
-    .select({ t: teams })
-    .from(teamMembers)
-    .innerJoin(teams, eq(teamMembers.teamId, teams.id))
-    .where(eq(teamMembers.userId, userId))
-    .orderBy(desc(teams.createdAt));
-  return rows.map((r) => r.t);
-}
-
-export async function isTeamMember(teamId: string, userId: string): Promise<boolean> {
-  return !!(
-    await db
-      .select({ id: teamMembers.id })
-      .from(teamMembers)
-      .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, userId)))
-  )[0];
 }
 
 export async function blobExists(hash: string): Promise<boolean> {

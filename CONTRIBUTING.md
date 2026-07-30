@@ -41,12 +41,14 @@ Source development keeps server and daemon state under the repo's ignored
 Copy `.env.example` to `packages/server/.env` only when you need to override the
 isolated defaults or configure auth and storage. The app runs open by default.
 
-> The fresh-deployment schema for this release is squashed into the single
-> reviewed `packages/server/drizzle/0000_baseline.sql`; removed product schemas
-> and their migrations are not retained. Until this baseline is published, keep
-> it, `src/db/schema.ts`, and `drizzle/meta/_journal.json` in lockstep. After the
-> baseline is published, every schema change must add a new forward-only migration.
-> Drizzle snapshots are local generation cache and are not committed. Restart
+> `packages/server/drizzle/0000_baseline.sql` is the published, immutable
+> original schema. `0001_add_pi_agent.sql` and `0002_remove_teams.sql` are required
+> forward migrations; preserve every published migration and its order in
+> `drizzle/meta/_journal.json`. Never edit, squash, or remove a published migration,
+> and add a new forward-only migration for every future schema change. Drizzle
+> snapshots are local generation cache and are not committed. `0002_remove_teams`
+> is destructive and backward-incompatible, so back up deployed databases and
+> coordinate the server upgrade before applying it. Restart
 > local dev after a schema change so embedded PGlite applies the migration set:
 > ```bash
 > pnpm dev
@@ -80,9 +82,9 @@ Please keep tests and `typecheck` green before opening a PR.
   `packages/server/package.json`; the workflow runs workspace typecheck/tests, a
   strict publish build, and packed-tarball assertions before publishing. The package
   must retain its repository provenance metadata and include `.output`, public assets,
-  pglite runtime assets, and the source/bundled baseline migration. Server
-  deployment remains separate: no target is configured, and both Fly workflows are
-  manual-only examples. Schema changes after the baseline release remain forward-only.
+  PGlite runtime assets, and the complete ordered migration set in both source and
+  bundled output. Server deployment remains separate: no target is configured, and
+  both Fly workflows are manual-only examples. Schema changes remain forward-only.
 - **Daemon** (`@kky42/pievo`) — publishes to npm on a `vX.Y.Z` git tag
   (`.github/workflows/publish-daemon.yml`, via npm OIDC trusted publishing). The
   tag must match `packages/daemon/package.json`. Public snippets install globally with

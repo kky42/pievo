@@ -5,8 +5,8 @@
  * The machine-facing poll, CLI, report, and artifact-sync endpoints are sibling
  * server routes in this same process, so one process owns the single scheduler.
  *
- * Reads and writes are scoped through requestScope/ownedLoop so users only see
- * teams and loops their current session is authorized to access.
+ * Reads and writes are scoped through requestScope/ownedLoop so auth-mode users
+ * can access only their own loops. Open mode intentionally shares all loops.
  */
 import { createServerFn } from '@tanstack/react-start'
 
@@ -19,7 +19,6 @@ import type {
   MutationResult,
   RunDiffResult,
   RunSummary,
-  TeamsView,
 } from '../types'
 import * as store from '../db/store.js'
 import { canAccessLoop, requestScope } from '../auth.js'
@@ -42,14 +41,8 @@ async function ownedLoop(id: string) {
   const loop = await store.getLoop(id)
   if (!loop) return undefined
   const scope = await requestScope()
-  // Authorize by MEMBERSHIP in the loop's own team (canAccessLoop is the shared
-  // gate): a member of the loop's team may open it even when it isn't their active
-  // team, so a cross-team link works; a non-member is indistinguishable from a
-  // missing loop.
-  if (!(await canAccessLoop(loop.teamId, scope))) return undefined
-  // Hand back the scope too — callers that mutate (e.g. patchLoop) need `enforce`
-  // and would otherwise re-run requestScope() (a second session decrypt).
-  return { loop, enforce: scope.enforce, teamId: scope.teamId }
+  if (!canAccessLoop(loop.userId, scope)) return undefined
+  return { loop }
 }
 
 export const getAuthState = createServerFn({ method: 'GET' }).handler(async () => {
@@ -75,64 +68,15 @@ export const getConfig = createServerFn({ method: 'GET' }).handler(() => {
   }
 })
 
-/** GET — the teams this user may view (for the header switcher) + the active
- *  selection. A user gets only their memberships (usually one ⇒ no dropdown).
- *  Open mode ⇒ empty. An explicit `teamId` (the `/t/<id>` route) pins the active
- *  selection for THIS request — so the switcher highlights the tab's own team,
- *  not the cookie's. */
-export const listMyTeams = createServerFn({ method: 'GET' })
-  .validator((teamId?: string) => teamId)
-  .handler(async ({ data: teamId }): Promise<TeamsView> => {
-    await backend()
-    const { enforce, userId, teamId: active } = await requestScope(teamId)
-    if (!enforce || !userId) return { teams: [], activeTeamId: active }
-    const teams = (await store.listTeamsForUser(userId)).map((t) => ({
-      id: t.id,
-      name: t.name,
-    }))
-    return { teams, activeTeamId: active }
-  })
-
-/** GET — whether the caller may view the given dashboard team (`/t/<id>` loader
- *  gate). Enumeration-safe: a team the caller isn't a member of returns false, so
- *  the loader throws the same generic not-found as a missing loop — never
- *  confirming the team exists. Open mode ⇒ always true (single shared workspace). */
-export const canViewTeam = createServerFn({ method: 'GET' })
-  .validator((teamId: string) => teamId)
-  .handler(async ({ data: teamId }): Promise<boolean> => {
-    await backend()
-    const scope = await requestScope(teamId)
-    if (!scope.enforce) return true // open mode: single workspace
-    if (!scope.userId) return false // signed out under the gate
-    // requestScope honored the requested team ⇒ member; a rejected team fell
-    // through to the personal team, so this won't match.
-    return scope.teamId === teamId
-  })
-
-/** GET — the caller's default dashboard team as an id: the last-used cookie,
- *  validated, else the personal team. Backs the `/` → `/t/<id>` redirect. */
-export const getDefaultTeam = createServerFn({ method: 'GET' }).handler(async (): Promise<string> => {
-  await backend()
-  const scope = await requestScope()
-  return scope.teamId
-})
-
-/** GET — the signed-in user's loops as compact summaries (most recently run first;
- *  never-run loops remain newest-created first).
- *  Gate on ⇒ only the given/active team's loops; open mode ⇒ the full shared list.
- *  An explicit `teamId` (the `/t/<id>` route) scopes this request independent of
- *  the cookie, so different tabs on /t/A and /t/B list different teams at once. */
+/** GET — visible loops as compact summaries, most recently run first. */
 export const listLoops = createServerFn({ method: 'GET' })
-  .validator((teamId?: string) => teamId)
-  .handler(async ({ data: teamId }) => {
+  .handler(async () => {
     await backend()
-    const { enforce, userId, teamId: active } = await requestScope(teamId)
-    if (enforce && !userId) return [] as LoopSummary[]
-    // Scope to the resolved active team (open mode ⇒ no team filter, the single
-    // shared workspace).
+    const scope = await requestScope()
+    if (scope.enforce && !scope.userId) return [] as LoopSummary[]
     const [loopRows, machines] = await Promise.all([
-      store.listLoops(enforce ? active : undefined),
-      enforce ? store.listMachinesForTeam(active) : store.listMachines(),
+      scope.enforce ? store.listLoopsForUser(scope.userId!) : store.listLoops(),
+      scope.enforce ? store.listMachinesForUser(scope.userId!) : store.listMachines(),
     ])
     const loops = loopRows.sort((a, b) => a.createdAt < b.createdAt ? 1 : -1)
     return sortLoopSummariesByRecentRun(await toLoopSummaries(loops, machines))
@@ -143,21 +87,9 @@ export const getLoopDetail = createServerFn({ method: 'GET' })
   .handler(async ({ data: id }): Promise<LoopDetail> => {
     await backend()
     const owned = await ownedLoop(id)
-    // Generic, enumeration-safe copy: a nonexistent loop and one in a team the
-    // caller can't access return the SAME message (never confirm a loop exists to
-    // someone without access).
+    // A missing loop and another user's loop return the same message.
     if (!owned) throw new Error('This loop does not exist, or you do not have access to it.')
-    const detail = await toLoopDetail(owned.loop)
-    // Team context for the header: which team owns the loop and whether it's the
-    // caller's active team. Only under the gate (open mode is a single workspace).
-    // When it isn't the active team (a member opened a cross-team link), the header
-    // offers a "switch to this team" affordance.
-    if (owned.enforce) {
-      const team = await store.getTeam(owned.loop.teamId)
-      if (!team) throw new Error(`invariant: loop ${owned.loop.id} references missing team ${owned.loop.teamId}`)
-      detail.team = { id: owned.loop.teamId, name: team.name, isActive: owned.loop.teamId === owned.teamId }
-    }
-    return detail
+    return toLoopDetail(owned.loop)
   })
 
 export const loadOlderRuns = createServerFn({ method: 'GET' })
@@ -273,23 +205,18 @@ export const deleteLoop = createServerFn({ method: 'POST' })
     if (!owned) return { error: 'not found' }
     const machine = await store.getMachine(owned.loop.machineId)
     const unreachable = machinePresence(machine?.online, machine?.lastSeen) !== 'online'
-    const actor = await requestScope()
-    const mayRetireAuthority = !owned.enforce || !!(
-      actor.userId && owned.loop.teamId &&
-      (await store.getTeamMember(owned.loop.teamId, actor.userId))?.role === 'owner'
-    )
     if (!unreachable && await store.hasRunningRun(id) && machine?.daemonProtocol !== DAEMON_PROTOCOL_VERSION) {
       return { error: 'Daemon upgrade required to stop a running process' }
     }
     scheduler.removeLoop(id)
     const requested = await store.requestDeleteLoop(id)
     if (!requested) return { error: 'not found' }
-    if (unreachable && mayRetireAuthority) {
+    if (unreachable) {
       const deleted = await store.forceDeleteLoop(id)
       if (!deleted) return { error: 'delete failed; server data was not deleted' }
       const { logger } = await import('../logger.js')
       logger.child({ mod: 'loop-lifecycle' }).warn(
-        { action: 'unreachable-delete', loopId: id, actorUserId: actor.userId, machineId: owned.loop.machineId },
+        { action: 'unreachable-delete', loopId: id, machineId: owned.loop.machineId },
         'unreachable-machine delete: retired execution authority and removed server data',
       )
       return { ok: true, deleted: true }
@@ -324,24 +251,14 @@ export const stopRun = createServerFn({ method: 'POST' })
     return result ? { ok: true, waiting: result.phase === 'running' } : { error: 'run not found' }
   })
 
-/** Mint the key shown in the New-loop daemon connection command. It may enroll
- * a new machine and remains valid as an optional team-bound create claim. */
-export const mintClaim = createServerFn({ method: 'POST' })
-  .validator((teamId?: string) => teamId)
-  .handler(async ({ data: teamId }): Promise<{ token: string } | { error: string }> => {
+/** Mint the key shown in the New-loop daemon connection command. */
+export const mintConnectKey = createServerFn({ method: 'POST' })
+  .handler(async (): Promise<{ token: string } | { error: string }> => {
     await backend()
+    const scope = await requestScope()
+    if (scope.enforce && !scope.userId) return { error: 'not signed in' }
     const { mintDeviceToken, rememberConnectKey } = await import('../gateway/tokens.js')
-    // Honor the tab's explicit team (the `/t/<id>` dashboard) so a loop captured
-    // from team B's dashboard binds to team B even if the cookie's last-used is A.
-    const { userId, teamId: active } = await requestScope(teamId)
-    const owner = userId ?? 'shared'
     const token = mintDeviceToken()
-    // Bind the minter (so the machine that self-registers with this token — and
-    // the loop Claude Code creates on it — belongs to the signed-in user) AND the
-    // VALIDATED active team (so a loop captured from team B's dashboard lands in
-    // team B — one machine can then serve many teams). The team is the VALIDATED
-    // scope (explicit tab team or cookie), never the raw client value. Durable: a
-    // deploy between mint and paste no longer mis-files the loop.
-    await rememberConnectKey(token, { userId: owner, teamId: active })
+    await rememberConnectKey(token, { userId: scope.userId ?? 'shared' })
     return { token }
   })

@@ -271,9 +271,9 @@ describe("runDaemonConnect", () => {
     expect(events).toEqual(["stop --force", "save dk_new", `replaced saved identity for ${url}`, "start"]);
   });
 
-  test("a new loop claim does not replace a valid saved machine identity", async () => {
+  test("a supplied key does not replace a valid saved machine identity", async () => {
     const events: string[] = [];
-    await runDaemonConnect(["--server-url", "https://one.test", "--connect-key", "dk_claim"], {
+    await runDaemonConnect(["--server-url", "https://one.test", "--connect-key", "dk_new"], {
       readConfig: () => config("https://one.test", { "https://one.test": { deviceToken: "dk_machine" } }),
       probeSaved: async () => "valid",
       stop: async () => { events.push("stop"); return 0; },
@@ -282,7 +282,7 @@ describe("runDaemonConnect", () => {
       out: (line) => { events.push(line.trim()); },
     });
     expect(events).toEqual([
-      "using saved identity for https://one.test; the supplied key remains available for loop creation",
+      "using saved identity for https://one.test; the supplied connect key was ignored",
       "save https://one.test dk_machine",
       "start",
     ]);

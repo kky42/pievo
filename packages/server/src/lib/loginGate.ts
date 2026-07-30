@@ -1,13 +1,18 @@
 /**
- * The GitHub login-gate condition, in ONE place. `auth.ts` derives its load-time
- * `authEnabled` const from this; the machine-enrollment guard (`gateway/index.ts`
- * `poll`) calls it LIVE so the gated-vs-open behavior can be exercised in a test
- * (which sets the env vars per-case) without pulling betterAuth into the machine
- * hot path. Leaf module — no imports, no side effects.
+ * The GitHub login-gate condition, in one leaf module. `auth.ts` derives its
+ * load-time `authEnabled` value from this, and server boot calls it before any
+ * migration or scheduler work.
  *
- * The gate is ON exactly when a GitHub OAuth app is configured (both id + secret).
- * OFF ⇒ open/dev mode (single shared workspace, anonymous self-registration).
+ * The gate is ON exactly when a complete GitHub OAuth app is configured. Open
+ * mode requires both values to be absent; a partial configuration fails closed.
  */
 export function loginGateEnabled(): boolean {
-  return !!(process.env.GITHUB_CLIENT_ID?.trim() && process.env.GITHUB_CLIENT_SECRET?.trim());
+  const hasClientId = !!process.env.GITHUB_CLIENT_ID?.trim();
+  const hasClientSecret = !!process.env.GITHUB_CLIENT_SECRET?.trim();
+  if (hasClientId !== hasClientSecret) {
+    throw new Error(
+      "incomplete GitHub auth configuration: set both GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET, or unset both for open mode",
+    );
+  }
+  return hasClientId;
 }

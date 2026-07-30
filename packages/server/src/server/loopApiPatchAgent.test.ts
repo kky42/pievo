@@ -31,8 +31,8 @@ test('coerceCodingAgent accepts every known enum value and rejects the rest', ()
 })
 
 test('canonical edit validation persists known agents and rejects unknown agents', async () => {
-  await store.createMachine({ id: 'm1', userId: 'u1', teamId: 't1', name: 'M1', tokenHash: 'hash-m1' })
-  const created = await store.createLoop({ workdir: "/work", userId: 'u1', teamId: 't1', machineId: 'm1', name: 'A', cron: '0 6 * * *' })
+  await store.createMachine({ id: 'm1', userId: 'u1', name: 'M1', tokenHash: 'hash-m1' })
+  const created = await store.createLoop({ workdir: "/work", userId: 'u1', machineId: 'm1', name: 'A', cron: '0 6 * * *' })
   expect(created.agent).toBe('claude-code')
 
   const accepted = validateLoopEdit(created, { agent: 'pi', reasoningEffort: 'medium' })

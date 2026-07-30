@@ -29,15 +29,13 @@ import { machinePresence } from "../lib/machinePresence.js";
 import { isValidSemver } from "../lib/semver.js";
 import { snapshotRetention } from "../env.js";
 import {
-  getDeviceOwner,
-  readClaimIntent,
+  readConnectKeyBinding,
   TERMINAL_GRACE_MS,
   resolveLease,
   retireLease,
   pruneExpiredLeases,
   readNewIdempotency,
   recordNewIdempotency,
-  isDeviceTokenShape,
   sha256,
   type RunLease,
 } from "./tokens.js";
@@ -78,8 +76,8 @@ const RUN_TIMEOUT_MS = Number.isFinite(configuredRunTimeoutMs) && configuredRunT
   : 20 * 60_000;
 /** The ONLY keys an owner `editLoop` patch may touch. A key outside this set is
  *  rejected (400) rather than silently ignored, so a `--json` typo fails loudly
- *  and identity/ownership columns (id/teamId/userId/machineId/timestamps) can
- *  never be patched over the device-token edit surface. Exported for `cli.ts`
+ *  and identity/ownership columns (id/userId/machineId/timestamps) can never be
+ *  patched over the device-token edit surface. Exported for `cli.ts`
  *  (the `new`/`edit` verb help lists these keys). */
 export const EDITABLE_LOOP_FIELDS = LOOP_EDIT_FIELDS;
 /** Formal `report --message` text. Provider finalText is stored separately;
@@ -453,23 +451,13 @@ export class MachineGateway {
       // First contact requires a live connect-key binding in every deployment
       // mode. Machine deletion revokes that binding, so a still-running daemon
       // cannot recreate server data after the owner deletes it.
-      const owner = await getDeviceOwner(machineId);
-      if (owner == null) {
+      const binding = await readConnectKeyBinding(deviceToken);
+      if (!binding) {
         return { status: 401, body: { error: "unknown device token — connect this machine first" } };
       }
-      const ownerId = owner;
-      // Home/default team for this machine: ALWAYS the owner's personal team (the
-      // no-claim fallback for loops created on it later). A loop's actual team comes
-      // from the validated claim intent at createLoop time, never from this home
-      // team — so cross-team capture still lands in team B. Keeping home = personal
-      // team preserves the safe invariant that a machine's fallback can never be a
-      // shared team the owner is merely a (possibly later-revoked) member of.
-      const teamId = store.teamIdForUser(ownerId);
-      await store.ensureTeam(teamId, ownerId === "shared" ? "Shared Workspace" : "Personal Team", ownerId === "shared" ? null : ownerId);
       machine = await store.createMachine({
         id: machineId,
-        userId: ownerId,
-        teamId,
+        userId: binding.userId,
         // Always name it (never blank) — listMachines hides empty-name rows, so a
         // self-registered machine must carry a name to show up + be counted.
         name: info?.host || `machine-${machineId.slice(2, 8)}`,
@@ -625,8 +613,8 @@ export class MachineGateway {
     // Unknown or deleted identity: keep the response enumeration-safe while
     // telling the local CLI that its saved identity must be replaced explicitly.
     if (!machine) {
-      const claimValid = (await readClaimIntent(deviceToken)) !== undefined;
-      return { status: 200, body: { registered: false, claimValid, online: false, name: null, lastSeen: null, daemonProtocol: null } };
+      const connectKeyValid = (await readConnectKeyBinding(deviceToken)) !== undefined;
+      return { status: 200, body: { registered: false, claimValid: connectKeyValid, online: false, name: null, lastSeen: null, daemonProtocol: null } };
     }
     const fresh = !!machine.lastSeen && Date.now() - Date.parse(machine.lastSeen) < ONLINE_TTL_MS;
     const online = !!machine.online && fresh;
@@ -658,7 +646,6 @@ export class MachineGateway {
       reasoningEffort?: unknown;
       workdir?: unknown;
       agent?: unknown;
-      claim?: unknown;
       /** Validate-only (`pievo new --dry-run`): run every check, persist NOTHING,
        *  and return the normalized config + fire preview. Zero-exec preserved. */
       dryRun?: unknown;
@@ -679,23 +666,12 @@ export class MachineGateway {
         return { status: 400, body: { error: "create body must be an object" } };
       }
       const rawBody = body as Record<string, unknown>;
-      const { claim, dryRun, idempotencyKey, ...rawConfig } = rawBody;
+      const { dryRun, idempotencyKey, ...rawConfig } = rawBody;
       if (dryRun !== undefined && typeof dryRun !== "boolean") {
         return { status: 400, body: { error: "dryRun must be boolean when provided" } };
       }
       if (typeof idempotencyKey !== "string" || !/^[0-9a-f]{64}$/.test(idempotencyKey)) {
         return { status: 400, body: { error: "idempotencyKey is required and must be exactly 64 lowercase hex characters" } };
-      }
-
-      let intent: Awaited<ReturnType<typeof readClaimIntent>> = undefined;
-      if (Object.prototype.hasOwnProperty.call(rawBody, "claim")) {
-        if (typeof claim !== "string" || !isDeviceTokenShape(claim)) {
-          return { status: 400, body: { error: "claim must have the exact dk_<30 lowercase hex> shape" } };
-        }
-        intent = await readClaimIntent(claim);
-        if (!intent) return { status: 400, body: { error: "claim is unknown or expired" } };
-        if (machine.userId !== intent.userId) return { status: 403, body: { error: "connect-key was minted by a different user" } };
-        if (!(await store.isTeamMember(intent.teamId, machine.userId))) return { status: 403, body: { error: "not authorized to create loops in that team" } };
       }
 
       const validated = validateLoopCreate(rawConfig);
@@ -709,10 +685,8 @@ export class MachineGateway {
       if (existing?.machineId === machineId) {
         return { status: 200, body: { ok: true, id: existing.id, name: existing.name, idempotent: true, text: `loop: ${existing.name}\nid: ${existing.id}\nreplayed: true` } };
       }
-      const teamId = intent?.teamId ?? machine.teamId;
       const loop = await store.createLoop({
         userId: machine.userId,
-        teamId,
         machineId,
         ...row,
       });

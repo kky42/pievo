@@ -1,6 +1,6 @@
 # Pievo agent guide
 
-Pievo is a multi-user scheduled prompt runner and status ledger. The TanStack Start
+Pievo is a user-isolated scheduled prompt runner and status ledger. The TanStack Start
 server owns scheduling, queueing, auth, persistence, and byte serving; the
 `@kky42/pievo` daemon runs Claude Code, Codex, or Pi on a user's machine.
 
@@ -28,8 +28,10 @@ server owns scheduling, queueing, auth, persistence, and byte serving; the
 - Artifact sync accepts configured exact workdir-relative paths only: no scan or
   globbing. Enforce lexical and realpath containment, regular files, and the 10 MB
   per-file rule. Every configured path is an explicit upload decision.
-- Device tokens impersonate machines; run tokens authorize only report/help. Keep
-  auth/team checks enumeration-safe. `PIEVO_ROOTS` is an always-applied daemon cwd
+- Device tokens impersonate machines; run tokens authorize only report/help. Auth
+  mode scopes human access by stored `userId`; keep ownership checks enumeration-safe.
+  Open mode grants shared administration to every caller and must remain network-
+  restricted. `PIEVO_ROOTS` is an always-applied daemon cwd
   jail, and server roots may only narrow it.
 - Exactly one server process owns a database. Production must explicitly select
   PGlite when `DATABASE_URL` is absent. Keep heavy/native server dependencies out of
@@ -59,7 +61,7 @@ server owns scheduling, queueing, auth, persistence, and byte serving; the
 - `packages/server/src/db/{schema,store}.ts`: baseline schema and loop-locked state
   transitions.
 - `packages/server/src/server/boot.ts`: singleton scheduler/gateway/blob-store boot.
-- `packages/server/src/auth.ts`: request/team authorization.
+- `packages/server/src/auth.ts`: request/user ownership authorization.
 - `packages/server/src/types.ts`: client-safe shared types and coding-agent enum.
 - `packages/daemon/src/{route,runner,cli-client}.ts`: command routing, provider spawn,
   and server-rendered CLI transport.
@@ -88,8 +90,9 @@ PIEVO_REAL_LLM_TESTS=1 pnpm --filter @kky42/pievo test src/telemetry.real.test.t
 
 - Keep SQL migrations reviewed: `0000_baseline` defines the original schema and
   deployed schema changes append forward migrations. Do not commit generated Drizzle
-  snapshots. Hosted migrations require a direct Postgres URL when runtime uses a
-  transaction pooler.
+  snapshots. Back up before destructive migrations and coordinate incompatible server
+  upgrades; ownership-removal migrations must document access loss. Hosted migrations
+  require a direct Postgres URL when runtime uses a transaction pooler.
 - `server-v*` publishes only `@kky42/pievo-server`; `v*` publishes only
   `@kky42/pievo`. Tag and package versions must match.
 - Publishing uses npm OIDC/trusted publishing and repository provenance. Do not add

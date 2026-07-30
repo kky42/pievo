@@ -72,7 +72,7 @@ describe("pievo CLI dispatch", () => {
     expect(stop.stdout).toContain("daemon confirms cancellation");
     expect(del.stdout).toContain("Local project files are never deleted");
     expect(del.stdout).toContain("prior Delete request");
-    expect(del.stdout).toContain("team-owner authority");
+    expect(del.stdout).toContain("this machine's owner authority");
     expect(run.stdout).toContain("without pausing its loop");
   });
 

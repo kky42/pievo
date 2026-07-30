@@ -42,9 +42,9 @@ function sha256(s: string | Buffer): string {
 async function seed() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = await store.createLoop({ workdir: "/work",
-    userId: "u1", teamId: "team-u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true,
+    userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true,
     artifacts: ["report.md", "a.md", "b.md", "c.md", "gone.md", "new.md", "keep.md", "blob.bin", "huge.txt", "first.md"],
   });
   return { token, machineId, loop };

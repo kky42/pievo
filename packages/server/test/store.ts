@@ -1,5 +1,4 @@
 import type * as Store from "../src/db/store.js";
-import type { NewMachine } from "../src/db/schema.js";
 
 type StoreModule = typeof Store;
 type LoopSeedRequired = Pick<Store.CreateLoopInput, "userId" | "machineId" | "name" | "cron" | "workdir">;
@@ -24,7 +23,6 @@ export function testStore(store: StoreModule): TestStore {
         ? input.timezone
         : scheduleMode === "cron" ? "UTC" : null;
       return store.createLoop({
-        teamId: `team-${input.userId}`,
         prompt: "Test prompt.",
         statusKeep: "Keep the test result.",
         statusNoChange: "No test change was needed.",
@@ -38,7 +36,7 @@ export function testStore(store: StoreModule): TestStore {
       } as Store.CreateLoopInput);
     },
     createMachine(input) {
-      return store.createMachine({ teamId: `team-${input.userId}`, ...input } as MachineCreateInput);
+      return store.createMachine(input as MachineCreateInput);
     },
   };
 }

@@ -1,18 +1,10 @@
 import { useEffect, useState } from 'react'
-import { getConfig, mintClaim } from '../server/loopApi'
+import { getConfig, mintConnectKey } from '../server/loopApi'
 import { daemonConnectCommand } from '../lib/daemonCommands'
 import { Modal, ModalHead } from './Modal'
 import { btnSm } from './ui'
 
-export function ComposeModal({
-  open,
-  onClose,
-  teamId,
-}: {
-  open: boolean
-  onClose: () => void
-  teamId?: string
-}) {
+export function ComposeModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [token, setToken] = useState<string | null>(null)
   const [config, setConfig] = useState<{ pievoCli: string; customCli: boolean } | null>(null)
   const [copied, setCopied] = useState(false)
@@ -39,7 +31,7 @@ export function ComposeModal({
     void getConfig()
       .then((value) => { if (active) setConfig(value) })
       .catch(() => { if (active) setConfigError(true) })
-    void mintClaim({ data: teamId })
+    void mintConnectKey()
       .then((result) => {
         if (!active) return
         if ('token' in result) setToken(result.token)
@@ -47,7 +39,7 @@ export function ComposeModal({
       })
       .catch(() => { if (active) setError('could not mint a connect key') })
     return () => { active = false }
-  }, [open, teamId])
+  }, [open])
 
   async function copyCommand() {
     try {

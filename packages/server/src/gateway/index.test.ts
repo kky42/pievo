@@ -103,16 +103,16 @@ function pollV4(
 
 test("machine status distinguishes an unregistered identity without rejecting its token", async () => {
   const unknown = await gateway().status(tokens.mintDeviceToken());
-  expect(unknown).toMatchObject({
+  expect(unknown).toEqual({
     status: 200,
     body: { registered: false, claimValid: false, online: false, name: null, lastSeen: null, daemonProtocol: null },
   });
 
-  const claim = tokens.mintDeviceToken();
-  await tokens.rememberConnectKey(claim, { userId: "u1", teamId: "team-personal-u1" });
-  expect(await gateway().status(claim)).toMatchObject({
+  const connectKey = tokens.mintDeviceToken();
+  await tokens.rememberConnectKey(connectKey, { userId: "u1" });
+  expect(await gateway().status(connectKey)).toEqual({
     status: 200,
-    body: { registered: false, claimValid: true },
+    body: { registered: false, claimValid: true, online: false, name: null, lastSeen: null, daemonProtocol: null },
   });
 
   const token = tokens.mintDeviceToken();
@@ -201,11 +201,10 @@ test("canonical create/edit expose one exclusive schedule union", async () => {
   expect((listed.body as any).loops).toEqual(json);
 });
 
-test("create transport requires exact idempotency/dryRun fields and rejects invalid explicit claims", async () => {
+test("create transport requires exact idempotency/dryRun fields and rejects removed claims", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await makeTeam("claim-team", ["u1"]);
-  const machine = await store.createMachine({ id: machineId, userId: "u1", teamId: "claim-team", name: "M", tokenHash: tokens.sha256(token), online: true });
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const config = {
     name: "Strict transport",
     schedule: { mode: "continuous", delayMinutes: 5 },
@@ -222,14 +221,9 @@ test("create transport requires exact idempotency/dryRun fields and rejects inva
   expect((await gw.createLoop(token, { ...config, idempotencyKey: "a".repeat(64), dryRun: "true" })).body)
     .toMatchObject({ error: "dryRun must be boolean when provided" });
 
-  for (const claim of [null, "", "dk_not-hex", tokens.mintDeviceToken()]) {
-    const result = await gw.createLoop(token, { ...config, idempotencyKey: "b".repeat(64), dryRun: true, claim });
-    expect(result.status).toBe(400);
-  }
-
-  const claim = tokens.mintDeviceToken();
-  await tokens.rememberConnectKey(claim, { userId: machine.userId, teamId: machine.teamId });
-  expect((await gw.createLoop(token, { ...config, idempotencyKey: "c".repeat(64), dryRun: true, claim })).status).toBe(200);
+  const removedClaim = { ...config, idempotencyKey: "b".repeat(64), dryRun: true, claim: tokens.mintDeviceToken() };
+  const result = await gw.createLoop(token, removedClaim);
+  expect(result).toMatchObject({ status: 400, body: { error: expect.stringContaining("unknown field(s): claim") } });
   expect(await store.loopsForMachine(machineId)).toHaveLength(0);
 });
 
@@ -317,18 +311,6 @@ test("three ordinary errors trigger the failure-streak pause", async () => {
   expect(await store.getLoop(seeded.loop.id)).toMatchObject({ enabled: false, pauseCause: { kind: "failure-streak", count: 3, runId: currentRun.id } });
 });
 
-/** Insert a team (+ optional member rows) directly, bypassing store.ensureTeam's
- *  memo/rename side effects so each test controls membership precisely. */
-async function makeTeam(id: string, memberUserIds: string[] = []): Promise<void> {
-  const ts = new Date().toISOString();
-  await (db.client as any).exec(`INSERT INTO teams (id, name, owner_user_id, created_at) VALUES ('${id}', '${id}', NULL, '${ts}') ON CONFLICT DO NOTHING`);
-  for (const u of memberUserIds) {
-    await (db.client as any).exec(
-      `INSERT INTO team_members (id, team_id, user_id, role, created_at) VALUES ('${id}:${u}', '${id}', '${u}', 'member', '${ts}') ON CONFLICT DO NOTHING`,
-    );
-  }
-}
-
 async function seededLoop() {
   const machine = (await store.createMachine({ id: "m-gateway", userId: "u1", name: "M", tokenHash: "h", online: true }));
   const loop = (await createLoop({
@@ -414,7 +396,7 @@ test("a machine's bound loops gate its deletion (loopsForMachine drains to empty
   // An executing loop requires explicit authority retirement before deletion.
   (await store.forceDeleteLoop(loop.id));
   expect((await store.loopsForMachine(machine.id))).toHaveLength(0);
-  expect((await store.deleteMachine(machine.id))).toBe(true);
+  expect(await store.forceDeleteMachine(machine.id)).toEqual({ state: "deleted", loopIds: [] });
 });
 
 
@@ -558,39 +540,25 @@ test("pollV4 with the supported daemon version can claim pending work", async ()
   expect((await store.getRun(secondRun.id))?.phase).toBe("pending");
 });
 
-test("createLoop uses the claim intent team instead of the machine home team", async () => {
-  await makeTeam("team-home", ["u1"]);
-  await makeTeam("team-target", ["u1"]);
+test("createLoop always persists the authenticated machine owner", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", teamId: "team-home", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const claim = tokens.mintDeviceToken();
-  await tokens.rememberConnectKey(claim, { userId: "u1", teamId: "team-target" });
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
 
   const result = await gateway().createLoop(token, {
-    name: "Targeted",
+    name: "Machine owner loop",
     schedule: { mode: "continuous", delayMinutes: 5 },
     workdir: "/work/project",
     agent: "claude-code",
     prompt: "Inspect the project.",
     statusDefinitions: { keep: "keep", noChange: "none", block: "blocked" },
-    claim,
     idempotencyKey: "d".repeat(64),
   });
 
   expect(result.status).toBe(200);
-  expect(await store.getLoop((result.body as { id: string }).id)).toMatchObject({ teamId: "team-target", machineId });
-});
-
-test("listMachinesForTeam is membership-scoped — a machine shows in its owner's team regardless of its home team", async () => {
-  (await makeTeam("team-lm", ["u1"])); // only u1 is a member
-  const t1 = tokens.mintDeviceToken();
-  const m1 = tokens.machineIdFromToken(t1);
-  (await store.createMachine({ id: m1, userId: "u1", teamId: "team-u1", name: "Mine", tokenHash: tokens.sha256(t1), online: true }));
-  const t2 = tokens.mintDeviceToken();
-  (await store.createMachine({ id: tokens.machineIdFromToken(t2), userId: "u2", teamId: "team-u2", name: "Other", tokenHash: tokens.sha256(t2), online: true }));
-
-  expect((await store.listMachinesForTeam("team-lm")).map((m) => m.id)).toEqual([m1]);
+  const loop = await store.getLoop((result.body as { id: string }).id);
+  expect(loop).toMatchObject({ userId: "u1", machineId });
+  expect(loop).not.toHaveProperty("teamId");
 });
 
 async function seededMachine() {
@@ -941,7 +909,7 @@ test("report clips valid diagnostic strings and durably rejects a non-string err
 test("poll persists the daemon version, updating only when it changes", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await tokens.rememberConnectKey(token, { userId: "shared", teamId: store.teamIdForUser("shared") });
+  await tokens.rememberConnectKey(token, { userId: "shared" });
   await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64", version: "0.8.0" } });
   expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.8.0");
   await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64", version: "0.9.0" } });
@@ -1070,12 +1038,14 @@ test("cli device run stop preserves loop state and reports terminal runs truthfu
   expect((await store.getRun(run.id))?.phase).toBe("running");
 });
 
-test("cli force delete requires prior request, explicit marker, and team-owner authority", async () => {
+test("cli force delete requires a prior request, explicit marker, and the loop machine", async () => {
   const { deviceToken, loop } = await seededCli();
-  await store.ensureTeam("team-cli", "CLI", "u1");
-  await store.updateLoop(loop.id, { teamId: "team-cli" });
   await store.updateMachine(loop.machineId, { daemonProtocol: 4 });
+  const other = await seededCli();
   const gw = gateway();
+
+  const crossMachine = await gw.cli(deviceToken, ["delete", other.loop.id, "--force", "--confirmation", "delete-server-data-anyway"]);
+  expect(crossMachine.status).toBe(404);
 
   const noRequest = await gw.cli(deviceToken, ["delete", loop.id, "--force", "--confirmation", "delete-server-data-anyway"]);
   expect(noRequest.status).toBe(409);
@@ -1086,17 +1056,13 @@ test("cli force delete requires prior request, explicit marker, and team-owner a
   expect(noMarker.status).toBe(400);
   expect(textOf(noMarker)).toContain("force delete confirmation required");
 
-  await store.addTeamMember("team-cli", "u2", "owner");
-  expect(await store.setTeamMemberRoleGuarded("team-cli", "u1", "member")).toBe("ok");
-  const notOwner = await gw.cli(deviceToken, ["delete", loop.id, "--force", "--confirmation", "delete-server-data-anyway"]);
-  expect(notOwner.status).toBe(403);
-  expect(textOf(notOwner)).toContain("team owner");
+  const forced = await gw.cli(deviceToken, ["delete", loop.id, "--force", "--confirmation", "delete-server-data-anyway"]);
+  expect(forced.status).toBe(200);
+  expect(await store.getLoop(loop.id)).toBeUndefined();
 });
 
 test("cli force delete logs, reports reachability truthfully, and honors a false store result", async () => {
   const first = await seededCli();
-  await store.ensureTeam("team-force", "Force", "u1");
-  await store.updateLoop(first.loop.id, { teamId: "team-force" });
   await store.updateMachine(first.loop.machineId, { daemonProtocol: 4, online: false, lastSeen: null });
   await store.requestDeleteLoop(first.loop.id);
   const audit: Array<Record<string, unknown>> = [];
@@ -1108,7 +1074,6 @@ test("cli force delete logs, reports reachability truthfully, and honors a false
   expect(audit).toEqual([expect.objectContaining({ action: "force-delete", loopId: first.loop.id, machineReachability: "offline" })]);
 
   const online = await seededCli();
-  await store.updateLoop(online.loop.id, { teamId: "team-force" });
   await store.updateMachine(online.loop.machineId, { online: true, lastSeen: new Date().toISOString() });
   await store.requestDeleteLoop(online.loop.id);
   const onlineForced = await gateway().cli(online.deviceToken, [
@@ -1119,7 +1084,6 @@ test("cli force delete logs, reports reachability truthfully, and honors a false
   expect(textOf(onlineForced)).not.toContain("machine is unreachable");
 
   const second = await seededCli();
-  await store.updateLoop(second.loop.id, { teamId: "team-force" });
   await store.requestDeleteLoop(second.loop.id);
   const failed = await gateway({ forceDeleteLoop: async () => false }).cli(second.deviceToken, [
     "delete", second.loop.id, "--force", "--confirmation", "delete-server-data-anyway",

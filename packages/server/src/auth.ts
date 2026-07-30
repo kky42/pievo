@@ -1,29 +1,24 @@
 /**
- * Better Auth with GitHub social login. Supplying the GitHub OAuth credentials
- * enables authentication; `PIEVO_ALLOWED_LOGINS` optionally narrows who may sign
- * in. Authenticated data is team-scoped, while `userId` retains creator/owner
- * attribution. With no GitHub credentials the local server runs in open mode.
+ * Better Auth with GitHub social login. Supplying GitHub OAuth credentials
+ * enables authentication; `PIEVO_ALLOWED_LOGINS` optionally narrows who may
+ * sign in. Auth mode isolates data by signed-in user. Without GitHub
+ * credentials, the server is one shared open-mode workspace.
  */
 import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 
 import { db } from "./db/index.js";
-import * as store from "./db/store.js";
 import { loginGateEnabled } from "./lib/loginGate.js";
 
 const clientId = process.env.GITHUB_CLIENT_ID?.trim();
 const clientSecret = process.env.GITHUB_CLIENT_SECRET?.trim();
 
-/** Auth is enforced only when a GitHub OAuth app is configured. Single source of
- *  the condition is `loginGateEnabled()` — the machine-enrollment guard reads it
- *  live so the two can never drift. */
+/** Keep the web-session gate and machine-enrollment gate on one live condition. */
 export const authEnabled = loginGateEnabled();
 
-// The session-signing secret. With the gate ON a real secret is REQUIRED —
-// falling back to the public dev constant would let anyone forge sessions, so
-// refuse to boot instead of running insecurely. Open mode (no gate ⇒ no
-// sessions worth forging) keeps the dev fallback for zero-config local runs.
+// A public fallback would let callers forge auth-mode sessions. Open mode has
+// no login sessions and retains the fallback for zero-config local operation.
 const authSecret = process.env.PIEVO_AUTH_SECRET?.trim();
 if (authEnabled && !authSecret) {
   throw new Error(
@@ -31,18 +26,15 @@ if (authEnabled && !authSecret) {
   );
 }
 
-const allowlist = (process.env.PIEVO_ALLOWED_LOGINS || "")
-  .split(",")
-  .map((s) => s.trim().toLowerCase())
-  .filter(Boolean);
-
 /**
- * Whether an email may sign in. An empty allowlist means "allow anyone" (open
- * mode). Each allowlist entry is either a full email (exact match) or a DOMAIN
- * WILDCARD — `@example.com` or `*@example.com` — matching any address at that
- * domain (so `*@example.com` admits the whole team without listing each one).
+ * An empty allowlist permits any GitHub-authenticated user. Entries may be full
+ * email addresses or domain wildcards (`@example.com` or `*@example.com`).
  */
 export function emailAllowed(email: string | null | undefined): boolean {
+  const allowlist = (process.env.PIEVO_ALLOWED_LOGINS || "")
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
   if (!allowlist.length) return true;
   const e = (email || "").toLowerCase();
   const at = e.indexOf("@");
@@ -53,105 +45,48 @@ export function emailAllowed(email: string | null | undefined): boolean {
   );
 }
 
-export function teamNameForEmail(email: string | null | undefined): string {
-  const local = (email || "").split("@")[0]?.trim();
-  return local ? `${local}'s Team` : "Personal Team";
+function rejectDisallowedEmail(email: string | null | undefined): never {
+  const normalized = (email || "").trim().toLowerCase();
+  throw new APIError("FORBIDDEN", {
+    message: `${normalized || "this account"} is not on the Pievo allowlist`,
+  });
 }
 
-const TEAM_COOKIE = "pievo.team";
-
-/**
- * The signed-in user (id + email) for the current server-fn request, or null when
- * no session. Reads the request via TanStack's async-local context, so it only
- * works inside a server fn / server route handler.
- */
+/** The Better Auth user for the current server request, or null without a session. */
 export async function currentUser(): Promise<{ id: string; email: string | null } | null> {
   const { getRequest } = await import("@tanstack/react-start/server");
   const session = await auth.api.getSession({ headers: getRequest().headers });
-  const u = session?.user;
-  return u ? { id: u.id, email: u.email ?? null } : null;
+  const user = session?.user;
+  return user ? { id: user.id, email: user.email ?? null } : null;
 }
 
 export async function currentUserId(): Promise<string | null> {
   return (await currentUser())?.id ?? null;
 }
 
-async function selectedTeam(): Promise<string | null> {
-  const { getRequest } = await import("@tanstack/react-start/server");
-  const raw = getRequest().headers.get("cookie") || "";
-  const v = new RegExp(`(?:^|;\\s*)${TEAM_COOKIE}=([^;]+)`).exec(raw)?.[1];
-  return v ? decodeURIComponent(v) : null;
-}
-
 export interface RequestScope {
   enforce: boolean;
   userId: string | null;
-  teamId: string;
 }
 
 /**
- * Per-request data scope. Machines and loops are scoped by `teamId`.
- * The active team is resolved from (in precedence order) an EXPLICIT team — the
- * `/t/<teamId>` route param, so a tab/bookmark pins its own team independent of
- * any cookie; otherwise the `pievo.team` cookie (only a last-used
- * default hint). Either source is VALIDATED here against membership, never
- * trusted blind, and falls back to the user's personal team.
- *
- * `explicitTeam` (when a non-empty string) wins over the cookie. An unauthorized
- * value falls through to the personal team exactly like a stale cookie, so the
- * caller can detect rejection by comparing the returned `teamId` to what it asked
- * for (see `canViewTeam` in loopApi) without this ever leaking another team's data.
+ * Auth mode uses the signed-in user as the sole tenant boundary. Open mode is
+ * intentionally unscoped and does not perform a session lookup.
  */
-export async function requestScope(explicitTeam?: string | null): Promise<RequestScope> {
-  const enforce = authEnabled;
-  if (!enforce) {
-    // Open mode ⇒ the single shared workspace; no sign-in, no switching.
-    // An explicit team from a /t/<id> URL is cosmetic here (nothing to scope to).
-    const teamId = store.teamIdForUser(null);
-    await store.ensureTeam(teamId, "Shared Workspace", null);
-    return { enforce, userId: null, teamId };
-  }
-
-  const user = await currentUser();
-  const userId = user?.id ?? null;
-  const personalTeam = store.teamIdForUser(userId);
-  // Ensure the personal/shared team exists and
-  // keep its name in sync with the email — also renames pre-existing teams.
-  await store.ensureTeam(personalTeam, userId ? teamNameForEmail(user?.email) : "Shared Workspace", userId);
-
-  // Explicit team (route param) takes precedence over the cookie; both are
-  // membership-validated below, so an explicit choice is no more trusted.
-  const sel = explicitTeam != null && explicitTeam !== "" ? explicitTeam : await selectedTeam();
-  // A specific team is honored only when the user is a MEMBER of it; otherwise
-  // fall back to the personal team.
-  if (sel && sel !== personalTeam && userId) {
-    if (await store.isTeamMember(sel, userId)) return { enforce, userId, teamId: sel };
-  }
-  return { enforce, userId, teamId: personalTeam };
+export async function requestScope(): Promise<RequestScope> {
+  if (!authEnabled) return { enforce: false, userId: null };
+  return { enforce: true, userId: await currentUserId() };
 }
 
 /**
- * Whether the request may view/act on a loop, by its owning team. The single
- * source for loop authorization, shared by the server fns (`ownedLoop`) and the
- * artifact download route so the gate can't drift between them.
- *
- * Authorization is by MEMBERSHIP in the loop's own team — NOT by the loop merely
- * matching the caller's active team. A user who belongs to team B can open a
- * direct link to a team-B loop while their active team is A, instead of getting a
- * spurious "not found" (the cross-team-link bug). Rules:
- *  - open mode ⇒ the single shared workspace, everything visible;
- *  - the active team is a no-DB fast path (requestScope already membership-
- *    validated the active-team cookie);
- *  - otherwise the user must be a MEMBER of the loop's team.
- * Async because the membership fall-through is a store lookup. A non-member (and a
- * signed-out request) is denied, indistinguishable from a nonexistent loop.
+ * Shared loop authorization used by server functions and raw artifact serving.
+ * A denied loop and an absent loop must remain externally indistinguishable.
  */
-export async function canAccessLoop(loopTeamId: string | null, scope: RequestScope): Promise<boolean> {
-  const { enforce, teamId, userId } = scope;
-  if (!enforce) return true;
-  if (loopTeamId === teamId) return true;
-  if (!loopTeamId || !userId) return false;
-  return store.isTeamMember(loopTeamId, userId);
+export function canAccessLoop(
+  loopUserId: string | null | undefined,
+  scope: Pick<RequestScope, "enforce" | "userId">,
+): boolean {
+  return !scope.enforce || (!!scope.userId && loopUserId === scope.userId);
 }
 
 export const auth = betterAuth({
@@ -165,22 +100,8 @@ export const auth = betterAuth({
     user: {
       create: {
         before: async (user) => {
-          // Login allowlist (empty ⇒ allow anyone). Closes the shared-workspace
-          // RCE hole: only listed people can sign in and thus reach machines.
-          // Entries may be full emails or domain wildcards (see `emailAllowed`).
-          if (!emailAllowed(user.email)) {
-            const email = (user.email || "").toLowerCase();
-            throw new APIError("FORBIDDEN", { message: `${email} is not on the Pievo allowlist` });
-          }
+          if (!emailAllowed(user.email)) rejectDisallowedEmail(user.email);
           return { data: user };
-        },
-        after: async (user) => {
-          try {
-            const teamId = store.teamIdForUser(user.id);
-            await store.ensureTeam(teamId, teamNameForEmail(user.email), user.id);
-          } catch {
-            /* non-fatal: requestScope's lazy ensureTeam backstops this */
-          }
         },
       },
     },

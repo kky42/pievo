@@ -1,11 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { canonicalJson, coerceAgent, cronLooksValid, idempotencyKey, runCreate } from "./create.js";
 
 const okResponse = (body: unknown) => ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
-const errResponse = (status: number, body: unknown) =>
-  ({ ok: false, status, json: async () => body }) as unknown as Response;
-
 function cfgJson(cfg: object): string {
   return JSON.stringify(cfg);
 }
@@ -72,33 +69,26 @@ describe("idempotencyKey / canonicalJson", () => {
     expect(idempotencyKey("dk_a", base)).not.toBe(idempotencyKey("dk_b", base));
   });
 
-  test("hashing the FULL resolved body closes the envelope-collision class (timezone/claim/agent all count)", () => {
+  test("hashing the full resolved body covers every transport and config field", () => {
     const body = { name: "Docs", prompt: "Check docs", schedule: { mode: "cron", timezone: "Europe/Paris" } };
     expect(idempotencyKey("dk_test", body)).toBe(idempotencyKey("dk_test", { ...body }));
     expect(idempotencyKey("dk_test", body)).not.toBe(idempotencyKey("dk_test", { ...body, schedule: { ...body.schedule, timezone: "America/New_York" } }));
-    expect(idempotencyKey("dk_test", { ...body, claim: "dk_teamA" })).not.toBe(idempotencyKey("dk_test", { ...body, claim: "dk_teamB" }));
+    expect(idempotencyKey("dk_test", body)).not.toBe(idempotencyKey("dk_test", { ...body, dryRun: true }));
     expect(idempotencyKey("dk_test", { ...body, agent: "claude-code" })).not.toBe(idempotencyKey("dk_test", { ...body, agent: "codex" }));
     expect(idempotencyKey("dk_test", body)).toBe(idempotencyKey("dk_test", { ...body, idempotencyKey: "whatever" }));
   });
 });
 
-describe("runCreate — sends the idempotency key on a real create, omits it on --dry-run", () => {
-  const prevToken = process.env.PIEVO_TOKEN;
-  beforeEach(() => {
-    process.env.PIEVO_TOKEN = "dk_test";
-  });
-  afterEach(() => {
-    if (prevToken === undefined) delete process.env.PIEVO_TOKEN;
-    else process.env.PIEVO_TOKEN = prevToken;
-  });
-
+describe("runCreate", () => {
+  const readActiveConnection = () => ({ serverUrl: "http://test", deviceToken: "dk_test" });
   const keyOf = (sent: any[]) => JSON.parse(sent[sent.length - 1].argv[2]).idempotencyKey as string | undefined;
 
   test("a real create stamps a 64-hex `idempotencyKey`, stable across a retry of the same config", async () => {
     const cfg = cfgJson(validConfig());
     const sent: any[] = [];
     const run = (json: string) =>
-      runCreate(["--json", json, "--server-url", "http://test"], {
+      runCreate(["--json", json], {
+        readActiveConnection,
         fetchImpl: async (_url: any, init: any) => {
           sent.push(JSON.parse((init as any).body as string));
           return okResponse({ ok: true, id: "loop-1", name: "X", text: "created: X (loop-1)", exitCode: 0 });
@@ -114,24 +104,38 @@ describe("runCreate — sends the idempotency key on a real create, omits it on 
     expect(keyOf(sent)).not.toBe(first);
   });
 
-  test("removed scalar envelope flags fail loudly", async () => {
+  test("removed scalar and connection override flags fail loudly", async () => {
     const fetchImpl = vi.fn();
-    expect(await runCreate(["--json", cfgJson(validConfig()), "--agent", "codex", "--server-url", "http://test"], { fetchImpl })).toBe(2);
-    expect(await runCreate(["--json", cfgJson(validConfig()), "--tz", "UTC", "--server-url", "http://test"], { fetchImpl })).toBe(2);
+    const deps = { fetchImpl, readActiveConnection };
+    expect(await runCreate(["--json", cfgJson(validConfig()), "--agent", "codex"], deps)).toBe(2);
+    expect(await runCreate(["--json", cfgJson(validConfig()), "--tz", "UTC"], deps)).toBe(2);
+    expect(await runCreate(["--json", cfgJson(validConfig()), "--connect-key", "dk_other"], deps)).toBe(2);
+    expect(await runCreate(["--json", cfgJson(validConfig()), "--server-url", "https://other.test"], deps)).toBe(2);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  test("requires the active connection instead of accepting a target override", async () => {
+    const fetchImpl = vi.fn();
+    expect(await runCreate(["--json", cfgJson(validConfig())], {
+      fetchImpl,
+      readActiveConnection: () => undefined,
+    })).toBe(2);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   test("agent is required and schedule must use the discriminated union", async () => {
     const fetchImpl = vi.fn();
-    expect(await runCreate(["--json", cfgJson(validConfig({ agent: undefined })), "--server-url", "http://test"], { fetchImpl })).toBe(2);
-    expect(await runCreate(["--json", cfgJson(validConfig({ schedule: undefined })), "--server-url", "http://test"], { fetchImpl })).toBe(2);
+    const deps = { fetchImpl, readActiveConnection };
+    expect(await runCreate(["--json", cfgJson(validConfig({ agent: undefined }))], deps)).toBe(2);
+    expect(await runCreate(["--json", cfgJson(validConfig({ schedule: undefined }))], deps)).toBe(2);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   test("--dry-run still carries the required exact idempotency transport field", async () => {
     const cfg = cfgJson(validConfig());
     let payload: any = null;
-    const code = await runCreate(["--json", cfg, "--dry-run", "--server-url", "http://test"], {
+    const code = await runCreate(["--json", cfg, "--dry-run"], {
+      readActiveConnection,
       fetchImpl: async (_url: any, init: any) => {
         payload = JSON.parse(JSON.parse((init as any).body as string).argv[2]);
         return okResponse({ ok: true, dryRun: true, text: "dry-run:\n  cron: 0 5 * * *", exitCode: 0 });

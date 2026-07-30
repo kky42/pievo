@@ -20,7 +20,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('../server/loopApi', () => ({
   getConfig: vi.fn(() => h.config!.promise),
-  mintClaim: vi.fn(async () => ({ token: 'dk_claim' })),
+  mintConnectKey: vi.fn(async () => ({ token: 'dk_connect' })),
 }))
 vi.mock('../server/machineFns', () => ({
   listMachines: vi.fn(async () => []),
@@ -69,7 +69,7 @@ describe('custom PIEVO_CLI config ordering', () => {
     const custom = 'tsx /repo/packages/daemon/src/cli.ts'
     await act(async () => h.config!.resolve({ pievoCli: custom, customCli: true }))
     expect(bodyText()).toContain(`${custom} daemon connect`)
-    expect(bodyText()).toContain('--connect-key dk_claim')
+    expect(bodyText()).toContain('--connect-key dk_connect')
     expect(bodyText()).toContain('Run this command in your terminal')
     expect(bodyText()).toContain('Start a new session')
     expect(bodyText()).toContain('start a new session in the project where the loop should run')
@@ -82,7 +82,7 @@ describe('custom PIEVO_CLI config ordering', () => {
     expect(copy.disabled).toBe(false)
   })
 
-  it('MachinesModal waits for config after a machine claim and then preserves the custom command verbatim', async () => {
+  it('MachinesModal waits for config after machine creation and then preserves the custom command verbatim', async () => {
     await act(async () => root.render(createElement(MachinesModal, { open: true, onClose: () => {} })))
     await settle()
     const connect = [...document.body.querySelectorAll('button')].find((b) => b.textContent === '+ Connect computer') as HTMLButtonElement

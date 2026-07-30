@@ -40,7 +40,7 @@ machine and uses its local files, tools, and provider credentials.
 ## Quick start
 
 Pievo has no default hosted service. This path runs the server and daemon on one
-machine; a team may later connect other machines to the same server.
+machine; you may later connect other machines to the same server.
 
 ### Prerequisites
 
@@ -50,6 +50,14 @@ machine; a team may later connect other machines to the same server.
 > **Local execution is powerful.** The daemon launches the selected coding agent in
 > unattended mode, where it can use the files, commands, and credentials available to
 > that process. Start with a disposable project or a restrictive `PIEVO_ROOTS` jail.
+
+> **Upgrade warning:** back up the database before upgrading across
+> `0002_remove_teams`. This destructive, backward-incompatible migration removes
+> team, membership, role, and invitation records while preserving each machine and
+> loop's stored `user_id`. Former team collaborators lose access to resources they
+> do not own by that field. Upgrade the server and database migration together; do
+> not run an older server binary afterward. Hosted Postgres migrates through the
+> direct prestart connection; PGlite migrates in-process during server boot.
 
 ### 1. Start a local server
 
@@ -154,10 +162,6 @@ Run exactly one server process and choose one database tier:
   `PIEVO_DATA_DIR` on durable storage. Production fails closed without this explicit
   opt-in so a lost database secret cannot silently create an empty database.
 
-> The `0001_add_pi_agent` forward migration upgrades existing agent constraints.
-> Hosted Postgres applies it through the direct prestart migration connection; PGlite
-> applies it in-process during server boot.
-
 Artifact bytes default to `<PIEVO_DATA_DIR>/blobs`. A complete `PIEVO_R2_*`
 configuration selects R2; `PIEVO_BLOB_STORE=local|r2|memory` can select explicitly.
 `memory` is an acknowledged data-loss mode and loses all artifact bytes at restart.
@@ -167,19 +171,23 @@ The database stores artifact metadata even when bytes use local or R2 storage.
 > directory, and back up local `blobs` with it. Use external Postgres for online
 > database backup facilities.
 
-### Authentication and teams
+### Access modes
 
 GitHub authentication is enabled only when both `GITHUB_CLIENT_ID` and
-`GITHUB_CLIENT_SECRET` are set. Then `PIEVO_AUTH_SECRET` is mandatory; also set the
+`GITHUB_CLIENT_SECRET` are set; setting exactly one makes startup fail rather than
+falling back to open mode. Then `PIEVO_AUTH_SECRET` is mandatory; also set the
 public `PIEVO_BASE_URL`. `PIEVO_ALLOWED_LOGINS` accepts exact emails or domain
 wildcards. An empty allowlist permits any GitHub user to sign in.
 
-> With GitHub credentials unset, Pievo is an open shared workspace. Do not expose that
-> mode to an untrusted network.
+In auth mode, the signed-in user is the isolation boundary: users can access only
+machines, loops, runs, and artifacts stored under their `user_id`. Sharing is not
+supported. Team creation, switching, membership, roles, and invitations do not exist.
 
-Authenticated users receive personal teams and may belong to additional teams. Loop
-and artifact reads are membership-scoped; machine device tokens remain visible only
-to the machine owner.
+> **Open mode is shared administrative access.** With GitHub credentials unset,
+> anyone who can reach the server can view and manage every resource, including
+> machine reconnect credentials. Restrict it to localhost, a trusted private
+> network, or an authenticated reverse proxy. Never expose open mode directly to the
+> public internet.
 
 ### Docker
 

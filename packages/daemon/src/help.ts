@@ -22,7 +22,7 @@ Loop setup and management
                           Create from the canonical config envelope (--json - reads stdin).
                           Required: name, schedule, workdir, agent, prompt,
                           statusDefinitions. Optional: model, reasoningEffort,
-                          artifacts, enabled, connect/server overrides.
+                          artifacts, enabled.
   pause <loop>            Pause future runs; the current run continues.
   start <loop>            Start a paused loop using its existing schedule.
   stop <loop>             Pause, cancel queued work, and request run termination.
@@ -59,7 +59,7 @@ const VERB_USAGE: Record<string, string> = {
   "daemon stop": "pievo daemon stop [--force]\n  Default waits for terminal-report durability; --force bounds the wait and may leave the last result uncertain.",
   "daemon restart": "pievo daemon restart [--force]\n  Stop then start the currently installed version. --force has the same durability risk as daemon stop.",
   "daemon status": "pievo daemon status\n  Show local daemon, server connectivity, run, and report diagnostics.",
-  new: `pievo new --json '<config>' [--dry-run] [--connect-key <dk_…>] [--server-url <url>]
+  new: `pievo new --json '<config>' [--dry-run]
   Use --json - to read the config from stdin.
 
 Canonical config
@@ -91,7 +91,7 @@ Canonical config
   delete: `pievo delete <loop> [--force]
   Stop first, then delete server history and synced artifact metadata.
   Local project files are never deleted. --force requires a prior Delete request,
-  team-owner authority, and explicit local confirmation; it may retire server
+  this machine's owner authority, and explicit local confirmation; it may retire server
   authority while a local process is still running.`,
   run: "pievo run stop <run>\n  Stop one pending or running run without pausing its loop. A running run changes state only after daemon confirmation.",
   log: "pievo log [<loop>] [--limit 1..20] [--status keep|no-change|block] [--phase done|error|canceled] [--run <index|UUID> [--diff]] [--json]\n  Show bounded run history or detail. <loop> defaults from the current workdir.",

@@ -211,15 +211,11 @@ export class CliGateway {
       if (!loop.deleteRequestedAt) return { status: 409, body: { error: "delete must be requested first" } };
       if (confirmation !== FORCE_DELETE_CONFIRMATION) return { status: 400, body: { error: "force delete confirmation required" } };
       const machine = await store.getMachine(machineId);
-      const actor = machine?.userId;
-      if (!loop.teamId || !actor || (await store.getTeamMember(loop.teamId, actor))?.role !== "owner") {
-        return { status: 403, body: { error: "only a team owner can force delete this loop" } };
-      }
       const reachability = machinePresence(!!machine?.online, machine?.lastSeen ?? null);
       const deleted = await this.forceDeleteLoop(loop.id);
       if (!deleted) return { status: 409, body: { error: "force delete failed; server data was not deleted" } };
       this.gateway.scheduler.removeLoop(loop.id);
-      this.destructiveLog({ action: "force-delete", loopId: loop.id, machineId, actorUserId: actor, machineReachability: reachability });
+      this.destructiveLog({ action: "force-delete", loopId: loop.id, machineId, actorUserId: loop.userId, machineReachability: reachability });
       return { status: 200, body: { text: forceDeleteWarning(reachability) } };
     }
     const target = await store.runningRunForLoop(loop.id);
@@ -495,7 +491,7 @@ const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
 
 const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
   new: {
-    syntax: "new --json '<config>' [--dry-run] [--connect-key <dk_…>] [--server-url <url>]",
+    syntax: "new --json '<config>' [--dry-run]",
     summary: `create a loop from the canonical envelope (keys: ${[...EDITABLE_LOOP_FIELDS].join(", ")}; agent required)`,
     help: [
       "Run `pievo new --json '{\"name\":\"Daily check\",\"schedule\":{\"mode\":\"cron\",\"cron\":\"0 8 * * *\",\"timezone\":\"UTC\",\"overlap\":\"skip\"},\"workdir\":\"<path>\",\"agent\":\"claude-code\",\"prompt\":\"Check the project.\",\"statusDefinitions\":{\"keep\":\"result retained\",\"noChange\":\"nothing changed\",\"block\":\"owner input required\"}}'` to create a loop",

@@ -1,8 +1,10 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { getAuthState } from '../server/loopApi'
-import { authClient, useSession } from '../lib/auth-client'
+import { useSession } from '../lib/auth-client'
 import { RunDetailView } from '../components/RunView'
 import { SignIn } from '../components/SignIn'
+import { OpenModeWarning } from '../components/OpenModeWarning'
+import { Loading } from '../components/ui'
 
 /**
  * Run detail PAGE — `/loops/$loopId/runs/$runId`. A standalone page (the trailing
@@ -11,19 +13,12 @@ import { SignIn } from '../components/SignIn'
  * modal or an inline panel. It resolves the run from the loop's detail payload
  * (reusing getLoopDetail) and the existing artifact diff.
  *
- * Auth-gated like the dashboard (`/`) so a logged-out/expired DEEP LINK shows the
- * sign-in CTA instead of a raw `loop not found` error from the blocked fetch.
+ * Auth-gated like the dashboard (`/`) so Better Auth's session hook keeps a
+ * logged-out or expired deep link from mounting the run view.
  */
 export const Route = createFileRoute('/loops/$loopId_/runs/$runId')({
   ssr: false,
-  loader: async () => {
-    const auth = await getAuthState()
-    if (auth.enabled) {
-      const { data: session } = await authClient.getSession()
-      if (!session) return { auth }
-    }
-    return { auth }
-  },
+  loader: async () => ({ auth: await getAuthState() }),
   component: RunDetailPage,
 })
 
@@ -31,8 +26,13 @@ function RunDetailPage() {
   const { loopId, runId } = Route.useParams()
   const { auth } = Route.useLoaderData() ?? { auth: { enabled: false } }
   const { data: session, isPending } = useSession()
+  if (auth.enabled && isPending) {
+    return <main className="mx-auto max-w-[1360px] px-8 pt-10"><Loading /></main>
+  }
+  if (auth.enabled && !session) return <SignIn callbackURL={`/loops/${loopId}/runs/${runId}`} />
   return (
-    <main className="mx-auto max-w-[1360px] px-8 pb-24 pt-10">
+    <main className="mx-auto max-w-[1360px] px-8 pb-24 pt-6">
+      {!auth.enabled && <OpenModeWarning className="mb-6" />}
       <div className="mb-5">
         <Link
           to="/loops/$loopId"
@@ -42,11 +42,7 @@ function RunDetailPage() {
           <span aria-hidden>←</span> Back to loop
         </Link>
       </div>
-      {auth?.enabled && !isPending && !session ? (
-        <SignIn callbackURL={`/loops/${loopId}/runs/${runId}`} />
-      ) : (
-        <RunDetailView loopId={loopId} runId={runId} />
-      )}
+      <RunDetailView loopId={loopId} runId={runId} />
     </main>
   )
 }

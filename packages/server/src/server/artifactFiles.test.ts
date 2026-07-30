@@ -43,9 +43,9 @@ function sha256(s: string | Buffer): string {
 async function seed() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", teamId: "team-u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = await store.createLoop({ workdir: "/work",
-    userId: "u1", teamId: "team-u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true,
+    userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true,
     artifacts: ["z.md", "a/b.txt", "logo.png", "big.bin", "keep.md", "data/raw.json", "huge.bin"],
   });
   return { token, machineId, loop };
@@ -135,21 +135,9 @@ test("readLoopArtifactBytes: path-safe (400), oversize/missing (404), valid byte
   expect((await artifacts.readLoopArtifactBytes(loop.id, "ghost.md")).status).toBe(404);
 });
 
-test("canAccessLoop authorizes by MEMBERSHIP, not the active team (cross-team-link fix)", async () => {
-  await store.ensureTeam("team-cas-a", "A", "u1");
-  await store.ensureTeam("team-cas-b", "B", "u1");
-  await store.ensureTeam("team-cas-c", "C", "u2");
-
-  const open = { enforce: false, userId: null, teamId: "team-shared" };
-  expect(await auth.canAccessLoop("team-x", open)).toBe(true);
-
-  const scoped = { enforce: true, userId: "u1", teamId: "team-cas-a" };
-  expect(await auth.canAccessLoop("team-cas-a", scoped)).toBe(true);
-  // The reported bug: a loop in team B, opened while active team = A. u1 IS a member
-  // of B, so it must OPEN — not return not-found.
-  expect(await auth.canAccessLoop("team-cas-b", scoped)).toBe(true);
-  expect(await auth.canAccessLoop("team-cas-c", scoped)).toBe(false);
-
-  const anon = { enforce: true, userId: null, teamId: "team-cas-a" };
-  expect(await auth.canAccessLoop("team-cas-b", anon)).toBe(false);
+test("canAccessLoop isolates owners in auth mode and shares loops in open mode", () => {
+  expect(auth.canAccessLoop("user-b", { enforce: false, userId: null })).toBe(true);
+  expect(auth.canAccessLoop("user-a", { enforce: true, userId: "user-a" })).toBe(true);
+  expect(auth.canAccessLoop("user-b", { enforce: true, userId: "user-a" })).toBe(false);
+  expect(auth.canAccessLoop("user-a", { enforce: true, userId: null })).toBe(false);
 });

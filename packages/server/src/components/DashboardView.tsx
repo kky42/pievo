@@ -1,61 +1,61 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
+import { useNavigate, useRouter } from '@tanstack/react-router'
 import { Tooltip } from '@base-ui/react/tooltip'
-import { listLoops, listMyTeams } from '../server/loopApi'
+import { listLoops } from '../server/loopApi'
 import { listMachines } from '../server/machineFns'
-import type { LoopSummary, MachineSummary, RunSummary, TeamsView } from '../types'
+import type { LoopSummary, MachineSummary, RunSummary } from '../types'
 import { LoopCard } from './LoopCard'
-import { TeamSwitcher } from './TeamSwitcher'
 import { MachinesModal } from './MachinesModal'
-import { TeamsModal } from './TeamsModal'
 import { ComposeModal } from './ComposeModal'
+import { OpenModeWarning } from './OpenModeWarning'
 import { PievoLogo } from './PievoLogo'
 import { GITHUB_URL, GitHubIcon } from './SocialLinks'
+import { signOut, useSession } from '../lib/auth-client'
 
 export interface DashboardData {
   loops: LoopSummary[]
   machines: MachineSummary[]
-  teams: TeamsView | undefined
 }
 
-/** Loops, machines, and teams change between polls.
- *
- *  `teamId` (the `/t/<id>` route's team, in id form or undefined in open mode)
- *  scopes every list fn EXPLICITLY - so a tab on /t/A and one on /t/B show
- *  different teams simultaneously, independent of the shared last-used cookie. */
-export async function fetchLiveData(teamId?: string) {
-  const [loops, machines, teams] = await Promise.all([
-    listLoops({ data: teamId }),
-    listMachines({ data: teamId }),
-    listMyTeams({ data: teamId }),
-  ])
-  return { loops, machines, teams }
+/** Loops and machines change between polls. Authorization is derived server-side
+ * from the current session; clients do not send tenant identifiers. */
+export async function fetchLiveData() {
+  const [loops, machines] = await Promise.all([listLoops(), listMachines()])
+  return { loops, machines }
 }
 
-/**
- * The dashboard body, shared by the `/` (open mode) and `/t/<teamId>` routes. It
- * renders from its own fetch-then-set poll state, seeded once from the route
- * loader's data, and scopes every fetch to `teamId` so the view is pinned to the
- * URL's team (multi-tab safe). The route mounts it with `key={teamId}` so a
- * team switch (a `/t/<id>` navigation) re-seeds state from the new loader data.
- */
-export function DashboardView({ teamId, initial }: { teamId?: string; initial: DashboardData }) {
+export function DashboardView({
+  initial,
+  mode,
+}: {
+  initial: DashboardData
+  mode: 'auth' | 'open'
+}) {
   // Render loader data until the first successful in-page refresh. This matters
   // when TanStack Router re-enters with cached data and then supplies its fresh
   // loader result: copying `initial` into a one-time state seed would ignore that
   // result and leave deleted loops visible until the next poll. Once fetched,
   // live data stays authoritative so an older loader result cannot roll it back.
-  const [live, setLive] = useState<{
-    loops: LoopSummary[]
-    machines: MachineSummary[]
-    teams: TeamsView | undefined
-  } | null>(null)
-  const { loops, machines, teams } = live ?? initial
+  const [live, setLive] = useState<DashboardData | null>(null)
+  const { loops, machines } = live ?? initial
   const online = machines.filter((m) => m.online).length
   const navigate = useNavigate()
+  const router = useRouter()
+  const { data: session } = useSession()
+  const [signingOut, setSigningOut] = useState(false)
   const [composeOpen, setComposeOpen] = useState(false)
   const [machinesOpen, setMachinesOpen] = useState(false)
-  const [teamsOpen, setTeamsOpen] = useState(false)
+
+  async function logout() {
+    setSigningOut(true)
+    try {
+      await signOut()
+      await navigate({ to: '/' })
+      await router.invalidate()
+    } finally {
+      setSigningOut(false)
+    }
+  }
 
   // Silent background refresh — fetch-then-set (like the detail pages), NOT
   // router.invalidate: invalidate re-runs the loader, whose Promise.all THROWS
@@ -64,18 +64,18 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
   // keeps the stale data on screen; the next tick retries.
   const refetch = useCallback(async () => {
     try {
-      setLive(await fetchLiveData(teamId))
+      setLive(await fetchLiveData())
     } catch {
       /* keep what we have; the next tick retries */
     }
-  }, [teamId])
+  }, [])
 
   // Poll, but never while a modal is open (avoid disrupting a compose in
   // progress). A ref keeps the interval reading current state. Speed up to 3s
   // while any loop is executing so its run block + Running badge surface (and
   // settle into a finished block) without a manual refresh.
   const openRef = useRef(false)
-  openRef.current = composeOpen || machinesOpen || teamsOpen
+  openRef.current = composeOpen || machinesOpen
   const anyRunning = loops.some((j) => j.running)
   useEffect(() => {
     const t = setInterval(
@@ -108,17 +108,19 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
         <div className="mx-auto flex max-w-[1180px] items-center gap-3 px-8 py-2.5">
           <PievoLogo size={30} />
           <span className="text-[18px] font-semibold tracking-[-0.015em] text-display">Pievo</span>
-          <TeamSwitcher data={teams} />
           <div className="flex-1" />
           <a href={GITHUB_URL} target="_blank" rel="noreferrer" aria-label="GitHub repository" title="GitHub" className={headerIconBtn}>
             <GitHubIcon className="size-[17px]" />
           </a>
-          {/* Team management is a gated feature (real identities) — the button
-              shows only when the user actually has teams (gate on). */}
-          {teams && teams.teams.length > 0 && (
-            <button onClick={() => setTeamsOpen(true)} className={headerBtn}>
-              Teams
-            </button>
+          {mode === 'auth' && (
+            <div className="flex items-center gap-2">
+              <span className="max-w-48 truncate text-label text-secondary" title={session?.user.email ?? session?.user.name ?? 'Account'}>
+                {session?.user.email ?? session?.user.name ?? 'Account'}
+              </span>
+              <button onClick={() => void logout()} disabled={signingOut} className={headerBtn}>
+                {signingOut ? 'Signing out…' : 'Sign out'}
+              </button>
+            </div>
           )}
           <button onClick={() => setMachinesOpen(true)} className={`${headerBtn} gap-1.5`}>
             <span className={`inline-block size-1.5 rounded-full ${online ? 'bg-rubik-green' : 'bg-disabled'}`} />
@@ -134,6 +136,7 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
       </header>
 
       <main className="mx-auto max-w-[1180px] px-8 pb-24">
+        {mode === 'open' && <OpenModeWarning className="mt-6" />}
         <section className="pb-2 pt-14 text-center">
           <h1 className="font-pixel text-[clamp(28px,4.5vw,38px)] leading-[1.15] text-display">What should happen while you sleep?</h1>
           <div className="mt-7"><button onClick={() => setComposeOpen(true)} className="inline-flex cursor-pointer items-center gap-1.5 rounded-full bg-display px-6 py-2.5 text-body font-medium text-paper transition-opacity hover:opacity-85">Start a new loop <span aria-hidden>→</span></button></div>
@@ -162,15 +165,9 @@ export function DashboardView({ teamId, initial }: { teamId?: string; initial: D
         )}
       </main>
 
-      <ComposeModal
-        open={composeOpen}
-        teamId={teamId}
-        onClose={() => setComposeOpen(false)}
-      />
+      <ComposeModal open={composeOpen} onClose={() => setComposeOpen(false)} />
 
-      <MachinesModal open={machinesOpen} onClose={() => setMachinesOpen(false)} teamId={teamId} />
-
-      <TeamsModal open={teamsOpen} onClose={() => setTeamsOpen(false)} activeTeamId={teamId} />
+      <MachinesModal open={machinesOpen} onClose={() => setMachinesOpen(false)} />
     </Tooltip.Provider>
   )
 }
