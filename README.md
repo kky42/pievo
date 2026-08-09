@@ -6,9 +6,11 @@
 
 **Run a stored coding-agent prompt on a reliable schedule, on your own machine.**
 
-Pievo is a self-hosted scheduler and status ledger. Its server stores configuration,
-queues runs, and serves the web UI; the `@kky42/pievo` daemon executes Claude Code,
-Codex, or Pi locally with your credentials and tools.
+Pievo schedules Claude Code, Codex, or Pi while keeping execution, credentials, and
+project files on your machine.
+
+Pievo began as a fork of [Loopany](https://github.com/superdesigndev/loopany) by
+[Superdesign](https://github.com/superdesigndev).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/kky42/pievo?style=flat)](https://github.com/kky42/pievo/stargazers)
@@ -19,97 +21,53 @@ Codex, or Pi locally with your credentials and tools.
 
 ![Pievo dashboard showing an active scheduled Codex loop and recent outcomes](docs/assets/pievo-dashboard.png)
 
-<p align="center"><sub>Example dashboard; machine and working-directory labels are anonymized.</sub></p>
+<p align="center"><sub>Example dashboard with anonymized machine and working-directory labels.</sub></p>
 
 ## What Pievo does
 
-Each loop combines a stored prompt with:
+A loop combines a prompt, a cron or continuous schedule, a local project, and one of
+three outcomes: `keep`, `no-change`, or `block`. It can also publish selected artifact
+files for viewing and diffing in the web UI.
 
-- a cron schedule or continuous delay;
-- a local working directory and Claude Code, Codex, or Pi;
-- `keep`, `no-change`, and `block` outcomes;
-- optional exact artifact paths for viewing and diffing in the web UI.
-
-The daemon runs the selected coding agent once per delivery and reports the result
-through a durable local outbox. `keep` and `no-change` continue the schedule; `block`
-pauses it. **Run once** uses the same queue as scheduled work.
-
-The server never starts an LLM or executes user code. Execution stays on the connected
-machine and uses its local files, tools, and provider credentials.
+The server owns scheduling, queueing, status, and storage. The daemon runs the selected
+coding agent once per delivery and durably reports the result. The server never starts
+an LLM or executes user code.
 
 ## Quick start
 
-Pievo has no default hosted service. This path runs the server and daemon on one
-machine; you may later connect other machines to the same server.
+Pievo has no default hosted service. This starts both the server and execution daemon
+on one machine.
 
-### Prerequisites
+**Requirements:** Node.js `>=22.13` (`>=22.19` when using Pi) and Claude Code,
+Codex, or Pi installed and authenticated.
 
-- Node.js `>=22.13` (Pi 0.82.1 itself requires Node.js `>=22.19`)
-- Claude Code, Codex, or Pi installed and authenticated on the execution machine
+> The daemon launches coding agents unattended with the files, commands, and
+> credentials available to it. Start with a disposable project or restrict access
+> with `PIEVO_ROOTS`.
 
-> **Local execution is powerful.** The daemon launches the selected coding agent in
-> unattended mode, where it can use the files, commands, and credentials available to
-> that process. Start with a disposable project or a restrictive `PIEVO_ROOTS` jail.
-
-> **Upgrade warning:** back up the database before upgrading across
-> `0002_remove_teams`. This destructive, backward-incompatible migration removes
-> team, membership, role, and invitation records while preserving each machine and
-> loop's stored `user_id`. Former team collaborators lose access to resources they
-> do not own by that field. Upgrade the server and database migration together; do
-> not run an older server binary afterward. Hosted Postgres migrates through the
-> direct prestart connection; PGlite migrates in-process during server boot.
-
-### 1. Start a local server
+### 1. Start the server
 
 ```bash
 npm install -g @kky42/pievo-server@latest
 pievo-server start
 ```
 
-The server starts detached at <http://127.0.0.1:3000>. By default the published
-launcher uses embedded PGlite and stores the database, local artifact bytes, pid
-record, and log under `~/.pievo`.
+### 2. Follow the web UI
 
-```bash
-pievo-server status
-```
+Open <http://127.0.0.1:3000>, click **New Loop**, and follow the two numbered
+instructions in the dialog:
 
-### 2. Connect the execution machine and create a loop
+![New Loop dialog showing where to connect the daemon and how to invoke Pievo from each supported agent](docs/assets/pievo-new-loop.png)
 
-1. Open <http://127.0.0.1:3000> and select **New Loop**.
-2. Run the connect command shown in the modal in a terminal. The `dk_…` value is a
-   persistent machine bearer credential and appears in that command, so treat the
-   command and your shell history as secrets.
-3. Confirm that the command prints `daemon online` and `pievo skill: installed`.
-   Pievo copies the current CLI's bundled skill to the Claude and universal agent
-   user directories, replacing any same-named `pievo` skill. If installation was
-   skipped, run `pievo skill install` and verify with `pievo skill status`.
-4. Start a fresh Claude Code, Codex, or Pi session in the project you want to schedule,
-   then tell the agent: **“Create a Pievo loop.”**
+<p align="center"><sub>Example only. Your dialog supplies the real server URL and connect key.</sub></p>
 
-The fresh session discovers Pievo's owner skill, gathers and confirms the prompt,
-schedule, status meanings, and optional artifact paths, then validates and creates the
-loop. Close the modal and the dashboard's normal refresh will show it. A continuous
-loop is immediately eligible; a cron loop shows its next occurrence. Use **Run once**
-to exercise either schedule immediately.
+The generated command is a machine credential, so treat it and your shell history as
+secrets. It should report `daemon online` and `pievo skill: installed`; installation
+replaces any same-named `pievo` skill. If needed, run `pievo skill install`, then
+`pievo skill status`.
 
-Useful commands:
-
-```bash
-pievo                    # machine-local home
-pievo loops              # loops bound to this machine
-pievo show <loop> --full # stored configuration
-pievo log <loop>         # bounded run history
-pievo daemon status
-pievo --help
-```
-
-Upgrade the daemon explicitly:
-
-```bash
-npm install -g @kky42/pievo@latest
-pievo daemon restart
-```
+When setup finishes, the dashboard shows the loop and its next run. Use **Run once**
+to test it immediately.
 
 ## How it works
 
@@ -120,87 +78,67 @@ flowchart LR
   Daemon --> Agent["Claude Code, Codex, or Pi"]
 ```
 
-The server owns schedules and queued runs. The daemon polls for work, runs the coding
-agent locally, then durably retries its report until the server accepts it. Different
-loops may run concurrently, while each individual loop remains serialized.
+Different loops may run concurrently, while each loop remains serialized. `keep` and
+`no-change` continue its schedule; `block` pauses it.
 
 ## Run your own server
 
-### Published server launcher
-
 ```bash
-npm install -g @kky42/pievo-server@latest
 pievo-server start              # detached
-pievo-server start --foreground # container/supervisor/debugging
+pievo-server start --foreground # container, supervisor, or debugging
 pievo-server status
 pievo-server restart
 pievo-server stop
 ```
 
-The default bind is deliberately local-only. `--data-dir`, `--host`, and `--port`
-select the instance and bind; equivalent environment variables are
-`PIEVO_DATA_DIR`, `HOST`/`NITRO_HOST`, and
-`PORT`/`NITRO_PORT`/`PIEVO_PORT`. Restart preserves the
-recorded host and port unless flags or bind environment variables override them.
-Before binding to `0.0.0.0`, configure authentication and network controls.
+The published launcher binds to localhost and stores embedded PGlite, local artifact
+bytes, logs, and its pid record under `~/.pievo` by default. Use `--data-dir`, `--host`,
+and `--port` to override them.
 
-Upgrade explicitly; restart does not update npm:
+For production:
 
-```bash
-npm update -g @kky42/pievo-server
-pievo-server restart
-```
+- Run exactly one server process.
+- For embedded PGlite, leave `DATABASE_URL` unset, set `PIEVO_DB=pglite`, and persist
+  `PIEVO_DATA_DIR`.
+- For external Postgres, set `DATABASE_URL`. If it uses a transaction pooler, also set
+  `DIRECT_DATABASE_URL` to a direct connection for migrations.
+- Artifact bytes use `<PIEVO_DATA_DIR>/blobs` by default. Configure the complete
+  `PIEVO_R2_*` set for R2-backed storage.
+- Stop an embedded-PGlite server before backing up its `pgdata` and local `blobs`.
+  Use your Postgres provider's online backup facilities for external Postgres.
+- GitHub auth requires `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`,
+  `PIEVO_AUTH_SECRET`, and the public `PIEVO_BASE_URL`. Without GitHub auth, everyone
+  who can reach the server has shared administrative access, so keep it on localhost,
+  a trusted private network, or behind an authenticated reverse proxy.
 
-### Production database and storage
-
-Run exactly one server process and choose one database tier:
-
-- **External Postgres:** set `DATABASE_URL`. For a Supabase transaction pooler
-  (`:6543`), also set `DIRECT_DATABASE_URL` to the direct/session (`:5432`) URL;
-  migrations refuse to run through the transaction pooler.
-- **Embedded PGlite:** leave `DATABASE_URL` unset, set `PIEVO_DB=pglite`, and place
-  `PIEVO_DATA_DIR` on durable storage. Production fails closed without this explicit
-  opt-in so a lost database secret cannot silently create an empty database.
-
-Artifact bytes default to `<PIEVO_DATA_DIR>/blobs`. A complete `PIEVO_R2_*`
-configuration selects R2; `PIEVO_BLOB_STORE=local|r2|memory` can select explicitly.
-`memory` is an acknowledged data-loss mode and loses all artifact bytes at restart.
-The database stores artifact metadata even when bytes use local or R2 storage.
-
-> **Backups:** stop an embedded-PGlite server before copying its live `pgdata`
-> directory, and back up local `blobs` with it. Use external Postgres for online
-> database backup facilities.
-
-### Access modes
-
-GitHub authentication is enabled only when both `GITHUB_CLIENT_ID` and
-`GITHUB_CLIENT_SECRET` are set; setting exactly one makes startup fail rather than
-falling back to open mode. Then `PIEVO_AUTH_SECRET` is mandatory; also set the
-public `PIEVO_BASE_URL`. `PIEVO_ALLOWED_LOGINS` accepts exact emails or domain
-wildcards. An empty allowlist permits any GitHub user to sign in.
-
-In auth mode, the signed-in user is the isolation boundary: users can access only
-machines, loops, runs, and artifacts stored under their `user_id`. Sharing is not
-supported. Team creation, switching, membership, roles, and invitations do not exist.
-
-> **Open mode is shared administrative access.** With GitHub credentials unset,
-> anyone who can reach the server can view and manage every resource, including
-> machine reconnect credentials. Restrict it to localhost, a trusted private
-> network, or an authenticated reverse proxy. Never expose open mode directly to the
-> public internet.
+See [`.env.example`](.env.example) for all settings and retention controls.
 
 ### Docker
 
 ```bash
 docker build -t pievo .
-# Embedded database and local artifacts: persist /data; publish locally only.
+# Embedded database and local artifacts: persist /data and publish locally.
 docker run -p 127.0.0.1:3000:3000 -e PIEVO_DB=pglite -v pievo-data:/data pievo
-# External Postgres; local artifact bytes still require /data.
+# External Postgres; local artifact bytes still require /data unless R2 is configured.
 docker run -p 127.0.0.1:3000:3000 -e DATABASE_URL=... -e DIRECT_DATABASE_URL=... -v pievo-data:/data pievo
 ```
 
-External Postgres plus R2 needs no local data volume. [`fly.toml`](fly.toml) and
-[`fly.prod.toml`](fly.prod.toml) are optional single-process deployment examples.
+[`fly.toml`](fly.toml) and [`fly.prod.toml`](fly.prod.toml) are optional
+single-process deployment examples.
+
+## Upgrade
+
+```bash
+npm update -g @kky42/pievo-server
+pievo-server restart
+npm install -g @kky42/pievo@latest
+pievo daemon restart
+```
+
+> **Upgrading a former team-enabled installation:** back up the database before the
+> `0002_remove_teams` migration. It removes teams, memberships, roles, and invitations;
+> resources remain owned by their stored `user_id`. Upgrade the server and migration
+> together, and do not run an older server afterward.
 
 ## License
 
