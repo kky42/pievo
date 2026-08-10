@@ -7,8 +7,9 @@ Use the same Pievo command prefix used to connect the machine. Start from server
 <pievo-cli> show <loop> --json
 ```
 
-For a config change, patch only the fields requested by the user. Propose and confirm
-any changed product choices, then consult the installed contract and preview first:
+For a config change, including replacing a loop's tags, patch only the fields requested
+by the user. Propose and confirm any changed product choices, then consult the installed
+contract and preview first:
 
 ```bash
 <pievo-cli> edit --help

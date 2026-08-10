@@ -22,7 +22,7 @@ Use this flow:
 
 1. **Understand** the task, desired outcome, and requested operation.
 2. **Inspect** the project, connection, existing loop, and real paths; do not guess.
-3. **Propose** the prompt and any missing schedule, status, provider, or artifact choices.
+3. **Propose** the prompt and any missing tags, schedule, status, provider, or artifact choices.
 4. **Confirm** choices with product meaning or side effects.
 5. **Consult help** with `<pievo-cli> <command> --help` for the installed command contract.
 6. **Dry-run** create/edit operations and inspect the normalized preview.

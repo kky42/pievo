@@ -1,16 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useRouter } from '@tanstack/react-router'
 import { Tooltip } from '@base-ui/react/tooltip'
 import { listLoops } from '../server/loopApi'
 import { listMachines } from '../server/machineFns'
 import type { LoopSummary, MachineSummary, RunSummary } from '../types'
 import { LoopCard } from './LoopCard'
+import { LoopFilterBar } from './LoopFilterBar'
 import { MachinesModal } from './MachinesModal'
 import { ComposeModal } from './ComposeModal'
 import { OpenModeWarning } from './OpenModeWarning'
 import { PievoLogo } from './PievoLogo'
 import { GITHUB_URL, GitHubIcon } from './SocialLinks'
 import { signOut, useSession } from '../lib/auth-client'
+import { filterLoops, loopFilterKey, loopFilterOptions, type LoopFilter } from '../lib/loopFilters'
 
 export interface DashboardData {
   loops: LoopSummary[]
@@ -45,6 +47,7 @@ export function DashboardView({
   const [signingOut, setSigningOut] = useState(false)
   const [composeOpen, setComposeOpen] = useState(false)
   const [machinesOpen, setMachinesOpen] = useState(false)
+  const [filter, setFilter] = useState<LoopFilter>({ kind: 'all' })
 
   async function logout() {
     setSigningOut(true)
@@ -87,14 +90,14 @@ export function DashboardView({
     return () => clearInterval(t)
   }, [refetch, anyRunning])
 
-  const activeCount = loops.filter((loop) => loop.enabled && !loop.deleteRequestedAt).length
-  const pausedCount = loops.filter((loop) => !loop.enabled && !loop.deleteRequestedAt).length
-  const deletingCount = loops.filter((loop) => Boolean(loop.deleteRequestedAt)).length
-  const lifecycleCounts = [
-    `${activeCount} active`,
-    `${pausedCount} paused`,
-    ...(deletingCount ? [`${deletingCount} deleting`] : []),
-  ].join(' · ')
+  const filterOptions = useMemo(() => loopFilterOptions(loops), [loops])
+  const selectedFilterKey = loopFilterKey(filter)
+  const filteredLoops = useMemo(() => filterLoops(loops, filter), [loops, filter])
+  useEffect(() => {
+    if (filter.kind === 'tag' && !filterOptions.some((option) => option.key === selectedFilterKey)) {
+      setFilter({ kind: 'all' })
+    }
+  }, [filter, filterOptions, selectedFilterKey])
 
   const cardProps = () => ({
     onOpen: (id: string) => void navigate({ to: '/loops/$loopId', params: { loopId: id } }),
@@ -105,16 +108,16 @@ export function DashboardView({
   return (
     <Tooltip.Provider delay={120}>
       <header className="glass glass-bar sticky top-0 z-50">
-        <div className="mx-auto flex max-w-[1180px] items-center gap-3 px-8 py-2.5">
-          <PievoLogo size={30} />
-          <span className="text-[18px] font-semibold tracking-[-0.015em] text-display">Pievo</span>
+        <div className="mx-auto flex max-w-[1180px] items-center gap-2 px-4 py-2.5 sm:gap-3 sm:px-8">
+          <span className="shrink-0"><PievoLogo size={30} /></span>
+          <span className={`shrink-0 text-[18px] font-semibold tracking-[-0.015em] text-display ${mode === 'auth' ? 'hidden sm:inline' : ''}`}>Pievo</span>
           <div className="flex-1" />
-          <a href={GITHUB_URL} target="_blank" rel="noreferrer" aria-label="GitHub repository" title="GitHub" className={headerIconBtn}>
+          <a href={GITHUB_URL} target="_blank" rel="noreferrer" aria-label="GitHub repository" title="GitHub" className={`${headerIconBtn} hidden sm:inline-flex`}>
             <GitHubIcon className="size-[17px]" />
           </a>
           {mode === 'auth' && (
-            <div className="flex items-center gap-2">
-              <span className="max-w-48 truncate text-label text-secondary" title={session?.user.email ?? session?.user.name ?? 'Account'}>
+            <div className="flex shrink-0 items-center gap-2">
+              <span className="hidden max-w-48 truncate text-label text-secondary md:inline" title={session?.user.email ?? session?.user.name ?? 'Account'}>
                 {session?.user.email ?? session?.user.name ?? 'Account'}
               </span>
               <button onClick={() => void logout()} disabled={signingOut} className={headerBtn}>
@@ -122,9 +125,10 @@ export function DashboardView({
               </button>
             </div>
           )}
-          <button onClick={() => setMachinesOpen(true)} className={`${headerBtn} gap-1.5`}>
+          <button onClick={() => setMachinesOpen(true)} aria-label={`${online} ${online === 1 ? 'machine' : 'machines'} online`} className={`${headerBtn} gap-1.5 px-2 sm:px-3`}>
             <span className={`inline-block size-1.5 rounded-full ${online ? 'bg-rubik-green' : 'bg-disabled'}`} />
-            {online} {online === 1 ? 'machine' : 'machines'} online
+            <span className="sm:hidden">{online}</span>
+            <span className="hidden sm:inline">{online} {online === 1 ? 'machine' : 'machines'} online</span>
           </button>
           <button
             onClick={() => setComposeOpen(true)}
@@ -142,25 +146,26 @@ export function DashboardView({
           <div className="mt-7"><button onClick={() => setComposeOpen(true)} className="inline-flex cursor-pointer items-center gap-1.5 rounded-full bg-display px-6 py-2.5 text-body font-medium text-paper transition-opacity hover:opacity-85">Start a new loop <span aria-hidden>→</span></button></div>
         </section>
 
-        <div className="mb-5 mt-12 flex items-baseline gap-2.5">
-          <h2 className="text-body font-semibold text-display">Loops</h2>
-          <span className="text-label text-secondary">
-            {loops.length ? lifecycleCounts : ''}
-          </span>
+        <div className="mb-5 mt-12">
+          <LoopFilterBar options={filterOptions} selectedKey={selectedFilterKey} onSelect={setFilter} />
+          <div className="sr-only" aria-live="polite">Showing {filteredLoops.length} loops</div>
         </div>
 
-        {loops.length ? (
-          loops.map((j) => <LoopCard loop={j} {...cardProps()} key={j.id} />)
+        {filteredLoops.length ? (
+          filteredLoops.map((j) => <LoopCard loop={j} {...cardProps()} key={j.id} />)
+        ) : loops.length ? (
+          <div className="py-16 text-center">
+            <div className="text-[15px] text-secondary">No loops match this filter</div>
+            <button type="button" onClick={() => setFilter({ kind: 'all' })} className="mt-2 text-body font-medium text-interactive hover:underline">
+              Show all loops
+            </button>
+          </div>
         ) : (
           <div className="py-16 text-center">
-            <div className="text-[15px] text-secondary">
-              No loops yet
+            <div className="text-[15px] text-secondary">No loops yet</div>
+            <div className="mt-1.5 text-body text-disabled">
+              Create a scheduled prompt for a connected machine.
             </div>
-            {!loops.length && (
-              <div className="mt-1.5 text-body text-disabled">
-                Create a scheduled prompt for a connected machine.
-              </div>
-            )}
           </div>
         )}
       </main>
@@ -176,4 +181,4 @@ const headerBtn =
   'inline-flex shrink-0 cursor-pointer items-center rounded-full px-3 py-1.5 text-meta font-medium text-secondary transition-colors hover:bg-raised hover:text-display'
 
 const headerIconBtn =
-  'inline-flex shrink-0 cursor-pointer items-center rounded-full p-1.5 text-secondary transition-colors hover:bg-raised hover:text-display'
+  'shrink-0 cursor-pointer items-center rounded-full p-1.5 text-secondary transition-colors hover:bg-raised hover:text-display'

@@ -1,7 +1,8 @@
-import { forwardRef, useId, useImperativeHandle, useState } from 'react'
+import { forwardRef, useId, useImperativeHandle, useRef, useState } from 'react'
 import type { CodingAgent, LoopPayload, LoopSchedule, StatusDefinitions } from '../types'
-import { CODING_AGENTS } from '../types'
-import { inputCls, labelCls, sectionHeadCls, selectCls } from './ui'
+import { CODING_AGENTS, MAX_LOOP_TAGS } from '../types'
+import { validateLoopTags } from '../lib/loopTags'
+import { focusRing, inputCls, labelCls, sectionHeadCls, selectCls } from './ui'
 
 export interface LoopFormHandle {
   read: () => LoopPayload | null
@@ -9,6 +10,7 @@ export interface LoopFormHandle {
 
 export interface LoopFormSeed {
   name?: string
+  tags?: string[]
   schedule?: LoopSchedule
   workdir?: string
   agent?: CodingAgent
@@ -22,6 +24,8 @@ export interface LoopFormSeed {
 
 interface FormState {
   name: string
+  tags: string[]
+  tagDraft: string
   mode: 'cron' | 'continuous'
   cron: string
   timezone: string
@@ -45,6 +49,8 @@ function initState(initial?: LoopFormSeed): FormState {
   const schedule = initial?.schedule
   return {
     name: initial?.name ?? '',
+    tags: initial?.tags ?? [],
+    tagDraft: '',
     mode: schedule?.mode ?? 'cron',
     cron: schedule?.mode === 'cron' ? schedule.cron : '0 */3 * * *',
     timezone: schedule?.mode === 'cron' ? schedule.timezone : Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
@@ -96,7 +102,33 @@ function TextArea({ label, value, onChange, rows = 4, mono, hint }: { label: str
 export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed }>(function LoopForm({ initial }, ref) {
   const [form, setForm] = useState<FormState>(() => initState(initial))
   const [error, setError] = useState<string | null>(null)
+  const [tagError, setTagError] = useState<string | null>(null)
+  const tagsLabelId = useId()
+  const tagsHintId = useId()
+  const tagsErrorId = useId()
+  const tagGroupRef = useRef<HTMLDivElement>(null)
+  const tagInputRef = useRef<HTMLInputElement>(null)
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => setForm((current) => ({ ...current, [key]: value }))
+
+  const commitTagDraft = () => {
+    const additions = form.tagDraft.trim() ? [form.tagDraft] : []
+    if (!additions.length) {
+      set('tagDraft', '')
+      return
+    }
+    const result = validateLoopTags([...form.tags, ...additions])
+    if (!result.ok) {
+      setTagError(result.detail)
+      return
+    }
+    setForm((current) => ({ ...current, tags: result.value, tagDraft: '' }))
+    setTagError(null)
+    if (result.value.length === MAX_LOOP_TAGS) {
+      requestAnimationFrame(() => {
+        if (document.activeElement === document.body) tagGroupRef.current?.focus()
+      })
+    }
+  }
 
   useImperativeHandle(ref, () => ({
     read(): LoopPayload | null {
@@ -109,6 +141,15 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed }>(f
         setError(`${missing[0]} is required.`)
         return null
       }
+      const tagResult = validateLoopTags([
+        ...form.tags,
+        ...(form.tagDraft.trim() ? [form.tagDraft] : []),
+      ])
+      if (!tagResult.ok) {
+        setTagError(tagResult.detail)
+        setError(null)
+        return null
+      }
       const delayMinutes = Number(form.delayMinutes)
       if (form.mode === 'continuous' && (!Number.isInteger(delayMinutes) || delayMinutes < 1)) {
         setError('Continuous delay must be an integer of at least 1 minute.')
@@ -118,8 +159,10 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed }>(f
         ? { mode: 'cron', cron: form.cron.trim(), timezone: form.timezone.trim(), overlap: form.overlap }
         : { mode: 'continuous', delayMinutes }
       setError(null)
+      setTagError(null)
       return {
         name: form.name.trim(),
+        tags: tagResult.value,
         schedule,
         workdir: form.workdir.trim(),
         agent: form.agent,
@@ -137,6 +180,61 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed }>(f
       <div className="min-w-0">
         <Section title="Basics" />
         <TextField label="Name" value={form.name} onChange={(value) => set('name', value)} />
+        <div className="min-w-0">
+          <div id={tagsLabelId} className={labelCls}>Tags</div>
+          <div
+            ref={tagGroupRef}
+            role="group"
+            tabIndex={-1}
+            aria-labelledby={tagsLabelId}
+            aria-describedby={`${tagsHintId}${tagError ? ` ${tagsErrorId}` : ''}`}
+            aria-invalid={tagError ? 'true' : undefined}
+            className="flex min-h-10 flex-wrap items-center gap-1.5 rounded-control border border-wire bg-surface px-2.5 py-1.5 outline-none transition-shadow focus-within:border-transparent focus-within:shadow-focus"
+          >
+            {form.tags.map((tag) => (
+              <span key={tag} className="inline-flex h-6 max-w-full items-center gap-1 rounded-full bg-raised px-2.5 text-caption font-medium text-secondary">
+                <span className="max-w-52 truncate" title={tag}>{tag}</span>
+                <button
+                  type="button"
+                  aria-label={`Remove tag ${tag}`}
+                  onClick={() => {
+                    set('tags', form.tags.filter((value) => value !== tag))
+                    setTagError(null)
+                    requestAnimationFrame(() => (tagInputRef.current ?? tagGroupRef.current)?.focus())
+                  }}
+                  className={`-mr-1 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-disabled transition-colors hover:bg-surface hover:text-primary ${focusRing}`}
+                >
+                  <span aria-hidden>×</span>
+                </button>
+              </span>
+            ))}
+            {form.tags.length < MAX_LOOP_TAGS && (
+              <input
+                ref={tagInputRef}
+                aria-label="Add tag"
+                value={form.tagDraft}
+                placeholder={form.tags.length ? 'Add another…' : 'Add a tag…'}
+                onChange={(event) => {
+                  set('tagDraft', event.target.value)
+                  setTagError(null)
+                }}
+                onKeyDown={(event) => {
+                  if (event.nativeEvent.isComposing) return
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    commitTagDraft()
+                  } else if (event.key === 'Backspace' && !form.tagDraft && form.tags.length) {
+                    set('tags', form.tags.slice(0, -1))
+                  }
+                }}
+                onBlur={commitTagDraft}
+                className="h-6 min-w-28 flex-1 bg-transparent px-1 text-sm text-primary outline-none placeholder:text-disabled"
+              />
+            )}
+          </div>
+          <div id={tagsHintId} className={hintCls}>Up to {MAX_LOOP_TAGS}. Press Enter to add.</div>
+          {tagError && <div id={tagsErrorId} role="alert" className="mt-1 text-caption text-accent">{tagError}</div>}
+        </div>
         <div className="min-w-0">
           <label className={labelCls}>Schedule</label>
           <select aria-label="Schedule" className={selectCls} value={form.mode} onChange={(event) => set('mode', event.target.value as FormState['mode'])}>

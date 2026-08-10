@@ -40,6 +40,30 @@ test("canonical create requires the complete prompt-runner config", () => {
   expect(validateLoopCreate({ ...base, artifacts: "report.md" } as any)).toMatchObject({ ok: false });
 });
 
+test("canonical create and edit normalize optional loop tags", () => {
+  expect(validateLoopCreate({ ...base, tags: [" Project ", "ＤＡＩＬＹ"] })).toMatchObject({
+    ok: true,
+    value: { config: { tags: ["daily", "project"] }, row: { tags: ["daily", "project"] } },
+  });
+  expect(validateLoopCreate({ ...base, tags: ["active"] })).toMatchObject({ ok: false });
+
+  const loop = {
+    ...base,
+    id: "loop-tags",
+    tags: ["old"],
+    scheduleMode: "cron",
+    cron: "0 6 * * *",
+    timezone: "UTC",
+    cronOverlap: "skip",
+    continuousDelayMinutes: 1,
+  } as unknown as Loop;
+  expect(validateLoopEdit(loop, {})).toEqual({ ok: true, value: {} });
+  expect(validateLoopEdit(loop, { tags: [] })).toEqual({ ok: true, value: { tags: [] } });
+  expect(validateLoopEdit(loop, { tags: null })).toMatchObject({ ok: false });
+  expect(validateLoopEdit(loop, { tags: ["Beta", "alpha"] })).toEqual({ ok: true, value: { tags: ["alpha", "beta"] } });
+  expect(validateLoopEdit(loop, { tags: ["a", "b", "c", "d", "e"] })).toMatchObject({ ok: false });
+});
+
 test("Pi thinking is conditional and agent switches validate the effective edit state", () => {
   for (const reasoningEffort of ["off", "minimal", "low", "medium", "high", "xhigh", "max", null]) {
     expect(validateLoopCreate({ ...base, agent: "pi", reasoningEffort })).toMatchObject({ ok: true });

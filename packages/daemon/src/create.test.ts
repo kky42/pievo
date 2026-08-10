@@ -9,6 +9,7 @@ function cfgJson(cfg: object): string {
 
 const validConfig = (overrides: Record<string, unknown> = {}) => ({
   name: "Docs",
+  tags: ["daily", "docs"],
   schedule: { mode: "cron", cron: "0 5 * * *", timezone: "UTC", overlap: "skip" },
   workdir: "/tmp/docs",
   agent: "claude-code",
@@ -144,6 +145,7 @@ describe("runCreate", () => {
     });
     expect(code).toBe(0);
     expect(payload.idempotencyKey).toMatch(/^[0-9a-f]{64}$/);
+    expect(payload.tags).toEqual(["daily", "docs"]);
     expect(payload.dryRun).toBe(true);
   });
 });

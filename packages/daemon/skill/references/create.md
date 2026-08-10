@@ -18,6 +18,10 @@ Propose and confirm missing choices:
 - **Statuses:** define task-specific `keep`, `no-change`, and `block` outcomes. Block
   means owner attention is required; a successfully completed block report pauses the
   loop.
+- **Tags:** optionally choose up to four custom tags for dashboard filtering. Each
+  tag is at most 64 characters; the server normalizes NFKC lowercase, collapses
+  whitespace, sorts them, and rejects duplicates, invisible/control characters,
+  and all loops/active/paused/blocked.
 - **Artifacts:** choose only stable, exact files the user intends to upload. Do not
   configure secrets, directories, scans, or globs.
 - **Execution:** confirm the machine workdir, coding agent, optional provider settings,
@@ -33,6 +37,7 @@ prompt:
 <pievo-cli> new --json - --dry-run <<'JSON'
 {
   "name": "Daily project check",
+  "tags": ["daily", "project"],
   "schedule": {"mode":"cron","cron":"0 9 * * *","timezone":"UTC","overlap":"skip"},
   "workdir": "/absolute/path/to/project",
   "agent": "claude-code",
@@ -50,5 +55,5 @@ JSON
 
 Inspect the normalized preview and fix every rejection. Then run the same command
 without `--dry-run`, preserving any supplied server/connect options. Finally use the
-created loop identifier with `show --json` and summarize the actual schedule, workdir,
-agent, enabled state, and artifact uploads.
+created loop identifier with `show --json` and summarize the actual tags, schedule,
+workdir, agent, enabled state, and artifact uploads.

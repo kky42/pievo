@@ -19,9 +19,9 @@ Pievo began as a fork of [Loopany](https://github.com/superdesigndev/loopany) by
 
 </div>
 
-![Pievo dashboard showing an active scheduled Codex loop and recent outcomes](docs/assets/pievo-dashboard.png)
+![Pievo dashboard with lifecycle and tag filters across scheduled agent loops](docs/assets/pievo-dashboard.png)
 
-<p align="center"><sub>Example dashboard with anonymized machine and working-directory labels.</sub></p>
+<p align="center"><sub>Example dashboard with lifecycle and tag filters, using anonymized machine and working-directory labels.</sub></p>
 
 ## What Pievo does
 

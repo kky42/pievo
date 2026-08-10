@@ -52,6 +52,10 @@ export interface StatusDefinitions {
   block: string
 }
 
+export const MAX_LOOP_TAGS = 4
+export const MAX_LOOP_TAG_LENGTH = 64
+export const RESERVED_LOOP_TAGS = ['all loops', 'active', 'paused', 'blocked'] as const
+
 export interface RunSummary {
   id: string
   loopId: string
@@ -119,6 +123,7 @@ export interface LoopMachineSummary {
 export interface LoopSummary {
   id: string
   name: string
+  tags: string[]
   schedule: LoopSchedule
   workdir: string
   agent: CodingAgent
@@ -142,6 +147,7 @@ export interface LoopSummary {
 export interface LoopFull {
   id: string
   name: string
+  tags: string[]
   schedule: LoopSchedule
   workdir: string
   agent: CodingAgent
@@ -217,6 +223,7 @@ export interface RunDiffResult {
 
 export interface LoopPayload {
   name?: string
+  tags?: string[]
   schedule?: LoopSchedule
   workdir?: string
   agent?: CodingAgent

@@ -86,6 +86,7 @@ export const loops = pgTable(
     /** Execution machine (set at creation; no cross-machine fallback). */
     machineId: text("machine_id").notNull(),
     name: text("name").notNull(),
+    tags: text("tags").array().notNull().default(sql`ARRAY[]::text[]`),
     prompt: text("prompt").notNull(),
     statusKeep: text("status_keep").notNull(),
     statusNoChange: text("status_no_change").notNull(),
@@ -125,6 +126,8 @@ export const loops = pgTable(
     index("loops_machine_idx").on(t.machineId),
     index("delete_requested_loops").on(t.deleteRequestedAt).where(sql`${t.deleteRequestedAt} IS NOT NULL`),
     check("loops_agent_check", sql`${t.agent} IN ('claude-code', 'codex', 'pi')`),
+    check("loops_tags_count_check", sql`cardinality(${t.tags}) <= 4`),
+    check("loops_tags_reserved_check", sql`NOT (${t.tags} && ARRAY['all loops', 'active', 'paused', 'blocked']::text[])`),
     check("loops_schedule_mode_check", sql`${t.scheduleMode} IN ('cron', 'continuous')`),
     check("loops_cron_overlap_check", sql`${t.cronOverlap} IN ('skip', 'queue-one')`),
   ],

@@ -11,6 +11,7 @@ vi.mock('../server/loopApi', () => ({ loadOlderRuns: vi.fn(async () => []) }))
 const loop: LoopSummary = {
   id: 'loop-1',
   name: 'Active loop',
+  tags: [],
   schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' },
   workdir: '/tmp/project',
   agent: 'claude-code',
@@ -55,6 +56,15 @@ test('shows lifecycle and agent labels beside the loop name', async () => {
   expect(labels).toContain('Claude Code')
   expect(host!.textContent).not.toContain('·claude-code')
   expect([...host!.querySelectorAll('span')].find((element) => element.textContent === 'Active')?.className).toContain('bg-success-soft')
+})
+
+test('shows custom tags as neutral labels beside the loop metadata', async () => {
+  await renderLoop({ ...loop, tags: ['daily', 'project'] })
+
+  const labels = [...host!.querySelectorAll('span')].map((element) => element.textContent)
+  expect(labels).toContain('daily')
+  expect(labels).toContain('project')
+  expect([...host!.querySelectorAll('span')].find((element) => element.textContent === 'daily')?.className).toContain('bg-raised')
 })
 
 test('shows the shared schedule, machine, and execution metadata without duplicating the next run', async () => {

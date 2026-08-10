@@ -111,17 +111,19 @@ export function Pill({
   tone = 'neutral',
   dot,
   title,
+  className = '',
   children,
 }: {
   tone?: keyof typeof PILL_TONES
   dot?: 'pulse' | 'green'
   title?: string
+  className?: string
   children: ReactNode
 }) {
   return (
     <span
       title={title}
-      className={`inline-flex h-[22px] items-center gap-1.5 rounded-full px-2.5 text-caption font-medium ${PILL_TONES[tone]}`}
+      className={`inline-flex h-[22px] items-center gap-1.5 rounded-full px-2.5 text-caption font-medium ${PILL_TONES[tone]} ${className}`}
     >
       {dot && (
         <span

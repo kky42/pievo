@@ -167,6 +167,7 @@ test("canonical create/edit expose one exclusive schedule union", async () => {
   const gw = gateway();
   const config = {
     name: "Prompt runner",
+    tags: ["Project", "DAILY"],
     schedule: { mode: "cron", cron: "0 6 * * *", timezone: "UTC", overlap: "skip" },
     workdir: "/work/project",
     agent: "claude-code",
@@ -179,10 +180,10 @@ test("canonical create/edit expose one exclusive schedule union", async () => {
   const created = await gw.createLoop(token, config);
   expect(created.status).toBe(200);
   const id = (created.body as any).id;
-  expect(await store.getLoop(id)).toMatchObject({ prompt: config.prompt, cronOverlap: "skip", artifacts: config.artifacts });
+  expect(await store.getLoop(id)).toMatchObject({ prompt: config.prompt, cronOverlap: "skip", artifacts: config.artifacts, tags: ["daily", "project"] });
   expect((await gw.editLoop(token, id, { schedule: { mode: "continuous", delayMinutes: 5, cron: "0 8 * * *" } })).status).toBe(400);
-  expect((await gw.editLoop(token, id, { schedule: { mode: "continuous", delayMinutes: 5 } })).status).toBe(200);
-  expect(await store.getLoop(id)).toMatchObject({ scheduleMode: "continuous", continuousDelayMinutes: 5 });
+  expect((await gw.editLoop(token, id, { schedule: { mode: "continuous", delayMinutes: 5 }, tags: ["Ops"] })).status).toBe(200);
+  expect(await store.getLoop(id)).toMatchObject({ scheduleMode: "continuous", continuousDelayMinutes: 5, tags: ["ops"] });
 
   const cronCreated = await gw.createLoop(token, { ...config, name: "Cron runner", idempotencyKey: "c".repeat(64) });
   expect(cronCreated.status).toBe(200);
@@ -192,6 +193,7 @@ test("canonical create/edit expose one exclusive schedule union", async () => {
     { mode: "continuous", delayMinutes: 5 },
     config.schedule,
   ]);
+  expect(json.map((loop) => loop.tags)).toEqual([["ops"], ["daily", "project"]]);
   for (const loop of json) {
     expect(loop).not.toHaveProperty("cron");
     expect(loop).not.toHaveProperty("scheduleMode");
@@ -199,6 +201,33 @@ test("canonical create/edit expose one exclusive schedule union", async () => {
     expect(loop).not.toHaveProperty("timezone");
   }
   expect((listed.body as any).loops).toEqual(json);
+});
+
+test("owner CLI creates, edits, and shows normalized tags through the agent-facing path", async () => {
+  const token = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(token);
+  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  const gw = gateway();
+  const config = {
+    name: "Tagged CLI loop",
+    tags: ["Project", "DAILY"],
+    schedule: { mode: "cron", cron: "0 6 * * *", timezone: "UTC", overlap: "skip" },
+    workdir: "/work/project",
+    agent: "claude-code",
+    prompt: "Inspect the project.",
+    statusDefinitions: { keep: "keep", noChange: "none", block: "blocked" },
+    idempotencyKey: "d".repeat(64),
+  };
+
+  const created = await gw.cli(token, ["new", "--json", JSON.stringify(config)]);
+  expect(created.status).toBe(200);
+  const id = idIn(created);
+  expect(JSON.parse(textOf(await gw.cli(token, ["show", id, "--json"])))).toMatchObject({ tags: ["daily", "project"] });
+
+  expect((await gw.cli(token, ["edit", id, "--json", JSON.stringify({ tags: ["Ops", "DAILY"] })])).status).toBe(200);
+  expect(JSON.parse(textOf(await gw.cli(token, ["show", id, "--json"])))).toMatchObject({ tags: ["daily", "ops"] });
+  const listed = JSON.parse(textOf(await gw.cli(token, ["loops", "--json"])));
+  expect(listed).toEqual([expect.objectContaining({ id, tags: ["daily", "ops"] })]);
 });
 
 test("create transport requires exact idempotency/dryRun fields and rejects removed claims", async () => {

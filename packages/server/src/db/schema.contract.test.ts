@@ -39,6 +39,8 @@ test("canonical text enums are enforced by database CHECK constraints", async ()
     "loops_agent_check",
     "loops_cron_overlap_check",
     "loops_schedule_mode_check",
+    "loops_tags_count_check",
+    "loops_tags_reserved_check",
     "run_leases_state_check",
     "runs_agent_check",
     "runs_phase_check",
@@ -55,9 +57,24 @@ test("canonical text enums are enforced by database CHECK constraints", async ()
   expect(result.rows.map((row) => row.conname)).toEqual(expected);
 });
 
+test("loop tag database constraints protect count and reserved names", async () => {
+  const insert = (id: string, tags: string) => queryClient.query(`
+    INSERT INTO loops (
+      id, user_id, machine_id, name, tags, prompt, status_keep, status_no_change,
+      status_block, cron, schedule_mode, cron_overlap, continuous_delay_minutes,
+      workdir, agent, enabled, created_at, updated_at
+    ) VALUES (
+      '${id}', 'u', 'm', 'Tags', ${tags}, 'task', 'keep', 'none', 'block',
+      '0 0 1 1 *', 'cron', 'skip', 1, '/work', 'pi', true, 'now', 'now'
+    )
+  `);
+  await expect(insert("schema-too-many-tags", "ARRAY['a','b','c','d','e']::text[]")).rejects.toThrow();
+  await expect(insert("schema-reserved-tag", "ARRAY['active']::text[]")).rejects.toThrow();
+});
+
 test("all forward migrations are applied and Pi remains valid", async () => {
   const migrations = await queryClient.query<{ count: string }>(`SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations`);
-  expect(migrations.rows).toEqual([{ count: "3" }]);
+  expect(migrations.rows).toEqual([{ count: "4" }]);
 
   await queryClient.query("BEGIN");
   try {
@@ -75,12 +92,12 @@ test("all forward migrations are applied and Pi remains valid", async () => {
       INSERT INTO runs (id, loop_id, machine_id, agent, phase, requested_by, ts)
       VALUES ('schema-pi-run', 'schema-pi-loop', 'm', 'pi', 'running', 'owner', 'now')
     `);
-    const result = await queryClient.query<{ loop_agent: string; run_agent: string }>(`
-      SELECT loops.agent AS loop_agent, runs.agent AS run_agent
+    const result = await queryClient.query<{ loop_agent: string; run_agent: string; tags: string[] }>(`
+      SELECT loops.agent AS loop_agent, runs.agent AS run_agent, loops.tags
       FROM loops JOIN runs ON runs.loop_id = loops.id
       WHERE loops.id = 'schema-pi-loop'
     `);
-    expect(result.rows).toEqual([{ loop_agent: "pi", run_agent: "pi" }]);
+    expect(result.rows).toEqual([{ loop_agent: "pi", run_agent: "pi", tags: [] }]);
   } finally {
     await queryClient.query("ROLLBACK");
   }

@@ -589,6 +589,7 @@ function renderShowText(
   const block = detailBlock("loop", [
     ["id", env.id as Scalar],
     ["name", env.name as Scalar],
+    ["tags", { raw: JSON.stringify(env.tags) }],
     ["schedule", { raw: JSON.stringify(env.schedule) }],
     ["workdir", env.workdir as Scalar],
     ["agent", env.agent as Scalar],

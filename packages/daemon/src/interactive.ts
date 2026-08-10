@@ -69,7 +69,7 @@ export function buildPatch(flags: Flags): Record<string, unknown> {
 
 const USAGE =
   "pievo: usage: pievo edit <loop-id> [options]\n" +
-  "  --json '<json-object>'      patch name/schedule/workdir/agent/model/reasoningEffort/\n" +
+  "  --json '<json-object>'      patch name/tags/schedule/workdir/agent/model/reasoningEffort/\n" +
   "                              prompt/statusDefinitions/artifacts/enabled\n" +
   "                              e.g. '{\"schedule\":{\"mode\":\"continuous\",\"delayMinutes\":5}}'\n" +
   "  --dry-run                   validate + preview before/after, change nothing\n" +

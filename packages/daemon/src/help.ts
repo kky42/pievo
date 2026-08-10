@@ -21,7 +21,7 @@ Loop setup and management
   new --json '<config>' [--dry-run]
                           Create from the canonical config envelope (--json - reads stdin).
                           Required: name, schedule, workdir, agent, prompt,
-                          statusDefinitions. Optional: model, reasoningEffort,
+                          statusDefinitions. Optional: tags, model, reasoningEffort,
                           artifacts, enabled.
   pause <loop>            Pause future runs; the current run continues.
   start <loop>            Start a paused loop using its existing schedule.
@@ -32,7 +32,7 @@ Loop setup and management
   log [<loop>]            Show recent runs (--json, --limit N).
   loops [--fields a,b] [--json]
   edit <loop> --json '<patch>' [--dry-run]
-                          Patch schedule/prompt/status/artifact/provider config.
+                          Patch tags/schedule/prompt/status/artifact/provider config.
   skill [status|install]  Install or inspect the bundled owner-facing Pievo skill.
                           Install overwrites same-named user Pievo skills.
 
@@ -73,8 +73,12 @@ Canonical config
     prompt              non-empty string, stored unchanged
     statusDefinitions   non-empty keep, noChange, block strings
   Optional:
-    model, reasoningEffort  string or null for the provider default
-                            Pi thinking: off|minimal|low|medium|high|xhigh|max
+    tags                   up to 4 strings, 64 characters each; default []
+                           NFKC lowercase with collapsed whitespace, then sorted;
+                           no duplicates, invisible/control characters, or
+                           all loops|active|paused|blocked
+    model, reasoningEffort string or null for the provider default
+                           Pi thinking: off|minimal|low|medium|high|xhigh|max
     artifacts              exact workdir-relative file paths; default []
     enabled                boolean; default true
 
@@ -100,8 +104,8 @@ Canonical config
   edit: `pievo edit <loop> --json '<patch>' [--dry-run]
   Inspect first with: pievo show <loop> --json
 
-  Accepted fields: name, schedule, workdir, agent, model, reasoningEffort, prompt,
-  statusDefinitions, artifacts, enabled. Unknown fields are rejected.
+  Accepted fields: name, tags, schedule, workdir, agent, model, reasoningEffort,
+  prompt, statusDefinitions, artifacts, enabled. Unknown fields are rejected.
   The patch changes only supplied fields, except schedule and statusDefinitions each
   require a complete replacement value. Use null for the provider-default model or
   reasoning effort. Use --dry-run to preview normalized before/after values without

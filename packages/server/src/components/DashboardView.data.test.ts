@@ -31,10 +31,11 @@ vi.mock('./ComposeModal', () => ({ ComposeModal: () => null }))
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-function loopSummary(id: string, name: string): LoopSummary {
+function loopSummary(id: string, name: string, patch: Partial<LoopSummary> = {}): LoopSummary {
   return {
     id,
     name,
+    tags: [],
     schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' },
     workdir: '/tmp/project',
     agent: 'claude-code',
@@ -49,6 +50,7 @@ function loopSummary(id: string, name: string): LoopSummary {
     runs: [],
     runCount: 0,
     recentUsage: { runCount: 0, tokenCount: 0 },
+    ...patch,
   }
 }
 
@@ -114,10 +116,55 @@ describe('DashboardView loader and live data ordering', () => {
     expect(h.invalidate).toHaveBeenCalledOnce()
   })
 
+  it('filters by one lifecycle or custom tag while keeping global counts visible', async () => {
+    const loops = [
+      loopSummary('active', 'Active loop', { tags: ['daily', 'project'] }),
+      loopSummary('paused', 'Paused loop', { enabled: false, tags: ['ops'], pauseCause: { kind: 'owner', at: '2026-01-01T00:00:00Z' } }),
+      loopSummary('blocked', 'Blocked loop', { enabled: false, tags: ['daily'], pauseCause: { kind: 'blocked', at: '2026-01-01T00:00:00Z', runId: 'r1' } }),
+      loopSummary('untagged', 'Untagged loop'),
+    ]
+    await render(initial(loops))
+
+    const radios = () => [...host!.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')]
+    const radio = (label: string) => radios().find((item) => item.textContent?.startsWith(label))
+    expect(radios().map((item) => item.textContent)).toEqual([
+      'All Loops(4)', 'Active(2)', 'Paused(2)', 'Blocked(1)', 'daily(2)', 'ops(1)', 'project(1)',
+    ])
+    expect(radio('All Loops')?.getAttribute('aria-pressed')).toBe('true')
+
+    await act(async () => { radio('daily')!.click() })
+    expect(findLoop('active')).not.toBeNull()
+    expect(findLoop('blocked')).not.toBeNull()
+    expect(findLoop('paused')).toBeNull()
+    expect(findLoop('untagged')).toBeNull()
+    expect(radio('daily')?.getAttribute('aria-pressed')).toBe('true')
+
+    await act(async () => { radio('Paused')!.click() })
+    expect(findLoop('paused')).not.toBeNull()
+    expect(findLoop('blocked')).not.toBeNull()
+    expect(findLoop('active')).toBeNull()
+
+    await act(async () => { radio('Blocked')!.click() })
+    expect(findLoop('blocked')).not.toBeNull()
+    expect(findLoop('paused')).toBeNull()
+  })
+
+  it('returns to All Loops when polling removes the selected custom tag', async () => {
+    await render(initial([loopSummary('one', 'One', { tags: ['daily'] })]))
+    const daily = [...host!.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')].find((item) => item.textContent?.startsWith('daily'))!
+    await act(async () => { daily.click() })
+    expect(daily.getAttribute('aria-pressed')).toBe('true')
+
+    await render(initial([loopSummary('one', 'One')]))
+    await act(async () => { await Promise.resolve() })
+    expect(host!.querySelector('button[aria-pressed]')?.getAttribute('aria-pressed')).toBe('true')
+    expect(findLoop('one')).not.toBeNull()
+  })
+
   it('renders a refreshed loader result instead of retaining its one-time seed', async () => {
     await render(initial([loopSummary('deleted', 'Deleted loop')]))
     expect(findLoop('deleted')).not.toBeNull()
-    expect(host!.querySelector('h2')?.textContent).toBe('Loops')
+    expect(host!.querySelector('button[aria-pressed]')?.textContent).toBe('All Loops(1)')
 
     await render(initial([]))
 

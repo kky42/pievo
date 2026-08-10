@@ -46,6 +46,8 @@ describe("pievo CLI dispatch", () => {
     expect(r.stdout).toContain("mode: cron");
     expect(r.stdout).toContain("mode: continuous");
     expect(r.stdout).toContain("keep, noChange, block");
+    expect(r.stdout).toContain("tags                   up to 4 strings, 64 characters each");
+    expect(r.stdout).toContain("all loops|active|paused|blocked");
     expect(r.stdout).toContain("unknown fields are rejected");
   });
 
@@ -54,6 +56,7 @@ describe("pievo CLI dispatch", () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("pievo show <loop> --json");
     expect(r.stdout).toContain("complete replacement");
+    expect(r.stdout).toContain("name, tags, schedule");
     expect(r.stdout).toContain("--dry-run");
     expect(r.stdout).toContain("Unknown fields are rejected");
   });

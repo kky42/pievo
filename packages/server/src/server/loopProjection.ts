@@ -75,6 +75,7 @@ async function toLoopSummaryWithMachine(loop: Loop, machine: Machine | undefined
   return {
     id: loop.id,
     name: loop.name,
+    tags: loop.tags,
     schedule: scheduleFromLoop(loop),
     workdir: loop.workdir,
     agent: loop.agent,
@@ -116,6 +117,7 @@ function toLoopFull(loop: Loop): LoopFull {
   return {
     id: loop.id,
     name: loop.name,
+    tags: loop.tags,
     schedule: scheduleFromLoop(loop),
     workdir: loop.workdir,
     agent: loop.agent,

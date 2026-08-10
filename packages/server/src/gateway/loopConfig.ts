@@ -11,10 +11,12 @@ import type {
   StatusDefinitions,
 } from "../db/schema.js";
 import { CODING_AGENTS, coerceCodingAgent } from "../types.js";
+import { validateLoopTags } from "../lib/loopTags.js";
 import { WIRE_TEXT_CAP } from "./http.js";
 
 export const LOOP_CONFIG_FIELDS = [
   "name",
+  "tags",
   "schedule",
   "workdir",
   "agent",
@@ -33,6 +35,7 @@ type Validation<T> = { ok: true; value: T } | { ok: false; detail: string };
 
 export interface CanonicalLoopConfig {
   name: string;
+  tags: string[];
   schedule: LoopSchedule;
   workdir: string;
   agent: CodingAgent;
@@ -49,6 +52,7 @@ export interface ValidatedLoopCreate {
   row: Pick<
     NewLoop,
     | "name"
+    | "tags"
     | "cron"
     | "scheduleMode"
     | "cronOverlap"
@@ -256,6 +260,7 @@ export function canonicalLoopEnvelope(loop: Loop): CanonicalLoopConfig & { id: s
   return {
     id: loop.id,
     name: loop.name,
+    tags: loop.tags,
     schedule: scheduleFromLoop(loop),
     workdir: loop.workdir,
     agent: loop.agent,
@@ -275,6 +280,8 @@ export function validateLoopCreate(value: unknown): Validation<ValidatedLoopCrea
   if (unknown.length) return { ok: false, detail: `unknown field(s): ${unknown.join(", ")} — allowed: ${LOOP_CONFIG_FIELDS.join(", ")}` };
   const name = requiredText(raw.name, "name");
   if (!name.ok) return name;
+  const tags = validateLoopTags(raw.tags);
+  if (!tags.ok) return tags;
   const workdir = validateWorkdir(raw.workdir);
   if (!workdir.ok) return workdir;
   const prompt = requiredText(raw.prompt, "prompt", true);
@@ -294,6 +301,7 @@ export function validateLoopCreate(value: unknown): Validation<ValidatedLoopCrea
   if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") return { ok: false, detail: "enabled must be boolean" };
   const config: CanonicalLoopConfig = {
     name: name.value,
+    tags: tags.value,
     schedule: schedule.value,
     workdir: workdir.value,
     agent,
@@ -310,6 +318,7 @@ export function validateLoopCreate(value: unknown): Validation<ValidatedLoopCrea
       config,
       row: {
         name: config.name,
+        tags: config.tags,
         ...rowSchedule(config.schedule),
         workdir: config.workdir,
         agent: config.agent,
@@ -336,6 +345,11 @@ export function validateLoopEdit(loop: Loop, value: unknown): Validation<Partial
     const result = requiredText(raw.name, "name");
     if (!result.ok) return result;
     update.name = result.value;
+  }
+  if (raw.tags !== undefined) {
+    const result = validateLoopTags(raw.tags);
+    if (!result.ok) return result;
+    update.tags = result.value;
   }
   if (raw.workdir !== undefined) {
     const result = validateWorkdir(raw.workdir);

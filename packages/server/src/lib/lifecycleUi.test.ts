@@ -8,7 +8,7 @@ const run = (patch: Partial<RunSummary> = {}): RunSummary => ({
   ...patch,
 })
 const loop = (patch: Partial<LoopSummary> = {}): LoopSummary => ({
-  id: 'l1', name: 'Loop', schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' },
+  id: 'l1', name: 'Loop', tags: [], schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' },
   workdir: '/tmp/project', agent: 'claude-code', model: null, reasoningEffort: null,
   machine: { id: 'm1', name: 'MacBook Pro', online: true, presence: 'online', lastSeen: null }, enabled: true,
   nextRun: null, lastRunTs: null, runs: [], runCount: 0, recentUsage: { runCount: 0, tokenCount: 0 },
@@ -17,7 +17,7 @@ const loop = (patch: Partial<LoopSummary> = {}): LoopSummary => ({
 
 function detail(summary: LoopSummary, machine: Partial<LoopDetail['machine']> = {}): LoopDetail {
   return {
-    loop: { id: summary.id, name: summary.name, schedule: summary.schedule, workdir: summary.workdir, agent: summary.agent, model: summary.model, reasoningEffort: summary.reasoningEffort, prompt: 'Do it.', statusDefinitions: { keep: 'keep', noChange: 'none', block: 'blocked' }, artifacts: [], enabled: summary.enabled },
+    loop: { id: summary.id, name: summary.name, tags: summary.tags, schedule: summary.schedule, workdir: summary.workdir, agent: summary.agent, model: summary.model, reasoningEffort: summary.reasoningEffort, prompt: 'Do it.', statusDefinitions: { keep: 'keep', noChange: 'none', block: 'blocked' }, artifacts: [], enabled: summary.enabled },
     summary, runs: summary.runs,
     machine: { id: 'm1', name: 'MacBook Pro', online: true, presence: 'online', lastSeen: null, daemonProtocol: 4, daemonVersion: '2.4.0', needsUpdate: false, requiredDaemonVersion: '2.4.0', ...machine },
   }

@@ -181,6 +181,7 @@ export function LoopDetailView({ id }: { id: string }) {
         <h2 className={`mb-4 border-b border-hairline pb-1.5 ${sectionHeadCls}`}>Configuration</h2>
         <dl className="grid min-w-0 gap-x-6 gap-y-4 md:grid-cols-[180px_minmax(0,1fr)]">
           <Config label="Schedule"><code className="break-all font-mono">{configurationScheduleText}</code></Config>
+          <Config label="Tags">{loop.tags.length ? <div className="flex flex-wrap gap-1.5">{loop.tags.map((tag) => <span key={tag} className="inline-flex h-[22px] max-w-52 items-center truncate rounded-full bg-raised px-2.5 text-caption font-medium text-secondary" title={tag}>{tag}</span>)}</div> : <span className="text-disabled">None</span>}</Config>
           <Config label="Working directory"><code className="break-all font-mono">{loop.workdir}</code></Config>
           <Config label="Agent">{AGENT_LABEL[loop.agent]}</Config>
           <Config label="Model / effort">{model} / {effort}</Config>
@@ -204,7 +205,7 @@ function MachineBanner({ text, action, onAction, tone }: { text: string; action:
 }
 
 function EditHead({ name, onBack }: { name: string; onBack: () => void }) {
-  return <div><button type="button" onClick={onBack} className={btnQuiet}><span aria-hidden>←</span> Back to loop</button><h1 className="mt-2.5 text-[24px] font-semibold text-display">Settings · {name}</h1><p className="mt-1.5 text-meta text-secondary">Edit the stored schedule, execution settings, prompt, status definitions, and exact artifact paths.</p></div>
+  return <div><button type="button" onClick={onBack} className={btnQuiet}><span aria-hidden>←</span> Back to loop</button><h1 className="mt-2.5 text-[24px] font-semibold text-display">Settings · {name}</h1><p className="mt-1.5 text-meta text-secondary">Edit tags, schedule, execution settings, prompt, status definitions, and exact artifact paths.</p></div>
 }
 
 function Shell({ back, children }: { back: React.ReactNode; children: React.ReactNode }) {

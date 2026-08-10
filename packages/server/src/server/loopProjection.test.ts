@@ -78,6 +78,14 @@ test("summaries aggregate run count and input plus output tokens from the last s
   expect(summary.recentUsage).toEqual({ runCount: 2, tokenCount: 1_240 });
 });
 
+test("custom tags map onto loop detail and summary", async () => {
+  const loop = await seed("codex");
+  await store.updateLoop(loop.id, { tags: ["daily", "project"] });
+  const detail = await projection.toLoopDetail((await store.getLoop(loop.id))!);
+  expect(detail.loop.tags).toEqual(["daily", "project"]);
+  expect(detail.summary.tags).toEqual(["daily", "project"]);
+});
+
 test("a loop's recorded agent maps onto detail and summary", async () => {
   const loop = await seed("codex");
   const detail = await projection.toLoopDetail(loop);

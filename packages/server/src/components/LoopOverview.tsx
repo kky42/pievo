@@ -56,6 +56,7 @@ export function LoopOverview({
         )}
         <Pill tone={lifecycle.tone}>{lifecycle.label}</Pill>
         <Pill tone="outline">{AGENT_LABEL[loop.agent]}</Pill>
+        {loop.tags.map((tag) => <Pill key={tag} tone="neutral" title={tag} className="max-w-44 truncate">{tag}</Pill>)}
         {extraPill}
         <div className="ml-auto min-w-0">
           <LoopMeta

@@ -637,6 +637,7 @@ export class MachineGateway {
     deviceToken: string,
     body: {
       name?: unknown;
+      tags?: unknown;
       schedule?: unknown;
       prompt?: unknown;
       statusDefinitions?: unknown;
@@ -753,6 +754,7 @@ export class MachineGateway {
     id: unknown,
     patch: {
       name?: unknown;
+      tags?: unknown;
       schedule?: unknown;
       prompt?: unknown;
       statusDefinitions?: unknown;
