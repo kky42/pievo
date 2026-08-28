@@ -99,8 +99,6 @@ PIEVO_REAL_LLM_TESTS=1 pnpm --filter @kky42/pievo test src/telemetry.real.test.t
   `registry-url` or `NPM_TOKEN`; pnpm comes from the root `packageManager`.
 - Keep server runtime output, public assets, PGlite assets, migrations, launcher
   scripts, and provenance metadata in the published package.
-- Fly examples are single-process/manual and own no app, origin, region, or volume.
-  Persist PGlite/local blobs; external Postgres plus R2 is stateless.
 - Public install prose uses `@latest`. Development servers may provide `PIEVO_CLI`
   verbatim and must not add a global-install step.
 

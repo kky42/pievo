@@ -1,5 +1,4 @@
 import type { MachinePresence } from './lib/machinePresence'
-export type { MachinePresence } from './lib/machinePresence'
 
 /** The coding agent a loop is bound to AND executed with (BYOA on the owner's
  *  machine): `claude-code` → Claude Code, `codex` → `codex exec`, `pi` → Pi.
@@ -43,8 +42,9 @@ export type PauseCause =
 
 export type RunStatus = 'keep' | 'no-change' | 'block'
 export type RunPhase = 'pending' | 'running' | 'done' | 'error' | 'canceled'
+export type CronOverlap = 'skip' | 'queue-one'
 export type LoopSchedule =
-  | { mode: 'cron'; cron: string; timezone: string; overlap: 'skip' | 'queue-one' }
+  | { mode: 'cron'; cron: string; timezone: string; overlap: CronOverlap }
   | { mode: 'continuous'; delayMinutes: number }
 export interface StatusDefinitions {
   keep: string

@@ -1,5 +1,5 @@
-import type { PostCliDeps } from "./cli-client.js";
 import { postCli, printCliResponse } from "./cli-client.js";
+import { buildPostCliDeps, serverFlag } from "./cli-deps.js";
 import { parseLongOptions } from "./long-options.js";
 import { renderResolveError, resolveOwnerLoop } from "./owner-loop.js";
 
@@ -20,16 +20,7 @@ export async function runShow(argv: string[], injected: ShowDeps = {}): Promise<
   const out = injected.out ?? ((s: string) => void process.stdout.write(s));
   const err = injected.err ?? ((s: string) => void process.stderr.write(s));
   const cwd = injected.cwd ?? (() => process.cwd());
-  const flagServer = (() => {
-    const i = argv.indexOf("--server-url");
-    return i >= 0 ? argv[i + 1] : undefined;
-  })();
-  const cliDeps: PostCliDeps = {
-    fetchImpl: injected.fetchFn,
-    serverFlag: flagServer,
-    ...("server" in injected ? { server: injected.server } : {}),
-    ...("token" in injected ? { deviceToken: injected.token } : {}),
-  };
+  const cliDeps = buildPostCliDeps({ ...injected, serverFlag: serverFlag(argv) });
 
   const { positional, flags, occurrences } = parseLongOptions(argv, (key) => SHOW_VALUE_FLAGS.has(key));
   const unknown = occurrences

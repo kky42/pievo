@@ -13,13 +13,16 @@
 import { sql } from "drizzle-orm";
 import { pgTable, text, integer, boolean, jsonb, index, uniqueIndex, timestamp, check } from "drizzle-orm/pg-core";
 
-// The coding-agent enum's SINGLE SOURCE lives in `../types` (client-safe, no db
-// deps); this schema DERIVES both the `CodingAgent` type and the `loops.agent`
-// column enum from it, so widening the set is a one-line edit
-// to `CODING_AGENTS` with no change here. `../types` imports nothing at runtime, so
-// this introduces no import cycle.
+// The coding-agent enum and client-safe wire types live in `../types`; this
+// schema only supplies the database tables and re-exports those types for
+// existing server-side imports.
 import { CODING_AGENTS } from "../types.js";
-import type { PauseCause, ReportIncident, ReportIncidentDisposition } from "../types.js";
+import type {
+  PauseCause,
+  ReportIncident,
+  ReportIncidentDisposition,
+} from "../types.js";
+export type { CodingAgent, CronOverlap, LoopSchedule, RunPhase, RunStatus, StatusDefinitions } from "../types.js";
 
 export interface RunUsage {
   inputTokens?: number;
@@ -28,16 +31,6 @@ export interface RunUsage {
   cacheCreationTokens?: number;
 }
 
-export type CronOverlap = "skip" | "queue-one";
-export type LoopSchedule =
-  | { mode: "cron"; cron: string; timezone: string; overlap: CronOverlap }
-  | { mode: "continuous"; delayMinutes: number };
-export interface StatusDefinitions {
-  keep: string;
-  noChange: string;
-  block: string;
-}
-export type RunPhase = "pending" | "running" | "done" | "error" | "canceled";
 /** Queue authority, not scheduling provenance. Owner intent may promote a
  * system row, and no later system event may downgrade it. */
 export type RunRequester = "owner" | "system";
@@ -45,12 +38,6 @@ export type RunRequester = "owner" | "system";
  *  queue coalescing, or the offline catch-up window elapsed).
  *  Neither success nor failure — excluded from the failure streak (it rides
  *  phase `canceled`, and the streak counts only phase `error`). */
-export type RunStatus = "keep" | "no-change" | "block";
-
-/** The coding agent a loop is bound to / recorded as its host (see `loops.agent`).
- *  DERIVED from the `CODING_AGENTS` single source so it widens automatically. */
-export type CodingAgent = (typeof CODING_AGENTS)[number];
-
 export const machines = pgTable(
   "machines",
   {

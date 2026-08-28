@@ -1,8 +1,8 @@
 import os from "node:os";
 
 import { resolveDurableBinPath } from "./bin-shim.js";
-import type { PostCliDeps } from "./cli-client.js";
 import { postCli, printCliResponse } from "./cli-client.js";
+import { buildPostCliDeps } from "./cli-deps.js";
 import { resolveServerUrl } from "./config.js";
 import { boundedFetch } from "./http.js";
 import { verifiedRunningPid } from "./pidfile.js";
@@ -40,11 +40,7 @@ export async function runHome(injected: HomeDeps = {}): Promise<number> {
   if (pid !== undefined) ctx.push("--pid", String(pid));
   if (serverDisplay) ctx.push("--server", serverDisplay);
 
-  const cliDeps: PostCliDeps = {
-    fetchImpl: injected.fetchImpl ?? boundedHomeFetch,
-    ...("server" in injected ? { server: injected.server } : {}),
-    ...("token" in injected ? { deviceToken: injected.token } : {}),
-  };
+  const cliDeps = buildPostCliDeps({ ...injected, fetchImpl: injected.fetchImpl ?? boundedHomeFetch });
 
   const r = await postCli(["home", ...ctx], cliDeps);
   if (r.kind === "not-configured") {

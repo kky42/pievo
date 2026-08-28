@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 
-import { testStore, type TestStore } from "../../test/store.js";
+import { registerRunLease, testStore, type TestStore } from "../../test/store.js";
 import type { LoopSummary } from "../types.js";
 
 let tmp: string;
@@ -60,7 +60,8 @@ test("dashboard summaries put recently run loops first and preserve never-run or
 });
 
 test("dashboard summaries include the loop's machine presentation", async () => {
-  const summary = await projection.toLoopSummary(await seed("codex"));
+  const loop = await seed("codex");
+  const summary = (await projection.toLoopSummaries([loop], [(await store.getMachine(loop.machineId))!]))[0]!;
   expect(summary.machine).toMatchObject({ id: "m-a", name: "M", online: false, presence: "offline" });
 });
 
@@ -74,7 +75,7 @@ test("summaries aggregate run count and input plus output tokens from the last s
   await store.addRun({ loopId: loop.id, machineId, phase: "error", ts: recentTs, usage: { outputTokens: 6 } });
   await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: oldTs, usage: { inputTokens: 50_000, outputTokens: 50_000 } });
 
-  const summary = await projection.toLoopSummary(loop);
+  const summary = (await projection.toLoopSummaries([loop], [(await store.getMachine(loop.machineId))!]))[0]!;
   expect(summary.recentUsage).toEqual({ runCount: 2, tokenCount: 1_240 });
 });
 
@@ -144,7 +145,7 @@ test("lifecycle request markers and daemon protocol surface at the Dashboard bou
 test("terminal reconciliation state crosses the dashboard boundary and explains queued blocking", async () => {
   const loop = await seed("claude-code");
   const interrupted = await store.addRun({ loopId: loop.id, machineId: loop.machineId, phase: "running", ts: new Date().toISOString() });
-  await (await import("../gateway/tokens.js")).registerRunLease({ runId: interrupted.id, loopId: loop.id, machineId: loop.machineId });
+  await registerRunLease({ runId: interrupted.id, loopId: loop.id, machineId: loop.machineId });
   await store.reclaimRun(interrupted.id, "running", "machine timed out / disconnected");
   await store.enqueueRun(loop.id, { requestedBy: "owner" });
 

@@ -8,7 +8,7 @@ import { marked } from 'marked'
  * Render the output under
  * the `.artifact-markdown` styles.
  */
-export const MD_SANITIZE: Config = {
+const MD_SANITIZE: Config = {
   ALLOWED_TAGS: [
     'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'br', 'hr', 'strong', 'b', 'em', 'i',
     'del', 's', 'code', 'pre', 'blockquote', 'ul', 'ol', 'li', 'a', 'span',

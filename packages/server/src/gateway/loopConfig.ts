@@ -14,7 +14,7 @@ import { CODING_AGENTS, coerceCodingAgent } from "../types.js";
 import { validateLoopTags } from "../lib/loopTags.js";
 import { WIRE_TEXT_CAP } from "./http.js";
 
-export const LOOP_CONFIG_FIELDS = [
+const LOOP_CONFIG_FIELDS = [
   "name",
   "tags",
   "schedule",
@@ -46,6 +46,8 @@ export interface CanonicalLoopConfig {
   artifacts: string[];
   enabled: boolean;
 }
+
+export type CanonicalLoopSummary = Pick<CanonicalLoopConfig, "name" | "tags" | "schedule" | "workdir" | "agent" | "model" | "reasoningEffort"> & { id: string };
 
 export interface ValidatedLoopCreate {
   config: CanonicalLoopConfig;
@@ -182,7 +184,7 @@ export function validateSchedule(value: unknown): Validation<LoopSchedule> {
   return { ok: false, detail: "schedule.mode must be cron|continuous" };
 }
 
-export function validateStatusDefinitions(value: unknown): Validation<StatusDefinitions> {
+function validateStatusDefinitions(value: unknown): Validation<StatusDefinitions> {
   const raw = object(value);
   if (!raw) return { ok: false, detail: "statusDefinitions is required" };
   const unknown = Object.keys(raw).filter((key) => !["keep", "noChange", "block"].includes(key));
@@ -252,11 +254,21 @@ export function scheduleFromLoop(loop: Loop): LoopSchedule {
   throw new Error(`invariant: loop ${loop.id} has unknown schedule mode: ${String(loop.scheduleMode)}`);
 }
 
-export function statusDefinitionsFromLoop(loop: Loop): StatusDefinitions {
+function statusDefinitionsFromLoop(loop: Loop): StatusDefinitions {
   return { keep: loop.statusKeep, noChange: loop.statusNoChange, block: loop.statusBlock };
 }
 
 export function canonicalLoopEnvelope(loop: Loop): CanonicalLoopConfig & { id: string } {
+  return {
+    ...canonicalLoopSummary(loop),
+    prompt: loop.prompt,
+    statusDefinitions: statusDefinitionsFromLoop(loop),
+    artifacts: loop.artifacts,
+    enabled: loop.enabled,
+  };
+}
+
+export function canonicalLoopSummary(loop: Loop): CanonicalLoopSummary {
   return {
     id: loop.id,
     name: loop.name,
@@ -266,10 +278,6 @@ export function canonicalLoopEnvelope(loop: Loop): CanonicalLoopConfig & { id: s
     agent: loop.agent,
     model: loop.model ?? null,
     reasoningEffort: loop.reasoningEffort ?? null,
-    prompt: loop.prompt,
-    statusDefinitions: statusDefinitionsFromLoop(loop),
-    artifacts: loop.artifacts,
-    enabled: loop.enabled,
   };
 }
 

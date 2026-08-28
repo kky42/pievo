@@ -3,13 +3,6 @@ import { boundedFetch } from "./http.js";
 
 const CLI_TIMEOUT_MS = 30_000;
 
-/** A server reply. A non-JSON body is represented as an empty object and rejected
- *  by the caller because canonical CLI responses require `text`. */
-export interface CliResponse {
-  status: number;
-  body: Record<string, unknown>;
-}
-
 export interface PostCliDeps {
   fetchImpl?: typeof fetch;
   env?: NodeJS.ProcessEnv;
@@ -53,7 +46,7 @@ export async function postCli(argv: string[], deps: PostCliDeps = {}): Promise<P
   }
 }
 
-export function printText(
+function printText(
   body: Record<string, unknown>,
   status: number,
   out: (s: string) => void,

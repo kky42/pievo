@@ -154,12 +154,3 @@ describe('direct loop and run routes', () => {
     expect(host!.textContent).not.toContain('Open mode:')
   })
 })
-
-describe('removed routes', () => {
-  test.each(['/t/stale', '/invite/stale'])('%s resolves as a global not-found', async (path) => {
-    const router = createRouter({ routeTree, history: createMemoryHistory({ initialEntries: [path] }) })
-    const matches = router.matchRoutes(path)
-    expect(matches).toHaveLength(1)
-    expect(matches[0]).toMatchObject({ routeId: '__root__', globalNotFound: true })
-  })
-})

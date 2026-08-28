@@ -4,13 +4,13 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 
 import type { Loop, Run } from "../db/schema.js";
-import { testStore, type TestStore } from "../../test/store.js";
+import { registerRunLease, testStore, type TestStore } from "../../test/store.js";
 
 let tmp: string;
 let db: typeof import("../db/index.js");
 let store: TestStore;
 let sched: typeof import("./index.js");
-let tokens: typeof import("../gateway/tokens.js");
+let tokens: typeof import("../gateway/tokens.js") & { registerRunLease: typeof registerRunLease };
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-schedule-facts-"));
@@ -20,7 +20,7 @@ beforeAll(async () => {
   await db.runMigrations();
   store = testStore(await import("../db/store.js"));
   sched = await import("./index.js");
-  tokens = await import("../gateway/tokens.js");
+  tokens = { ...(await import("../gateway/tokens.js")), registerRunLease };
 });
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));

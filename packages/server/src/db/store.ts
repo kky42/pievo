@@ -517,40 +517,6 @@ async function terminalLifecycleTx(
   return { loop, failureStreak, autoPaused };
 }
 
-export async function addRun(
-  input: Omit<NewRun, "id" | "createdAt" | "updatedAt"> & {
-    id?: string;
-    createdAt?: string;
-    updatedAt?: string;
-  },
-): Promise<Run> {
-  return db.transaction(async (tx) => {
-    const loop = (await tx.select().from(loops).where(eq(loops.id, input.loopId)).for("update"))[0];
-    if (!loop) throw new Error(`cannot add run for missing loop ${input.loopId}`);
-    let runIndex = input.runIndex;
-    if (runIndex != null) {
-      await tx.update(loops).set({ lastRunIndex: sql`greatest(${loops.lastRunIndex}, ${runIndex})` }).where(eq(loops.id, loop.id));
-    } else if (input.phase !== "pending") {
-      runIndex = await allocateRunIndexTx(tx, loop.id);
-    }
-    const executing = input.phase === "running";
-    const at = input.ts;
-    const row: NewRun = {
-      ...input,
-      ...(runIndex != null ? { runIndex } : {}),
-      ...(executing ? {
-        agent: input.agent ?? loop.agent,
-        model: input.model ?? loop.model,
-        reasoningEffort: input.reasoningEffort ?? loop.reasoningEffort,
-      } : {}),
-      id: input.id ?? randomUUID(),
-      createdAt: input.createdAt ?? at,
-      updatedAt: input.updatedAt ?? at,
-    };
-    return (await tx.insert(runs).values(row).returning())[0]!;
-  });
-}
-
 export async function getRun(id: string): Promise<Run | undefined> {
   return (await db.select().from(runs).where(eq(runs.id, id)))[0];
 }
@@ -600,21 +566,12 @@ export async function putTerminalReportIncidentIfAbsent(input: {
   });
 }
 
-export async function countTerminalReportIncidents(): Promise<number> {
-  const row = (await db.select({ n: sql<number>`count(*)` }).from(terminalReportIncidents))[0];
-  return Number(row?.n ?? 0);
-}
-
 /** Serialize all terminal handling for one reportId, even when the competing
  * runs belong to different loop locks or one terminal result lands in the incident table. */
 async function lockReportIdTx(tx: StoreTx, reportId: string): Promise<void> {
   const unsigned = BigInt(`0x${createHash("sha256").update(reportId).digest("hex").slice(0, 16)}`);
   const key = BigInt.asIntN(64, unsigned).toString();
   await tx.execute(sql`select pg_advisory_xact_lock(${key}::bigint)`);
-}
-
-export async function insertReportReceipt(input: typeof runReportReceipts.$inferInsert): Promise<void> {
-  await db.insert(runReportReceipts).values(input);
 }
 
 /** Race-safe receipt reservation for definitive non-finalization ACKs (RETIRED).
@@ -626,11 +583,6 @@ export async function putReportReceiptIfAbsent(input: typeof runReportReceipts.$
       .onConflictDoNothing({ target: runReportReceipts.reportId }).returning();
     return inserted[0] ?? (await tx.select().from(runReportReceipts).where(eq(runReportReceipts.reportId, input.reportId)))[0];
   });
-}
-
-export async function countReportReceipts(): Promise<number> {
-  const row = (await db.select({ n: sql<number>`count(*)` }).from(runReportReceipts))[0];
-  return Number(row?.n ?? 0);
 }
 
 /** Idempotent startup repair for a crash across terminalization.
@@ -666,11 +618,6 @@ export async function acknowledgeRetiredReport(
     }
     return stored;
   });
-}
-
-export async function updateRun(id: string, patch: Partial<NewRun>): Promise<Run | undefined> {
-  await db.update(runs).set({ ...patch, updatedAt: nowIso() }).where(eq(runs.id, id));
-  return getRun(id);
 }
 
 /** Refresh provider-neutral liveness in one machine-scoped UPDATE. Untrusted ids
@@ -776,6 +723,88 @@ export interface FinalizeRunningRunResult {
   failureStreak: number;
   autoPaused: boolean;
   reportOnly?: boolean;
+}
+
+type TerminalLeaseState = "active" | "terminal-grace" | "reconciliation-only";
+type TerminalLeaseCheck = (tx: StoreTx) => Promise<TerminalLeaseState | undefined>;
+
+interface FinalizeTerminalRunInput {
+  loopId: string;
+  runId: string;
+  runPhase: "running" | "error";
+  runPatch: Partial<NewRun> & { phase: "done" | "error" | "canceled" };
+  loopPatch: Partial<NewLoop>;
+  leaseTokenHash?: string;
+  leaseCheck?: TerminalLeaseCheck;
+  failureAutopauseStreak: number;
+  receipt?: typeof runReportReceipts.$inferInsert;
+  reconciliation?: boolean;
+}
+
+async function finalizeTerminalRunTx(
+  tx: StoreTx,
+  input: FinalizeTerminalRunInput,
+): Promise<FinalizeRunningRunResult | undefined> {
+  if (input.receipt) await lockReportIdTx(tx, input.receipt.reportId);
+  const current = (await tx.select().from(loops).where(eq(loops.id, input.loopId)).for("update"))[0];
+  if (!current) return undefined;
+  if (input.receipt) {
+    const incident = (await tx.select({ id: terminalReportIncidents.id }).from(terminalReportIncidents)
+      .where(eq(terminalReportIncidents.reportId, input.receipt.reportId)).limit(1))[0];
+    if (incident) return undefined;
+  }
+  const leaseState = input.leaseCheck ? await input.leaseCheck(tx) : undefined;
+  if (input.leaseCheck && !leaseState) return undefined;
+  const target = (await tx.select().from(runs)
+    .where(and(eq(runs.id, input.runId), eq(runs.loopId, input.loopId), eq(runs.phase, input.runPhase)))
+    .limit(1).for("update"))[0];
+  if (!target) return undefined;
+  const runIndex = await ensureRunIndexTx(tx, target);
+  const at = typeof input.runPatch.ts === "string" ? input.runPatch.ts : nowIso();
+  const run = (
+    await tx
+      .update(runs)
+      .set({ ...input.runPatch, runIndex, updatedAt: at })
+      .where(and(eq(runs.id, input.runId), eq(runs.loopId, input.loopId), eq(runs.phase, input.runPhase)))
+      .returning()
+  )[0];
+  if (!run) return undefined;
+  const lifecycle = leaseState === "reconciliation-only"
+    ? { loop: current, failureStreak: 0, autoPaused: false }
+    : await terminalLifecycleTx(tx, current, run, at, input.loopPatch, input.failureAutopauseStreak);
+  if (input.leaseTokenHash) await tx.delete(runLeases).where(eq(runLeases.runId, input.runId));
+  if (input.receipt) await tx.insert(runReportReceipts).values(input.receipt);
+  return {
+    run,
+    ...lifecycle,
+    ...(input.reconciliation ? { reportOnly: leaseState === "reconciliation-only" } : {}),
+  };
+}
+
+async function reclaimedLeaseStateTx(
+  tx: StoreTx,
+  loopId: string,
+  runId: string,
+  leaseTokenHash: string,
+): Promise<TerminalLeaseState | undefined> {
+  // Resolve expiry after the loop lock. Gateway prechecks are never authority
+  // for this write.
+  const leaseNow = nowIso();
+  const lease = (
+    await tx
+      .select({ state: runLeases.state })
+      .from(runLeases)
+      .where(and(
+        eq(runLeases.tokenHash, leaseTokenHash),
+        eq(runLeases.runId, runId),
+        eq(runLeases.loopId, loopId),
+        inArray(runLeases.state, ["terminal-grace", "reconciliation-only"]),
+        gt(runLeases.expiresAt, leaseNow),
+      ))
+      .limit(1)
+      .for("update")
+  )[0];
+  return lease?.state === "terminal-grace" || lease?.state === "reconciliation-only" ? lease.state : undefined;
 }
 
 /** Consume a retired tombstone when its reportId is owned by another run.
@@ -930,36 +959,22 @@ export async function finalizeRunningRun(
   receipt?: typeof runReportReceipts.$inferInsert,
 ): Promise<FinalizeRunningRunResult | undefined> {
   return db.transaction(async (tx) => {
-    if (receipt) await lockReportIdTx(tx, receipt.reportId);
-    const current = (await tx.select().from(loops).where(eq(loops.id, loopId)).for("update"))[0];
-    if (!current) return undefined;
-    if (receipt) {
-      const incident = (await tx.select({ id: terminalReportIncidents.id }).from(terminalReportIncidents)
-        .where(eq(terminalReportIncidents.reportId, receipt.reportId)).limit(1))[0];
-      if (incident) return undefined;
-    }
-    if (leaseTokenHash) {
-      const active = await activeRunForReportTx(tx, loopId, runId, leaseTokenHash);
-      if (active.state !== "active") return undefined;
-    }
-    const target = (await tx.select().from(runs)
-      .where(and(eq(runs.id, runId), eq(runs.loopId, loopId), eq(runs.phase, "running")))
-      .limit(1).for("update"))[0];
-    if (!target) return undefined;
-    const runIndex = await ensureRunIndexTx(tx, target);
-    const at = typeof runPatch.ts === "string" ? runPatch.ts : nowIso();
-    const run = (
-      await tx
-        .update(runs)
-        .set({ ...runPatch, runIndex, updatedAt: at })
-        .where(and(eq(runs.id, runId), eq(runs.loopId, loopId), eq(runs.phase, "running")))
-        .returning()
-    )[0];
-    if (!run) return undefined;
-    const lifecycle = await terminalLifecycleTx(tx, current, run, at, loopPatch, failureAutopauseStreak);
-    if (leaseTokenHash) await tx.delete(runLeases).where(eq(runLeases.runId, runId));
-    if (receipt) await tx.insert(runReportReceipts).values(receipt);
-    return { run, ...lifecycle };
+    return finalizeTerminalRunTx(tx, {
+      loopId,
+      runId,
+      runPhase: "running",
+      runPatch,
+      loopPatch,
+      leaseTokenHash,
+      leaseCheck: leaseTokenHash
+        ? async (lockedTx) => {
+            const active = await activeRunForReportTx(lockedTx, loopId, runId, leaseTokenHash);
+            return active.state === "active" ? "active" : undefined;
+          }
+        : undefined,
+      failureAutopauseStreak,
+      receipt,
+    });
   });
 }
 
@@ -1037,58 +1052,18 @@ export async function reconcileReclaimedRun(
   receipt?: typeof runReportReceipts.$inferInsert,
 ): Promise<FinalizeRunningRunResult | undefined> {
   return db.transaction(async (tx) => {
-    if (receipt) await lockReportIdTx(tx, receipt.reportId);
-    const current = (await tx.select().from(loops).where(eq(loops.id, loopId)).for("update"))[0];
-    if (!current) return undefined;
-    if (receipt) {
-      const incident = (await tx.select({ id: terminalReportIncidents.id }).from(terminalReportIncidents)
-        .where(eq(terminalReportIncidents.reportId, receipt.reportId)).limit(1))[0];
-      if (incident) return undefined;
-    }
-    // Resolve expiry from a fresh clock read after acquiring the loop lock. A
-    // gateway precheck may have happened before the grace window elapsed or a
-    // successor claim; it is never authority for this write.
-    const leaseNow = nowIso();
-    const lease = (
-      await tx
-        .select({ tokenHash: runLeases.tokenHash, state: runLeases.state })
-        .from(runLeases)
-        .where(
-          and(
-            eq(runLeases.tokenHash, leaseTokenHash),
-            eq(runLeases.runId, runId),
-            eq(runLeases.loopId, loopId),
-            inArray(runLeases.state, ["terminal-grace", "reconciliation-only"]),
-            gt(runLeases.expiresAt, leaseNow),
-          ),
-        )
-        .limit(1)
-        .for("update")
-    )[0];
-    if (!lease) return undefined;
-    const target = (await tx.select().from(runs)
-      .where(and(eq(runs.id, runId), eq(runs.loopId, loopId), eq(runs.phase, "error")))
-      .limit(1).for("update"))[0];
-    if (!target) return undefined;
-    const runIndex = await ensureRunIndexTx(tx, target);
-    const at = typeof runPatch.ts === "string" ? runPatch.ts : nowIso();
-    const run = (
-      await tx
-        .update(runs)
-        .set({ ...runPatch, runIndex, updatedAt: at })
-        .where(and(eq(runs.id, runId), eq(runs.loopId, loopId), eq(runs.phase, "error")))
-        .returning()
-    )[0];
-    if (!run) return undefined;
-    // Once the daemon has disavowed execution, a successor may already be open.
-    // Preserve the old run's late result, but never let it retime or reconfigure
-    // the loop, trip the breaker, or otherwise mutate the successor lifecycle.
-    const lifecycle = lease.state === "reconciliation-only"
-      ? { loop: current, failureStreak: 0, autoPaused: false }
-      : await terminalLifecycleTx(tx, current, run, at, loopPatch, failureAutopauseStreak);
-    await tx.delete(runLeases).where(eq(runLeases.runId, runId));
-    if (receipt) await tx.insert(runReportReceipts).values(receipt);
-    return { run, ...lifecycle, reportOnly: lease.state === "reconciliation-only" };
+    return finalizeTerminalRunTx(tx, {
+      loopId,
+      runId,
+      runPhase: "error",
+      runPatch,
+      loopPatch,
+      leaseTokenHash,
+      leaseCheck: (lockedTx) => reclaimedLeaseStateTx(lockedTx, loopId, runId, leaseTokenHash),
+      failureAutopauseStreak,
+      receipt,
+      reconciliation: true,
+    });
   });
 }
 
@@ -1392,10 +1367,6 @@ export async function hasPendingRun(loopId: string): Promise<boolean> {
   return !!r;
 }
 
-export async function openRunsForLoop(loopId: string): Promise<Run[]> {
-  return db.select().from(runs).where(and(eq(runs.loopId, loopId), inArray(runs.phase, ["pending", "running"])));
-}
-
 /** Expire one offline system row only if the sweep snapshot is still exact and
  * its immutable lifetime remains over the cap under the loop lock. */
 export async function expirePendingRun(
@@ -1616,10 +1587,6 @@ export async function listArtifacts(loopId: string): Promise<ArtifactFile[]> {
     .orderBy(artifactFiles.path);
 }
 
-export async function listAllArtifactFiles(loopId: string): Promise<ArtifactFile[]> {
-  return db.select().from(artifactFiles).where(eq(artifactFiles.loopId, loopId)).orderBy(artifactFiles.path);
-}
-
 export async function getArtifactFile(loopId: string, path: string): Promise<ArtifactFile | undefined> {
   return (
     await db
@@ -1715,11 +1682,7 @@ export async function liveBlobRefs(): Promise<Set<string>> {
     .where(isNotNull(artifactFiles.hash))) {
     if (r.hash) refs.add(r.hash);
   }
-  for (const r of await db.select({ manifest: runSnapshots.manifest }).from(runSnapshots)) {
-    for (const entry of Object.values(r.manifest)) {
-      if (entry?.hash) refs.add(entry.hash);
-    }
-  }
+  for (const hash of await collectSnapshotBlobRefs()) refs.add(hash);
   return refs;
 }
 
@@ -1754,7 +1717,7 @@ export async function artifactFileReferencesHash(hash: string): Promise<boolean>
  *  raced the pass), so a snapshot that comes to reference a hash mid-pass is still
  *  caught — closing the GC-check-time gap where a snapshot references a hash no live
  *  file row does — without paying O(garbage × snapshots). */
-export async function snapshotBlobRefs(): Promise<Set<string>> {
+async function collectSnapshotBlobRefs(): Promise<Set<string>> {
   const refs = new Set<string>();
   for (const r of await db.select({ manifest: runSnapshots.manifest }).from(runSnapshots)) {
     for (const entry of Object.values(r.manifest)) {
@@ -1762,6 +1725,10 @@ export async function snapshotBlobRefs(): Promise<Set<string>> {
     }
   }
   return refs;
+}
+
+export async function snapshotBlobRefs(): Promise<Set<string>> {
+  return collectSnapshotBlobRefs();
 }
 
 /** Count of retained run_snapshot rows — the GC's cheap change-detector for deciding

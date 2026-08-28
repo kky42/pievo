@@ -1,6 +1,6 @@
 import {
-  POLL_INFO_TEXT_CAP,
   POLL_VERSION_CAP,
+  WIRE_TEXT_CAP,
   validOptionalPollString,
 } from './http.js'
 
@@ -24,7 +24,7 @@ export type PollV4Request = {
   info?: PollInfo
 }
 
-export const POLL_INFO_FIELDS = new Set(['host', 'platform', 'arch', 'version'])
+const POLL_INFO_FIELDS = new Set(['host', 'platform', 'arch', 'version'])
 export const POLL_V4_REQUEST_FIELDS = new Set([
   'protocolVersion', 'currentRuns', 'daemonInstanceId', 'recoveryComplete', 'info',
 ])
@@ -52,8 +52,8 @@ export const validPollInfo = (value: unknown): value is PollInfo | undefined =>
   value === undefined || (
     value !== null && typeof value === 'object' && !Array.isArray(value)
     && Object.keys(value).every((key) => POLL_INFO_FIELDS.has(key))
-    && validOptionalPollString((value as Record<string, unknown>).host, POLL_INFO_TEXT_CAP)
-    && validOptionalPollString((value as Record<string, unknown>).platform, POLL_INFO_TEXT_CAP)
-    && validOptionalPollString((value as Record<string, unknown>).arch, POLL_INFO_TEXT_CAP)
+    && validOptionalPollString((value as Record<string, unknown>).host, WIRE_TEXT_CAP)
+    && validOptionalPollString((value as Record<string, unknown>).platform, WIRE_TEXT_CAP)
+    && validOptionalPollString((value as Record<string, unknown>).arch, WIRE_TEXT_CAP)
     && validOptionalPollString((value as Record<string, unknown>).version, POLL_VERSION_CAP)
   )

@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 
-import type { PostCliDeps } from "./cli-client.js";
 import { postCli, printCliResponse } from "./cli-client.js";
+import { buildPostCliDeps, serverFlag } from "./cli-deps.js";
 import { parseLongOptions } from "./long-options.js";
 
 type Flags = Record<string, string | boolean>;
@@ -78,16 +78,7 @@ const USAGE =
 export async function runInteractive(argv: string[], injected: InteractiveDeps = {}): Promise<number> {
   const out = injected.out ?? ((s: string) => void process.stdout.write(s));
   const err = injected.err ?? ((s: string) => void process.stderr.write(s));
-  const flagServer = (() => {
-    const i = process.argv.indexOf("--server-url");
-    return i >= 0 ? process.argv[i + 1] : undefined;
-  })();
-  const cliDeps: PostCliDeps = {
-    fetchImpl: injected.fetchImpl,
-    serverFlag: flagServer,
-    ...("server" in injected ? { server: injected.server } : {}),
-    ...("token" in injected ? { deviceToken: injected.token } : {}),
-  };
+  const cliDeps = buildPostCliDeps({ ...injected, serverFlag: serverFlag(process.argv) });
 
   const verb = argv[0];
   const booleanFlags = verb === "loops" ? new Set([...BOOLEAN_FLAGS, "json"]) : BOOLEAN_FLAGS;

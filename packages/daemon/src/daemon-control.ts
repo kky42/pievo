@@ -7,8 +7,6 @@ import { readReportDiagnostics, type ReportDiagnostics } from "./report-outbox.j
 import { readRuntimeDiagnostics, type RuntimeDiagnostics } from "./runtime-diagnostics.js";
 
 export type MachineStatus = {
-  /** False when the supplied saved identity has no machine on this server. Older
-   * servers omit this field, which remains compatible with a registered identity. */
   registered?: boolean;
   claimValid?: boolean;
   online: boolean;

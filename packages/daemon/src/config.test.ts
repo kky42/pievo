@@ -25,15 +25,6 @@ describe("connections config", () => {
     expect(fs.statSync(home).mode & 0o777).toBe(0o700);
   });
 
-  test("does not read legacy server-url/device-token files", async () => {
-    home = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-connections-legacy-"));
-    fs.writeFileSync(path.join(home, "server-url"), "https://old.test");
-    fs.writeFileSync(path.join(home, "device-token"), "dk_old");
-    process.env.PIEVO_HOME = home;
-    const config = await import("./config.js");
-    expect(config.activeConnection()).toBeUndefined();
-  });
-
   test("canonicalizes equivalent origins and rejects non-origin URLs", async () => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-connections-origin-"));
     process.env.PIEVO_HOME = home;

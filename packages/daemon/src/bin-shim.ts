@@ -7,7 +7,7 @@ import { REEXEC_WRAPPER_MARKER, reexecWrapperContents } from "./reexec-wrapper.j
 /** The re-exec wrapper prefix that uniquely marks a `pievo` file as OUR shim (vs a
  *  real installed binary). Any existing `pievo` that doesn't start with this is
  *  foreign and must never be overwritten. */
-export const SHIM_MARKER = REEXEC_WRAPPER_MARKER;
+const SHIM_MARKER = REEXEC_WRAPPER_MARKER;
 
 /** Is the re-exec entry inside an ephemeral npx / npm cache (`/_npx/`, `/_cacache/`)?
  *  A shim that re-execs such a path breaks once the cache is pruned, so we refuse to

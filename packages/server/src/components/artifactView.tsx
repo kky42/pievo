@@ -42,7 +42,7 @@ export function ViewerHead({
   )
 }
 
-export function BinaryNotice({
+function BinaryNotice({
   loopId,
   path,
   oversize,

@@ -2,7 +2,7 @@ import path from "node:path";
 
 import type { Delivery } from "./runner.js";
 
-export interface NeedsUpdate {
+interface NeedsUpdate {
   current: string | null;
   required: string;
   command: string;

@@ -25,7 +25,7 @@ export function buildDaemonSpawn(token: string): { args: string[]; env: NodeJS.P
   return { args, env: { ...process.env, PIEVO_TOKEN: token, [INTERNAL_DAEMON_CHILD]: "1" } };
 }
 
-function spawnDaemonDefault(server: string, token: string, logFile: string): number | undefined {
+function spawnDaemonDefault(token: string, logFile: string): number | undefined {
   const out = fs.openSync(logFile, "a");
   const { args, env } = buildDaemonSpawn(token);
   const child = spawn(process.execPath, args, {
@@ -55,7 +55,7 @@ const RECONNECT_GUIDANCE = "pievo: saved identity is no longer registered — co
 
 export type DaemonStartDeps = {
   fetchStatus?: (server: string, token: string) => Promise<import("./daemon-control.js").MachineStatus | undefined>;
-  spawnDaemon?: (server: string, token: string, logFile: string) => number | undefined;
+  spawnDaemon?: (token: string, logFile: string) => number | undefined;
   kill?: (pid: number, signal: NodeJS.Signals) => void;
   sleep?: (ms: number) => Promise<void>;
   localPid?: () => number | undefined;
@@ -159,7 +159,7 @@ export async function runDaemonStart(args: string[], injected: DaemonStartDeps =
   let baselineHeartbeat = initialHeartbeat ?? null;
 
   d.out("starting daemon…\n");
-  const childPid = d.spawnDaemon(server, token, logFile);
+  const childPid = d.spawnDaemon(token, logFile);
 
   const attempts = Math.ceil(READY_TIMEOUT_MS / POLL_MS);
   for (let i = 0; i < attempts; i++) {

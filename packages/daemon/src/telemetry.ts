@@ -12,7 +12,7 @@ export interface TokenUsage {
   cacheCreationTokens: number;
 }
 
-export interface AttemptTelemetry {
+interface AttemptTelemetry {
   sessionId?: string;
   finalText?: string;
   usage?: TokenUsage;

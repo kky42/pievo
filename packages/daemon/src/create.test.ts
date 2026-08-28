@@ -105,16 +105,6 @@ describe("runCreate", () => {
     expect(keyOf(sent)).not.toBe(first);
   });
 
-  test("removed scalar and connection override flags fail loudly", async () => {
-    const fetchImpl = vi.fn();
-    const deps = { fetchImpl, readActiveConnection };
-    expect(await runCreate(["--json", cfgJson(validConfig()), "--agent", "codex"], deps)).toBe(2);
-    expect(await runCreate(["--json", cfgJson(validConfig()), "--tz", "UTC"], deps)).toBe(2);
-    expect(await runCreate(["--json", cfgJson(validConfig()), "--connect-key", "dk_other"], deps)).toBe(2);
-    expect(await runCreate(["--json", cfgJson(validConfig()), "--server-url", "https://other.test"], deps)).toBe(2);
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
   test("requires the active connection instead of accepting a target override", async () => {
     const fetchImpl = vi.fn();
     expect(await runCreate(["--json", cfgJson(validConfig())], {

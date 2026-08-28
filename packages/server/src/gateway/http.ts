@@ -91,9 +91,6 @@ export interface HttpResult {
 }
 
 export const WIRE_TEXT_CAP = 512 * 1024;
-/** Poll identity strings use the normal wire-text budget; package versions have
- * a tighter existing budget because canonical SemVer is necessarily short. */
-export const POLL_INFO_TEXT_CAP = WIRE_TEXT_CAP;
 export const POLL_VERSION_CAP = 64;
 
 /** Validate an optional poll string without coercion, clipping, or NUL removal. */
@@ -108,7 +105,7 @@ export function nowIso(): string {
 /** Strip NUL (U+0000) from a wire string: Postgres text/jsonb columns REJECT the
  *  NUL byte (SQLite tolerated it), so a daemon-supplied string carrying one would
  *  throw mid-finalize on the DB write. The single sanitizing primitive behind
- *  `clipText` and index.ts's `str` - and used directly by `cli.ts`
+ *  `clipText` - and used directly by `cli.ts`
  *  (parseFlags/validateState, the same one-chokepoint discipline). */
 export function stripNul(s: string): string {
   return s.replace(/\u0000/g, "");

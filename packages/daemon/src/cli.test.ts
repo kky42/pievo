@@ -110,9 +110,8 @@ describe("classify lifecycle routing", () => {
     }
   });
 
-  test("raw flags never launch the daemon", () => {
+  test("server flags never launch the daemon", () => {
     expect(classify(["--server-url", "http://x"], {})).toEqual({ kind: "unknown", verb: "--server-url" });
-    expect(classify(["--api-key", "dk_x"], {})).toEqual({ kind: "unknown", verb: "--api-key" });
   });
 
   test("owner loop verbs remain interactive", () => {

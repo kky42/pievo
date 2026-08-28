@@ -33,7 +33,7 @@ export interface Delivery {
   artifacts: string[];
 }
 
-export interface ReportBody {
+interface ReportBody {
   runId: string;
   exitCode: number | null;
   durationMs: number;
@@ -114,7 +114,7 @@ export function buildAgentSpawn(opts: {
 // Bound coding-agent wall-clock runtime to 12 hours by default. Operators may
 // override it with a positive PIEVO_EXEC_TIMEOUT_MS value; missing or invalid
 // values fail safe to the default rather than allowing an unbounded child.
-export const DEFAULT_EXEC_TIMEOUT_MS = 12 * 60 * 60 * 1000;
+const DEFAULT_EXEC_TIMEOUT_MS = 12 * 60 * 60 * 1000;
 export function resolveExecTimeoutMs(value: string | undefined): number {
   const parsed = Number(value);
   return value?.trim() && Number.isFinite(parsed) && parsed > 0

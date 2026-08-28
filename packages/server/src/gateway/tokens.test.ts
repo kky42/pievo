@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 
+import { registerRunLease, type RunLeaseRegistration } from "../../test/store.js";
+
 let tmp: string;
-let tokens: typeof import("./tokens.js");
+let tokens: typeof import("./tokens.js") & { registerRunLease: typeof registerRunLease };
 let db: typeof import("../db/index.js");
 
 beforeAll(async () => {
@@ -13,7 +15,7 @@ beforeAll(async () => {
   process.env.PIEVO_LOG_LEVEL = "silent";
   db = await import("../db/index.js");
   await db.runMigrations();
-  tokens = await import("./tokens.js");
+  tokens = { ...(await import("./tokens.js")), registerRunLease };
 });
 
 afterAll(() => {
@@ -22,7 +24,7 @@ afterAll(() => {
 
 let seq = 0;
 /** A distinct run each call so leases never collide across tests (shared table). */
-function caps(over: Partial<import("./tokens.js").RunLeaseRegistration> = {}): import("./tokens.js").RunLeaseRegistration {
+function caps(over: Partial<RunLeaseRegistration> = {}): RunLeaseRegistration {
   seq += 1;
   return { runId: `run-${seq}`, loopId: `loop-${seq}`, machineId: `m-${seq}`, ...over };
 }

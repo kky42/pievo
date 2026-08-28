@@ -38,8 +38,6 @@ export const btnDanger = `${btnBase} border border-transparent bg-rubik-red text
 // the px/text tug-of-war on CSS source-order. For inline affordances like Copy
 // that sit next to dense content rather than anchoring a dialog.
 export const btnSm = `inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-wire bg-surface px-3 py-1 text-label font-medium text-primary transition-colors duration-150 hover:bg-raised disabled:cursor-default disabled:opacity-40 ${focusRing}`
-export const btnPrimaryPill = `inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-display bg-display px-4 py-2 text-body font-medium text-paper transition-colors duration-150 hover:opacity-85 disabled:cursor-default disabled:opacity-40 ${focusRing}`
-
 export const btnQuiet =
   'inline-flex cursor-pointer items-center gap-1.5 border-none bg-transparent p-0 text-meta font-medium text-secondary transition-colors hover:text-display'
 
@@ -85,14 +83,6 @@ export function ErrorBanner({
         </button>
       )}
     </div>
-  )
-}
-
-export function Pre({ children }: { children: ReactNode }) {
-  return (
-    <pre className="max-h-[300px] overflow-auto whitespace-pre-wrap rounded-control border border-hairline bg-raised px-4 py-3.5 font-mono text-meta leading-relaxed text-secondary">
-      {children}
-    </pre>
   )
 }
 

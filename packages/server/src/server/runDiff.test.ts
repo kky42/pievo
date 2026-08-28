@@ -4,13 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 
-import { testStore, type TestStore } from "../../test/store.js";
+import { registerRunLease, testStore, type TestStore } from "../../test/store.js";
 
 let tmp: string;
 let db: typeof import("../db/index.js");
 let store: TestStore;
 let boot: typeof import("./boot.js");
-let tokens: typeof import("../gateway/tokens.js");
+let tokens: typeof import("../gateway/tokens.js") & { registerRunLease: typeof registerRunLease };
 let runDiff: typeof import("./runDiff.js");
 let gw: Awaited<ReturnType<typeof import("./boot.js")["getGateway"]>>;
 let art: Awaited<ReturnType<typeof import("./boot.js")["getArtifactSync"]>>;
@@ -23,7 +23,7 @@ beforeAll(async () => {
   await db.runMigrations();
   store = testStore(await import("../db/store.js"));
   boot = await import("./boot.js");
-  tokens = await import("../gateway/tokens.js");
+  tokens = { ...(await import("../gateway/tokens.js")), registerRunLease };
   runDiff = await import("./runDiff.js");
   gw = await boot.getGateway();
   art = await boot.getArtifactSync();

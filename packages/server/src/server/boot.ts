@@ -45,8 +45,7 @@ export function ensureServer(): Promise<Booted> {
   if (g.__pievoBooted) return g.__pievoBooted;
   const p = boot();
   g.__pievoBooted = p;
-  // If boot fails, clear the cache so a later call can retry (mirrors the old
-  // sync behavior where a throw left `__pievoBooted` unset).
+  // If boot fails, allow a later call to retry.
   p.catch(() => {
     if (g.__pievoBooted === p) g.__pievoBooted = undefined;
   });

@@ -3,11 +3,6 @@ import type { Machine } from "../db/schema.js";
 import type { HttpResult } from "./http.js";
 import { isDeviceTokenShape, machineIdFromToken, sha256 } from "./tokens.js";
 
-export interface AuthenticatedDevice {
-  machineId: string;
-  machine: Machine;
-}
-
 export type DeviceAuthResult =
   | { ok: true; machineId: string; machine: Machine | undefined }
   | { ok: false; reason: "invalid" | "unknown" | "mismatch"; response: HttpResult };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { LoopDetail, LoopSummary, RunSummary } from '../types'
-import { daemonStopSupport, deriveLoopLifecycle, lifecycleDisplay, lifecyclePresentation } from './lifecycleUi'
+import { daemonStopSupport, deriveLoopLifecycle, lifecyclePresentation } from './lifecycleUi'
 
 const run = (patch: Partial<RunSummary> = {}): RunSummary => ({
   id: 'r1', loopId: 'l1', ts: '2026-01-01T00:00:00Z', phase: 'done', agent: null, status: null, message: null, durationMs: null, exitCode: null,
@@ -49,8 +49,8 @@ describe('Dashboard lifecycle derivation', () => {
     const owner = { kind: 'owner' as const, at: '2026-01-01T00:00:00Z' }
     const finishing = loop({ enabled: false, running: true, pauseCause: owner, runs: [run({ phase: 'running' })] })
     const stopping = loop({ enabled: false, running: true, pauseCause: owner, runs: [run({ phase: 'running', cancelRequested: true })] })
-    expect(lifecycleDisplay(detail(finishing))).toBe('Paused · owner')
-    expect(lifecycleDisplay(detail(stopping, { online: false, presence: 'offline', daemonProtocol: 1 }))).toBe('Paused · owner')
+    expect(lifecyclePresentation(detail(finishing).summary).label).toBe('Paused · owner')
+    expect(lifecyclePresentation(detail(stopping, { online: false, presence: 'offline', daemonProtocol: 1 }).summary).label).toBe('Paused · owner')
   })
 
   it('reports breaking protocol support explicitly', () => {

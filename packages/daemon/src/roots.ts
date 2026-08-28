@@ -13,7 +13,7 @@ function resolveRoot(root: string): string {
   return path.resolve(expandTilde(root));
 }
 
-export function resolveRoots(roots: string[]): string[] {
+function resolveRoots(roots: string[]): string[] {
   return roots.map(resolveRoot);
 }
 
@@ -23,7 +23,7 @@ export function resolveRoots(roots: string[]): string[] {
  *  compare: a server-sent path can carry unresolved `..` segments
  *  (`/jail/root/../../…`) that a raw lexical startsWith would wrongly admit
  *  while the OS resolves it OUTSIDE the jail. */
-export function isWithinResolvedRoots(abs: string, resolvedRoots: string[]): boolean {
+function isWithinResolvedRoots(abs: string, resolvedRoots: string[]): boolean {
   const a = path.resolve(abs);
   return resolvedRoots.some((r) => a === r || a.startsWith(r + path.sep));
 }

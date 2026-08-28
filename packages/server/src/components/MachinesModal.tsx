@@ -38,6 +38,20 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
+type CliConfig = { pievoCli: string; customCli: boolean }
+
+function UpgradeCommand({ cliConfig, configErr }: { cliConfig: CliConfig | null; configErr: boolean }) {
+  const command = cliConfig ? daemonUpgradeCommand(cliConfig.pievoCli, cliConfig.customCli) : null
+  return (
+    command ? <div className="flex items-start gap-2">
+      <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-control bg-display p-3 font-mono text-caption leading-relaxed text-paper">{command}</pre>
+      <CopyButton text={command} />
+    </div> : <div className="text-label text-secondary">
+      {configErr ? 'Could not load the upgrade command. Close and try again.' : 'Loading upgrade command…'}
+    </div>
+  )
+}
+
 type Pending = { id: string; token: string }
 
 function machineOrder(a: MachineSummary, b: MachineSummary): number {
@@ -54,7 +68,7 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [delErr, setDelErr] = useState<string | null>(null)
-  const [cliConfig, setCliConfig] = useState<{ pievoCli: string; customCli: boolean } | null>(null)
+  const [cliConfig, setCliConfig] = useState<CliConfig | null>(null)
   const [configErr, setConfigErr] = useState(false)
 
   useEffect(() => {
@@ -316,18 +330,7 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
                 <div className="text-label text-secondary">
                   running {m.daemonVersion ? `v${m.daemonVersion}` : 'unknown version'} · required v{m.requiredDaemonVersion}
                 </div>
-                {cliConfig ? (
-                  <div className="flex items-start gap-2">
-                    <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-control bg-display p-3 font-mono text-caption leading-relaxed text-paper">
-                      {daemonUpgradeCommand(cliConfig.pievoCli, cliConfig.customCli)}
-                    </pre>
-                    <CopyButton text={daemonUpgradeCommand(cliConfig.pievoCli, cliConfig.customCli)} />
-                  </div>
-                ) : (
-                  <div className="text-label text-secondary">
-                    {configErr ? 'Could not load the upgrade command. Close and try again.' : 'Loading upgrade command…'}
-                  </div>
-                )}
+                <UpgradeCommand cliConfig={cliConfig} configErr={configErr} />
               </div>
             )}
             {/* Outdated-daemon hint: only when both versions are known and the
@@ -337,18 +340,7 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
                 <div className="text-label text-secondary">
                   daemon v{m.daemonVersion} · upgrade available (v{m.latestDaemonVersion})
                 </div>
-                {cliConfig ? (
-                  <div className="flex items-start gap-2">
-                    <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-control bg-display p-3 font-mono text-caption leading-relaxed text-paper">
-                      {daemonUpgradeCommand(cliConfig.pievoCli, cliConfig.customCli)}
-                    </pre>
-                    <CopyButton text={daemonUpgradeCommand(cliConfig.pievoCli, cliConfig.customCli)} />
-                  </div>
-                ) : (
-                  <div className="text-label text-secondary">
-                    {configErr ? 'Could not load the upgrade command. Close and try again.' : 'Loading upgrade command…'}
-                  </div>
-                )}
+                <UpgradeCommand cliConfig={cliConfig} configErr={configErr} />
               </div>
             )}
           </li>

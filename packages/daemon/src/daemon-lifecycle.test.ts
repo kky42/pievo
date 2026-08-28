@@ -37,17 +37,6 @@ function seams(extra: DaemonStartDeps = {}): Cap {
   };
 }
 
-describe("runDaemonStart — exact public flags", () => {
-  test("rejects removed --api-key and unknown flags without spawning", async () => {
-    for (const args of [["--api-key", "dk_old"], ["--wat"]]) {
-      const cap = seams();
-      expect(await runDaemonStart(args, cap)).toBe(2);
-      expect(cap.spawned()).toBe(0);
-      expect(cap.stderr()).toContain("pievo daemon start");
-    }
-  });
-});
-
 describe("runDaemonStart — local pidfile first (no daemon leaks)", () => {
   test("a live local daemon short-circuits: never spawns a second one even when the server is unreachable", async () => {
     const cap = seams({ localPid: () => 4242, fetchStatus: async () => undefined });

@@ -1,7 +1,5 @@
 <div align="center">
 
-<img alt="Pievo" src="docs/assets/logo.svg" width="50">
-
 # Pievo
 
 **Run a stored coding-agent prompt on a reliable schedule, on your own machine.**
@@ -9,19 +7,12 @@
 Pievo schedules Claude Code, Codex, or Pi while keeping execution, credentials, and
 project files on your machine.
 
-Pievo began as a fork of [Loopany](https://github.com/superdesigndev/loopany) by
-[Superdesign](https://github.com/superdesigndev).
-
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/kky42/pievo?style=flat)](https://github.com/kky42/pievo/stargazers)
 
 [Source](https://github.com/kky42/pievo) · [Daemon on npm](https://www.npmjs.com/package/@kky42/pievo)
 
 </div>
-
-![Pievo dashboard with lifecycle and tag filters across scheduled agent loops](docs/assets/pievo-dashboard.png)
-
-<p align="center"><sub>Example dashboard with lifecycle and tag filters, using anonymized machine and working-directory labels.</sub></p>
 
 ## What Pievo does
 
@@ -56,10 +47,6 @@ pievo-server start
 
 Open <http://127.0.0.1:3000>, click **New Loop**, and follow the two numbered
 instructions in the dialog:
-
-![New Loop dialog showing where to connect the daemon and how to invoke Pievo from each supported agent](docs/assets/pievo-new-loop.png)
-
-<p align="center"><sub>Example only. Your dialog supplies the real server URL and connect key.</sub></p>
 
 The generated command is a machine credential, so treat it and your shell history as
 secrets. It should report `daemon online` and `pievo skill: installed`; installation
@@ -111,8 +98,6 @@ For production:
   who can reach the server has shared administrative access, so keep it on localhost,
   a trusted private network, or behind an authenticated reverse proxy.
 
-See [`.env.example`](.env.example) for all settings and retention controls.
-
 ### Docker
 
 ```bash
@@ -123,9 +108,6 @@ docker run -p 127.0.0.1:3000:3000 -e PIEVO_DB=pglite -v pievo-data:/data pievo
 docker run -p 127.0.0.1:3000:3000 -e DATABASE_URL=... -e DIRECT_DATABASE_URL=... -v pievo-data:/data pievo
 ```
 
-[`fly.toml`](fly.toml) and [`fly.prod.toml`](fly.prod.toml) are optional
-single-process deployment examples.
-
 ## Upgrade
 
 ```bash
@@ -134,11 +116,6 @@ pievo-server restart
 npm install -g @kky42/pievo@latest
 pievo daemon restart
 ```
-
-> **Upgrading a former team-enabled installation:** back up the database before the
-> `0002_remove_teams` migration. It removes teams, memberships, roles, and invitations;
-> resources remain owned by their stored `user_id`. Upgrade the server and migration
-> together, and do not run an older server afterward.
 
 ## License
 

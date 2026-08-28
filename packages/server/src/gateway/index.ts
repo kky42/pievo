@@ -22,10 +22,9 @@ import * as store from "../db/store.js";
 import type { Loop, NewLoop, NewRun, Run, RunUsage } from "../db/schema.js";
 import type { ReportIncident, ReportIncidentCode, ReportIncidentFaultDomain } from "../types.js";
 import type { Scheduler } from "../scheduler/index.js";
-import { buildDelivery, type Delivery } from "./delivery.js";
+import { buildDelivery } from "./delivery.js";
 import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainResult } from "./retention.js";
-import { machinePresence } from "../lib/machinePresence.js";
 import { isValidSemver } from "../lib/semver.js";
 import { snapshotRetention } from "../env.js";
 import {
@@ -42,17 +41,15 @@ import {
 import { authenticateDeviceToken } from "./deviceAuth.js";
 import {
   countLine,
-  detailBlock,
   doc,
   emptyList,
   helpBlock,
-  kvLine,
   listBlock,
   type Scalar,
 } from "./toon.js";
 import { canonicalLoopEnvelope, LOOP_EDIT_FIELDS, scheduleFromLoop, validateLoopCreate, validateLoopEdit } from "./loopConfig.js";
 import { DAEMON_PROTOCOL_VERSION, MIN_DAEMON_VERSION, daemonNeedsUpdate, daemonUpgradeCommand } from "./protocol.js";
-import { clipText, nowIso, POLL_VERSION_CAP, stripNul, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
+import { clipText, nowIso, POLL_VERSION_CAP, WIRE_TEXT_CAP, type HttpResult } from "./http.js";
 import {
   POLL_V4_REQUEST_FIELDS,
   validPollCurrentRun,
@@ -62,6 +59,7 @@ import {
 } from "./pollValidation.js";
 
 const log = logger.child({ mod: "gateway" });
+type Delivery = Awaited<ReturnType<typeof buildDelivery>>;
 
 export const ONLINE_TTL_MS = 30_000;
 /** Auto-pause after this many consecutive errors. Canceled rows are transparent;
@@ -881,6 +879,51 @@ export class MachineGateway {
     return response;
   }
 
+  private async reportRaceResponse(
+    runToken: string,
+    lease: RunLease,
+    body: MachineReportBody,
+    payloadDigest: string,
+  ): Promise<HttpResult | undefined> {
+    const raced = await committedReportEvidence(body.reportId!, payloadDigest, lease.runId);
+    if (raced.response) return raced.response;
+    if (raced.foreignRun) {
+      return this.rejectTerminalAttempt(runToken, lease, body, payloadDigest, "REPORT_CONFLICT", ["reportId was already committed for another run"]);
+    }
+    return undefined;
+  }
+
+  private async resolveLostTerminalRace(
+    runToken: string,
+    lease: RunLease,
+    body: MachineReportBody,
+    payloadDigest: string,
+    retryReconcile: boolean,
+    logMessage: string,
+  ): Promise<HttpResult> {
+    const raced = await this.reportRaceResponse(runToken, lease, body, payloadDigest);
+    if (raced) return raced;
+    const fresh = await store.getRun(lease.runId);
+    if (fresh?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease, body);
+    if (fresh?.phase === "done") return { status: 409, body: { error: "run already finalized", code: "REPORT_NOT_FINALIZED", reportId: body.reportId } };
+    const refreshedLease = await resolveLease(runToken);
+    if (refreshedLease?.state === "retired") return this.retiredReport(runToken, body, lease.runId);
+    if (retryReconcile && fresh?.phase === "error" && refreshedLease?.state === "terminal-grace") {
+      return this.reconcileReclaimedReport(runToken, refreshedLease, fresh, body);
+    }
+    log.info({ runId: lease.runId, phase: fresh?.phase }, logMessage);
+    return { status: 409, body: { error: "terminal report was not finalized", code: "REPORT_NOT_FINALIZED", reportId: body.reportId } };
+  }
+
+  private async captureRunSnapshot(runId: string, loopId: string): Promise<void> {
+    try {
+      await store.putRunSnapshot(runId, loopId, await store.buildLoopManifest(loopId));
+      await store.pruneRunSnapshots(loopId, snapshotRetention());
+    } catch (err) {
+      log.warn({ runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
+    }
+  }
+
   /** Reconcile one swept run. The store consumes the terminal-grace lease in the
    * same loop-lock transaction as the error→done/error patch and loop state, so
    * concurrent late reports cannot both win (including error→error). */
@@ -922,35 +965,19 @@ export class MachineGateway {
         receipt,
       );
     } catch (error) {
-      const raced = await committedReportEvidence(receipt.reportId, payloadDigest, lease.runId);
-      if (raced.response) return raced.response;
-      if (raced.foreignRun) return this.rejectTerminalAttempt(runToken, lease, body, payloadDigest, "REPORT_CONFLICT", ["reportId was already committed for another run"]);
+      const raced = await this.reportRaceResponse(runToken, lease, body, payloadDigest);
+      if (raced) return raced;
       throw error;
     }
     if (!reconciled) {
       // Another terminal actor consumed the lease/phase. Handle the observed
       // winner once, without recursive report() retries.
-      const raced = await committedReportEvidence(receipt.reportId, payloadDigest, lease.runId);
-      if (raced.response) return raced.response;
-      if (raced.foreignRun) return this.rejectTerminalAttempt(runToken, lease, body, payloadDigest, "REPORT_CONFLICT", ["reportId was already committed for another run"]);
-      const fresh = await store.getRun(lease.runId);
-      if (fresh?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease, body);
-      if (fresh?.phase === "done") return { status: 409, body: { error: "run already finalized", code: "REPORT_NOT_FINALIZED", reportId: body.reportId } };
-      const refreshed = await resolveLease(runToken);
-      if (refreshed?.state === "retired") return this.retiredReport(runToken, body, lease.runId);
-      log.info({ runId: lease.runId, phase: fresh?.phase }, "report: late reconcile lost terminal race");
-      return { status: 409, body: { error: "terminal report was not finalized", code: "REPORT_NOT_FINALIZED", reportId: body.reportId } };
+      return this.resolveLostTerminalRace(runToken, lease, body, payloadDigest, false, "report: late reconcile lost terminal race");
     }
 
     const deleting = reconciled.loop.deleteRequestedAt != null;
     const reportOnly = reconciled.reportOnly === true;
-    if (!deleting && !reportOnly) try {
-      await store.putRunSnapshot(lease.runId, lease.loopId, await store.buildLoopManifest(lease.loopId));
-      await store.pruneRunSnapshots(lease.loopId, snapshotRetention());
-    } catch (err) {
-      log.warn({ runId: lease.runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
-    }
-    const finalized = reconciled.run;
+    if (!deleting && !reportOnly) await this.captureRunSnapshot(lease.runId, lease.loopId);
     if (!reportOnly) this.scheduler.addLoop(reconciled.loop);
     if (!reportOnly) this.applyAutopauseTimer(lease.loopId, reconciled);
     if (deleting) await store.tryDeleteLoop(lease.loopId);
@@ -1105,47 +1132,19 @@ export class MachineGateway {
       // A different loop may win the reportId unique race while this transaction
       // waits. Its insert rolls this finalization back; convert the collision to a
       // replay/conflict only after observing the durable winning receipt.
-      const raced = await committedReportEvidence(reportId, payloadDigest, lease.runId);
-      if (raced.response) return raced.response;
-      if (raced.foreignRun) {
-        return this.rejectTerminalAttempt(runToken, lease, body, payloadDigest, "REPORT_CONFLICT", ["reportId was already committed for another run"]);
-      }
+      const raced = await this.reportRaceResponse(runToken, lease, body, payloadDigest);
+      if (raced) return raced;
       throw error;
     }
     if (!terminal) {
       // A concurrent report may have passed the pre-lock receipt read. Re-read
       // after the loop-lock winner commits before handling the losing path.
-      const raced = await committedReportEvidence(reportId, payloadDigest, lease.runId);
-      if (raced.response) return raced.response;
-      if (raced.foreignRun) {
-        return this.rejectTerminalAttempt(runToken, lease, body, payloadDigest, "REPORT_CONFLICT", ["reportId was already committed for another run"]);
-      }
-      const fresh = await store.getRun(lease.runId);
-      if (fresh?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease, body);
-      if (fresh?.phase === "done") return { status: 409, body: { error: "run already finalized", code: "REPORT_NOT_FINALIZED", reportId } };
-      const refreshedLease = await resolveLease(runToken);
-      if (refreshedLease?.state === "retired") return this.retiredReport(runToken, body, lease.runId);
-      if (fresh?.phase === "error" && refreshedLease?.state === "terminal-grace") {
-        return this.reconcileReclaimedReport(runToken, refreshedLease, fresh, body);
-      }
-      log.info({ runId: lease.runId, phase: fresh?.phase }, "report: lost terminal race");
-      return { status: 409, body: { error: "terminal report was not finalized", code: "REPORT_NOT_FINALIZED", reportId } };
+      return this.resolveLostTerminalRace(runToken, lease, body, payloadDigest, true, "report: lost terminal race");
     }
-    const finalized = terminal.run;
-
     // A delete-requested loop needs only the atomic receipt/finalization; deletion
     // follows in a second transaction and maintenance can repair a crash gap.
     const deleting = terminal.loop.deleteRequestedAt != null;
-    if (!deleting) try {
-      await store.putRunSnapshot(lease.runId, lease.loopId, await store.buildLoopManifest(lease.loopId));
-      // Bound the snapshot history right away (cheap, keeps the table from growing
-      // unbounded between maintenance passes). The blobs this unpins are reclaimed
-      // by the periodic GC, not here — the grace window means a just-unreferenced
-      // blob isn't collectable yet anyway, and report() must stay lean + zero-exec.
-      await store.pruneRunSnapshots(lease.loopId, snapshotRetention());
-    } catch (err) {
-      log.warn({ runId: lease.runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
-    }
+    if (!deleting) await this.captureRunSnapshot(lease.runId, lease.loopId);
 
     // Terminal cadence was committed with the run transition. This only
     // refreshes the best-effort timer.
@@ -1269,14 +1268,6 @@ export function runResultToken(r: { phase: string; status: string | null }): str
   if (r.phase === "canceled") return "canceled";
   const base = r.phase === "error" ? "failed" : r.phase === "done" ? "ok" : r.phase;
   return r.status ? `${base}/${r.status}` : `${base}/missing-status`;
-}
-
-export const LOG_MESSAGE_CELL_CAP = 100;
-
-function str(v: unknown): string | null {
-  if (typeof v !== "string") return null;
-  const t = stripNul(v).trim();
-  return t ? t : null;
 }
 
 /** Stable JSON with recursively sorted object keys — so two structurally-equal values

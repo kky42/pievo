@@ -1,4 +1,4 @@
-import type { LoopDetail, LoopSummary } from '../types'
+import type { LoopSummary } from '../types'
 
 export const DASHBOARD_PROTOCOL = 4
 export const DAEMON_UPGRADE_REQUIRED = 'Daemon upgrade required to stop a running process. Run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.'
@@ -31,8 +31,4 @@ export function daemonStopSupport(protocol: number | null | undefined): { suppor
   return protocol === DASHBOARD_PROTOCOL
     ? { supported: true, label: `Daemon protocol ${DASHBOARD_PROTOCOL} · Stop supported` }
     : { supported: false, label: `Daemon protocol ${protocol ?? 'unknown'} · upgrade required` }
-}
-
-export function lifecycleDisplay(detail: LoopDetail): string {
-  return lifecyclePresentation(detail.summary).label
 }

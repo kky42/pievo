@@ -1,5 +1,5 @@
-import type { PostCliDeps } from "./cli-client.js";
 import { postCli, printCliResponse } from "./cli-client.js";
+import { buildPostCliDeps, serverFlag } from "./cli-deps.js";
 import { parseLongOptions } from "./long-options.js";
 import { renderResolveError, resolveOwnerLoop } from "./owner-loop.js";
 
@@ -39,16 +39,7 @@ const LOG_FLAGS = new Set([...BOOL_FLAGS, ...VALUE_FLAGS, "server-url"]);
 
 export async function runLog(argv: string[], injected: LogDeps = {}): Promise<number> {
   const d = seams(injected);
-  const flagServer = (() => {
-    const i = argv.indexOf("--server-url");
-    return i >= 0 ? argv[i + 1] : undefined;
-  })();
-  const cliDeps: PostCliDeps = {
-    fetchImpl: injected.fetchFn,
-    serverFlag: flagServer,
-    ...("server" in injected ? { server: injected.server } : {}),
-    ...("token" in injected ? { deviceToken: injected.token } : {}),
-  };
+  const cliDeps = buildPostCliDeps({ ...injected, serverFlag: serverFlag(argv) });
 
   const { positional, flags } = parseLongOptions(argv, (key) => !BOOL_FLAGS.has(key));
   const unknown = Object.keys(flags).filter((k) => !LOG_FLAGS.has(k));

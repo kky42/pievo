@@ -6,7 +6,7 @@
  * are preserved verbatim (the view scrolls them inside its own pane).
  */
 
-export type DiffLineKind =
+type DiffLineKind =
   | 'add'
   | 'del'
   | 'hunk'

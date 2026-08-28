@@ -31,13 +31,10 @@ import {
   helpBlock,
   kvLine,
   listBlock,
-  scalar,
-  truncate,
   type Scalar,
 } from "./toon.js";
 import {
   EDITABLE_LOOP_FIELDS,
-  LOG_MESSAGE_CELL_CAP,
   LOG_RUNS_DEFAULT,
   MESSAGE_CAP,
   fmtTime,
@@ -414,12 +411,6 @@ function parseJsonFlag(raw: unknown): { ok: true; value: Record<string, unknown>
   }
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { ok: false, error: "pievo: --json must be a JSON object" };
   return { ok: true, value: obj as Record<string, unknown> };
-}
-
-function stringifyFlags(flags: Flags): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(flags)) out[k] = String(v);
-  return out;
 }
 
 /** A structured `error:`/`code:` TOON result for stdout.

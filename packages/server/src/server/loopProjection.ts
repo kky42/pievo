@@ -3,7 +3,7 @@ import type { ArtifactFile, Loop, Machine, Run } from "../db/schema.js";
 import type { ArtifactSummary, LoopDetail, LoopFull, LoopSummary, RunSummary } from "../types.js";
 import { machinePresence } from "../lib/machinePresence.js";
 import { MIN_DAEMON_VERSION, daemonNeedsUpdate } from "../gateway/protocol.js";
-import { scheduleFromLoop, statusDefinitionsFromLoop } from "../gateway/loopConfig.js";
+import { canonicalLoopEnvelope, canonicalLoopSummary } from "../gateway/loopConfig.js";
 
 const SUMMARY_RUNS = 18;
 const RECENT_USAGE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -73,14 +73,7 @@ async function toLoopSummaryWithMachine(loop: Loop, machine: Machine | undefined
   const recentUsage = await store.recentLoopUsage(loop.id, new Date(Date.now() - RECENT_USAGE_WINDOW_MS).toISOString());
   const presence = machinePresence(machine?.online, machine?.lastSeen);
   return {
-    id: loop.id,
-    name: loop.name,
-    tags: loop.tags,
-    schedule: scheduleFromLoop(loop),
-    workdir: loop.workdir,
-    agent: loop.agent,
-    model: loop.model ?? null,
-    reasoningEffort: loop.reasoningEffort ?? null,
+    ...canonicalLoopSummary(loop),
     machine: {
       id: loop.machineId,
       name: machine?.name || "",
@@ -102,10 +95,6 @@ async function toLoopSummaryWithMachine(loop: Loop, machine: Machine | undefined
   };
 }
 
-export async function toLoopSummary(loop: Loop): Promise<LoopSummary> {
-  return toLoopSummaryWithMachine(loop, await store.getMachine(loop.machineId));
-}
-
 /** Batch dashboard projection: machine rows are preloaded once, avoiding a
  * machine lookup per loop on every dashboard poll. */
 export async function toLoopSummaries(loops: Loop[], machines: Machine[]): Promise<LoopSummary[]> {
@@ -115,18 +104,7 @@ export async function toLoopSummaries(loops: Loop[], machines: Machine[]): Promi
 
 function toLoopFull(loop: Loop): LoopFull {
   return {
-    id: loop.id,
-    name: loop.name,
-    tags: loop.tags,
-    schedule: scheduleFromLoop(loop),
-    workdir: loop.workdir,
-    agent: loop.agent,
-    model: loop.model ?? null,
-    reasoningEffort: loop.reasoningEffort ?? null,
-    prompt: loop.prompt,
-    statusDefinitions: statusDefinitionsFromLoop(loop),
-    artifacts: loop.artifacts,
-    enabled: loop.enabled,
+    ...canonicalLoopEnvelope(loop),
     pauseCause: loop.pauseCause ?? null,
     createdAt: loop.createdAt,
     updatedAt: loop.updatedAt,

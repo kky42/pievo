@@ -73,13 +73,6 @@ export async function readConnectKeyBinding(connectKey: string | null | undefine
   return { userId: row.userId };
 }
 
-/** Identity needed to seed a report-only lease outside the atomic claim path. */
-export interface RunLeaseRegistration {
-  runId: string;
-  loopId: string;
-  machineId: string;
-}
-
 /**
  * A run lease: the per-run credential and its lifecycle state machine.
  *
@@ -129,18 +122,6 @@ function leaseFromRow(row: typeof runLeases.$inferSelect): RunLease {
 const RUN_TOKEN_RE = /^rk_[0-9a-f]{32}$/;
 export function isRunTokenShape(token: string): boolean {
   return RUN_TOKEN_RE.test(token);
-}
-
-export async function registerRunLease(caps: RunLeaseRegistration): Promise<string> {
-  const token = `rk_${randomBytes(16).toString("hex")}`;
-  await db.insert(runLeases).values({
-    tokenHash: sha256(token),
-    runId: caps.runId,
-    loopId: caps.loopId,
-    machineId: caps.machineId,
-    createdAt: new Date().toISOString(),
-  });
-  return token;
 }
 
 /** Resolve a run lease. An elapsed reconciliation window is atomically reduced

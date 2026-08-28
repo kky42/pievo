@@ -37,8 +37,7 @@ export function validServerUrl(value: string): boolean {
   }
 }
 
-/** Invalid or absent config is treated as unconfigured. Legacy credential files
- * are deliberately not consulted. */
+/** Invalid or absent config is treated as unconfigured. */
 export function readConnections(file = CONNECTIONS_FILE): ConnectionsConfig {
   try {
     const raw = JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
@@ -61,7 +60,7 @@ export function readConnections(file = CONNECTIONS_FILE): ConnectionsConfig {
 
 /** Credential persistence is not best-effort: a successful connect must survive
  * restart. Both the directory and file are owner-only, including existing files. */
-export function writeConnections(config: ConnectionsConfig, file = CONNECTIONS_FILE): void {
+function writeConnections(config: ConnectionsConfig, file = CONNECTIONS_FILE): void {
   const dir = path.dirname(file);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   fs.chmodSync(dir, 0o700);

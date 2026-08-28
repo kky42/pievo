@@ -14,7 +14,7 @@ const PUT_CONCURRENCY = 4;
 
 export type SyncFetch = (url: string, init: RequestInit, timeoutMs: number) => Promise<Response>;
 
-export interface ArtifactManifestEntry {
+interface ArtifactManifestEntry {
   path: string;
   hash: string | null;
   size: number;
@@ -37,7 +37,7 @@ function sha256(buf: Buffer): string {
 }
 
 /** Match the server/viewer convention: a NUL in the first 8 KiB is binary. */
-export function looksBinary(bytes: Buffer): boolean {
+function looksBinary(bytes: Buffer): boolean {
   return bytes.subarray(0, 8192).includes(0);
 }
 

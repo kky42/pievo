@@ -6,7 +6,7 @@
 // but does NOT copy its WASM/data runtime assets. At runtime the bundled module
 // opens `pglite.data` / `pglite.wasm` RELATIVE to its own directory (`_libs/`), so
 // the first DB query dies with ENOENT and the whole embedded/self-host tier
-// (`pnpm start` / Docker / fly.toml's pglite default) is broken. This step copies
+// (`pnpm start` / Docker) is broken. This step copies
 // the assets into `_libs/` (beside the bundled module) to close that gap.
 //
 // It is intentionally forgiving: if there is no `.output` (e.g. a bare checkout, or

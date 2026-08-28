@@ -111,8 +111,8 @@ test("schedule rows fail closed at every read", () => {
     timezone: null,
     cronOverlap: "skip",
   } as Loop)).toThrow("invariant: cron loop loop-missing-timezone has no timezone");
-  expect(() => scheduleFromLoop({ id: "loop-unknown", scheduleMode: "legacy" } as unknown as Loop))
-    .toThrow("invariant: loop loop-unknown has unknown schedule mode: legacy");
+  expect(() => scheduleFromLoop({ id: "loop-unknown", scheduleMode: "unsupported" } as unknown as Loop))
+    .toThrow("invariant: loop loop-unknown has unknown schedule mode: unsupported");
 });
 
 test("workdir is absolute in either supported platform syntax", () => {

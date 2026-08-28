@@ -3,12 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
-import { testStore, type TestStore } from "../../test/store.js";
+import { registerRunLease, testStore, type TestStore } from "../../test/store.js";
 
 let tmp: string;
 let db: typeof import("../db/index.js");
 let store: TestStore;
-let tokens: typeof import("./tokens.js");
+let tokens: typeof import("./tokens.js") & { registerRunLease: typeof registerRunLease };
 let gatewayMod: typeof import("./index.js");
 
 beforeAll(async () => {
@@ -18,7 +18,7 @@ beforeAll(async () => {
   db = await import("../db/index.js");
   await db.runMigrations();
   store = testStore(await import("../db/store.js"));
-  tokens = await import("./tokens.js");
+  tokens = { ...(await import("./tokens.js")), registerRunLease };
   gatewayMod = await import("./index.js");
 });
 

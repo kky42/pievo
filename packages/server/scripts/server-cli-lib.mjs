@@ -4,8 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export const DEFAULT_HOST = "127.0.0.1";
-export const DEFAULT_PORT = 3000;
+const DEFAULT_HOST = "127.0.0.1";
+const DEFAULT_PORT = 3000;
 const MALFORMED_LOCK_GRACE_MS = 5_000;
 
 export function usage() {

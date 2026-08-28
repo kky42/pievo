@@ -8,7 +8,7 @@
 import { describe, expect, test } from 'vitest'
 
 import { SYNC_BODY_CAP } from '../gateway/artifacts'
-import { MACHINE_BODY_CAP, POLL_INFO_TEXT_CAP, POLL_VERSION_CAP, readJsonBody } from '../gateway/http'
+import { MACHINE_BODY_CAP, POLL_VERSION_CAP, WIRE_TEXT_CAP, readJsonBody } from '../gateway/http'
 import { gatewayPollRequest, parsePollBody, Route as PollRoute } from './api.machine.poll'
 import { Route as ReportRoute } from './machine.report'
 import { parseCliBody, Route as CliRoute } from './api.machine.cli'
@@ -104,7 +104,7 @@ test('poll HTTP envelope has an exact, strictly typed field allowlist', () => {
   expect(parsePollBody({ arch: ['arm64'] })).toBeNull()
   expect(parsePollBody({ version: { value: '2.4.0' } })).toBeNull()
   expect(parsePollBody({ host: 'mac\0forged' })).toBeNull()
-  expect(parsePollBody({ host: 'h'.repeat(POLL_INFO_TEXT_CAP + 1) })).toBeNull()
+  expect(parsePollBody({ host: 'h'.repeat(WIRE_TEXT_CAP + 1) })).toBeNull()
   expect(parsePollBody({ version: 'v'.repeat(POLL_VERSION_CAP + 1) })).toBeNull()
   expect(parsePollBody({ currentRuns: [{ runId: 'run-1', stage: 'reporting' }] })).not.toBeNull()
   expect(parsePollBody({ currentRuns: [{ runId: 'run-1', stage: 'reporting', unknown: true }] })).toBeNull()

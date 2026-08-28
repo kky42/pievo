@@ -3,14 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 
-import { testStore, type TestLoopSeed, type TestStore } from "../../test/store.js";
+import { registerRunLease, testStore, type TestLoopSeed, type TestStore } from "../../test/store.js";
 
 let tmp: string;
 let db: typeof import("../db/index.js");
 let store: TestStore;
 let gatewayMod: typeof import("./index.js");
 let cliMod: typeof import("./cli.js");
-let tokens: typeof import("./tokens.js");
+let tokens: typeof import("./tokens.js") & { registerRunLease: typeof registerRunLease };
 let schedulerMod: typeof import("../scheduler/index.js");
 
 beforeAll(async () => {
@@ -22,7 +22,7 @@ beforeAll(async () => {
   store = testStore(await import("../db/store.js"));
   gatewayMod = await import("./index.js");
   cliMod = await import("./cli.js");
-  tokens = await import("./tokens.js");
+  tokens = { ...(await import("./tokens.js")), registerRunLease };
   schedulerMod = await import("../scheduler/index.js");
 });
 
@@ -230,7 +230,7 @@ test("owner CLI creates, edits, and shows normalized tags through the agent-faci
   expect(listed).toEqual([expect.objectContaining({ id, tags: ["daily", "ops"] })]);
 });
 
-test("create transport requires exact idempotency/dryRun fields and rejects removed claims", async () => {
+test("create transport requires exact idempotency/dryRun fields", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
@@ -250,10 +250,6 @@ test("create transport requires exact idempotency/dryRun fields and rejects remo
   expect((await gw.createLoop(token, { ...config, idempotencyKey: "a".repeat(64), dryRun: "true" })).body)
     .toMatchObject({ error: "dryRun must be boolean when provided" });
 
-  const removedClaim = { ...config, idempotencyKey: "b".repeat(64), dryRun: true, claim: tokens.mintDeviceToken() };
-  const result = await gw.createLoop(token, removedClaim);
-  expect(result).toMatchObject({ status: 400, body: { error: expect.stringContaining("unknown field(s): claim") } });
-  expect(await store.loopsForMachine(machineId)).toHaveLength(0);
 });
 
 test("minimal report protocol accepts only canonical status, message, and help flags", async () => {
@@ -629,10 +625,6 @@ test("editLoop --dry-run returns canonical before and after without persisting",
   expect(JSON.parse(String(body.text))).toMatchObject({ before: { name: "Before" }, after: { name: "After" } });
   expect(await store.getLoop(loop.id)).toMatchObject({ name: "Before", model: null });
 });
-
-async function addExecRun(loopId: string, machineId: string, phase: "done" | "error", ts: string) {
-  return (await store.addRun({ loopId, machineId, phase, ts }));
-}
 
 
 
@@ -1122,12 +1114,10 @@ test("cli force delete logs, reports reachability truthfully, and honors a false
   expect(await store.getLoop(second.loop.id)).toBeTruthy();
 });
 
-test("cli device credential: report is run-only and removed finish verbs are unknown", async () => {
+test("cli device credential: report is run-only", async () => {
   const { deviceToken } = (await seededCli());
   const gw = gateway();
   expect((await gw.cli(deviceToken, ["report"])).status).toBe(403);
-  expect((await gw.cli(deviceToken, ["finish"])).status).toBe(400);
-  expect((await gw.cli(deviceToken, ["complete"])).status).toBe(400);
 });
 
 

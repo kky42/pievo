@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import type { LoopDetail, RunDiffResult, RunSummary } from '../types'
-import { dur, fmt, fnum, until } from '../lib/format'
+import { dur, fmt, fnum } from '../lib/format'
 import { DAEMON_UPGRADE_REQUIRED, DASHBOARD_PROTOCOL } from '../lib/lifecycleUi'
 import { getLoopDetail, getRunDiff, loadOlderRuns, stopRun } from '../server/loopApi'
 import { DiffView } from './DiffView'

@@ -1,6 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { MACHINE_BODY_CAP, readJsonBody } from '../gateway/http'
-import { machineRouteLimit } from '../gateway/rateLimit'
+import { machineJsonRoute } from '../gateway/machineRoute'
 
 export function parseCliBody(value: unknown): { argv: string[] } | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
@@ -20,18 +19,17 @@ export const Route = createFileRoute('/api/machine/cli')({
   server: {
     handlers: {
       POST: async ({ request }: { request: Request }) => {
-        const auth = request.headers.get('authorization') ?? ''
-        const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
-        const limited = machineRouteLimit(request, token || undefined)
-        if (limited) return limited
-        if (!token) return Response.json({ error: 'missing credential' }, { status: 401 })
-        const parsed = await readJsonBody(request, MACHINE_BODY_CAP)
-        if (parsed.kind === 'too-large') return Response.json({ error: 'body too large' }, { status: 413 })
-        const body = parsed.kind === 'ok' ? parseCliBody(parsed.body) : null
-        if (!body) return Response.json({ error: 'body must be exactly {argv:string[]}' }, { status: 400 })
-        const { getCliGateway } = await import('../server/boot.js')
-        const r = await (await getCliGateway()).cli(token, body.argv)
-        return Response.json(r.body, { status: r.status })
+        return machineJsonRoute(request, {
+          missingCredential: 'missing credential',
+          invalidJsonError: 'body must be exactly {argv:string[]}',
+          invalidBodyError: 'body must be exactly {argv:string[]}',
+          parseBody: parseCliBody,
+          handle: async (token, body) => {
+            const { getCliGateway } = await import('../server/boot.js')
+            const r = await (await getCliGateway()).cli(token, body.argv)
+            return Response.json(r.body, { status: r.status })
+          },
+        })
       },
     },
   },

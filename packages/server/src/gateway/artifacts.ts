@@ -5,7 +5,7 @@ export const BLOB_CAP = 10 * 1024 * 1024; // 10MB
 /** Hard ceiling on the exact-manifest sync POST body. */
 export const SYNC_BODY_CAP = 32 * 1024 * 1024; // 32MB
 
-export type ArtifactManifestEntry =
+type ArtifactManifestEntry =
   | { path: string; hash: string; size: number; binary: boolean; oversize: false }
   | { path: string; hash: null; size: number; binary: boolean; oversize: true };
 

@@ -9,7 +9,6 @@ import {
   emptyList,
   errorBlock,
   helpBlock,
-  kvLine,
   listBlock,
   needsQuote,
   quote,

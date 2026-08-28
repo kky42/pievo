@@ -22,7 +22,7 @@ const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
  * outside these common shapes is labeled as a custom schedule; the literal cron
  * remains available on hover and in Configuration.
  */
-export function cronText(cron: string): string {
+function cronText(cron: string): string {
   const p = (cron || '').trim().split(/\s+/)
   if (p.length !== 5) return 'custom schedule'
   const [mi, ho, dom, mon, dow] = p as [string, string, string, string, string]
@@ -86,12 +86,12 @@ export function humanBytes(n: number): string {
   return `${(abs / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export interface StatusMeta {
+interface StatusMeta {
   c: string
   label: string
 }
 
-export const ST = {
+const ST = {
   keep: { c: 'var(--color-run-keep)', label: 'Keep' },
   'no-change': { c: 'var(--color-run-no-change)', label: 'No change' },
   block: { c: 'var(--color-run-block)', label: 'Block' },
