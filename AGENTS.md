@@ -31,7 +31,7 @@ and the daemon (`pievo daemon`), which runs Claude Code, Codex, or Pi on each de
   Lease/report/lifecycle transitions stay loop-locked. Breaking protocol behavior
   requires updating `gateway/protocol.ts` and the matching daemon release together.
 - Loop files (`gateway/loopFiles.ts`): the server owns each loop's required
-  `MEMORY.md` (8000 characters) and up to four text/code artifacts (2 MB). A run
+  `MEMORY.md` (8000 characters) and up to four text/code artifacts (256 KB). A run
   downloads them into `~/.pievo/runs/<run>`, uploads changed versions with its run
   token, and the terminal transaction applies them only if the version the run
   started from is still current (owner edits win). Over-limit versions are rejected,

@@ -13,7 +13,7 @@ export function parseCliBody(value: unknown): { argv: string[] } | null {
  * POST /api/machine/cli — the ONE unified CLI dispatch (Bearer credential + `{argv}`).
  * `CliGateway.cli()` branches by credential type: a `dk_` device token takes owner
  * commands; an `rk_` run credential is rejected. The 4 MB body cap fits
- * `file set` carrying a 2 MB artifact as base64 (4/3 expansion) plus argv framing.
+ * `file set` carrying a 256 KB artifact as base64 (4/3 expansion) plus argv framing.
  */
 const CLI_BODY_CAP = 4 * 1024 * 1024
 export const Route = createFileRoute('/api/machine/cli')({

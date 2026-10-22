@@ -278,7 +278,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed }>(f
         <TextArea label="keep" value={form.keep} onChange={(value) => set('keep', value)} rows={2} />
         <TextArea label="no-change" value={form.noChange} onChange={(value) => set('noChange', value)} rows={2} />
         <TextArea label="block" value={form.block} onChange={(value) => set('block', value)} rows={2} />
-        <Section title="Artifacts" hint="Optional text/code file names such as .md, .html, .sh, .py, .json, or .csv (up to 4, 2 MB each) that runs update and the dashboard renders. One name per line. Every loop also has MEMORY.md." />
+        <Section title="Artifacts" hint="Optional text/code file names such as .md, .html, .sh, .py, .json, or .csv (up to 4, 256 KB each) that runs update and the dashboard renders. One name per line. Every loop also has MEMORY.md." />
         <TextArea label="Artifact files" value={form.artifacts} onChange={(value) => set('artifacts', value)} rows={6} mono />
         {error && <div className="mt-4 text-body text-accent">{error}</div>}
       </div>

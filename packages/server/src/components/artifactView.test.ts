@@ -10,7 +10,6 @@ vi.mock('../server/loopApi', () => ({
     if (/\.html?$/.test(data.path))
       return { text: '<h1>Report</h1><script>document.title=document.cookie</script>' }
     if (/\.(md|markdown)$/.test(data.path)) return { text: '# Heading\n\nsome **bold** prose' }
-    if (data.path === 'huge.sh') return { text: 'x'.repeat(300 * 1024) }
     return { text: 'plain text body' }
   }),
 }))
@@ -102,20 +101,5 @@ describe('ArtifactBody - markdown / oversize / binary', () => {
     const a = el.querySelector('a[download]') as HTMLAnchorElement | null
     expect(a?.getAttribute('href')).toBe('/api/artifact/loop-1/data.bin')
     expect(el.textContent).toMatch(/not previewable/i)
-  })
-})
-
-describe('ArtifactBody - preview cap', () => {
-  it('caps large text at 256 KB and can render the full file', async () => {
-    const el = await mount(file({ path: 'huge.sh', size: 300 * 1024 }))
-    expect(el.textContent).toContain('Showing the first 256.0 KB')
-    expect(el.querySelector('pre')?.textContent?.length ?? 0).toBeGreaterThan(200 * 1024)
-
-    const full = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Render full file')
-    expect(full, 'a Render full file action should exist').toBeTruthy()
-    await act(async () => full!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
-
-    expect(el.textContent).not.toContain('Showing the first')
-    expect(el.querySelector('pre')?.textContent?.length ?? 0).toBeGreaterThanOrEqual(300 * 1024)
   })
 })

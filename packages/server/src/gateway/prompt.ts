@@ -1,5 +1,5 @@
 import type { Loop } from "../db/schema.js";
-import { MEMORY_CHAR_CAP, MEMORY_FILE } from "./loopFiles.js";
+import { MEMORY_CHAR_CAP, MEMORY_FILE, fileLimitLabel } from "./loopFiles.js";
 
 /** Literal placeholder the daemon replaces with the run's absolute loop-file
  *  directory before launch (and exports as an env var of the same name). */
@@ -15,7 +15,7 @@ const STATUS_LINE_RE = /^STATUS:\s*(keep|no-change|block)\.?$/i;
 export function buildRunTask(loop: Loop, previousNotices: string[] = []): string {
   const files = [
     `- ${MEMORY_FILE}: this loop's memory, kept across runs (max ${MEMORY_CHAR_CAP} characters). Read it before you start. Before finishing, update it with anything that would help future runs avoid mistakes or work faster. Keep it concise: merge similar notes, delete stale or wrong ones, no run logs.`,
-    ...loop.artifacts.map((name) => `- ${name}: artifact shown on the Pievo dashboard (max 2 MB). Update it only as the task above asks.`),
+    ...loop.artifacts.map((name) => `- ${name}: artifact shown on the Pievo dashboard (max ${fileLimitLabel(name)}). Update it only as the task above asks.`),
   ];
   const notices = previousNotices.length
     ? `\n\nNotices from the previous run:\n${previousNotices.map((notice) => `- ${notice}`).join("\n")}`

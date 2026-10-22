@@ -22,8 +22,9 @@ export const MEMORY_FILE = "MEMORY.md";
 /** Memory is re-read by every run, so it is bounded in characters (Unicode code
  *  points), roughly 2k tokens of prompt context per run. */
 export const MEMORY_CHAR_CAP = 8000;
-/** Artifacts can be bulky; 2 MB keeps a run's upload and the dashboard preview cheap. */
-export const ARTIFACT_BYTE_CAP = 2 * 1024 * 1024;
+/** 256 KB bounds a run's upload and keeps dashboard rendering smooth. */
+export const ARTIFACT_BYTE_CAP = 256 * 1024;
+const ARTIFACT_LIMIT_LABEL = `${ARTIFACT_BYTE_CAP / 1024} KB`;
 export const MAX_ARTIFACTS = 4;
 /** sha256 of zero bytes: the version of a loop file that has never been written. */
 export const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -64,7 +65,7 @@ export function loopFileNames(loop: { artifacts: string[] }): string[] {
 }
 
 export function fileLimitLabel(name: string): string {
-  return name === MEMORY_FILE ? `${MEMORY_CHAR_CAP} characters` : "2 MB";
+  return name === MEMORY_FILE ? `${MEMORY_CHAR_CAP} characters` : ARTIFACT_LIMIT_LABEL;
 }
 
 /** Why `bytes` cannot become the next version of `name`, or undefined if it can. */
@@ -76,7 +77,7 @@ export function loopFileIssue(name: string, bytes: Buffer): string | undefined {
     return undefined;
   }
   if (bytes.length > ARTIFACT_BYTE_CAP) {
-    return `${name}: ${(bytes.length / 1024 / 1024).toFixed(1)} MB exceeds the 2 MB limit`;
+    return `${name}: ${(bytes.length / 1024).toFixed(1)} KB exceeds the ${ARTIFACT_LIMIT_LABEL} limit`;
   }
   return undefined;
 }

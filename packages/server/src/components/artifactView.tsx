@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import type { ArtifactContent, ArtifactSummary } from '../types'
 import { artifactKind, type ArtifactKind } from '../lib/artifactKind'
 import { getArtifact } from '../server/loopApi'
-import { humanBytes } from '../lib/format'
 import { downloadHref, inlineHref } from './artifactUrls'
 import { MarkdownView } from './MarkdownView'
 
@@ -170,26 +169,9 @@ function ImageView({ loopId, file }: { loopId: string; file: ArtifactSummary }) 
 
 type Loaded = ArtifactContent | { loading: true }
 
-/** Main-thread rendering budget, not a storage limit. A 2 MB artifact can
- *  produce tens of thousands of DOM nodes; the preview caps that work. */
-const PREVIEW_CAP = 256 * 1024
-
-/** Cut at a paragraph boundary when possible, then a line boundary, so the
- *  preview does not end in the middle of a Markdown block. */
-function cutAtBlock(text: string, cap: number): string {
-  if (text.length <= cap) return text
-  const head = text.slice(0, cap)
-  const block = head.lastIndexOf('\n\n')
-  if (block >= cap * 0.75) return head.slice(0, block)
-  const line = head.lastIndexOf('\n')
-  if (line >= cap * 0.75) return head.slice(0, line)
-  return head
-}
-
 function TextArtifactView({ loopId, file, kind }: { loopId: string; file: ArtifactSummary; kind: ArtifactKind }) {
   const [loaded, setLoaded] = useState<Loaded>({ loading: true })
   const [mode, setMode] = useState<ViewMode>('preview')
-  const [full, setFull] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -207,12 +189,8 @@ function TextArtifactView({ loopId, file, kind }: { loopId: string; file: Artifa
   if ('error' in loaded) return <div className="px-5 py-6 text-body text-accent">Couldn't load this file - {loaded.error}</div>
 
   const text = loaded.text || '(empty file)'
-  const preview = cutAtBlock(text, PREVIEW_CAP)
-  const truncated = preview.length < text.length
   const renderable = kind === 'html' || kind === 'markdown'
   const showSource = !renderable || mode === 'source'
-  const capped = truncated && (kind !== 'html' || showSource)
-  const displayText = full || !truncated ? text : preview
 
   return (
     <div className="min-w-0">
@@ -223,32 +201,13 @@ function TextArtifactView({ loopId, file, kind }: { loopId: string; file: Artifa
         onMode={setMode}
         showToggle={renderable}
       />
-      {capped && !full && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-hairline bg-raised px-5 py-2 text-caption text-secondary">
-          <span>Showing the first {humanBytes(PREVIEW_CAP)} of {humanBytes(file.size ?? text.length)}.</span>
-          <button
-            type="button"
-            onClick={() => setFull(true)}
-            className="cursor-pointer border-none bg-transparent p-0 text-caption font-medium text-interactive underline underline-offset-2 transition-colors hover:text-display"
-          >
-            Render full file
-          </button>
-          <a
-            href={downloadHref(loopId, file.path)}
-            download
-            className="text-caption font-medium text-interactive underline underline-offset-2 transition-colors hover:text-display"
-          >
-            Download
-          </a>
-        </div>
-      )}
       {kind === 'html' && !showSource ? (
         <HtmlPreview html={loaded.text || ''} />
       ) : kind === 'markdown' && !showSource ? (
-        <MarkdownView content={displayText} />
+        <MarkdownView content={text} />
       ) : (
         <pre className="m-0 overflow-x-auto whitespace-pre-wrap px-5 py-4 font-mono text-label leading-relaxed text-secondary">
-          {displayText}
+          {text}
         </pre>
       )}
     </div>

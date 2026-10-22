@@ -91,7 +91,7 @@ Canonical config
                            all loops|active|paused|blocked
     model, reasoningEffort string or null for the provider default
                            Pi thinking: off|minimal|low|medium|high|xhigh|max
-    artifacts              up to 4 text/code file names (2 MB each); default []
+    artifacts              up to 4 text/code file names (256 KB each); default []
     enabled                boolean; default true
 
   Cron and continuous fields cannot be mixed. Every loop also has MEMORY.md (8000
@@ -125,7 +125,7 @@ Canonical config
   file: `pievo file list <loop> | file get <loop> <name> | file set <loop> <name> --from <path|->
   Inspect or replace a loop's MEMORY.md and artifact files (use --from - for stdin).
   An owner edit made while a run is executing wins over that run's version.
-  Limits: MEMORY.md 8000 characters, artifacts 2 MB; over-limit content is rejected.`,
+  Limits: MEMORY.md 8000 characters, artifacts 256 KB; over-limit content is rejected.`,
 };
 
 function versionLabel(version: string | undefined): string {

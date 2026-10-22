@@ -1268,7 +1268,7 @@ test("device file verbs list, get, and set loop files with limits", async () => 
   expect(textOf(list)).toContain("MEMORY.md");
   expect(textOf(list)).toContain("report.md");
   expect(textOf(list)).toContain("8000 characters");
-  expect(textOf(list)).toContain("2 MB");
+  expect(textOf(list)).toContain("256 KB");
 
   expect(textOf(await gw.cli(deviceToken, ["file", "get", loop.id, "MEMORY.md"]))).toBe("\n");
 

@@ -125,19 +125,19 @@ test("getRunDiff: added / modified / removed / unchanged across two runs", async
   expect(byPath["gone.md"]!.sizeDelta).toBe(-3);
 });
 
-test("getRunDiff: a large text file (over the diff cap, under oversize) is tooLarge, not binary", async () => {
+test("getRunDiff: a large text file under the diff cap still gets a diff", async () => {
   const { token, machineId, loop } = await seed();
-  const big = Buffer.from("x".repeat(600 * 1024));
-  const bigger = Buffer.from("y".repeat(601 * 1024));
+  const big = Buffer.from("x".repeat(200 * 1024));
+  const bigger = Buffer.from("y".repeat(201 * 1024));
   await doRun(token, machineId, loop.id, "2026-06-01T00:00:00.000Z", [{ path: "huge.md", bytes: big }]);
   const run2 = await doRun(token, machineId, loop.id, "2026-06-02T00:00:00.000Z", [{ path: "huge.md", bytes: bigger }]);
 
   const diff = await runDiff.computeRunDiff(run2.id);
   const f = diff.files.find((x) => x.path === "huge.md")!;
   expect(f.status).toBe("modified");
-  expect(f.tooLarge).toBe(true);
+  expect(f.tooLarge).toBe(false);
   expect(f.binary).toBe(false);
-  expect(f.diff).toBeUndefined();
+  expect(f.diff).toContain("y");
 });
 
 test("getRunDiff: first run (no previous snapshot) shows everything as added", async () => {

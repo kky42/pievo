@@ -18,7 +18,8 @@ import { boundedFetch } from "./http.js";
 
 export const MEMORY_FILE = "MEMORY.md";
 export const MEMORY_CHAR_CAP = 8000;
-export const ARTIFACT_BYTE_CAP = 2 * 1024 * 1024;
+export const ARTIFACT_BYTE_CAP = 256 * 1024;
+const ARTIFACT_LIMIT_LABEL = `${ARTIFACT_BYTE_CAP / 1024} KB`;
 const LOOP_FILE_BYTE_CAP = Math.max(ARTIFACT_BYTE_CAP, MEMORY_CHAR_CAP * 4);
 export const RUNS_DIR = path.join(PIEVO_DIR, "runs");
 const FILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
@@ -53,7 +54,7 @@ function loopFileIssue(name: string, bytes: Buffer): string | undefined {
     return chars > MEMORY_CHAR_CAP ? `${name}: ${chars} characters exceeds the ${MEMORY_CHAR_CAP}-character limit` : undefined;
   }
   return bytes.length > ARTIFACT_BYTE_CAP
-    ? `${name}: ${(bytes.length / 1024 / 1024).toFixed(1)} MB exceeds the 2 MB limit`
+    ? `${name}: ${(bytes.length / 1024).toFixed(1)} KB exceeds the ${ARTIFACT_LIMIT_LABEL} limit`
     : undefined;
 }
 
@@ -118,7 +119,7 @@ export function collectLoopFiles(
       continue;
     }
     if (stat.size > LOOP_FILE_BYTE_CAP) {
-      notices.push(`${name}: ${(stat.size / 1024 / 1024).toFixed(1)} MB exceeds the ${name === MEMORY_FILE ? `${MEMORY_CHAR_CAP}-character` : "2 MB"} limit; the previous version was kept`);
+      notices.push(`${name}: ${(stat.size / 1024).toFixed(1)} KB exceeds the ${name === MEMORY_FILE ? `${MEMORY_CHAR_CAP}-character` : ARTIFACT_LIMIT_LABEL} limit; the previous version was kept`);
       continue;
     }
     let bytes: Buffer;

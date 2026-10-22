@@ -22,7 +22,7 @@ Propose and confirm missing choices:
   tag is at most 64 characters; the server normalizes NFKC lowercase, collapses
   whitespace, sorts them, and rejects duplicates, invisible/control characters,
   and all loops/active/paused/blocked.
-- **Artifacts:** optionally name up to four text/code files (2 MB each) that runs
+- **Artifacts:** optionally name up to four text/code files (256 KB each) that runs
   maintain for the dashboard, e.g. `report.html`, `deploy.sh`, or `data.json`. Describe in the prompt what each
   should contain; refer to them as `$PIEVO_LOOP_DIR/<name>`. Every loop already has
   `MEMORY.md`; do not list it.

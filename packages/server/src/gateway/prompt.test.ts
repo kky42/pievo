@@ -24,7 +24,7 @@ Status definitions:
 
 Loop files in $PIEVO_LOOP_DIR:
 - MEMORY.md: this loop's memory, kept across runs (max 8000 characters). Read it before you start. Before finishing, update it with anything that would help future runs avoid mistakes or work faster. Keep it concise: merge similar notes, delete stale or wrong ones, no run logs.
-- report.html: artifact shown on the Pievo dashboard (max 2 MB). Update it only as the task above asks.
+- report.html: artifact shown on the Pievo dashboard (max 256 KB). Update it only as the task above asks.
 A file over its limit is rejected and its previous version kept. Other files in that directory are discarded.
 
 End your final response with a short summary, then exactly one last line:

@@ -154,12 +154,12 @@ describe("collectLoopFiles", () => {
     ]);
   });
 
-  test("an artifact over 2 MB becomes a notice instead of being truncated", () => {
+  test("an artifact over 256 KB becomes a notice instead of being truncated", () => {
     writeRunFile("MEMORY.md", Buffer.from("old memory"));
     writeRunFile("report.md", Buffer.alloc(ARTIFACT_BYTE_CAP + 1, 0x61));
     const collected = collectLoopFiles(runPath(), baseHashes());
     expect(collected.files).toEqual([]);
-    expect(collected.notices).toEqual([expect.stringContaining("exceeds the 2 MB limit")]);
+    expect(collected.notices).toEqual([expect.stringContaining("exceeds the 256 KB limit")]);
   });
 
   test("inspection and read failures become notices instead of stranding the run", () => {

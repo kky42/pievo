@@ -59,7 +59,7 @@ describe("loop file names", () => {
 describe("loop file limits", () => {
   test("labels are the agent-facing limit text", () => {
     expect(fileLimitLabel(MEMORY_FILE)).toBe("8000 characters");
-    expect(fileLimitLabel("report.md")).toBe("2 MB");
+    expect(fileLimitLabel("report.md")).toBe("256 KB");
   });
 
   test("MEMORY.md is bounded in Unicode code points, not bytes", () => {
@@ -76,7 +76,7 @@ describe("loop file limits", () => {
   test("artifacts are bounded in bytes and empty files are valid", () => {
     expect(loopFileIssue("report.html", Buffer.alloc(0))).toBeUndefined();
     expect(loopFileIssue("report.html", Buffer.alloc(ARTIFACT_BYTE_CAP, 0x61))).toBeUndefined();
-    expect(loopFileIssue("report.html", Buffer.alloc(ARTIFACT_BYTE_CAP + 1, 0x61))).toContain("2.0 MB exceeds the 2 MB limit");
+    expect(loopFileIssue("report.html", Buffer.alloc(ARTIFACT_BYTE_CAP + 1, 0x61))).toContain("exceeds the 256 KB limit");
     expect(LOOP_FILE_BYTE_CAP).toBe(ARTIFACT_BYTE_CAP);
   });
 
