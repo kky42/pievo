@@ -91,7 +91,7 @@ Canonical config
                            all loops|active|paused|blocked
     model, reasoningEffort string or null for the provider default
                            Pi thinking: off|minimal|low|medium|high|xhigh|max
-    artifacts              up to 4 .md/.html file names (2 MB each); default []
+    artifacts              up to 4 text/code file names (2 MB each); default []
     enabled                boolean; default true
 
   Cron and continuous fields cannot be mixed. Every loop also has MEMORY.md (8000

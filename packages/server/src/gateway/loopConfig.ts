@@ -13,7 +13,7 @@ import type {
 import { CODING_AGENTS, coerceCodingAgent } from "../types.js";
 import { validateLoopTags } from "../lib/loopTags.js";
 import { WIRE_TEXT_CAP } from "./http.js";
-import { MAX_ARTIFACTS, MEMORY_FILE, validArtifactName } from "./loopFiles.js";
+import { ARTIFACT_EXTENSIONS, MAX_ARTIFACTS, MEMORY_FILE, validArtifactName } from "./loopFiles.js";
 
 const LOOP_CONFIG_FIELDS = [
   "name",
@@ -207,7 +207,7 @@ export function validateArtifactNames(value: unknown): Validation<string[]> {
   const seen = new Set<string>();
   for (const entry of value) {
     if (!validArtifactName(entry)) {
-      return { ok: false, detail: `artifact must be a plain .md or .html file name other than ${MEMORY_FILE} (letters, digits, . _ -; at most 64 characters before the extension): ${JSON.stringify(entry)}` };
+      return { ok: false, detail: `artifact must be a plain text/code file name other than ${MEMORY_FILE} (supported extensions: ${ARTIFACT_EXTENSIONS.join(", ")}; letters, digits, . _ -; at most 64 characters before the extension): ${JSON.stringify(entry)}` };
     }
     const key = entry.toLowerCase();
     if (seen.has(key)) return { ok: false, detail: `duplicate artifact name: ${entry}` };

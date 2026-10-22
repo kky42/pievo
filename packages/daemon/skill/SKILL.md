@@ -16,7 +16,7 @@ with their status and report instructions separately; keep those instructions ou
 the stored prompt.
 
 Every loop has a server-owned `MEMORY.md` (its memory across runs, 8000 characters)
-and up to four `.md`/`.html` artifact files (2 MB each) the dashboard renders. Runs
+and up to four text/code artifact files (2 MB each) the dashboard renders. Runs
 edit them in a private directory, not the workdir. The owner can read or repair them
 with `<pievo-cli> file get|set`.
 

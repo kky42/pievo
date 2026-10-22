@@ -97,8 +97,8 @@ until that server accepts it. There is no provider retry or session resume. Diff
 concurrently, while each loop remains serialized.
 
 Each loop has server-owned files: `MEMORY.md` (at most 8000 characters), its memory
-across runs, plus up to four configured `.md`/`.html` artifacts (2 MB each) that the
-dashboard renders. For each run the daemon downloads them into a private
+across runs, plus up to four configured text/code artifacts (2 MB each) that the
+dashboard renders (Markdown, HTML, source, and SVG). For each run the daemon downloads them into a private
 `~/.pievo/runs/<run>` directory, tells the agent the path, and uploads changed
 versions with the durable terminal report. A version over its limit is rejected and the
 previous one kept; an owner edit (`pievo file set`) made during a run wins.

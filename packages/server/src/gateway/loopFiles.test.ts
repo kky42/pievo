@@ -27,13 +27,16 @@ describe("loop file names", () => {
     expect(loopFileNames({ artifacts: ["report.html", "notes.md"] })).toEqual(["MEMORY.md", "report.html", "notes.md"]);
   });
 
-  test("artifact names are plain .md/.html files other than MEMORY.md", () => {
-    for (const name of ["report.md", "notes.html", "a1.md", "A_b-c.1.md", `${"a".repeat(64)}.md`]) {
+  test("artifact names are plain text/code files other than MEMORY.md", () => {
+    for (const name of [
+      "report.md", "notes.html", "deploy.sh", "script.py", "data.json", "table.csv",
+      "report.MD", "diagram.svg", "a1.md", "A_b-c.1.md", `${"a".repeat(64)}.md`,
+    ]) {
       expect(validArtifactName(name), name).toBe(true);
     }
     for (const name of [
       "MEMORY.md", "memory.md", "MEMORY.MD",
-      "report.txt", "report.MD", "report", "",
+      "report.exe", "report.pdf", "screenshot.png", "report", "",
       "../report.md", "dir/report.md", "/report.md", "C:\\report.md",
       ".hidden.md", `${"a".repeat(65)}.md`,
       null, 42,

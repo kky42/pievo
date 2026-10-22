@@ -2,7 +2,7 @@
  * Loop files: a loop's server-owned memory and display artifacts.
  *
  * Every loop has the required `MEMORY.md` plus up to MAX_ARTIFACTS configured
- * `.md`/`.html` artifact names. The server is authoritative: bytes live in the
+ * text/code artifact names. The server is authoritative: bytes live in the
  * content-addressed BlobStore and the current version of each name is an
  * `artifact_files` row. For each run the daemon downloads the current files into
  * a private run directory, and the terminal report carries the changed versions
@@ -22,13 +22,27 @@ export const MEMORY_FILE = "MEMORY.md";
 /** Memory is re-read by every run, so it is bounded in characters (Unicode code
  *  points), roughly 2k tokens of prompt context per run. */
 export const MEMORY_CHAR_CAP = 8000;
-/** HTML reports are bulky; 2 MB keeps a run's upload and the dashboard iframe cheap. */
+/** Artifacts can be bulky; 2 MB keeps a run's upload and the dashboard preview cheap. */
 export const ARTIFACT_BYTE_CAP = 2 * 1024 * 1024;
 export const MAX_ARTIFACTS = 4;
 /** sha256 of zero bytes: the version of a loop file that has never been written. */
 export const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
-const ARTIFACT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.(md|html)$/;
+/** Text/code formats accepted as artifacts. Loop files are NUL-free text, so
+ *  binary formats (images, PDFs, archives) are deliberately absent; `.svg` is
+ *  text and renders through the hardened inline image route. */
+export const ARTIFACT_EXTENSIONS = [
+  "md", "markdown", "mdx", "html", "htm", "txt", "text", "rst", "adoc", "org",
+  "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd",
+  "py", "rb", "pl", "lua", "r", "js", "mjs", "cjs", "ts", "tsx", "jsx",
+  "go", "rs", "java", "kt", "kts", "scala", "c", "h", "cc", "cpp", "hpp",
+  "cs", "php", "swift", "dart", "ex", "exs", "erl", "hs", "clj", "cljs",
+  "json", "jsonl", "yaml", "yml", "toml", "xml", "csv", "tsv", "svg",
+  "css", "scss", "sass", "less", "sql", "ini", "conf", "cfg", "env",
+  "properties", "diff", "patch", "tex", "log",
+] as const;
+const ARTIFACT_EXTENSION_SET = new Set<string>(ARTIFACT_EXTENSIONS);
+const ARTIFACT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.([A-Za-z0-9]{1,16})$/;
 
 export function sha256Buf(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -38,9 +52,11 @@ export function isValidHash(hash: unknown): hash is string {
   return typeof hash === "string" && /^[0-9a-f]{64}$/.test(hash);
 }
 
-/** A plain file name (no directories) ending in .md or .html, other than MEMORY.md. */
+/** A plain text/code file name (no directories) other than MEMORY.md. */
 export function validArtifactName(name: unknown): name is string {
-  return typeof name === "string" && ARTIFACT_NAME_RE.test(name) && name.toLowerCase() !== MEMORY_FILE.toLowerCase();
+  if (typeof name !== "string" || name.toLowerCase() === MEMORY_FILE.toLowerCase()) return false;
+  const match = ARTIFACT_NAME_RE.exec(name);
+  return match !== null && ARTIFACT_EXTENSION_SET.has(match[1]!.toLowerCase());
 }
 
 export function loopFileNames(loop: { artifacts: string[] }): string[] {

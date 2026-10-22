@@ -19,7 +19,7 @@ project files on the device that runs each loop.
 A loop combines a prompt, a cron or continuous schedule, a project folder on one
 device, and one of three outcomes: `keep`, `no-change`, or `block`. Each loop keeps a
 memory file its runs read and update, so later runs avoid earlier mistakes, and can
-maintain Markdown or HTML artifacts the dashboard renders and diffs.
+maintain Markdown, HTML, or text/code artifacts the dashboard renders and diffs.
 
 Pievo is personal software for one user. One device runs the **server** (dashboard,
 scheduler, history). Every device that runs loops runs the **daemon**, which polls

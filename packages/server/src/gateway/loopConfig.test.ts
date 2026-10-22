@@ -125,11 +125,11 @@ test("workdir is absolute in either supported platform syntax", () => {
   }
 });
 
-test("artifacts are up to four unique plain .md/.html names other than MEMORY.md", () => {
-  expect(validateArtifactNames(["report.html", "notes.md", "a_b-1.2.md"])).toEqual({ ok: true, value: ["report.html", "notes.md", "a_b-1.2.md"] });
+test("artifacts are up to four unique plain text/code names other than MEMORY.md", () => {
+  expect(validateArtifactNames(["report.html", "notes.md", "deploy.sh", "a_b-1.2.md"])).toEqual({ ok: true, value: ["report.html", "notes.md", "deploy.sh", "a_b-1.2.md"] });
   expect(validateArtifactNames(["a.md", "b.md", "c.md", "d.md", "e.md"])).toMatchObject({ ok: false });
   expect(validateArtifactNames(["Report.md", "report.md"])).toMatchObject({ ok: false });
-  for (const name of ["MEMORY.md", "memory.md", "reports/latest.md", "../x.md", "/etc/x.md", "report.txt", ".hidden.md", " report.md", "*.md", `${"a".repeat(65)}.md`]) {
+  for (const name of ["MEMORY.md", "memory.md", "reports/latest.md", "../x.md", "/etc/x.md", "report.exe", "report.pdf", "screenshot.png", ".hidden.md", " report.md", "*.md", `${"a".repeat(65)}.md`]) {
     expect(validateArtifactNames([name])).toMatchObject({ ok: false });
   }
 });
