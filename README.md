@@ -154,10 +154,14 @@ concurrently, while each loop stays serialized.
 
 A run reports through its final response, which must end with the line
 `STATUS: keep|no-change|block`. `keep` and `no-change` continue the schedule;
-`block` pauses the loop. `pievo` commands are unavailable inside a run.
+`block` pauses the loop. A line `ATTENTION: <reason>` just above it flags the run
+for the owner (a yellow mark on the dashboard) without pausing the loop, whatever
+the status. `pievo` commands are unavailable inside a run.
 
 Each loop has server-owned files: `MEMORY.md` (at most 8000 characters) plus up to
-four text/code artifacts (256 KB each) that the dashboard renders and diffs. For
+four text/code artifacts (256 KB each) that the dashboard renders and diffs.
+`MEMORY.md` holds only the loop's long-term experience (lessons runs learned the hard
+way); task state, results, and history belong in an artifact. For
 each run the daemon downloads them into a private `~/.pievo/runs/<run>` directory,
 tells the agent the path, and uploads changed versions with the terminal report. A
 version over its limit is rejected and the previous one kept; an owner edit

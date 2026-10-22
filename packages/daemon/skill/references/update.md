@@ -18,13 +18,26 @@ contract and preview first:
 <pievo-cli> show <loop> --json
 ```
 
-Use the final `show` output to report what actually changed. Pievo appends the runtime
-status and loop-file contract, so never duplicate it in a stored prompt.
+Use the final `show` output to report what actually changed, as a short before/after
+list. Pievo appends the runtime status and loop-file contract, so never duplicate it
+in a stored prompt.
 
 To repair a loop's memory or an artifact (e.g. broken HTML or a wrong memory note),
 read it with `<pievo-cli> file get <loop> <name>`, write the corrected version to a
 temporary file, and replace it with `<pievo-cli> file set <loop> <name> --from <path>`.
 Confirm the change with the user first; an edit wins over an in-progress run's version.
+
+When repairing memory, keep only lessons learned the hard way in `MEMORY.md`, one
+line each. Move task state, results, baselines, and trends to an artifact (a bounded
+history section in the report if needed); fold standing rules into the prompt; drop
+run logs (Pievo already keeps run history), stale facts, and anything that restates
+the prompt. If the prompt tells runs to store such things in memory, fix the prompt in
+the same change, or the next run will put them back.
+
+Whenever you touch a loop, also check it against the design and propose fixes:
+`block` used for findings rather than "cannot continue safely" (findings use an
+`ATTENTION:` line), artifacts asked to keep run logs or unbounded history, and prompts
+that restate Pievo's appended contract.
 
 Lifecycle operations are not config edits. Consult the relevant command help and keep
 these distinctions in mind:

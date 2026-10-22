@@ -21,8 +21,8 @@ export function deriveLoopLifecycle(loop: LoopSummary): LoopLifecycle {
 export function lifecyclePresentation(loop: LoopSummary): { label: string; tone: LoopLifecycleTone } {
   if (loop.deleteRequestedAt != null) return { label: 'Deleting', tone: 'accent' }
   if (loop.enabled) return { label: 'Active', tone: 'success' }
-  if (loop.pauseCause?.kind === 'blocked') return { label: 'Paused · blocked', tone: 'attention' }
-  if (loop.pauseCause?.kind === 'failure-streak') return { label: 'Paused · failure streak', tone: 'attention' }
+  if (loop.pauseCause?.kind === 'blocked') return { label: 'Paused · blocked', tone: 'accent' }
+  if (loop.pauseCause?.kind === 'failure-streak') return { label: 'Paused · failure streak', tone: 'accent' }
   if (loop.pauseCause?.kind === 'owner') return { label: 'Paused · owner', tone: 'neutral' }
   return { label: 'Paused', tone: 'neutral' }
 }

@@ -70,18 +70,43 @@ that a change works is an end-to-end run, not a unit test. Follow the recipe in
 `CONTRIBUTING.md` ("End-to-end check").
 
 - **Agent behavior** (prompt, delivery, runner, provider spawn, telemetry, status
-  parsing, loop files, protocol, scheduling, lifecycle): run a real loop with a real
-  agent on the dev server and confirm the run's terminal state, status, summary, and
-  file updates. Use a disposable working directory, the cheapest suitable model, and
-  a small prompt.
+  parsing, loop files, protocol, scheduling, lifecycle): run real loops with a real
+  agent on the dev server. Use a disposable working directory, a small prompt, and the
+  owner's everyday provider (Pi on `dgx-spark/deepseek-v4.1-flash`), plus any other
+  provider the change touches.
+- **Skill and owner flows** (`packages/daemon/skill`, CLI verbs it uses): drive the
+  skill with a headless coding agent the way the owner would: ask in plain words, let
+  it propose, then confirm. Cover each flow the change touches: create, edit, memory or
+  artifact repair, lifecycle.
+- **Test both sides of a loop.** Owner-side agents author loops through the skill;
+  in-loop agents run them. A change to either side's instructions can break the
+  other, so a loop created through the skill should also be run.
+- **Design scenarios, not a single run.** Shape workdir inputs so successive runs hit
+  every outcome the change affects: keep, no-change, block, attention, a failure, and
+  a messy input that teaches a real lesson. Change the inputs between runs. Seed
+  realistic bad state with `file set` and `edit` (bloated memory, a `block` used for
+  findings) when testing repair.
+- **Judge results against the design, not exit codes.** Check:
+  - terminal phase and status;
+  - attention set only for findings;
+  - `block` pauses the loop, attention does not;
+  - the final response is a few lines;
+  - `MEMORY.md` holds only lessons learned the hard way;
+  - state and history sit in a bounded artifact section;
+  - the owner-side agent proposed before mutating, stayed brief, and created a loop
+    whose prompt does not restate Pievo's contract.
+
+  When an agent misbehaves, fix the contract, skill, or prompt that misled it and
+  rerun. Don't explain the misbehavior away.
 - **Dashboard** (components, styles, routes, server functions): open the dev
   dashboard in a real browser, check how it renders, and use the changed flow the
   way the owner would: clicks, forms, confirmations, loading/empty/error states,
-  light and dark mode, and a narrow window with no horizontal page scroll.
-- **CLI and skill**: run the changed commands through `pnpm dev:daemon` against the
-  dev server.
+  light and dark mode, and a narrow window with no horizontal page scroll. Also look
+  at what real runs produced, not just seeded data.
+- **CLI**: run the changed commands through `pnpm dev:daemon` against the dev server.
 - Always also run `pnpm -r typecheck` and both test suites.
-- Report what you ran and what you saw. If you could not run the end-to-end check
+- Report what you ran and what you saw: a short table of scenario, agent, and result,
+  plus every fix the runs forced. If you could not run the end-to-end check
   (for example, no provider credentials), say so plainly; never call the change
   verified. Clean up dev daemons, loops, and scratch directories you created.
 

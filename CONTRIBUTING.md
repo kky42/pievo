@@ -66,6 +66,44 @@ behavior change done, exercise it for real:
 6. Clean up: `pnpm dev:daemon daemon stop`, stop `pnpm dev`, and delete the scratch
    folder and any loops you created.
 
+### Agent scenarios
+
+- Keep everything for one check in a single `mktemp -d` folder: workdirs, wrapper,
+  seeded files, transcripts.
+- Make the workdir inputs small files the prompt reads (for example `disk.txt` holding
+  `83`). Then edit them between runs to drive each outcome: a value over a threshold
+  (attention), the same value again (no-change), a removed file (block), and a changed
+  format (a lesson worth remembering).
+- After each run, read `pnpm dev:daemon log <loop> --run <n>`, both loop files
+  (`file get`), and `show` (enabled, pauseCause, nextFire).
+- Click **Run once** in the browser to start runs. There is no owner CLI for it.
+- TODO: `pnpm dev` answers any `/api/machine/run-files/*.md` request with Vite's
+  "Cannot GET" 404, so runs fail at the `MEMORY.md` download. Until that's fixed:
+  1. Run `pnpm build`.
+  2. Start the built server on the dev state:
+     `node packages/server/scripts/pievo-server.mjs start --foreground --host 127.0.0.1 --port 3001 --no-https --data-dir .pievo/development/server`.
+  3. After stopping it, wait for the old process to exit before starting it again.
+
+### Owner skill
+
+1. Connecting or restarting the dev daemon (`pnpm dev:daemon daemon restart`)
+   reinstalls the repo skill into `~/.claude/skills/pievo` and
+   `~/.agents/skills/pievo`. Confirm with
+   `diff -r packages/daemon/skill ~/.claude/skills/pievo`.
+2. Give the agent a CLI wrapper in the scratch folder:
+   `exec node <repo>/packages/daemon/scripts/dev.mjs "$@"`. Don't use
+   `pnpm dev:daemon` here: `pnpm run` re-quotes arguments through a shell and expands
+   `$PIEVO_LOOP_DIR` inside JSON configs.
+3. Run the agent headless from the scratch folder and state the wrapper path as
+   the CLI prefix in the request. Let it propose, then confirm in a second turn:
+   - Claude Code: `claude -p "/pievo <request>" --output-format json --allowedTools "Bash(<wrapper>:*)" Read Write`,
+     then `claude -p "go ahead" --resume <session_id> …`. Put the message before
+     `--allowedTools`, which consumes every argument after it.
+   - Pi: `pi -p --model <model> --session-id <uuid> "/skill:pievo <request>"`,
+     then the same `--session-id` with the confirmation.
+4. Read the created or edited loop back with `show --full` and `file get`, then run it
+   at least once.
+
 ## Database migrations
 
 `packages/server/drizzle/0000_baseline` defines the 3.x schema; later changes append

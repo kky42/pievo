@@ -63,6 +63,8 @@ export interface RunSummary {
   agent: CodingAgent | null
   status: RunStatus | null
   message: string | null
+  /** Set when the run asked for owner attention; independent of status. */
+  attention?: string | null
   durationMs: number | null
   exitCode: number | null
   finalText: string | null

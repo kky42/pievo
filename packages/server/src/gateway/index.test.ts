@@ -275,7 +275,7 @@ test("block persists telemetry and atomically pauses", async () => {
     durationMs: 321,
     exitCode: 0,
     sessionId: "session-123",
-    finalText: "owner input required\n\n**STATUS: block**",
+    finalText: "owner input required\nATTENTION: port 8888 open\n\n**STATUS: block**",
     usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 2 },
   });
   expect(terminal.status).toBe(200);
@@ -283,11 +283,19 @@ test("block persists telemetry and atomically pauses", async () => {
     phase: "done",
     status: "block",
     message: "owner input required",
+    attention: "port 8888 open",
     sessionId: "session-123",
-    finalText: "owner input required\n\n**STATUS: block**",
     usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 2 },
   });
   expect(await store.getLoop(loop.id)).toMatchObject({ enabled: false, nextCadenceAt: null, nextRunAt: null, pauseCause: { kind: "blocked", runId: run.id } });
+});
+
+test("attention is stored with a keep status and never pauses the loop", async () => {
+  const { loop, run, rt } = await seededExecRun();
+  const response = await reportV2(gateway(), rt, { result: "success", exitCode: 0, finalText: "disk 83%\nATTENTION: disk above 80%\nSTATUS: keep" });
+  expect(response.status).toBe(200);
+  expect(await store.getRun(run.id)).toMatchObject({ phase: "done", status: "keep", message: "disk 83%", attention: "disk above 80%" });
+  expect(await store.getLoop(loop.id)).toMatchObject({ enabled: true, pauseCause: null });
 });
 
 test("three ordinary errors trigger the failure-streak pause", async () => {

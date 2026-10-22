@@ -130,6 +130,7 @@ function normalizedListRun(run: Run) {
     terminalAt: run.ts,
     phase: run.phase,
     status: run.status ?? null,
+    attention: run.attention ?? null,
     durationMs: run.durationMs ?? null,
     tokenUsage: totalTokenUsage(run.usage ?? null),
     message: message.value,
@@ -172,8 +173,8 @@ async function listHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
     return text ? response(text) : { status: 413, body: { error: "history JSON exceeds the response cap; lower --limit" } };
   }
   const table = rows.length
-    ? listBlock("runs", ["index", "terminal", "phase", "status", "durationMs", "tokenUsage", "message", "finalTextAvailable"], rows.map((run) => [
-        run.runIndex!, fmt(run.ts), run.phase, run.status ?? null, run.durationMs ?? null, totalTokenUsage(run.usage ?? null),
+    ? listBlock("runs", ["index", "terminal", "phase", "status", "attention", "durationMs", "tokenUsage", "message", "finalTextAvailable"], rows.map((run) => [
+        run.runIndex!, fmt(run.ts), run.phase, run.status ?? null, run.attention ?? null, run.durationMs ?? null, totalTokenUsage(run.usage ?? null),
         run.message ? truncate(run.message, HISTORY_MESSAGE_CAP, "use --run for detail").value : null,
         !!run.finalText?.trim(),
       ]))
@@ -218,6 +219,7 @@ async function detailHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
     terminalAt: TERMINAL_PHASES.includes(run.phase as typeof TERMINAL_PHASES[number]) ? run.ts : null,
     phase: run.phase,
     status: run.status ?? null,
+    attention: run.attention ?? null,
     durationMs: run.durationMs ?? null,
     tokenUsage: totalTokenUsage(run.usage ?? null),
     message: message.value,
@@ -235,6 +237,7 @@ async function detailHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
   if (q.json) return response(json);
   return response(detailBlock("run", [
     ["index", detail.runIndex], ["terminalAt", detail.terminalAt], ["phase", detail.phase], ["status", detail.status],
+    ["attention", detail.attention],
     ["durationMs", detail.durationMs], ["tokenUsage", detail.tokenUsage], ["message", detail.message],
     ["messageTruncated", detail.messageTruncated], ["error", detail.error], ["errorTruncated", detail.errorTruncated],
     ["finalText", detail.finalText], ["finalTextTruncated", detail.finalTextTruncated],

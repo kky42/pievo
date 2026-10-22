@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Tooltip } from '@base-ui/react/tooltip'
 import type { LoopSummary, RunSummary } from '../types'
 import { dotColor, dotLabel, dotOpacity, dur, fmt, until } from '../lib/format'
-import { runPulseAnim, useHydrated } from './ui'
+import { AttentionMark, runPulseAnim, useHydrated } from './ui'
 
 /*
  * One block per run, at most WINDOW at a time. Overflow collapses into "+N" pagers
@@ -28,10 +28,12 @@ function RunSeg({ run, onClick }: { run: RunSummary; onClick: () => void }) {
               e.stopPropagation()
               onClick()
             }}
-            aria-label={dotLabel(run)}
-            className={`${SEG} cursor-pointer transition-opacity hover:opacity-70`}
+            aria-label={run.attention ? `${dotLabel(run)} · needs attention` : dotLabel(run)}
+            className={`${SEG} relative flex cursor-pointer items-center justify-center transition-opacity hover:opacity-70`}
             style={{ background: dotColor(run), opacity: dotOpacity(run), ...(run.phase === 'running' ? runPulseAnim : {}) }}
-          />
+          >
+            {run.attention && <AttentionMark />}
+          </button>
         }
       />
       <Tooltip.Portal>
@@ -45,6 +47,7 @@ function RunSeg({ run, onClick }: { run: RunSummary; onClick: () => void }) {
                 {meta}
               </span>
             </div>
+            {run.attention && <div className="mt-1.5 break-words font-medium text-running">! {run.attention}</div>}
             {body && (
               <div
                 className={`mt-1.5 max-h-[150px] overflow-hidden whitespace-pre-wrap ${

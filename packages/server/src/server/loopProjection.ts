@@ -36,6 +36,7 @@ export function toRunSummary(r: Run, reconciliation?: "blocking" | "report-only"
     agent: r.agent ?? null,
     status: r.status ?? null,
     message: r.message ?? null,
+    attention: r.attention ?? null,
     durationMs: r.durationMs ?? null,
     exitCode: r.exitCode ?? null,
     finalText: r.finalText ?? null,

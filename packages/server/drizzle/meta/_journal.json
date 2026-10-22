@@ -15,6 +15,13 @@
       "when": 1792900000000,
       "tag": "0001_loop_files",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793000000000,
+      "tag": "0002_run_attention",
+      "breakpoints": true
     }
   ]
 }

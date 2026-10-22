@@ -20,11 +20,24 @@ and up to four text/code artifact files (256 KB each) the dashboard renders. Run
 edit them in a private directory, not the workdir. The owner can read or repair them
 with `<pievo-cli> file get|set`.
 
+- `MEMORY.md` is the loop's long-term experience: lessons runs learned the hard way
+  (pitfalls, workarounds, environment facts). Task instructions belong in the
+  prompt; state, results, baselines, trends, and history belong in an artifact.
+  Neither goes in memory.
+- `block` pauses the loop. Reserve it for "cannot continue safely". A finding the
+  owner should see while the loop keeps running is an `ATTENTION: <reason>` line,
+  which the run adds on its own; it works with any status.
+
+Be brief with the owner, who has to review everything you write. Use short tables or
+lists instead of paragraphs, show only the choices that need a decision, and don't
+echo help output or JSON back to them.
+
 Use this flow:
 
 1. **Understand** the task, desired outcome, and requested operation.
 2. **Inspect** the project, connection, existing loop, and real paths; do not guess.
-3. **Propose** the prompt and any missing tags, schedule, status, provider, or artifact choices.
+3. **Propose** the prompt and any missing tags, schedule, status, provider, or artifact choices
+   as one compact table, with a recommended default for each.
 4. **Confirm** choices with product meaning or side effects.
 5. **Consult help** with `<pievo-cli> <command> --help` for the installed command contract.
 6. **Dry-run** create/edit operations and inspect the normalized preview.

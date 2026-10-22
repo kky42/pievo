@@ -50,7 +50,8 @@ Loop setup and management
 
 Inside a run
   pievo commands are unavailable. Runs edit loop files in $PIEVO_LOOP_DIR and end
-  their final response with a last line \`STATUS: keep|no-change|block\`.
+  their final response with an optional \`ATTENTION: <reason>\` line and a last
+  line \`STATUS: keep|no-change|block\`.
 
 Upgrade
   npm install -g @kky42/pievo@latest

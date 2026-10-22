@@ -118,6 +118,7 @@ export function dotColor(r: RunSummary): string {
 }
 
 export function dotOpacity(r: RunSummary): number {
+  if (r.attention) return 1
   if (r.reconciliation || r.phase === 'running' || r.status === 'block' || r.phase === 'error') return 1
   if (r.phase === 'pending') return 0.7
   if (r.phase === 'canceled') return 0.5
@@ -149,6 +150,11 @@ export function dotLabel(r: RunSummary): string {
   if (r.phase === 'done') return ST.warning.label
   return ST['no-change'].label
 }
+
+/** The newest finished run, whose attention reason the loop card surfaces until a
+ *  later run finishes without one. */
+export const lastFinishedRun = (runs: RunSummary[]): RunSummary | undefined =>
+  runs.findLast((r) => r.phase === 'done' || r.phase === 'error')
 
 export const lastRunOf = (j: LoopSummary): RunSummary | null => {
   const a = j.runs ?? []

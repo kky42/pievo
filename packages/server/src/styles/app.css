@@ -105,7 +105,8 @@
 
   --color-run-keep: var(--color-success);
   --color-run-no-change: var(--color-secondary);
-  --color-run-block: var(--color-running);
+  --color-run-block: var(--color-accent);
+  --color-run-attention: var(--color-rubik-yellow);
   --color-run-error: var(--color-accent);
   --color-run-warning: var(--color-warn);
   --color-run-canceled: var(--color-disabled);

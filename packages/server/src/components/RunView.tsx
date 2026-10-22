@@ -223,6 +223,7 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-[26px] font-medium leading-tight tracking-tight text-display">Run · {loopName}</h1>
               <StatusPill run={run} colorText />
+              {run.attention && <Pill tone="attention">Needs attention</Pill>}
             </div>
             <div className="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-meta text-secondary">
               <span className="text-primary">{fmt(run.ts)}</span>
@@ -270,6 +271,12 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
               </div>
             </Card>
           ) : null}
+
+          {run.attention && (
+            <Card label="Needs attention">
+              <div className="break-words text-body font-medium text-running">{run.attention}</div>
+            </Card>
+          )}
 
           {run.reportIncident && (
             <Card label="Terminal report rejected">

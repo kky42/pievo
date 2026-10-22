@@ -226,7 +226,7 @@ const MISSING_STATUS_ERROR = 'run protocol incomplete: the final response has no
 function reportOutcome(body: MachineReportBody): {
   ok: boolean;
   canceled: boolean;
-  patch: Partial<Pick<NewRun, "status" | "message" | "error">>;
+  patch: Partial<Pick<NewRun, "status" | "message" | "attention" | "error">>;
 } {
   const canceled = body.result === "canceled";
   if (canceled) return { ok: false, canceled, patch: { error: "stopped by user" } };
@@ -235,7 +235,7 @@ function reportOutcome(body: MachineReportBody): {
   }
   const parsed = parseFinalStatus(body.finalText);
   if (!parsed) return { ok: false, canceled, patch: { error: MISSING_STATUS_ERROR } };
-  return { ok: true, canceled, patch: { status: parsed.status, message: clipText(parsed.message, MESSAGE_CAP) || null, error: null } };
+  return { ok: true, canceled, patch: { status: parsed.status, message: clipText(parsed.message, MESSAGE_CAP) || null, attention: parsed.attention, error: null } };
 }
 
 function validateTerminalReport(body: MachineReportBody): string[] {

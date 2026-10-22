@@ -125,6 +125,9 @@ export const runs = pgTable(
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP::text`),
     status: text("status", { enum: ["keep", "no-change", "block"] }),
     message: text("message"),
+    /** Owner-facing reason from the final response's ATTENTION line. Independent
+     *  of status: it never pauses the loop. */
+    attention: text("attention"),
     durationMs: integer("duration_ms"),
     exitCode: integer("exit_code"),
     finalText: text("final_text"),

@@ -1,5 +1,5 @@
 import type { CodingAgent, LoopSummary, RunSummary } from '../types'
-import { dotLabel, fnum, lastRunOf, rel } from '../lib/format'
+import { dotLabel, fnum, lastFinishedRun, lastRunOf, rel } from '../lib/format'
 import { lifecyclePresentation } from '../lib/lifecycleUi'
 import { LoopMeta } from './LoopMeta'
 import { Timeline } from './Timeline'
@@ -36,6 +36,7 @@ export function LoopOverview({
   const hydrated = useHydrated()
   const newestRun = runs.at(-1)
   const latestIncidentRun = newestRun?.reportIncident ? newestRun : undefined
+  const attention = lastFinishedRun(runs)?.attention
 
   return (
     <>
@@ -55,6 +56,7 @@ export function LoopOverview({
           <h1 className={titleCls}>{loop.name}</h1>
         )}
         <Pill tone={lifecycle.tone}>{lifecycle.label}</Pill>
+        {attention && <Pill tone="attention" title={attention}>Needs attention</Pill>}
         <Pill tone="outline">{AGENT_LABEL[loop.agent]}</Pill>
         {loop.tags.map((tag) => <Pill key={tag} tone="neutral" title={tag} className="max-w-44 truncate">{tag}</Pill>)}
         {extraPill}
@@ -87,6 +89,8 @@ export function LoopOverview({
         )}
         <RecentUsage usage={loop.recentUsage} />
       </div>
+
+      {attention && <div className="mt-1.5 truncate text-meta font-medium text-running" title={attention}>! {attention}</div>}
 
       {latestIncidentRun?.reportIncident && (
         <div className="mt-1.5 text-meta text-secondary">
