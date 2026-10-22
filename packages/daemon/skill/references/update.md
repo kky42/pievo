@@ -19,7 +19,12 @@ contract and preview first:
 ```
 
 Use the final `show` output to report what actually changed. Pievo appends the runtime
-report contract, so never duplicate it in a stored prompt.
+status and loop-file contract, so never duplicate it in a stored prompt.
+
+To repair a loop's memory or an artifact (e.g. broken HTML or a wrong memory note),
+read it with `<pievo-cli> file get <loop> <name>`, write the corrected version to a
+temporary file, and replace it with `<pievo-cli> file set <loop> <name> --from <path>`.
+Confirm the change with the user first; an edit wins over an in-progress run's version.
 
 Lifecycle operations are not config edits. Consult the relevant command help and keep
 these distinctions in mind:
@@ -29,7 +34,7 @@ these distinctions in mind:
 - **Stop:** pauses, cancels queued work, and requests current-run termination; wait for
   daemon proof before treating a running run as canceled.
 - **Run stop:** stops one run without pausing its loop.
-- **Delete:** removes Pievo server history and synced artifact metadata, never local
+- **Delete:** removes Pievo server history, memory, and artifacts, never local
   project files. Confirm destructive intent; force delete has stronger caveats in help.
 
 Run once is a Web action on the loop detail page; there is no owner CLI run-once

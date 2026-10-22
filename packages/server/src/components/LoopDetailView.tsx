@@ -168,7 +168,7 @@ export function LoopDetailView({ id }: { id: string }) {
             <button className={btnDanger} disabled={busy || !canStop} title={summary.running && !stopSupport.supported ? DAEMON_UPGRADE_REQUIRED : !summary.running ? 'No run is currently running' : undefined} onClick={() => void doLifecycle('stop')}>Stop</button>
             <button className={btnDanger} disabled={busy || deleting} onClick={() => setConfirmingDelete(true)}>{deleting ? 'Deleting…' : 'Delete'}</button>
           </div>
-          {confirmingDelete && !deleting && <div className="mt-3"><ConfirmBar prompt="Stop this loop and delete its server data?" note="This stops the loop and deletes server history and collected artifacts. Files in the working directory are not deleted. If the machine is unreachable, its local process may continue running." cta="Delete" danger busy={busy} onConfirm={() => void doLifecycle('delete')} onCancel={() => setConfirmingDelete(false)} /></div>}
+          {confirmingDelete && !deleting && <div className="mt-3"><ConfirmBar prompt="Stop this loop and delete its server data?" note="This stops the loop and deletes server history, the loop memory, and artifacts. Files in the working directory are not deleted. If the machine is unreachable, its local process may continue running." cta="Delete" danger busy={busy} onConfirm={() => void doLifecycle('delete')} onCancel={() => setConfirmingDelete(false)} /></div>}
         </div>
       </header>
 
@@ -187,7 +187,7 @@ export function LoopDetailView({ id }: { id: string }) {
           <Config label="Model / effort">{model} / {effort}</Config>
           <Config label="Prompt"><pre className="whitespace-pre-wrap break-words font-sans">{loop.prompt}</pre></Config>
           <Config label="Status definitions"><ul className="space-y-1"><li><b>keep:</b> {loop.statusDefinitions.keep}</li><li><b>no-change:</b> {loop.statusDefinitions.noChange}</li><li><b>block:</b> {loop.statusDefinitions.block}</li></ul></Config>
-          <Config label="Artifact paths">{loop.artifacts.length ? <ul className="space-y-1">{loop.artifacts.map((path) => <li key={path}><code className="break-all font-mono">{path}</code></li>)}</ul> : <span className="text-disabled">None</span>}</Config>
+          <Config label="Artifacts">{loop.artifacts.length ? <ul className="space-y-1">{loop.artifacts.map((name) => <li key={name}><code className="break-all font-mono">{name}</code></li>)}</ul> : <span className="text-disabled">None</span>}</Config>
         </dl>
       </section>
 
@@ -205,7 +205,7 @@ function MachineBanner({ text, action, onAction, tone }: { text: string; action:
 }
 
 function EditHead({ name, onBack }: { name: string; onBack: () => void }) {
-  return <div><button type="button" onClick={onBack} className={btnQuiet}><span aria-hidden>←</span> Back to loop</button><h1 className="mt-2.5 text-[24px] font-semibold text-display">Settings · {name}</h1><p className="mt-1.5 text-meta text-secondary">Edit tags, schedule, execution settings, prompt, status definitions, and exact artifact paths.</p></div>
+  return <div><button type="button" onClick={onBack} className={btnQuiet}><span aria-hidden>←</span> Back to loop</button><h1 className="mt-2.5 text-[24px] font-semibold text-display">Settings · {name}</h1><p className="mt-1.5 text-meta text-secondary">Edit tags, schedule, execution settings, prompt, status definitions, and artifact files.</p></div>
 }
 
 function Shell({ back, children }: { back: React.ReactNode; children: React.ReactNode }) {

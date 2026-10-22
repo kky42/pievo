@@ -1,5 +1,5 @@
 /**
- * Server-side reads over a loop's current exact artifacts. Pure helpers
+ * Server-side reads over a loop's current files (MEMORY.md + artifacts). Pure helpers
  * (no request/session context) so they're shared by the lazy server fns
  * (`getArtifacts` / `getArtifact` in loopApi) AND the download route, and are
  * directly unit-testable against an injected blob store.
@@ -8,8 +8,7 @@
  * the server's zero-exec invariant holds (it decodes text, never interprets it).
  */
 import * as store from "../db/store.js";
-import { safeRelPath } from "../gateway/artifacts.js";
-import { getArtifactSync } from "./boot.js";
+import { getLoopFiles } from "./boot.js";
 import { toArtifactSummary } from "./loopProjection.js";
 import type { ArtifactContent, ArtifactSummary } from "../types.js";
 
@@ -20,22 +19,20 @@ export async function listLoopArtifacts(loopId: string): Promise<ArtifactSummary
 /**
  * One file's content for inline display: decoded text for a text file, or a
  * binary/oversize marker (the UI then offers the download route). Returns an
- * error marker for an unknown/tombstoned path or a blob whose bytes aren't
- * stored yet (a pending upload) — never throws.
+ * error marker for an unknown/tombstoned name or a row whose blob bytes are
+ * absent — never throws.
  */
 export async function readLoopArtifact(loopId: string, rawPath: string): Promise<ArtifactContent> {
-  const rel = safeRelPath(rawPath);
-  if (!rel) return { error: "invalid path" };
-  const row = await store.getArtifactFile(loopId, rel);
+  const row = await store.getArtifactFile(loopId, rawPath);
   if (!row || row.deleted) return { error: "file not found" };
   // Genuinely binary or oversize → download-only marker (the UI offers the route).
   if (row.binary || row.oversize) {
     return { binary: true, size: row.size ?? null, oversize: row.oversize };
   }
-  // A text file whose bytes haven't been recorded yet (transient mid-sync): a
-  // distinct pending marker, not a binary dead-end with no download link.
-  if (!row.hash) return { error: "file not synced yet" };
-  const bytes = await (await getArtifactSync()).readBlob(row.hash);
+  // A live text row without a hash has no bytes to decode; keep it distinct
+  // from the binary/oversize marker.
+  if (!row.hash) return { error: "file has no stored version" };
+  const bytes = await (await getLoopFiles()).readBlob(row.hash);
   if (!bytes) return { error: "file not found" }; // blob bytes not (yet) stored
   return { text: bytes.toString("utf8") };
 }
@@ -48,16 +45,13 @@ export interface ArtifactBytes {
 }
 
 /**
- * Resolve a loop-relative path to its stored bytes for the download route.
- * Path-safe (rejects absolute/`..`/escaping → 400). Oversize/tombstoned/absent
- * → 404 (no bytes to serve). The bytes stream straight from the BlobStore.
+ * Resolve a loop file name to its stored bytes for the download route. Names are
+ * matched exactly against stored rows; tombstoned/absent → 404. The bytes stream straight from the BlobStore.
  */
 export async function readLoopArtifactBytes(loopId: string, rawPath: string): Promise<ArtifactBytes> {
-  const rel = safeRelPath(rawPath);
-  if (!rel) return { status: 400 };
-  const row = await store.getArtifactFile(loopId, rel);
-  if (!row || row.deleted || !row.hash) return { status: 404 }; // tombstone/oversize ⇒ no bytes
-  const bytes = await (await getArtifactSync()).readBlob(row.hash);
+  const row = await store.getArtifactFile(loopId, rawPath);
+  if (!row || row.deleted || !row.hash) return { status: 404 };
+  const bytes = await (await getLoopFiles()).readBlob(row.hash);
   if (!bytes) return { status: 404 };
-  return { status: 200, bytes, binary: row.binary, filename: rel.split("/").pop() || "file" };
+  return { status: 200, bytes, binary: row.binary, filename: rawPath };
 }

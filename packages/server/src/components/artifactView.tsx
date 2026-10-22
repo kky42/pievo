@@ -20,8 +20,8 @@ import { MarkdownView } from './MarkdownView'
  *             rides as an image, which does not execute embedded scripts).
  *  - markdown → the shared markdown pipeline (Preview) with a raw Source toggle.
  *  - text   → monospace source.
- * Everything keeps a Download fallback; an oversize (metadata-only) artifact has
- * no synced bytes to render, so it says so rather than showing an empty pane.
+ * Everything keeps a Download fallback; a legacy oversize/binary entry has no
+ * renderable bytes, so it says so rather than showing an empty pane.
  */
 
 export function ViewerHead({

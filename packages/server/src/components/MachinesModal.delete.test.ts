@@ -103,7 +103,7 @@ describe('MachinesModal deletion UX', () => {
     await act(async () => button('Delete').click())
     expect(h.deleteMachine).not.toHaveBeenCalled()
     expect(bodyText()).toContain('Delete Workstation and 2 loops?')
-    expect(bodyText()).toContain('permanently deletes the machine, 2 loops, and their server history and artifact metadata')
+    expect(bodyText()).toContain('permanently deletes the machine, 2 loops, and their server history, memory, and artifacts')
     expect(bodyText()).toContain('Local project files are not deleted')
     expect(bodyText()).toContain('an unreachable local agent may continue running')
 

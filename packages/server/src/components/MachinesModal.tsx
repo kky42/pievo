@@ -282,7 +282,7 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
             {confirmDelete === m.id && (
               <ConfirmBar
                 prompt={`Delete ${m.name} and ${m.loopCount} loop${m.loopCount === 1 ? '' : 's'}?`}
-                note={`This permanently deletes the machine, ${m.loopCount} loop${m.loopCount === 1 ? '' : 's'}, and their server history and artifact metadata. Local project files are not deleted, but an unreachable local agent may continue running.`}
+                note={`This permanently deletes the machine, ${m.loopCount} loop${m.loopCount === 1 ? '' : 's'}, and their server history, memory, and artifacts. Local project files are not deleted, but an unreachable local agent may continue running.`}
                 cta="Delete machine"
                 danger
                 busy={deleting}

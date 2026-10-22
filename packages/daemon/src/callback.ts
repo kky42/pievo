@@ -1,23 +1,9 @@
-import { postCli, printCliResponse } from "./cli-client.js";
-
-export async function runCallback(argv: string[]): Promise<number> {
-  const verb = argv[0];
-  if (verb === "--help" || verb === "-h" || verb === "help" || (verb === "report" && argv.slice(1).some((arg) => arg === "--help" || arg === "-h"))) {
-    process.stdout.write("pievo report --status keep|no-change|block --message <text>\n");
-    return 0;
-  }
-  if (verb !== "report") {
-    process.stderr.write("pievo: only `report` is available inside a run\n");
-    return 2;
-  }
-  const r = await postCli(argv);
-  if (r.kind === "not-configured") {
-    process.stderr.write("pievo: run callback not configured\n");
-    return 2;
-  }
-  if (r.kind === "network-error") {
-    process.stderr.write(`pievo: ${r.message}\n`);
-    return 1;
-  }
-  return printCliResponse(r.body, r.status, (s) => process.stdout.write(s));
+/** Inside a run the `pievo` shim answers every command with the run contract: a
+ * run reports through its final response, and owner commands need the owner. */
+export async function runCallback(_argv: string[]): Promise<number> {
+  process.stderr.write(
+    "pievo: commands are not available inside a Pievo run. Edit loop files in $PIEVO_LOOP_DIR, "
+      + "then end your final response with a summary and a last line `STATUS: keep|no-change|block`.\n",
+  );
+  return 2;
 }

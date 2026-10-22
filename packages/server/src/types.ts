@@ -84,6 +84,8 @@ export interface RunSummary {
   error: string | null
   sessionId: string | null
   reportIncident?: ReportIncident | null
+  /** Loop-file versions from this run that were not kept, with the reason. */
+  fileNotices?: string[] | null
 }
 
 export interface MachineSummary {

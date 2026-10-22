@@ -7,6 +7,7 @@
  *
  *   POST /api/machine/poll   (Bearer device token) → claim pending runs, deliver
  *   POST /machine/report     (Bearer run token)    → finalize a run
+ *   GET|PUT /api/machine/run-files/:name (Bearer run token) → loop-file transfer
  *
  * plus owner create/list/edit methods and retention.
  * Also exposes `dispatcher` (a `Dispatcher` for the Scheduler: "is the machine
@@ -23,6 +24,16 @@ import type { Loop, NewLoop, NewRun, Run, RunUsage } from "../db/schema.js";
 import type { ReportIncident, ReportIncidentCode, ReportIncidentFaultDomain } from "../types.js";
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery } from "./delivery.js";
+import { parseFinalStatus } from "./prompt.js";
+import {
+  EMPTY_SHA256,
+  LOOP_FILE_BYTE_CAP,
+  LoopFiles,
+  isValidHash,
+  loopFileIssue,
+  loopFileNames,
+  sha256Buf,
+} from "./loopFiles.js";
 import { createBlobStore, type BlobStore } from "./blobstore.js";
 import { maintainStorage, type MaintainOptions, type MaintainResult } from "./retention.js";
 import { isValidSemver } from "../lib/semver.js";
@@ -78,10 +89,15 @@ const RUN_TIMEOUT_MS = Number.isFinite(configuredRunTimeoutMs) && configuredRunT
  *  patched over the device-token edit surface. Exported for `cli.ts`
  *  (the `new`/`edit` verb help lists these keys). */
 export const EDITABLE_LOOP_FIELDS = LOOP_EDIT_FIELDS;
-/** Formal `report --message` text. Provider finalText is stored separately;
- *  it never satisfies the successful-run reporting protocol. Run errors share
- *  this cap. Exported for `cli.ts` so the report verb uses the same budget. */
+/** Run summary (the final response minus its STATUS line) and run errors share
+ *  this cap; the full final response is stored separately as finalText. */
 export const MESSAGE_CAP = 2000;
+/** A run reports at most one version per loop file (MEMORY.md + 4 artifacts). */
+const REPORT_FILES_MAX = 5;
+/** One notice per file plus a few upload/rejection reasons; bounds the prompt echo. */
+const REPORT_NOTICES_MAX = 10;
+/** One short sentence (name + reason); 500 chars keeps the next prompt small. */
+const NOTICE_CAP = 500;
 /** Provider session IDs are opaque short tokens; this rejects malformed payloads
  *  without constraining known provider formats. */
 const SESSION_ID_CAP = 200;
@@ -107,12 +123,23 @@ export interface MachineReportBody {
   usage?: unknown;
   error?: string;
   finalText?: string;
+  files?: ReportedLoopFile[];
+  fileNotices?: string[];
+}
+
+/** A changed loop file whose bytes the daemon already uploaded with this run's token. */
+export interface ReportedLoopFile {
+  name: string;
+  baseHash: string;
+  hash: string;
+  size: number;
 }
 
 export const MACHINE_REPORT_FIELDS = [
   "reportId", "runId", "result", "exitCode", "durationMs",
-  "sessionId", "usage", "error", "finalText",
+  "sessionId", "usage", "error", "finalText", "files", "fileNotices",
 ] as const;
+const REPORT_FILE_FIELDS = ["baseHash", "hash", "name", "size"];
 const MACHINE_REPORT_FIELD_SET = new Set<string>(MACHINE_REPORT_FIELDS);
 const MACHINE_REPORT_USAGE_FIELDS = new Set<string>([
   "inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens",
@@ -198,14 +225,23 @@ function incidentDiagnosis(
   return { at: nowIso(), code, reason, issues, reportId, payloadDigest, faultDomain, recommendedAction };
 }
 
-/** Validate the durable report facts before a successful provider process may
- * become a successful run. The CLI validates first so an agent can retry; this
- * terminal seam prevents an ignored 400 from silently producing an empty run. */
-function runProtocolMissing(run: Run): string[] {
-  const missing: string[] = [];
-  if (run.status !== "keep" && run.status !== "no-change" && run.status !== "block") missing.push("status");
-  if (!run.message?.trim()) missing.push("message");
-  return missing;
+const MISSING_STATUS_ERROR = 'run protocol incomplete: the final response has no "STATUS: keep|no-change|block" line';
+
+/** The run outcome a terminal report establishes. Only a successful provider
+ * exit is read for a status; a successful exit without one is a protocol error. */
+function reportOutcome(body: MachineReportBody): {
+  ok: boolean;
+  canceled: boolean;
+  patch: Partial<Pick<NewRun, "status" | "message" | "error">>;
+} {
+  const canceled = body.result === "canceled";
+  if (canceled) return { ok: false, canceled, patch: { error: "stopped by user" } };
+  if (body.result !== "success") {
+    return { ok: false, canceled, patch: { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : "run failed on machine" } };
+  }
+  const parsed = parseFinalStatus(body.finalText);
+  if (!parsed) return { ok: false, canceled, patch: { error: MISSING_STATUS_ERROR } };
+  return { ok: true, canceled, patch: { status: parsed.status, message: clipText(parsed.message, MESSAGE_CAP) || null, error: null } };
 }
 
 function validateTerminalReport(body: MachineReportBody): string[] {
@@ -224,6 +260,33 @@ function validateTerminalReport(body: MachineReportBody): string[] {
   }
   for (const key of ["sessionId", "error", "finalText"] as const) {
     if (has(key) && typeof body[key] !== "string") issues.push(`${key} must be a string`);
+  }
+  if (has("files")) {
+    const files = body.files as unknown;
+    if (!Array.isArray(files) || files.length > REPORT_FILES_MAX) {
+      issues.push(`files must be an array of at most ${REPORT_FILES_MAX} entries`);
+    } else {
+      const names = new Set<string>();
+      for (const entry of files as unknown[]) {
+        const file = entry as Record<string, unknown>;
+        const valid = file !== null && typeof file === "object" && !Array.isArray(file)
+          && Object.keys(file).sort().join(",") === REPORT_FILE_FIELDS.join(",")
+          && typeof file.name === "string" && file.name.length > 0 && file.name.length <= 100 && !names.has(file.name)
+          && isValidHash(file.baseHash) && isValidHash(file.hash)
+          && typeof file.size === "number" && Number.isInteger(file.size) && file.size >= 0 && file.size <= LOOP_FILE_BYTE_CAP;
+        if (!valid) {
+          issues.push("files entries must be exactly {name, baseHash, hash, size} with unique names, sha256 hashes, and an in-cap size");
+          break;
+        }
+        names.add(file.name as string);
+      }
+    }
+  }
+  if (has("fileNotices")) {
+    const notices = body.fileNotices as unknown;
+    if (!Array.isArray(notices) || notices.length > REPORT_NOTICES_MAX || notices.some((notice) => typeof notice !== "string" || notice.length > NOTICE_CAP)) {
+      issues.push(`fileNotices must be an array of at most ${REPORT_NOTICES_MAX} strings of at most ${NOTICE_CAP} characters`);
+    }
   }
   if (has("usage")) {
     if (body.usage === null || typeof body.usage !== "object" || Array.isArray(body.usage)) {
@@ -265,12 +328,14 @@ function coerceTelemetry(body: MachineReportBody): Partial<Pick<NewRun, "duratio
 export class MachineGateway {
   constructor(
     readonly scheduler: Scheduler,
-    /** Artifact bytes (local filesystem; injectable in tests).
-     *  Only `maintainStorage` (retention/GC) reads it here - the byte-ingress
-     *  methods live on `ArtifactSync` (`sync.ts`), and boot hands BOTH classes
-     *  the same instance. */
+    /** Loop-file bytes (local filesystem; injectable in tests). */
     private readonly blobStore: BlobStore = createBlobStore(),
-  ) {}
+  ) {
+    this.loopFiles = new LoopFiles(blobStore);
+  }
+
+  /** Loop-file bytes over the same blob store that maintenance garbage-collects. */
+  readonly loopFiles: LoopFiles;
 
   /** In-flight latch: the maintenance pass is sequential and the first post-deploy
    *  backlog reclamation can overrun the interval, so a fresh tick skips rather than
@@ -365,7 +430,7 @@ export class MachineGateway {
         }
       } else if (run.phase === "running") {
         // INACTIVITY-based timeout. `heartbeatAt` is refreshed only when the daemon
-        // explicitly lists this run in protocol-v4 `currentRuns`; claim time is the fallback
+        // explicitly lists this run in `currentRuns`; claim time is the fallback
         // until the first heartbeat arrives.
         const heardAt = Math.max(Date.parse(run.ts), run.heartbeatAt ? Date.parse(run.heartbeatAt) || 0 : 0);
         if (now - heardAt > RUN_TIMEOUT_MS) {
@@ -414,9 +479,10 @@ export class MachineGateway {
    * Periodic storage maintenance: prune each loop's run snapshots to the
    * retention window, then GC blob bytes no live row needs. Wired to its own
    * interval in boot (independent of the faster offline-sweep) and exposed for
-   * tests / on-demand triggers. Safe to run concurrently with active syncs (a
-   * grace window + final re-check protect freshly-written/referenced blobs) and
-   * idempotent with no garbage. Best-effort — never throws into the caller.
+   * tests / on-demand triggers. Safe to run concurrently with owner writes and
+   * run uploads (a grace window + final re-check protect freshly-written or
+   * referenced blobs) and idempotent with no garbage. Best-effort — never throws
+   * into the caller.
    */
   async maintainStorage(options?: MaintainOptions): Promise<MaintainResult> {
     if (this.maintenanceRunning) {
@@ -910,6 +976,62 @@ export class MachineGateway {
     return { status: 409, body: { error: "terminal report was not finalized", code: "REPORT_NOT_FINALIZED", reportId: body.reportId } };
   }
 
+  /** Reported loop-file versions whose uploaded bytes are present. A canceled run
+   * was killed mid-edit, so none of its files are applied. */
+  private async terminalFiles(body: MachineReportBody): Promise<{ updates: store.LoopFileUpdate[]; notices: string[] }> {
+    const notices = (body.fileNotices ?? []).map((notice) => clipText(notice, NOTICE_CAP));
+    const updates: store.LoopFileUpdate[] = [];
+    if (body.result === "canceled") return { updates, notices };
+    const files = body.files ?? [];
+    // The report's size is client-supplied metadata; the blob row written at
+    // upload is authoritative. A mismatch means the report cannot be trusted
+    // for this version, so the previous version stays.
+    const sizes = await store.blobSizes(files.map((file) => file.hash).filter((hash) => hash !== EMPTY_SHA256));
+    for (const file of files) {
+      if (!(await this.loopFiles.hasBlob(file.hash))) {
+        notices.push(`${file.name}: the upload was lost; the previous version was kept`);
+        continue;
+      }
+      const size = file.hash === EMPTY_SHA256 ? 0 : sizes.get(file.hash);
+      if (size === undefined || size !== file.size) {
+        notices.push(`${file.name}: reported size did not match the stored version; the previous version was kept`);
+        continue;
+      }
+      updates.push({ name: file.name, baseHash: file.baseHash, hash: file.hash, size });
+    }
+    return { updates, notices };
+  }
+
+  /** Current bytes of one loop file for an executing run (the run's starting version). */
+  async readRunFile(runToken: string, name: string): Promise<HttpResult & { bytes?: Buffer; hash?: string }> {
+    const lease = await resolveLease(runToken);
+    if (!lease) return { status: 401, body: { error: "invalid or expired token" } };
+    if (lease.state !== "active") return { status: 409, body: { error: "run is no longer executing" } };
+    const loop = await store.getLoop(lease.loopId);
+    if (!loop || !loopFileNames(loop).includes(name)) return { status: 404, body: { error: "no such loop file" } };
+    const row = await store.getArtifactFile(loop.id, name);
+    const hash = row && !row.deleted && row.hash ? row.hash : EMPTY_SHA256;
+    const bytes = await this.loopFiles.readBlob(hash);
+    if (!bytes) return { status: 500, body: { error: "loop file bytes are missing" } };
+    return { status: 200, body: {}, bytes, hash };
+  }
+
+  /** Store one loop-file version produced by a run. Accepted until the run's
+   * authority retires, so the durable report outbox can retry after a crash.
+   * Applying it to the loop happens only in the terminal report transaction. */
+  async storeRunFile(runToken: string, name: string, bytes: Buffer, expectedHash: string | null): Promise<HttpResult> {
+    const lease = await resolveLease(runToken);
+    if (!lease || lease.state === "retired") return { status: 401, body: { error: "invalid or expired token" } };
+    const loop = await store.getLoop(lease.loopId);
+    if (!loop || !loopFileNames(loop).includes(name)) return { status: 404, body: { error: "no such loop file" } };
+    const issue = loopFileIssue(name, bytes);
+    if (issue) return { status: 413, body: { error: issue } };
+    if (expectedHash !== null && expectedHash !== sha256Buf(bytes)) return { status: 400, body: { error: "hash mismatch" } };
+    const hash = await this.loopFiles.putBlob(bytes);
+    if (hash !== EMPTY_SHA256) await store.recordBlob(hash, bytes.length);
+    return { status: 200, body: { ok: true, hash } };
+  }
+
   private async captureRunSnapshot(runId: string, loopId: string): Promise<void> {
     try {
       await store.putRunSnapshot(runId, loopId, await store.buildLoopManifest(loopId));
@@ -928,11 +1050,8 @@ export class MachineGateway {
     run: Run,
     body: MachineReportBody,
   ): Promise<HttpResult> {
-    const providerOk = body.result === "success";
-    const canceled = body.result === "canceled";
-    const protocolMissing = providerOk ? runProtocolMissing(run) : [];
-    const ok = providerOk && protocolMissing.length === 0;
-    const message = run.message ?? undefined;
+    const { ok, canceled, patch } = reportOutcome(body);
+    const files = await this.terminalFiles(body);
     const loopPatch: Partial<NewLoop> = {};
     const receipt = receiptFor(body, lease.runId)!;
     const payloadDigest = sha256(JSON.stringify(body));
@@ -945,19 +1064,14 @@ export class MachineGateway {
       {
         phase: canceled ? "canceled" : ok ? "done" : "error",
         ...coerceTelemetry(body),
-        ...(message !== undefined ? { message } : {}),
-        ...(canceled
-          ? { error: "stopped by user" }
-          : protocolMissing.length
-            ? { error: `run protocol incomplete: missing ${protocolMissing.join(", ")}` }
-            : ok
-              ? { error: null }
-              : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : run.error }),
+        ...patch,
+        fileNotices: files.notices,
         ts: nowIso(),
       },
         loopPatch,
         AUTOPAUSE_STREAK,
         receipt,
+        files.updates,
       );
     } catch (error) {
       const raced = await this.reportRaceResponse(runToken, lease, body, payloadDigest);
@@ -1086,8 +1200,6 @@ export class MachineGateway {
     }
 
     const expected = receiptFor(body, lease.runId)!;
-    const ok = body.result === "success";
-    const canceled = body.result === "canceled";
 
     const run = await store.getRun(lease.runId);
     if (run?.phase === "canceled") return this.ignoreCanceledReport(runToken, lease, body);
@@ -1096,8 +1208,8 @@ export class MachineGateway {
       return this.reconcileReclaimedReport(runToken, lease, run, body);
     }
 
-    const protocolMissing = ok && run ? runProtocolMissing(run) : [];
-    const effectiveOk = ok && protocolMissing.length === 0;
+    const { ok: effectiveOk, canceled, patch } = reportOutcome(body);
+    const files = await this.terminalFiles(body);
 
     // Held until the running→terminal CAS wins. Cancel/reclaim/report losers can
     // never reach loop-level writes.
@@ -1111,17 +1223,15 @@ export class MachineGateway {
         {
         phase: canceled ? "canceled" : effectiveOk ? "done" : "error",
         ...coerceTelemetry(body),
-        ...(canceled
-          ? { error: "stopped by user" }
-          : protocolMissing.length
-            ? { error: `run protocol incomplete: missing ${protocolMissing.join(", ")}` }
-            : effectiveOk ? {} : { error: typeof body.error === "string" ? clipText(body.error, MESSAGE_CAP) : "run failed on machine" }),
+        ...patch,
+        fileNotices: files.notices,
         ts: nowIso(),
       },
         loopPatch,
         sha256(runToken),
         AUTOPAUSE_STREAK,
         expected,
+        files.updates,
       );
     } catch (error) {
       // A different loop may win the reportId unique race while this transaction

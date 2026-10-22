@@ -72,9 +72,9 @@ test("loop tag database constraints protect count and reserved names", async () 
   await expect(insert("schema-reserved-tag", "ARRAY['active']::text[]")).rejects.toThrow(/loops_tags_reserved_check/);
 });
 
-test("the baseline migration is applied and Pi is a valid agent", async () => {
+test("every migration is applied and Pi is a valid agent", async () => {
   const migrations = await queryClient.query<{ count: string }>(`SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations`);
-  expect(migrations.rows).toEqual([{ count: "1" }]);
+  expect(migrations.rows).toEqual([{ count: "2" }]);
 
   await queryClient.query("BEGIN");
   try {

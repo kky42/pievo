@@ -10,7 +10,7 @@ import { runMigrations, closeClient } from "../db/index.js";
 import { repairTerminalRunLeases } from "../db/store.js";
 import { logger } from "../logger.js";
 import { MachineGateway, ONLINE_TTL_MS } from "../gateway/index.js";
-import { ArtifactSync } from "../gateway/sync.js";
+import type { LoopFiles } from "../gateway/loopFiles.js";
 import { CliGateway } from "../gateway/cli.js";
 import { createBlobStore } from "../gateway/blobstore.js";
 import { GC_INTERVAL_MS } from "../env.js";
@@ -19,7 +19,6 @@ import { Scheduler, type Dispatcher } from "../scheduler/index.js";
 interface Booted {
   scheduler: Scheduler;
   gateway: MachineGateway;
-  artifactSync: ArtifactSync;
   cliGateway: CliGateway;
   abort: AbortController;
   shutdown: () => Promise<void>;
@@ -61,12 +60,10 @@ async function boot(): Promise<Booted> {
   let gateway: MachineGateway;
   const dispatcher: Dispatcher = { dispatch: (loop) => gateway.dispatcher.dispatch(loop) };
   const scheduler = new Scheduler(dispatcher);
-  // ONE blob store, shared explicitly: ArtifactSync writes/reads the bytes and
-  // the gateway's maintainStorage (retention/GC) deletes them - two stores would
-  // GC bytes the other half just wrote.
+  // ONE blob store: loop-file writes/reads and the gateway's maintainStorage
+  // (retention/GC) must see the same bytes.
   const blobStore = createBlobStore();
   gateway = new MachineGateway(scheduler, blobStore);
-  const artifactSync = new ArtifactSync(blobStore);
   const cliGateway = new CliGateway(gateway);
 
   await scheduler.start(abort.signal);
@@ -94,15 +91,15 @@ async function boot(): Promise<Booted> {
   abort.signal.addEventListener("abort", () => clearInterval(gc), { once: true });
 
   logger.info("pievo server booted");
-  return { scheduler, gateway, artifactSync, cliGateway, abort, shutdown };
+  return { scheduler, gateway, cliGateway, abort, shutdown };
 }
 
 export async function getGateway(): Promise<MachineGateway> {
   return (await ensureServer()).gateway;
 }
 
-export async function getArtifactSync(): Promise<ArtifactSync> {
-  return (await ensureServer()).artifactSync;
+export async function getLoopFiles(): Promise<LoopFiles> {
+  return (await ensureServer()).gateway.loopFiles;
 }
 
 export async function getCliGateway(): Promise<CliGateway> {

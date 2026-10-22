@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import type { Delivery } from "./runner.js";
+import { MEMORY_FILE, validLoopFileName } from "./loop-files.js";
 
 interface NeedsUpdate {
   current: string | null;
@@ -17,7 +18,7 @@ export interface PollResponse {
 type Decode<T> = { ok: true; value: T } | { ok: false; error: string };
 type JsonObject = Record<string, unknown>;
 
-const DELIVERY_FIELDS = new Set(["runId", "runIndex", "runToken", "loop", "roots", "task", "artifacts"]);
+const DELIVERY_FIELDS = new Set(["runId", "runIndex", "runToken", "loop", "roots", "task", "files"]);
 const LOOP_FIELDS = new Set(["id", "name", "workdir", "model", "reasoningEffort", "agent"]);
 const RESPONSE_FIELDS = new Set(["delivery", "cancelRunIds", "needsUpdate"]);
 const UPDATE_FIELDS = new Set(["current", "required", "command"]);
@@ -121,8 +122,13 @@ function decodeDelivery(value: unknown): Decode<Delivery | null> {
   }
   const task = text(raw.task, "delivery.task");
   if (!task.ok) return task;
-  const artifacts = textArray(raw.artifacts, "delivery.artifacts");
-  if (!artifacts.ok) return artifacts;
+  const files = textArray(raw.files, "delivery.files");
+  if (!files.ok) return files;
+  if (files.value.length > 5 || !files.value.includes(MEMORY_FILE)
+    || new Set(files.value).size !== files.value.length
+    || files.value.some((name) => !validLoopFileName(name))) {
+    return { ok: false, error: `delivery.files must be at most 5 unique plain file names including ${MEMORY_FILE}` };
+  }
 
   return {
     ok: true,
@@ -133,7 +139,7 @@ function decodeDelivery(value: unknown): Decode<Delivery | null> {
       loop: loop.value,
       roots: roots.value,
       task: task.value,
-      artifacts: artifacts.value,
+      files: files.value,
     },
   };
 }

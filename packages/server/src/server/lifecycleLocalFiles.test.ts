@@ -29,7 +29,7 @@ beforeAll(async () => {
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
 
 async function loop(id: string, machineId: string) {
-  await store.createMachine({ id: machineId, name: machineId, tokenHash: `hash-${machineId}`, online: true, daemonProtocol: 4 })
+  await store.createMachine({ id: machineId, name: machineId, tokenHash: `hash-${machineId}`, online: true, daemonProtocol: 5 })
   return store.createLoop({ id, machineId, name: id, cron: '0 6 * * *', workdir, enabled: true })
 }
 

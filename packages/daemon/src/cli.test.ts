@@ -14,6 +14,7 @@ type Run = { code: number; stdout: string; stderr: string };
 function runCli(args: string[]): Promise<Run> {
   return new Promise((resolve) => {
     const env = { ...process.env, PIEVO_HOME: path.join(os.tmpdir(), `pievo-cli-test-${process.pid}`) };
+    delete env.PIEVO_IN_RUN;
     delete env.PIEVO_RUN_TOKEN;
     execFile(tsx, [entry, ...args], { env, timeout: 20_000 }, (err, stdout, stderr) => {
       const code = err && typeof (err as { code?: unknown }).code === "number" ? (err as { code: number }).code : 0;
@@ -85,10 +86,10 @@ describe("pievo CLI dispatch", () => {
     expect(r.stdout).toContain("pievo daemon connect");
   });
 
-  test("report outside a run fails locally with a run-only diagnostic", async () => {
+  test("report is not a verb outside a run", async () => {
     const r = await runCli(["report", "--status", "keep", "--message", "done"]);
     expect(r.code).toBe(2);
-    expect(r.stderr).toContain("`report` is available only inside a Pievo run");
+    expect(r.stderr).toContain("unknown command 'report'");
   });
 });
 
@@ -121,58 +122,42 @@ describe("classify lifecycle routing", () => {
     expect(classify(["stop", "loop-1"], {})).toEqual({ kind: "interactive", argv: ["stop", "loop-1"] });
   });
 
-  test("in-run callback routing wins and preserves argv exactly", () => {
-    expect(classify(["daemon", "stop"], { PIEVO_RUN_TOKEN: "rk_x" })).toEqual({ kind: "callback", argv: ["daemon", "stop"] });
-    expect(classify(["report", "--help"], { PIEVO_RUN_TOKEN: "rk_x" })).toEqual({ kind: "callback", argv: ["report", "--help"] });
-    expect(classify([], { PIEVO_RUN_TOKEN: "rk_x" })).toEqual({ kind: "callback", argv: [] });
+  test("in-run routing wins and preserves argv exactly", () => {
+    expect(classify(["daemon", "stop"], { PIEVO_IN_RUN: "1" })).toEqual({ kind: "callback", argv: ["daemon", "stop"] });
+    expect(classify(["report", "--help"], { PIEVO_IN_RUN: "1" })).toEqual({ kind: "callback", argv: ["report", "--help"] });
+    expect(classify([], { PIEVO_IN_RUN: "1" })).toEqual({ kind: "callback", argv: [] });
   });
 
-  test("out-of-run report has no forwarding route", () => {
-    expect(classify(["report", "--message", "done"], {})).toEqual({ kind: "runOnlyReport" });
-    expect(classify(["report", "--help"], {})).toEqual({ kind: "help", verb: "report" });
+  test("out-of-run report has no route", () => {
+    expect(classify(["report", "--message", "done"], {})).toEqual({ kind: "unknown", verb: "report" });
+    expect(classify(["report", "--help"], {})).toEqual({ kind: "unknown", verb: "report" });
   });
 });
 
 describe("postCli credential selection", () => {
-  test("resolveCredential: the run token (env) wins over the device token", () => {
-    const cred = resolveCredential({ env: { PIEVO_RUN_TOKEN: "run-1" }, deviceToken: "dk_dev" });
-    expect(cred).toEqual({ token: "run-1" });
+  test("resolveCredential: uses the persisted device token", () => {
+    expect(resolveCredential({ deviceToken: "dk_dev" })).toEqual({ token: "dk_dev" });
   });
 
-  test("resolveCredential: no run token in env → the persisted device token", () => {
-    const cred = resolveCredential({ env: {}, deviceToken: "dk_dev" });
-    expect(cred).toEqual({ token: "dk_dev" });
+  test("resolveCredential: no device token → undefined (not connected)", () => {
+    expect(resolveCredential({ deviceToken: undefined })).toBeUndefined();
   });
 
-  test("resolveCredential: neither present → undefined (not connected)", () => {
-    expect(resolveCredential({ env: {}, deviceToken: undefined })).toBeUndefined();
-  });
-
-  test("attaches the RUN token from env and posts {argv} to /api/machine/cli", async () => {
+  test("posts {argv} to /api/machine/cli with the DEVICE token", async () => {
     const calls: any[] = [];
     const fetchImpl = (async (url: string, init: any) => {
       calls.push({ url: String(url), init });
       return { status: 200, ok: true, json: async () => ({ text: "ok", exitCode: 0 }) };
     }) as unknown as typeof fetch;
-    const r = await postCli(["report", "--status", "new"], {
-      env: { PIEVO_RUN_TOKEN: "run-xyz" },
+    const r = await postCli(["file", "list", "loop-1"], {
+      deviceToken: "dk_dev",
       server: "https://srv.test",
       fetchImpl,
     });
     expect(r).toMatchObject({ kind: "ok", status: 200 });
     expect(calls[0].url).toBe("https://srv.test/api/machine/cli");
-    expect(calls[0].init.headers.Authorization).toBe("Bearer run-xyz");
-    expect(JSON.parse(calls[0].init.body).argv).toEqual(["report", "--status", "new"]);
-  });
-
-  test("no run token → posts with the persisted DEVICE token", async () => {
-    const calls: any[] = [];
-    const fetchImpl = (async (url: string, init: any) => {
-      calls.push({ url: String(url), init });
-      return { status: 200, ok: true, json: async () => ({ ok: true, loops: [] }) };
-    }) as unknown as typeof fetch;
-    await postCli(["loops"], { env: {}, deviceToken: "dk_dev", server: "https://srv.test", fetchImpl });
     expect(calls[0].init.headers.Authorization).toBe("Bearer dk_dev");
+    expect(JSON.parse(calls[0].init.body).argv).toEqual(["file", "list", "loop-1"]);
   });
 
   test("no credential/server → not-configured, never fetches", async () => {
@@ -181,7 +166,7 @@ describe("postCli credential selection", () => {
       called = true;
       return { status: 200, ok: true, json: async () => ({}) };
     }) as unknown as typeof fetch;
-    const r = await postCli(["loops"], { env: {}, deviceToken: undefined, server: "", fetchImpl });
+    const r = await postCli(["loops"], { deviceToken: undefined, server: "", fetchImpl });
     expect(r).toEqual({ kind: "not-configured" });
     expect(called).toBe(false);
   });
@@ -193,7 +178,7 @@ describe("postCli credential selection", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     try {
-      await expect(postCli(["loops"], { env: {}, deviceToken: "dk_dev", server: "https://srv.test" }))
+      await expect(postCli(["loops"], { deviceToken: "dk_dev", server: "https://srv.test" }))
         .resolves.toMatchObject({ kind: "ok", status: 200 });
       expect(fetchMock).toHaveBeenCalledOnce();
     } finally {

@@ -72,28 +72,25 @@ test("(a) a running run reclaimed while asleep is reconciled to done by the late
   const { machineId, loop } = (await seedMachineLoop(21 * MIN));
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: isoAgo(21 * MIN) }));
   const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId });
-  // The in-run report is the durable source of status/message. The later machine
-  // terminal report only contributes provider/process telemetry.
-  await store.updateRun(run.id, { status: "keep", message: "opened PR #42" });
-
   (await gw.sweep());
   const swept = (await store.getRun(run.id))!;
   expect(swept.phase).toBe("error");
   expect(swept.error).toBe("machine timed out / disconnected");
   expect((await tokens.resolveLease(rt))?.state).toBe("terminal-grace");
 
-  const res = (await gw.report(rt, { result: "success" as const, durationMs: 1234, sessionId: "sess-1", finalText: "opened PR #42" }));
+  const res = (await gw.report(rt, { result: "success" as const, durationMs: 1234, sessionId: "sess-1", finalText: "opened PR #42\nSTATUS: keep" }));
   expect(res.status).toBe(200);
   const final = (await store.getRun(run.id))!;
   expect(final.phase).toBe("done");
   expect(final.error).toBeNull();
+  expect(final.status).toBe("keep");
   expect(final.message).toBe("opened PR #42");
   expect(final.durationMs).toBe(1234);
   expect(await tokens.resolveLease(rt)).toBeUndefined();
   expect((await gw.report(rt, { result: "success" as const, finalText: "again" })).status).toBe(401);
 });
 
-test("a reclaimed late success stays failed when the run skipped its required report", async () => {
+test("a reclaimed late success stays failed when its final response has no status line", async () => {
   const gw = gateway();
   const { machineId, loop } = await seedMachineLoop(21 * MIN);
   const run = await store.addRun({
@@ -108,7 +105,7 @@ test("a reclaimed late success stays failed when the run skipped its required re
     phase: "error",
     status: null,
     message: null,
-    error: "run protocol incomplete: missing status, message",
+    error: 'run protocol incomplete: the final response has no "STATUS: keep|no-change|block" line',
   });
 });
 
@@ -145,15 +142,14 @@ test("a report-only late success updates only the old run after queued work star
     loopId: loop.id, machineId, phase: "running", requestedBy: "system", ts: isoAgo(21 * MIN),
   });
   const rt = await tokens.registerRunLease({ runId: interrupted.id, loopId: loop.id, machineId });
-  await store.updateRun(interrupted.id, { status: "keep", message: "old result" });
   await gw.sweep();
   await store.enqueueRun(loop.id, { requestedBy: "owner" });
   await store.releaseAbsentReconciliations(machineId, []);
   const successor = await store.claimReadyRunForMachine(machineId);
   expect(successor?.run.phase).toBe("running");
   const before = await store.getLoop(loop.id);
-  expect((await gw.report(rt, { result: "success", finalText: "late old result" })).status).toBe(200);
-  expect(await store.getRun(interrupted.id)).toMatchObject({ phase: "done", message: "old result" });
+  expect((await gw.report(rt, { result: "success", finalText: "old result\nSTATUS: keep" })).status).toBe(200);
+  expect(await store.getRun(interrupted.id)).toMatchObject({ phase: "done", status: "keep", message: "old result" });
   expect((await store.getRun(successor!.run.id))?.phase).toBe("running");
   expect(await store.getLoop(loop.id)).toMatchObject({ nextCadenceAt: before?.nextCadenceAt });
 });
@@ -251,7 +247,7 @@ test("(c) a long-running run with a fresh heartbeat survives the sweep", async (
   expect((await store.getRun(run.id))!.phase).toBe("running");
 });
 
-test("run-token CLI verbs are refused for a reclaimed run (only the final report reconciles)", async () => {
+test("run-token CLI verbs are refused for a reclaimed run (runs have no CLI)", async () => {
   const gw = gateway();
   const { machineId, loop } = (await seedMachineLoop(21 * MIN));
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: isoAgo(21 * MIN) }));
@@ -259,6 +255,6 @@ test("run-token CLI verbs are refused for a reclaimed run (only the final report
 
   (await gw.sweep());
   const out = await new cliMod.CliGateway(gw).cli(rt, ["reschedule", "1h"]);
-  expect(out.status).toBe(409);
-  expect(String((out.body as any).text)).toMatch(/terminal|no longer accepts/i);
+  expect(out.status).toBe(403);
+  expect(String((out.body as any).text)).toMatch(/not available inside a run/i);
 });

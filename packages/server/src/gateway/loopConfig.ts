@@ -13,6 +13,7 @@ import type {
 import { CODING_AGENTS, coerceCodingAgent } from "../types.js";
 import { validateLoopTags } from "../lib/loopTags.js";
 import { WIRE_TEXT_CAP } from "./http.js";
+import { MAX_ARTIFACTS, MEMORY_FILE, validArtifactName } from "./loopFiles.js";
 
 const LOOP_CONFIG_FIELDS = [
   "name",
@@ -198,26 +199,22 @@ function validateStatusDefinitions(value: unknown): Validation<StatusDefinitions
   return { ok: true, value: { keep: keep.value, noChange: noChange.value, block: block.value } };
 }
 
-export function validateArtifactPaths(value: unknown): Validation<string[]> {
+export function validateArtifactNames(value: unknown): Validation<string[]> {
   if (value === undefined || value === null) return { ok: true, value: [] };
-  if (!Array.isArray(value)) return { ok: false, detail: "artifacts must be an array of exact relative file paths" };
-  const paths: string[] = [];
+  if (!Array.isArray(value)) return { ok: false, detail: "artifacts must be an array of file names" };
+  if (value.length > MAX_ARTIFACTS) return { ok: false, detail: `at most ${MAX_ARTIFACTS} artifacts are allowed` };
+  const names: string[] = [];
   const seen = new Set<string>();
   for (const entry of value) {
-    if (typeof entry !== "string" || entry.length === 0) return { ok: false, detail: "artifact paths must be non-empty strings" };
-    if (entry.includes("\0")) return { ok: false, detail: "artifact path must not contain NUL" };
-    if (entry.startsWith("/") || entry.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(entry)) {
-      return { ok: false, detail: `artifact path must be relative to workdir: ${entry}` };
+    if (!validArtifactName(entry)) {
+      return { ok: false, detail: `artifact must be a plain .md or .html file name other than ${MEMORY_FILE} (letters, digits, . _ -; at most 64 characters before the extension): ${JSON.stringify(entry)}` };
     }
-    const parts = entry.split(/[\\/]/);
-    if (parts.some((part) => part === "" || part === "." || part === "..")) {
-      return { ok: false, detail: `artifact path must not traverse or alias another path: ${entry}` };
-    }
-    if (seen.has(entry)) return { ok: false, detail: `duplicate artifact path: ${entry}` };
-    seen.add(entry);
-    paths.push(entry);
+    const key = entry.toLowerCase();
+    if (seen.has(key)) return { ok: false, detail: `duplicate artifact name: ${entry}` };
+    seen.add(key);
+    names.push(entry);
   }
-  return { ok: true, value: paths };
+  return { ok: true, value: names };
 }
 
 function rowSchedule(schedule: LoopSchedule, retainedCron = SAFE_RETAINED_CRON): Pick<NewLoop, "cron" | "scheduleMode" | "cronOverlap" | "continuousDelayMinutes" | "timezone"> & { timezone: string | null } {
@@ -298,7 +295,7 @@ export function validateLoopCreate(value: unknown): Validation<ValidatedLoopCrea
   if (!schedule.ok) return schedule;
   const statusDefinitions = validateStatusDefinitions(raw.statusDefinitions);
   if (!statusDefinitions.ok) return statusDefinitions;
-  const artifacts = validateArtifactPaths(raw.artifacts);
+  const artifacts = validateArtifactNames(raw.artifacts);
   if (!artifacts.ok) return artifacts;
   const model = optionalProvider(raw.model, "model");
   if (!model.ok) return model;
@@ -382,7 +379,7 @@ export function validateLoopEdit(loop: Loop, value: unknown): Validation<Partial
     update.statusBlock = result.value.block;
   }
   if (raw.artifacts !== undefined) {
-    const result = validateArtifactPaths(raw.artifacts);
+    const result = validateArtifactNames(raw.artifacts);
     if (!result.ok) return result;
     update.artifacts = result.value;
   }

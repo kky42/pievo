@@ -46,7 +46,7 @@ describe("runDaemon startup ordering", () => {
               loop: { id: "loop-1", name: "bad", workdir: home, model: null, reasoningEffort: null, agent: "unknown" },
               roots: [],
               task: "must not execute",
-              artifacts: [],
+              files: ["MEMORY.md"],
             },
             cancelRunIds: [],
           }), { status: 200 });

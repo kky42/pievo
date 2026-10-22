@@ -1,5 +1,5 @@
 /**
- * Content-addressed blob byte store for live-synced loop artifacts.
+ * Content-addressed blob byte store for loop files.
  *
  * Bytes are keyed by their sha256 hash (content-addressed ⇒ deduped across every
  * loop/run). The store ONLY writes/reads bytes — it never executes or interprets
@@ -161,7 +161,7 @@ export class MemoryBlobStore implements BlobStore {
   }
 }
 
-/** The one local blob store shared by sync writes, artifact reads, and GC. */
+/** The one local blob store shared by loop-file writes/reads and GC. */
 export function createBlobStore(): BlobStore {
   const local = new LocalBlobStore();
   log.info({ root: local.root }, "blob store: local filesystem");

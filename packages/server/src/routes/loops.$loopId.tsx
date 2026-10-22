@@ -3,8 +3,8 @@ import { LoopDetailView } from '../components/LoopDetailView'
 
 /**
  * Loop detail page — `/loops/$loopId`: a loop header and action toolbar, the
- * exact artifact Files panel, and the runs timeline. The view owns its own
- * data + self-poll. Run rows link on to `/loops/$loopId/runs/$runId`.
+ * loop Files panel, and the runs timeline. The view owns its own data + self-poll.
+ * Run rows link on to `/loops/$loopId/runs/$runId`.
  */
 export const Route = createFileRoute('/loops/$loopId')({
   ssr: false,

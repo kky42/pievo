@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 
 import { buildPatch, type InteractiveDeps, parseFlags, runInteractive } from "./interactive.js";
@@ -78,6 +81,55 @@ describe("runInteractive — text sink (new server renders TOON in `text`)", () 
     const cap = capture({ fetchImpl: fetchFn });
     expect(await runInteractive(["loops"], cap)).toBe(1);
     expect(cap.stdout()).toContain("code: INVALID_SERVER_RESPONSE");
+  });
+});
+
+describe("runInteractive — file verbs", () => {
+  test("file list/get forward the loop id and file name", async () => {
+    const { fetchFn, calls } = stub(({ argv }) => {
+      if (argv[0] === "file" && argv[1] === "list") return { ok: true, body: { text: "files: MEMORY.md", exitCode: 0 } };
+      if (argv[0] === "file" && argv[1] === "get") return { ok: true, body: { text: "# Memory\n", exitCode: 0 } };
+      return { ok: false, status: 404, body: {} };
+    });
+    const cap = capture({ fetchImpl: fetchFn });
+
+    expect(await runInteractive(["file", "list", "loop-1"], cap)).toBe(0);
+    expect(calls[0]!.argv).toEqual(["file", "list", "loop-1"]);
+    expect(cap.stdout()).toContain("files: MEMORY.md");
+
+    expect(await runInteractive(["file", "get", "loop-1", "MEMORY.md"], cap)).toBe(0);
+    expect(calls[1]!.argv).toEqual(["file", "get", "loop-1", "MEMORY.md"]);
+  });
+
+  test("file set reads --from locally and sends base64 content", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-file-test-"));
+    const file = path.join(dir, "memory.md");
+    fs.writeFileSync(file, "# Memory\nline");
+    try {
+      const { fetchFn, calls } = stub(({ argv }) => argv[0] === "file" && argv[1] === "set"
+        ? { ok: true, body: { text: "file: MEMORY.md\nsize: 13\nupdated: true", exitCode: 0 } }
+        : { ok: false, status: 404, body: {} });
+      const cap = capture({ fetchImpl: fetchFn });
+
+      expect(await runInteractive(["file", "set", "loop-1", "MEMORY.md", "--from", file], cap)).toBe(0);
+      expect(calls[0]!.argv.slice(0, 4)).toEqual(["file", "set", "loop-1", "MEMORY.md"]);
+      expect(calls[0]!.argv[4]).toBe("--content-base64");
+      expect(Buffer.from(calls[0]!.argv[5]!, "base64").toString()).toBe("# Memory\nline");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("file usage and read failures exit locally without fetching", async () => {
+    const { fetchFn, calls } = stub(() => ({ ok: true, body: { text: "should not run", exitCode: 0 } }));
+    const cap = capture({ fetchImpl: fetchFn });
+
+    expect(await runInteractive(["file", "set", "loop-1", "MEMORY.md"], cap)).toBe(2);
+    expect(cap.stderr()).toContain("usage: pievo file");
+    expect(await runInteractive(["file", "list"], cap)).toBe(2);
+    expect(await runInteractive(["file", "set", "loop-1", "MEMORY.md", "--from", "/no/such/file"], cap)).toBe(1);
+    expect(cap.stderr()).toContain("could not read");
+    expect(calls).toHaveLength(0);
   });
 });
 

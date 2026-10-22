@@ -7,6 +7,7 @@ type MachineRouteOptions<T> = {
   parseBody: (value: unknown) => T | null;
   invalidBodyError?: string;
   handle: (token: string, body: T) => Promise<Response>;
+  maxBytes?: number;
 };
 
 export async function machineJsonRoute<T>(request: Request, options: MachineRouteOptions<T>): Promise<Response> {
@@ -14,7 +15,7 @@ export async function machineJsonRoute<T>(request: Request, options: MachineRout
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
   if (!token) return Response.json({ error: options.missingCredential }, { status: 401 });
 
-  const parsed = await readJsonBody(request, MACHINE_BODY_CAP);
+  const parsed = await readJsonBody(request, options.maxBytes ?? MACHINE_BODY_CAP);
   if (parsed.kind === "too-large") return Response.json({ error: "body too large" }, { status: 413 });
   if (parsed.kind !== "ok") {
     if (options.invalidBody === undefined) {

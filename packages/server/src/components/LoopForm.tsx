@@ -170,7 +170,7 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed }>(f
         reasoningEffort: form.reasoningEffort.trim() || null,
         prompt: form.prompt,
         statusDefinitions: { keep: form.keep, noChange: form.noChange, block: form.block },
-        artifacts: form.artifacts.split(/\r?\n/).filter((path) => path.length > 0),
+        artifacts: form.artifacts.split(/\r?\n/).filter((name) => name.length > 0),
       }
     },
   }))
@@ -278,8 +278,8 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed }>(f
         <TextArea label="keep" value={form.keep} onChange={(value) => set('keep', value)} rows={2} />
         <TextArea label="no-change" value={form.noChange} onChange={(value) => set('noChange', value)} rows={2} />
         <TextArea label="block" value={form.block} onChange={(value) => set('block', value)} rows={2} />
-        <Section title="Artifacts" hint="Optional exact paths relative to the working directory. One path per line; globs are not supported." />
-        <TextArea label="Artifact paths" value={form.artifacts} onChange={(value) => set('artifacts', value)} rows={6} mono />
+        <Section title="Artifacts" hint="Optional .md or .html file names (up to 4, 2 MB each) that runs update and the dashboard renders. One name per line. Every loop also has MEMORY.md." />
+        <TextArea label="Artifact files" value={form.artifacts} onChange={(value) => set('artifacts', value)} rows={6} mono />
         {error && <div className="mt-4 text-body text-accent">{error}</div>}
       </div>
     </div>

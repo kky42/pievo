@@ -1,6 +1,6 @@
 import type { LoopSummary } from '../types'
 
-export const DASHBOARD_PROTOCOL = 4
+export const DASHBOARD_PROTOCOL = 5
 export const DAEMON_UPGRADE_REQUIRED = 'Daemon upgrade required to stop a running process. Run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.'
 
 export type LoopLifecycle = 'deleting' | 'stopping' | 'paused-finishing' | 'paused' | 'active'

@@ -1,4 +1,4 @@
-// Use the booted local store so read helpers resolve the same bytes sync wrote.
+// Use the booted local store so read helpers resolve the same bytes the writes stored.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,7 +13,7 @@ let store: TestStore;
 let boot: typeof import("./boot.js");
 let tokens: typeof import("../gateway/tokens.js");
 let artifacts: typeof import("./artifactFiles.js");
-let art: Awaited<ReturnType<typeof import("./boot.js")["getArtifactSync"]>>;
+let files: Awaited<ReturnType<typeof import("./boot.js")["getLoopFiles"]>>;
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-art2-"));
@@ -25,7 +25,7 @@ beforeAll(async () => {
   boot = await import("./boot.js");
   tokens = await import("../gateway/tokens.js");
   artifacts = await import("./artifactFiles.js");
-  art = await boot.getArtifactSync();
+  files = await boot.getLoopFiles();
 });
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -43,91 +43,76 @@ async function seed() {
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = await store.createLoop({ workdir: "/work", machineId, name: "L", cron: "0 0 1 1 *", enabled: true,
-    artifacts: ["z.md", "a/b.txt", "logo.png", "big.bin", "keep.md", "data/raw.json", "huge.bin"],
+    artifacts: ["z.md", "report.html", "keep.md"],
   });
   return { token, machineId, loop };
 }
 
-async function syncFile(token: string, loopId: string, p: string, bytes: Buffer, binary = false) {
-  const hash = sha256(bytes);
-  await art.sync(token, {
-    loopId,
-    manifest: [{ path: p, hash, size: bytes.length, binary, oversize: false }],
-  });
-  expect((await art.putBlob(token, hash, bytes)).status).toBe(200);
+async function writeFile(loopId: string, name: string, bytes: Buffer) {
+  const hash = await files.putBlob(bytes);
+  if (bytes.length) await store.recordBlob(hash, bytes.length);
+  expect(await store.writeLoopFile(loopId, name, hash, bytes.length)).toBe(true);
   return hash;
 }
 
-test("listLoopArtifacts returns path-sorted summaries; readLoopArtifact decodes text", async () => {
-  const { token, loop } = await seed();
-  const z = Buffer.from("# Z");
-  const b = Buffer.from("hello");
-  await art.sync(token, {
-    loopId: loop.id,
-    manifest: [
-      { path: "z.md", hash: sha256(z), size: z.length, binary: false, oversize: false },
-      { path: "a/b.txt", hash: sha256(b), size: b.length, binary: false, oversize: false },
-    ],
-  });
-  expect((await art.putBlob(token, sha256(z), z)).status).toBe(200);
-  expect((await art.putBlob(token, sha256(b), b)).status).toBe(200);
+test("listLoopArtifacts returns name-sorted summaries; readLoopArtifact decodes text", async () => {
+  const { loop } = await seed();
+  await writeFile(loop.id, "z.md", Buffer.from("# Z"));
+  await writeFile(loop.id, "MEMORY.md", Buffer.from("hello"));
 
   const list = await artifacts.listLoopArtifacts(loop.id);
-  expect(list.map((f) => f.path)).toEqual(["a/b.txt", "z.md"]);
-  expect(list[0]).toMatchObject({ path: "a/b.txt", size: 5, binary: false, oversize: false });
+  expect(list.map((f) => f.path)).toEqual(["MEMORY.md", "z.md"]);
+  expect(list[0]).toMatchObject({ path: "MEMORY.md", size: 5, binary: false, oversize: false });
   expect(typeof list[0]!.updatedAt).toBe("string");
 
-  const content = await artifacts.readLoopArtifact(loop.id, "a/b.txt");
-  expect(content).toEqual({ text: "hello" });
+  expect(await artifacts.readLoopArtifact(loop.id, "MEMORY.md")).toEqual({ text: "hello" });
 });
 
-test("readLoopArtifact returns a binary marker for binary files (download-only)", async () => {
-  const { token, loop } = await seed();
-  await syncFile(token, loop.id, "logo.png", Buffer.from([0x89, 0x50, 0x00, 0x4e]), true);
-  const content = await artifacts.readLoopArtifact(loop.id, "logo.png");
-  expect(content).toEqual({ binary: true, size: 4, oversize: false });
+test("an empty loop file reads as empty text without a stored blob", async () => {
+  const { loop } = await seed();
+  const hash = await writeFile(loop.id, "keep.md", Buffer.alloc(0));
+  expect(await store.blobExists(hash)).toBe(false);
+  expect(await artifacts.readLoopArtifact(loop.id, "keep.md")).toEqual({ text: "" });
 });
 
-test("readLoopArtifact marks oversize (metadata-only) files; no bytes are read", async () => {
-  const { token, loop } = await seed();
-  await art.sync(token, {
-    loopId: loop.id,
-    manifest: [{ path: "big.bin", hash: null, size: 20 * 1024 * 1024, binary: false, oversize: true }],
-  });
-  const content = await artifacts.readLoopArtifact(loop.id, "big.bin");
-  expect(content).toEqual({ binary: true, size: 20 * 1024 * 1024, oversize: true });
+test("writeLoopFile refuses unconfigured names", async () => {
+  const { loop } = await seed();
+  expect(await store.writeLoopFile(loop.id, "other.md", sha256("x"), 1)).toBe(false);
 });
 
-test("readLoopArtifact reports not-found for unknown + tombstoned paths", async () => {
-  const { token, loop } = await seed();
-  await syncFile(token, loop.id, "keep.md", Buffer.from("a"));
+test("readLoopArtifact reports not-found for unknown + unconfigured files", async () => {
+  const { loop } = await seed();
+  await writeFile(loop.id, "keep.md", Buffer.from("a"));
   expect(await artifacts.readLoopArtifact(loop.id, "nope.md")).toEqual({ error: "file not found" });
 
-  await art.sync(token, { loopId: loop.id, manifest: [] });
+  await store.updateLoop(loop.id, { artifacts: ["z.md"] });
   expect(await artifacts.readLoopArtifact(loop.id, "keep.md")).toEqual({ error: "file not found" });
 });
 
-test("readLoopArtifactBytes: path-safe (400), oversize/missing (404), valid bytes (200)", async () => {
-  const { token, loop } = await seed();
-  const bytes = Buffer.from("downloadable");
-  await syncFile(token, loop.id, "data/raw.json", bytes, false);
+test("unconfiguring artifacts never tombstones MEMORY.md", async () => {
+  const { loop } = await seed();
+  await writeFile(loop.id, "MEMORY.md", Buffer.from("lesson"));
+  await store.updateLoop(loop.id, { artifacts: [] });
+  expect(await artifacts.readLoopArtifact(loop.id, "MEMORY.md")).toEqual({ text: "lesson" });
+});
 
-  expect((await artifacts.readLoopArtifactBytes(loop.id, "../../etc/passwd")).status).toBe(400);
-  expect((await artifacts.readLoopArtifactBytes(loop.id, "/abs")).status).toBe(400);
+test("deleting a loop removes its MEMORY.md row", async () => {
+  const { loop } = await seed();
+  await writeFile(loop.id, "MEMORY.md", Buffer.from("memory"));
+  expect((await store.listAllArtifactFiles(loop.id)).map((file) => file.path)).toContain("MEMORY.md");
+  expect(await store.deleteLoop(loop.id)).toBe(true);
+  expect(await store.listAllArtifactFiles(loop.id)).toHaveLength(0);
+});
 
-  const ok = await artifacts.readLoopArtifactBytes(loop.id, "data/raw.json");
+test("readLoopArtifactBytes: missing (404), valid bytes (200)", async () => {
+  const { loop } = await seed();
+  await writeFile(loop.id, "report.html", Buffer.from("<h1>hi</h1>"));
+
+  const ok = await artifacts.readLoopArtifactBytes(loop.id, "report.html");
   expect(ok.status).toBe(200);
-  expect(ok.bytes!.toString()).toBe("downloadable");
-  expect(ok.filename).toBe("raw.json");
+  expect(ok.bytes!.toString()).toBe("<h1>hi</h1>");
+  expect(ok.filename).toBe("report.html");
 
-  await art.sync(token, {
-    loopId: loop.id,
-    manifest: [
-      { path: "data/raw.json", hash: sha256(bytes), size: bytes.length, binary: false, oversize: false },
-      { path: "huge.bin", hash: null, size: 20 * 1024 * 1024, binary: false, oversize: true },
-    ],
-  });
-  expect((await art.putBlob(token, sha256(bytes), bytes)).status).toBe(200);
-  expect((await artifacts.readLoopArtifactBytes(loop.id, "huge.bin")).status).toBe(404);
+  expect((await artifacts.readLoopArtifactBytes(loop.id, "../../etc/passwd")).status).toBe(404);
   expect((await artifacts.readLoopArtifactBytes(loop.id, "ghost.md")).status).toBe(404);
 });

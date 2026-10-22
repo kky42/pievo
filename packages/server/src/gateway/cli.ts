@@ -9,17 +9,16 @@
  * The verb router keys authority on credential type first (`dk_` device prefix
  * vs `rk_` run lease) and reuses the core gateway
  * methods (`createLoop`/`editLoop`) through the injected `MachineGateway`,
- * plus the credential-neutral history module. Run credentials expose only the
- * exactly-once report callback.
+ * plus the credential-neutral history module. Run credentials authorize no CLI
+ * verb: a run reports through its final response, not a callback.
  */
-import { createHash } from "node:crypto";
 import path from "node:path";
 
 import * as store from "../db/store.js";
 import type { Loop, NewRun, Run } from "../db/schema.js";
 import { machinePresence, type MachinePresence } from "../lib/machinePresence.js";
 import { logger } from "../logger.js";
-import { resolveLease, type RunLease } from "./tokens.js";
+import { resolveLease } from "./tokens.js";
 import { authenticateDeviceToken } from "./deviceAuth.js";
 import { DAEMON_PROTOCOL_VERSION } from "./protocol.js";
 import {
@@ -36,14 +35,13 @@ import {
 import {
   EDITABLE_LOOP_FIELDS,
   LOG_RUNS_DEFAULT,
-  MESSAGE_CAP,
   fmtTime,
   fmtTimeZoned,
   nextFires,
   runResultToken,
-  type Applied,
   type MachineGateway,
 } from "./index.js";
+import { EMPTY_SHA256, fileLimitLabel, loopFileIssue, loopFileNames } from "./loopFiles.js";
 import { canonicalLoopEnvelope, scheduleFromLoop } from "./loopConfig.js";
 import { readLoopHistory } from "./history.js";
 import { stripNul, type HttpResult } from "./http.js";
@@ -77,9 +75,8 @@ export class CliGateway {
    * already exists — never a rewrite — that keys authority on the credential type:
    *   · DEVICE credential (`dk_`-prefixed) → owner authority over any loop bound to
    *     the machine: `new`→createLoop, `loops`→listLoops, `edit`→editLoop,
-   *     `log`→readLoopHistory, `show`→describe. `report` is RUN-only (403).
-   *   · RUN credential (`rk_` run lease) → report and report help only.
-   *     Every owner verb is rejected.
+   *     `log`→readLoopHistory, `show`→describe, `file`→loop files.
+   *   · RUN credential (`rk_` run lease) → rejected; runs have no CLI.
    */
   async cli(token: string, argv: string[]): Promise<HttpResult> {
     const res = token.startsWith("dk_") ? await this.deviceCli(token, argv) : await this.runCli(token, argv);
@@ -149,10 +146,10 @@ export class CliGateway {
         }
         return { status: 200, body: { ok: true, text: await this.describe(loop.id, { full: flags["full"] === true }) } };
       }
-      case "report":
-        return { status: 403, body: { error: "pievo: report is a run-only verb; the owner edits via edit" } };
+      case "file":
+        return this.ownerFile(machineId, argv);
       default:
-        return { status: 400, body: { error: `pievo: unknown command "${verb}" for the device credential (try: new, loops, pause, start, stop, delete, run stop, edit, log, show)` } };
+        return { status: 400, body: { error: `pievo: unknown command "${verb}" for the device credential (try: new, loops, pause, start, stop, delete, run stop, edit, log, show, file)` } };
     }
   }
 
@@ -242,93 +239,51 @@ export class CliGateway {
     return { status: 200, body: { text: `run already finished: ${runResultToken(stopped)}` } };
   }
 
-  private async runCli(runToken: string, argv: string[]): Promise<HttpResult> {
-    const lease = await resolveLease(runToken);
-    if (!lease) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
-    // Finished or sweep-reclaimed authority accepts only the final report, never
-    // further CLI commands.
-    if (lease.state === "terminal-grace" || lease.state === "reconciliation-only") {
-      return { status: 409, body: { text: errorBlock(TERMINAL_GRACE_MSG, "CONFLICT"), exitCode: 1 } };
-    }
-    const verb = argv[0] ?? "";
-    const flags = parseFlags(argv.slice(1));
-    if (DEVICE_ONLY_VERBS.has(verb)) {
-      return { status: 403, body: { text: errorBlock(`"${verb}" needs the device credential (owner authority); a run may only report`, "FORBIDDEN"), exitCode: 1 } };
-    }
-    if (flags.help === true && verb === "report") {
-      return { status: 200, body: { text: verbHelpText("report", lease)!, exitCode: 0 } };
-    }
-    if (verb !== "report" && verb !== "help" && verb !== "--help" && verb !== "-h" && verb !== "") {
-      return { status: 403, body: { text: errorBlock("run credentials authorize only pievo report", "FORBIDDEN"), exitCode: 1 } };
-    }
-    const out = await this.dispatch(lease, createHash("sha256").update(runToken).digest("hex"), argv);
-    return { status: out.code, body: { text: out.text, exitCode: out.code === 200 ? 0 : 1 } };
+  private async runCli(runToken: string, _argv: string[]): Promise<HttpResult> {
+    if (!(await resolveLease(runToken))) return { status: 401, body: { text: errorBlock("invalid or expired token", "UNAUTHORIZED"), exitCode: 1 } };
+    return { status: 403, body: { text: errorBlock(RUN_HAS_NO_CLI, "FORBIDDEN"), exitCode: 1 } };
   }
 
-  private async dispatch(lease: RunLease, leaseTokenHash: string, argv: string[]): Promise<{ code: number; text: string }> {
-    const verb = argv[0];
-    const flags = parseFlags(argv.slice(1));
-    const str = (key: string) => typeof flags[key] === "string" ? flags[key] as string : undefined;
-    if (verb === undefined || verb === "" || verb === "-h" || verb === "--help" || verb === "help") {
-      return { code: 200, text: this.helpText(lease) };
+  /** `file list|get|set` over one loop's files. `set` takes base64 content so
+   *  arbitrary text (including leading `--`) survives argv transport. */
+  private async ownerFile(machineId: string, argv: string[]): Promise<HttpResult> {
+    const [, sub, loopId, name] = argv;
+    const loop = loopId ? await this.ownedLoop(machineId, loopId) : undefined;
+    if (sub !== "list" && sub !== "get" && sub !== "set") return { status: 400, body: { error: `usage: ${FILE_USAGE}` } };
+    if (!loop) return { status: 404, body: { error: "no such loop on this machine" } };
+    const names = loopFileNames(loop);
+    if (sub === "list") {
+      const rows = await Promise.all(names.map(async (file) => {
+        const row = await store.getArtifactFile(loop.id, file);
+        const live = row && !row.deleted && row.hash ? row : undefined;
+        return [file, live?.size ?? 0, fileLimitLabel(file), live ? fmtTime(live.updatedAt) : null] as Scalar[];
+      }));
+      return { status: 200, body: { text: doc(listBlock("files", ["name", "size", "limit", "updatedAt"], rows), helpBlock([
+        `Run \`pievo file get ${loop.id} <name>\` to print a file`,
+        `Run \`pievo file set ${loop.id} <name> --from <path>\` to replace a file`,
+      ])) } };
     }
-    if (verb !== "report") return derr(403, "run credentials authorize only pievo report", "FORBIDDEN");
-    if (flags.help === true) return { code: 200, text: verbHelpText("report", lease)! };
-    const rawStatus = str("status");
-    const status = reportStatus(rawStatus);
-    if (!status) {
-      return derr(400, `status must be keep|no-change|block${rawStatus === undefined ? "" : ` (got "${rawStatus}")`}`, "VALIDATION_ERROR");
+    if (!name || !names.includes(name)) {
+      return { status: 404, body: { error: `no such loop file: ${name ?? ""} (files: ${names.join(", ")})` } };
     }
-    const message = str("message")?.trim();
-    if (!message) return derr(400, "report requires a non-empty --message", "VALIDATION_ERROR");
-    const acceptedFlags = ["status", "message", "help"];
-    const unknown = Object.keys(flags).filter((key) => !acceptedFlags.includes(key));
-    if (unknown.length) return derr(400, `report does not accept --${unknown[0]}`, "VALIDATION_ERROR");
-    // Owner force-deletion retires the run lease before removing loop/run data.
-    // Treat the model-facing required callback as a successful idempotent sink:
-    // deletion already decided the result is irrelevant, and surfacing an error
-    // invites the provider to retry or otherwise react to an unfixable race.
-    if (lease.state === "retired") return { code: 200, text: "reported: run retired · result discarded" };
-    const applied = await this.applyReportMutation(
-      lease,
-      leaseTokenHash,
-      status,
-      message.slice(0, MESSAGE_CAP),
-    );
-    return applied.ok
-      ? { code: 200, text: renderReportedText(status, true) }
-      : derr(applied.status ?? 409, applied.detail ?? "this run is no longer active", applied.code);
-  }
-
-  private helpText(_lease: RunLease): string {
-    return doc(
-      listBlock("verbs", ["verb", "syntax"], [
-        ["report", "--status keep|no-change|block --message <summary>"],
-      ]),
-      helpBlock([
-        "Call exactly one pievo report before finishing",
-        "No other command is accepted from a run credential",
-      ]),
-    );
-  }
-
-  private async applyReportMutation(
-    lease: RunLease,
-    leaseTokenHash: string,
-    status: "keep" | "no-change" | "block",
-    message: string,
-  ): Promise<Applied> {
-    const result = await store.recordRunReportOnce({
-      loopId: lease.loopId,
-      runId: lease.runId,
-      leaseTokenHash,
-      status,
-      message,
-    });
-    if (result.state === "applied") return { ok: true, detail: "reported" };
-    if (result.state === "missing-loop") return { ok: false, detail: "loop not found", code: "NOT_FOUND", status: 404 };
-    if (result.state === "already-reported") return { ok: false, detail: "this run already reported", code: "CONFLICT", status: 409 };
-    return { ok: false, detail: "this run is no longer active", code: "CONFLICT", status: 409 };
+    if (sub === "get") {
+      const row = await store.getArtifactFile(loop.id, name);
+      const bytes = await this.gateway.loopFiles.readBlob(row && !row.deleted && row.hash ? row.hash : EMPTY_SHA256);
+      if (!bytes) return { status: 500, body: { error: "loop file bytes are missing" } };
+      // An empty file prints as one blank line: the CLI transport requires non-empty text.
+      return { status: 200, body: { text: bytes.length ? bytes.toString("utf8") : "\n" } };
+    }
+    const flags = parseFlags(argv.slice(4));
+    const encoded = flags["content-base64"];
+    // A bare flag (no value) would silently mean "empty file"; require the value.
+    if (typeof encoded !== "string") return { status: 400, body: { error: `usage: ${FILE_USAGE}` } };
+    const bytes = Buffer.from(encoded, "base64");
+    const issue = loopFileIssue(name, bytes);
+    if (issue) return { status: 413, body: { error: `${issue}; nothing was changed` } };
+    const hash = await this.gateway.loopFiles.putBlob(bytes);
+    if (hash !== EMPTY_SHA256) await store.recordBlob(hash, bytes.length);
+    if (!(await store.writeLoopFile(loop.id, name, hash, bytes.length))) return { status: 404, body: { error: "no such loop file" } };
+    return { status: 200, body: { text: `file: ${name}\nsize: ${bytes.length}\nupdated: true` } };
   }
 
   private async describe(loopId: string, opts: { full?: boolean } = {}): Promise<string> {
@@ -381,11 +336,9 @@ export class CliGateway {
 
 type Flags = Record<string, string | boolean>;
 
-const TERMINAL_GRACE_MSG =
-  "this run is terminal and no longer accepts commands; its final result is delivered via the terminal report";
-
-/** Verbs that require device authority. `report` is run-only and rejected there. */
-const DEVICE_ONLY_VERBS = new Set(["new", "edit", "loops", "start", "stop", "delete", "run"]);
+const RUN_HAS_NO_CLI =
+  "pievo commands are not available inside a run; end your final response with a summary and a last line `STATUS: keep|no-change|block`";
+const FILE_USAGE = "pievo file list <loop> | file get <loop> <name> | file set <loop> <name> --from <path>";
 
 const PAUSED_FINISHING = "loop paused; current run is finishing";
 const STOP_UPGRADE_REQUIRED = "Daemon upgrade required to stop a running process. Run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.";
@@ -450,35 +403,14 @@ function finalizeCli(res: HttpResult): HttpResult {
   return res;
 }
 
-function renderReportedText(status: string | undefined, hasMessage: boolean): string {
-  const parts: string[] = [];
-  if (status) parts.push(`status=${status}`);
-  if (hasMessage) parts.push("message recorded");
-  return `reported: ${parts.length ? parts.join(" · ") : "recorded"}`;
-}
-
-// `<verb> --help` prints syntax, a summary, and concrete examples. Run credentials
-// expose report help only; device credentials receive the owner command surface. A
-// verb absent from the relevant map falls through to unknown-command handling.
+// `<verb> --help` prints syntax, a summary, and concrete examples for device
+// credentials. A verb absent from the map falls through to unknown-command handling.
 
 interface VerbHelpSpec {
   syntax: string;
   summary: string;
   help: string[];
-  avail?: (lease: RunLease) => string;
 }
-
-const RUN_VERB_HELP: Record<string, VerbHelpSpec> = {
-  report: {
-    syntax: "report --status keep|no-change|block --message <text>",
-    summary: "record this run's required status and non-empty summary",
-    avail: () => "always available",
-    help: [
-      'Run `pievo report --status no-change --message "no actionable change"` to close this run',
-      'Run `pievo report --status keep --message "completed the requested work"` to retain a result',
-    ],
-  },
-};
 
 const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
   new: {
@@ -524,13 +456,21 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
   },
   delete: {
     syntax: "delete <id> [--force]",
-    summary: "stop first, then delete server history and synced artifact metadata",
-    help: ["Stop this loop and delete its Pievo history and synced artifacts? Local project files are not deleted.", "--force requires a prior Delete request and explicit local confirmation; the local process may still be running"],
+    summary: "stop first, then delete server history, memory, and artifacts",
+    help: ["Stop this loop and delete its Pievo history, memory, and artifacts? Local project files are not deleted.", "--force requires a prior Delete request and explicit local confirmation; the local process may still be running"],
   },
   run: {
     syntax: "run stop <run-id>",
     summary: "stop one pending or running run without pausing its loop",
     help: ["A running run remains running until the daemon confirms cancellation"],
+  },
+  file: {
+    syntax: "file list <id> | file get <id> <name> | file set <id> <name> --from <path>",
+    summary: "inspect or replace a loop's MEMORY.md and artifact files",
+    help: [
+      "Run `pievo file get <id> MEMORY.md` to read the loop's memory",
+      "An edit made while a run is executing wins over that run's version of the file",
+    ],
   },
   log: {
     syntax: "log [<id>] [--limit 1..20] [--since ISO] [--until ISO] [--status keep|no-change|block] [--phase done|error|canceled] [--run <index|UUID> [--diff]] [--json]",
@@ -539,14 +479,13 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
   },
 };
 
-function verbHelpText(verb: string, lease?: RunLease): string | undefined {
-  const spec = lease ? RUN_VERB_HELP[verb] : DEVICE_VERB_HELP[verb];
+function verbHelpText(verb: string): string | undefined {
+  const spec = DEVICE_VERB_HELP[verb];
   if (!spec) return undefined;
   return doc(
     kvLine("verb", verb),
     kvLine("syntax", spec.syntax),
     kvLine("summary", spec.summary),
-    lease && spec.avail ? kvLine("availability", spec.avail(lease)) : null,
     helpBlock(spec.help),
   );
 }
@@ -598,6 +537,7 @@ function renderShowText(
     `Run \`pievo show ${loop.id} --full\` to see the complete prompt`,
     `Run \`pievo edit ${loop.id} --json '{"schedule":{"mode":"continuous","delayMinutes":5}}'\` to change the schedule`,
     `Run \`pievo log ${loop.id}\` to see recent run results`,
+    `Run \`pievo file list ${loop.id}\` to see the loop's memory and artifact files`,
   ];
   return doc(
     block,
@@ -736,10 +676,6 @@ function renderHomeText(
       "Run `pievo new --json '{...}'` to create a loop",
     ]),
   );
-}
-
-function reportStatus(s: string | undefined): "keep" | "no-change" | "block" | undefined {
-  return s === "keep" || s === "no-change" || s === "block" ? s : undefined;
 }
 
 /** Tiny flag parser: `--k v` pairs, bare `--flag` → true, first positional under `_`.

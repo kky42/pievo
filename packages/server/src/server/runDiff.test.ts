@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 
 import { registerRunLease, testStore, type TestStore } from "../../test/store.js";
+import { EMPTY_SHA256 } from "../gateway/loopFiles.js";
 
 let tmp: string;
 let db: typeof import("../db/index.js");
@@ -13,7 +14,6 @@ let boot: typeof import("./boot.js");
 let tokens: typeof import("../gateway/tokens.js") & { registerRunLease: typeof registerRunLease };
 let runDiff: typeof import("./runDiff.js");
 let gw: Awaited<ReturnType<typeof import("./boot.js")["getGateway"]>>;
-let art: Awaited<ReturnType<typeof import("./boot.js")["getArtifactSync"]>>;
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-diff-"));
@@ -26,7 +26,6 @@ beforeAll(async () => {
   tokens = { ...(await import("../gateway/tokens.js")), registerRunLease };
   runDiff = await import("./runDiff.js");
   gw = await boot.getGateway();
-  art = await boot.getArtifactSync();
 });
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -44,7 +43,7 @@ async function seed() {
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = await store.createLoop({ workdir: "/work", machineId, name: "L", cron: "0 0 1 1 *", enabled: true,
-    artifacts: ["report.md", "a.md", "b.md", "c.md", "gone.md", "new.md", "keep.md", "blob.bin", "huge.txt", "first.md"],
+    artifacts: ["report.md", "a.md", "b.md", "c.md", "gone.md", "new.md", "keep.md", "huge.md", "first.md"],
   });
   return { token, machineId, loop };
 }
@@ -52,29 +51,40 @@ async function seed() {
 interface FileSpec {
   path: string;
   bytes: Buffer;
-  binary?: boolean;
-  oversize?: boolean;
 }
 
-async function doRun(token: string, machineId: string, loopId: string, ts: string, files: FileSpec[]) {
+/** One run through the real loop-file path: upload with the run token, then a
+ *  terminal report naming each new version and the version it started from. */
+async function doRun(_token: string, machineId: string, loopId: string, ts: string, files: FileSpec[]) {
   const run = await store.addRun({ loopId, machineId, phase: "running", ts });
   const runToken = await tokens.registerRunLease({
     runId: run.id,
     loopId,
     machineId,
   });
-  const manifest = files.map((f) =>
-    f.oversize
-      ? { path: f.path, hash: null, size: f.bytes.length, binary: !!f.binary, oversize: true }
-      : { path: f.path, hash: sha256(f.bytes), size: f.bytes.length, binary: !!f.binary, oversize: false },
-  );
-  await art.sync(token, { loopId, manifest });
-  for (const file of files.filter((f) => !f.oversize)) {
-    expect((await art.putBlob(token, sha256(file.bytes), file.bytes)).status).toBe(200);
+  const reported = [];
+  for (const file of files) {
+    const hash = sha256(file.bytes);
+    expect((await gw.storeRunFile(runToken, file.path, file.bytes, hash)).status).toBe(200);
+    const current = await store.getArtifactFile(loopId, file.path);
+    const baseHash = current && !current.deleted && current.hash ? current.hash : EMPTY_SHA256;
+    reported.push({ name: file.path, baseHash, hash, size: file.bytes.length });
   }
-  const r = await gw.report(runToken, { reportId: `018f47a2-9c2b-7d11-8f52-${run.id.replace(/-/g, "").slice(0, 12)}`, runId: run.id, result: "success" as const, durationMs: 1 });
+  const r = await gw.report(runToken, {
+    reportId: `018f47a2-9c2b-7d11-8f52-${run.id.replace(/-/g, "").slice(0, 12)}`,
+    runId: run.id,
+    result: "success" as const,
+    durationMs: 1,
+    finalText: "done\nSTATUS: keep",
+    ...(reported.length ? { files: reported } : {}),
+  });
   expect(r.status).toBe(200);
   return run;
+}
+
+async function unconfigure(loopId: string, name: string) {
+  const loop = (await store.getLoop(loopId))!;
+  await store.updateLoop(loopId, { artifacts: loop.artifacts.filter((artifact) => artifact !== name) });
 }
 
 test("report writes a run snapshot capturing the loop's end-state manifest", async () => {
@@ -95,9 +105,9 @@ test("getRunDiff: added / modified / removed / unchanged across two runs", async
     { path: "keep.md", bytes: Buffer.from("unchanged") },
     { path: "gone.md", bytes: Buffer.from("bye") },
   ]);
+  await unconfigure(loop.id, "gone.md");
   const run2 = await doRun(token, machineId, loop.id, "2026-06-02T00:00:00.000Z", [
     { path: "a.md", bytes: Buffer.from("line one\nline TWO changed\n") },
-    { path: "keep.md", bytes: Buffer.from("unchanged") },
     { path: "new.md", bytes: Buffer.from("brand new") },
   ]);
 
@@ -115,30 +125,15 @@ test("getRunDiff: added / modified / removed / unchanged across two runs", async
   expect(byPath["gone.md"]!.sizeDelta).toBe(-3);
 });
 
-test("getRunDiff: binary/oversize change emits a size-delta marker, no inline diff", async () => {
-  const { token, machineId, loop } = await seed();
-  const small = Buffer.from([0x00, 0x01, 0x02]);
-  const bigger = Buffer.from([0x00, 0x01, 0x02, 0x03, 0x04]);
-  await doRun(token, machineId, loop.id, "2026-06-01T00:00:00.000Z", [{ path: "blob.bin", bytes: small, binary: true }]);
-  const run2 = await doRun(token, machineId, loop.id, "2026-06-02T00:00:00.000Z", [{ path: "blob.bin", bytes: bigger, binary: true }]);
-
-  const diff = await runDiff.computeRunDiff(run2.id);
-  const f = diff.files.find((x) => x.path === "blob.bin")!;
-  expect(f.status).toBe("modified");
-  expect(f.binary).toBe(true);
-  expect(f.diff).toBeUndefined();
-  expect(f.sizeDelta).toBe(2);
-});
-
 test("getRunDiff: a large text file (over the diff cap, under oversize) is tooLarge, not binary", async () => {
   const { token, machineId, loop } = await seed();
   const big = Buffer.from("x".repeat(600 * 1024));
   const bigger = Buffer.from("y".repeat(601 * 1024));
-  await doRun(token, machineId, loop.id, "2026-06-01T00:00:00.000Z", [{ path: "huge.txt", bytes: big }]);
-  const run2 = await doRun(token, machineId, loop.id, "2026-06-02T00:00:00.000Z", [{ path: "huge.txt", bytes: bigger }]);
+  await doRun(token, machineId, loop.id, "2026-06-01T00:00:00.000Z", [{ path: "huge.md", bytes: big }]);
+  const run2 = await doRun(token, machineId, loop.id, "2026-06-02T00:00:00.000Z", [{ path: "huge.md", bytes: bigger }]);
 
   const diff = await runDiff.computeRunDiff(run2.id);
-  const f = diff.files.find((x) => x.path === "huge.txt")!;
+  const f = diff.files.find((x) => x.path === "huge.md")!;
   expect(f.status).toBe("modified");
   expect(f.tooLarge).toBe(true);
   expect(f.binary).toBe(false);

@@ -6,7 +6,7 @@ import { expandTilde } from "./loopdir.js";
 import { effectiveRoots, isWithinRoots } from "./roots.js";
 import { CALLBACK_BIN_DIR } from "./callback-bin.js";
 import { makeTerminalCollector, type TokenUsage } from "./telemetry.js";
-import { syncArtifacts } from "./artifacts.js";
+import { collectLoopFiles, prepareLoopFiles, type ReportedLoopFile } from "./loop-files.js";
 import type { CodingAgent } from "./create.js";
 import type { TerminalReport, TerminalResult } from "./report-outbox.js";
 
@@ -29,9 +29,14 @@ export interface Delivery {
   /** Server-configured workdir jail — may only NARROW the daemon's local env
    *  PIEVO_ROOTS jail, never widen it (see roots.effectiveRoots). */
   roots: string[];
+  /** Contains the literal LOOP_DIR_PLACEHOLDER, replaced with the run directory. */
   task: string;
-  artifacts: string[];
+  /** Loop file names (MEMORY.md first) to download into the run directory. */
+  files: string[];
 }
+
+/** Server prompt placeholder for the run's loop-file directory; also exported to the provider env. */
+export const LOOP_DIR_PLACEHOLDER = "$PIEVO_LOOP_DIR";
 
 interface ReportBody {
   runId: string;
@@ -41,6 +46,8 @@ interface ReportBody {
   usage?: TokenUsage;
   error?: string;
   finalText?: string;
+  files?: ReportedLoopFile[];
+  fileNotices?: string[];
 }
 
 const SELF_SCHEDULING_TOOLS = "ScheduleWakeup,CronCreate,CronList,CronDelete";
@@ -127,7 +134,7 @@ export async function executeDelivery(
   serverUrl: string,
   roots: string[],
   signal?: AbortSignal,
-  deviceToken?: string,
+  fetchImpl?: typeof fetch,
 ): Promise<TerminalReport> {
   const start = Date.now();
   const canceled = () => signal?.aborted && signal.reason === RUN_CANCEL_REASON;
@@ -148,6 +155,12 @@ export async function executeDelivery(
   } catch (err) {
     return completeRun({ runId: d.runId, exitCode: null, durationMs: Date.now() - start, error: msg(err) });
   }
+  let loopFiles: Awaited<ReturnType<typeof prepareLoopFiles>>;
+  try {
+    loopFiles = await prepareLoopFiles({ serverUrl, runToken: d.runToken, runId: d.runId, files: d.files, fetchImpl });
+  } catch (err) {
+    return completeRun({ runId: d.runId, exitCode: null, durationMs: Date.now() - start, error: `could not prepare loop files: ${msg(err)}` });
+  }
 
   // Run the selected coding agent exactly once.
   let ok = false;
@@ -161,12 +174,13 @@ export async function executeDelivery(
   try {
     const env: NodeJS.ProcessEnv = {
       ...execEnv(agent),
-      // Prepend the home bin dir so `pievo` resolves to our re-exec wrapper.
+      // Prepend the home bin dir so `pievo` resolves to our re-exec wrapper,
+      // which refuses owner commands inside a run (PIEVO_IN_RUN).
       PATH: `${CALLBACK_BIN_DIR}${path.delimiter}${process.env.PATH ?? ""}`,
-      PIEVO_RUN_TOKEN: d.runToken,
-      PIEVO_SERVER_URL: serverUrl,
+      PIEVO_IN_RUN: "1",
+      PIEVO_LOOP_DIR: loopFiles.dir,
     };
-    const task = d.task;
+    const task = d.task.split(LOOP_DIR_PLACEHOLDER).join(loopFiles.dir);
 
     // Provider sessions are deliberately single-shot. Capture sessionId for
     // possible future use, but never resume or retry this run's provider process.
@@ -213,18 +227,15 @@ export async function executeDelivery(
     error = `failed to run ${agentLabel}: ${msg(err)}`;
   }
 
-  // Collection happens only after the provider exits and before the terminal
-  // report enters the durable outbox, so the server snapshots the exact files.
-  if (deviceToken) {
-    await syncArtifacts({
-      loopId: d.loop.id,
-      runId: d.runId,
-      workdir,
-      artifacts: d.artifacts,
-      server: serverUrl,
-      token: deviceToken,
-    });
-  }
+  // Collection happens after the provider exits and before the terminal report
+  // enters the durable outbox; the bytes stay in the run dir until the ACK.
+  // Only a provider that was actually killed mid-edit (canceled or timed out)
+  // has untrustworthy files. A stop that arrives after a clean provider exit
+  // still lets the completed run's versions apply.
+  const discard = error === "canceled by server request"
+    ? "the run was canceled"
+    : error?.includes("timed out") ? "the run timed out" : undefined;
+  const collected = collectLoopFiles(loopFiles.dir, loopFiles.baseHashes, discard);
 
   return completeRun({
     runId: d.runId,
@@ -233,10 +244,11 @@ export async function executeDelivery(
     sessionId,
     usage,
     error,
-    // Preserve the provider's final response independently from the required
-    // `pievo report --message`. History detail exposes both without treating the
-    // free-form final response as a successful protocol report.
+    // The server reads the run's status from the final response's last
+    // `STATUS:` line.
     finalText,
+    ...(collected.files.length ? { files: collected.files } : {}),
+    ...(collected.notices.length ? { fileNotices: collected.notices } : {}),
   }, error === "canceled by server request" ? "canceled" : undefined, ok);
 }
 

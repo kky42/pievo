@@ -46,12 +46,12 @@ describe("runDaemon", () => {
 });
 
 describe("poll transport helpers", () => {
-  test("buildPollBody: protocol v4 reports all active runs", async () => {
+  test("buildPollBody: protocol v5 reports all active runs", async () => {
     const { buildPollBody } = await import("./daemon.js");
     const info = { host: "mac", platform: "darwin" };
-    expect(buildPollBody(info, [], "daemon-1")).toEqual({ protocolVersion: 4, host: "mac", platform: "darwin", daemonInstanceId: "daemon-1", recoveryComplete: true, currentRuns: [] });
+    expect(buildPollBody(info, [], "daemon-1")).toEqual({ protocolVersion: 5, host: "mac", platform: "darwin", daemonInstanceId: "daemon-1", recoveryComplete: true, currentRuns: [] });
     expect(buildPollBody(info, [{ runId: "r1", stage: "reporting" }, { runId: "r2", stage: "executing" }], "daemon-1")).toEqual({
-      protocolVersion: 4, host: "mac", platform: "darwin", daemonInstanceId: "daemon-1", recoveryComplete: true,
+      protocolVersion: 5, host: "mac", platform: "darwin", daemonInstanceId: "daemon-1", recoveryComplete: true,
       currentRuns: [{ runId: "r1", stage: "reporting" }, { runId: "r2", stage: "executing" }],
     });
   });

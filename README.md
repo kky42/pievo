@@ -17,8 +17,9 @@ project files on the device that runs each loop.
 ## What Pievo does
 
 A loop combines a prompt, a cron or continuous schedule, a project folder on one
-device, and one of three outcomes: `keep`, `no-change`, or `block`. It can also
-publish selected artifact files for viewing and diffing in the dashboard.
+device, and one of three outcomes: `keep`, `no-change`, or `block`. Each loop keeps a
+memory file its runs read and update, so later runs avoid earlier mistakes, and can
+maintain Markdown or HTML artifacts the dashboard renders and diffs.
 
 Pievo is personal software for one user. One device runs the **server** (dashboard,
 scheduler, history). Every device that runs loops runs the **daemon**, which polls
@@ -99,8 +100,9 @@ pievo server stop
 
 Options: `--port <n>` (default 3000), `--host <addr>` (default `0.0.0.0`),
 `--no-https`, and `--data-dir <path>`. The server stores its embedded database,
-artifact bytes, log, and pid record in `~/.pievo-server`; the daemon keeps its
-connection, logs, and report outbox in `~/.pievo`. Run exactly one server per data
+loop memory and artifact bytes, log, and pid record in `~/.pievo-server`; the daemon
+keeps its connection, logs, report outbox, and per-run loop-file directories in
+`~/.pievo`. Run exactly one server per data
 directory, and stop it before backing up `~/.pievo-server`.
 
 ## How it works

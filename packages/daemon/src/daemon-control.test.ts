@@ -137,11 +137,11 @@ describe("runDaemonStatus", () => {
       readPid: () => ({ pid: 12, startTime: "test-start" }), alive: () => true,
       server: "https://srv.example", token: "dk_x",
       runtimeDiagnostics: () => ({
-        protocolVersion: 4,
+        protocolVersion: 5,
         currentRuns: [{ runId: "run-local", stage: "reporting" }],
         cancelPendingRunIds: ["run-local"],
       }),
-      fetchOnline: async () => ({ online: true, name: "MacBook", daemonProtocol: 4, currentRuns: [{ runId: "run-local", stage: "executing" }] }),
+      fetchOnline: async () => ({ online: true, name: "MacBook", daemonProtocol: 5, currentRuns: [{ runId: "run-local", stage: "executing" }] }),
     });
     await runDaemonStatus([], cap);
     expect(cap.stdout()).toContain("current run: run-local (reporting)");
@@ -154,7 +154,7 @@ describe("runDaemonStatus", () => {
       readPid: () => ({ pid: 12, startTime: "test-start" }), alive: () => true,
       server: "", token: undefined,
       runtimeDiagnostics: () => ({
-        protocolVersion: 4,
+        protocolVersion: 5,
         currentRuns: [{ runId: "run-local", stage: "reporting" }],
         persistenceError: "SQLITE_FULL: database or disk is full",
         outboxPath: "/home/me/.pievo/pending-reports.sqlite",
@@ -190,7 +190,7 @@ describe("runDaemonStatus", () => {
       }),
     });
     await runDaemonStatus([], cap);
-    expect(cap.stdout()).toContain("daemon upgrade required: protocol 1 -> 4");
+    expect(cap.stdout()).toContain("daemon upgrade required: protocol 1 -> 5");
     expect(cap.stdout()).toContain("current run: run-9 (executing)");
     expect(cap.stdout()).toContain("cancel pending");
   });

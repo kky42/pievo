@@ -12,14 +12,14 @@ afterEach(() => { delete process.env.PIEVO_CLAUDE_BIN; delete process.env.PIEVO_
 
 function delivery(overrides: Partial<Delivery> = {}): Delivery {
   root ||= fs.mkdtempSync(path.join(os.tmpdir(), "pievo-v4-"));
-  return { runId: "run-1", runIndex: 1, runToken: "rk_00000000000000000000000000000000", loop: { id: "loop-1", name: "one", workdir: root, model: null, reasoningEffort: null, agent: "claude-code" }, roots: [], task: "do it", artifacts: [], ...overrides };
+  return { runId: "run-1", runIndex: 1, runToken: "rk_00000000000000000000000000000000", loop: { id: "loop-1", name: "one", workdir: root, model: null, reasoningEffort: null, agent: "claude-code" }, roots: [], task: "do it", files: ["MEMORY.md"], ...overrides };
 }
 
-describe("poll protocol v4", () => {
+describe("poll protocol v5", () => {
   test("advertises every current run in one canonical shape", () => {
-    expect(buildPollBody({ host: "mac" }, [], "daemon-1")).toEqual({ protocolVersion: 4, host: "mac", daemonInstanceId: "daemon-1", recoveryComplete: true, currentRuns: [] });
+    expect(buildPollBody({ host: "mac" }, [], "daemon-1")).toEqual({ protocolVersion: 5, host: "mac", daemonInstanceId: "daemon-1", recoveryComplete: true, currentRuns: [] });
     const runs = [{ runId: "r1", stage: "executing" as const }, { runId: "r2", stage: "reporting" as const }];
-    expect(buildPollBody({ host: "mac" }, runs, "daemon-1")).toEqual({ protocolVersion: 4, host: "mac", daemonInstanceId: "daemon-1", recoveryComplete: true, currentRuns: runs });
+    expect(buildPollBody({ host: "mac" }, runs, "daemon-1")).toEqual({ protocolVersion: 5, host: "mac", daemonInstanceId: "daemon-1", recoveryComplete: true, currentRuns: runs });
   });
 });
 

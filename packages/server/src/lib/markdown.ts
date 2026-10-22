@@ -4,7 +4,7 @@ import { marked } from 'marked'
 /**
  * Shared markdown → sanitized HTML pipeline: marked (GFM) → DOMPurify (an
  * allowlisted prose subset, NO script/handlers). ONE sanitizer config for every
- * artifact markdown surface so the allowlist cannot drift between viewers.
+ * loop-file markdown surface so the allowlist cannot drift between viewers.
  * Render the output under
  * the `.artifact-markdown` styles.
  */

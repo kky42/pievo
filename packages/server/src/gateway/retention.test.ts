@@ -13,7 +13,6 @@ let tmp: string;
 let db: typeof import("../db/index.js");
 let store: TestStore;
 let gatewayMod: typeof import("./index.js");
-let syncMod: typeof import("./sync.js");
 let retention: typeof import("./retention.js");
 let tokens: typeof import("./tokens.js");
 
@@ -25,7 +24,6 @@ beforeAll(async () => {
   await db.runMigrations();
   store = testStore(await import("../db/store.js"));
   gatewayMod = await import("./index.js");
-  syncMod = await import("./sync.js");
   retention = await import("./retention.js");
   tokens = await import("./tokens.js");
 });
@@ -52,15 +50,14 @@ const scheduler = {
   runNow(): void {},
 } as any;
 
-/** Gateway (retention/GC) + ArtifactSync (byte ingress) over ONE shared blob
- *  store - the same sharing boot wires up. */
+/** Gateway (retention/GC) over a blob store the test also writes - the same
+ *  sharing boot wires up. */
 function gatewayWithStore(): {
   gw: InstanceType<typeof gatewayMod.MachineGateway>;
-  art: InstanceType<typeof syncMod.ArtifactSync>;
   blobs: MemoryBlobStore;
 } {
   const blobs = new MemoryBlobStore();
-  return { gw: new gatewayMod.MachineGateway(scheduler, blobs), art: new syncMod.ArtifactSync(blobs), blobs };
+  return { gw: new gatewayMod.MachineGateway(scheduler, blobs), blobs };
 }
 
 async function seed() {
@@ -81,13 +78,13 @@ async function putBlob(blobs: MemoryBlobStore, content: string): Promise<string>
   return hash;
 }
 
-async function putArtifact(input: Parameters<typeof store.upsertConfiguredArtifactFile>[0]): Promise<void> {
-  expect(await store.upsertConfiguredArtifactFile(input)).toBe(true);
+async function putArtifact(input: { loopId: string; path: string; hash: string; size: number }): Promise<void> {
+  expect(await store.writeLoopFile(input.loopId, input.path, input.hash, input.size)).toBe(true);
 }
 
-async function reconcileArtifacts(loopId: string, keepPaths: string[]): Promise<void> {
-  const loop = (await store.getLoop(loopId))!;
-  await store.reconcileConfiguredArtifacts(loopId, loop.artifacts, keepPaths);
+/** Unconfiguring an artifact tombstones its row, releasing the blob reference. */
+async function keepOnlyArtifacts(loopId: string, keep: string[]): Promise<void> {
+  expect(await store.updateLoop(loopId, { artifacts: keep })).toBeDefined();
 }
 
 // A negative grace pushes the cutoff into the future so every just-written blob
@@ -99,10 +96,10 @@ test("GC keeps a blob still referenced by another live file (shared content)", a
   const { blobs } = gatewayWithStore();
   const hash = await putBlob(blobs, "shared bytes");
 
-  await putArtifact({ loopId: loop.id, path: "a.txt", hash, size: 11, binary: false, oversize: false });
-  await putArtifact({ loopId: loop.id, path: "b.txt", hash, size: 11, binary: false, oversize: false });
+  await putArtifact({ loopId: loop.id, path: "a.txt", hash, size: 11 });
+  await putArtifact({ loopId: loop.id, path: "b.txt", hash, size: 11 });
 
-  await reconcileArtifacts(loop.id, ["a.txt"]);
+  await keepOnlyArtifacts(loop.id, ["a.txt"]);
 
   const reclaimed = await retention.gcBlobs(blobs, FORCE);
   expect(reclaimed).toBe(0);
@@ -115,10 +112,10 @@ test("GC keeps a blob a retained snapshot still references, then reclaims it onc
   const { blobs } = gatewayWithStore();
   const hash = await putBlob(blobs, "report v1");
 
-  await putArtifact({ loopId: loop.id, path: "report.md", hash, size: 9, binary: false, oversize: false });
+  await putArtifact({ loopId: loop.id, path: "report.md", hash, size: 9 });
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: new Date().toISOString() }));
   (await store.putRunSnapshot(run.id, loop.id, { "report.md": { hash, size: 9, binary: false, oversize: false } }));
-  await reconcileArtifacts(loop.id, []);
+  await keepOnlyArtifacts(loop.id, []);
 
   const r1 = await retention.gcBlobs(blobs, FORCE);
   expect(r1).toBe(0);
@@ -163,7 +160,7 @@ test("GC deletes bytes before metadata: a blob re-referenced mid-delete drops me
     get: (h: string) => base.get(h),
     async delete(h: string): Promise<void> {
       if (h === hash) {
-        await putArtifact({ loopId: loop.id, path: "racer.txt", hash, size: content.length, binary: false, oversize: false });
+        await putArtifact({ loopId: loop.id, path: "racer.txt", hash, size: content.length });
         await store.recordBlob(hash, content.length);
       }
       return base.delete(h);
@@ -267,7 +264,7 @@ test("deleting a loop cascades runs/artifact_files/run_snapshots so its blobs be
   const { blobs } = gatewayWithStore();
   const hash = await putBlob(blobs, "doomed loop content");
 
-  await putArtifact({ loopId: loop.id, path: "f.md", hash, size: 19, binary: false, oversize: false });
+  await putArtifact({ loopId: loop.id, path: "f.md", hash, size: 19 });
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: new Date().toISOString() }));
   (await store.putRunSnapshot(run.id, loop.id, { "f.md": { hash, size: 19, binary: false, oversize: false } }));
   expect(await retention.gcBlobs(blobs, FORCE)).toBe(0);

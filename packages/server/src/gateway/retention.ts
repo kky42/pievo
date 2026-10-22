@@ -1,9 +1,9 @@
 /**
- * Artifact-storage retention + garbage collection — the policy that keeps the
+ * Loop-file storage retention + garbage collection — the policy that keeps the
  * local byte store from growing monotonically.
  *
- * The artifact pipeline is content-addressed: blob BYTES are keyed by sha256 and
- * deduped across every loop/run. When a path is deleted or its content changes,
+ * The loop-file pipeline is content-addressed: blob BYTES are keyed by sha256 and
+ * deduped across every loop/run. When a file is deleted or its content changes,
  * the OLD blob is no longer pointed at by the current file row — but nothing was
  * reclaiming it, so the byte store grew forever. This module closes that gap with two pieces:
  *
@@ -14,14 +14,14 @@
  *      hash. CORRECTNESS over aggressiveness — a still-referenced blob is never
  *      deleted; a leaked blob is only a cost bug the next pass reclaims.
  *
- * Concurrency: gcBlobs is safe to run alongside active syncs. Three guards combine —
- * a grace window (a blob whose metadata row is younger than the window is never
- * collected, so a blob a sync just wrote/referenced is untouchable), a point
- * re-check of each candidate immediately before its bytes are deleted (so a blob
+ * Concurrency: gcBlobs is safe alongside owner writes and run uploads. Three guards
+ * combine — a grace window (a blob whose metadata row is younger than the window is
+ * never collected, so a blob a run just uploaded is untouchable), a point re-check
+ * of each candidate immediately before its bytes are deleted (so a blob
  * re-referenced before we touch it keeps both its bytes and metadata), and a
  * bytes-before-metadata delete ordering: each candidate's bytes are reclaimed
  * FIRST, then its metadata row is dropped unconditionally — so blobExists() goes
- * false and any sync that re-references the hash (even one that raced the byte
+ * false and any writer that re-references the hash (even one that raced the byte
  * delete) re-uploads the bytes (self-healing). We never leave a live blobs row
  * pointing at deleted bytes.
  */

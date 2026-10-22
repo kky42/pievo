@@ -2,8 +2,9 @@
  * Workdir-jail helpers (PIEVO_ROOTS). The daemon's env roots are the LOCAL,
  * always-enforced jail; server-sent roots may only NARROW it, never widen it —
  * every server-controlled execution workdir is checked before it is touched.
- * Configured artifact paths are additionally confined beneath that workdir. With no local
- * roots configured, behavior is unchanged (fully open — the documented default).
+ * Loop files live under the daemon's run directory, not in the workdir, so this
+ * jail governs only the provider cwd. With no local roots configured, behavior is
+ * unchanged (fully open — the documented default).
  */
 import path from "node:path";
 

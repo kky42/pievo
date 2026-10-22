@@ -7,22 +7,22 @@
  */
 import { describe, expect, test } from 'vitest'
 
-import { SYNC_BODY_CAP } from '../gateway/artifacts'
+import { LOOP_FILE_BYTE_CAP } from '../gateway/loopFiles'
 import { MACHINE_BODY_CAP, POLL_VERSION_CAP, WIRE_TEXT_CAP, readJsonBody } from '../gateway/http'
 import { gatewayPollRequest, parsePollBody, Route as PollRoute } from './api.machine.poll'
 import { Route as ReportRoute } from './machine.report'
 import { parseCliBody, Route as CliRoute } from './api.machine.cli'
-import { Route as SyncRoute } from './api.machine.sync'
+import { Route as RunFilesRoute } from './api.machine.run-files.$name'
 
 type Handler = (ctx: { request: Request }) => Response | Promise<Response>
 const handler = (route: unknown, method: string): Handler =>
   (route as any).options.server.handlers[method]
 
-const oversized = (url: string, method = 'POST') =>
+const oversized = (url: string, method = 'POST', cap = MACHINE_BODY_CAP) =>
   new Request(`http://localhost:3000${url}`, {
     method,
     headers: { authorization: 'Bearer dev-token', 'content-type': 'application/json' },
-    body: `{"pad":"${'x'.repeat(MACHINE_BODY_CAP + 1)}"}`,
+    body: `{"pad":"${'x'.repeat(cap + 1)}"}`,
   })
 
 describe('readJsonBody', () => {
@@ -82,13 +82,13 @@ describe('readJsonBody', () => {
 
 test('poll route forwards a completed recovery snapshot and constructs exact machine info', () => {
   expect(gatewayPollRequest({
-    protocolVersion: 4,
+    protocolVersion: 5,
     daemonInstanceId: 'daemon-new',
     recoveryComplete: true,
     currentRuns: [{ runId: 'run-1', stage: 'reporting' }],
     host: 'mac',
   })).toEqual({
-    protocolVersion: 4,
+    protocolVersion: 5,
     daemonInstanceId: 'daemon-new',
     recoveryComplete: true,
     currentRuns: [{ runId: 'run-1', stage: 'reporting' }],
@@ -97,12 +97,12 @@ test('poll route forwards a completed recovery snapshot and constructs exact mac
 })
 
 test('poll HTTP envelope has an exact, strictly typed field allowlist', () => {
-  expect(parsePollBody({ protocolVersion: 4, recoveryComplete: true })).not.toBeNull()
-  expect(parsePollBody({ protocolVersion: 4, recoveryComplete: true, unknown: true })).toBeNull()
+  expect(parsePollBody({ protocolVersion: 5, recoveryComplete: true })).not.toBeNull()
+  expect(parsePollBody({ protocolVersion: 5, recoveryComplete: true, unknown: true })).toBeNull()
   expect(parsePollBody({ host: 42 })).toBeNull()
   expect(parsePollBody({ platform: null })).toBeNull()
   expect(parsePollBody({ arch: ['arm64'] })).toBeNull()
-  expect(parsePollBody({ version: { value: '2.4.0' } })).toBeNull()
+  expect(parsePollBody({ version: { value: '4.0.0' } })).toBeNull()
   expect(parsePollBody({ host: 'mac\0forged' })).toBeNull()
   expect(parsePollBody({ host: 'h'.repeat(WIRE_TEXT_CAP + 1) })).toBeNull()
   expect(parsePollBody({ version: 'v'.repeat(POLL_VERSION_CAP + 1) })).toBeNull()
@@ -115,10 +115,10 @@ test('poll HTTP envelope has an exact, strictly typed field allowlist', () => {
 
 test.each([
   ['invalid JSON', 'not json'],
-  ['an unknown field', JSON.stringify({ protocolVersion: 4, unknown: true })],
-  ['a non-string host', JSON.stringify({ protocolVersion: 4, host: 42 })],
-  ['a NUL-bearing platform', JSON.stringify({ protocolVersion: 4, platform: 'darwin\0x' })],
-  ['an over-cap version', JSON.stringify({ protocolVersion: 4, version: 'v'.repeat(POLL_VERSION_CAP + 1) })],
+  ['an unknown field', JSON.stringify({ protocolVersion: 5, unknown: true })],
+  ['a non-string host', JSON.stringify({ protocolVersion: 5, host: 42 })],
+  ['a NUL-bearing platform', JSON.stringify({ protocolVersion: 5, platform: 'darwin\0x' })],
+  ['an over-cap version', JSON.stringify({ protocolVersion: 5, version: 'v'.repeat(POLL_VERSION_CAP + 1) })],
 ])('poll route rejects %s before boot', async (_label, body) => {
   const h = handler(PollRoute, 'POST')
   const res = await h({ request: new Request('http://localhost:3000/api/machine/poll', {
@@ -129,31 +129,18 @@ test.each([
   expect(res.status).toBe(400)
 })
 
-test.each([
-  ['an unknown top-level field', '{"loopId":"loop-test","manifest":[],"blobs":[]}'],
-  ['a missing manifest', '{"loopId":"loop-test"}'],
-  ['a non-array manifest', '{"loopId":"loop-test","manifest":{}}'],
-  ['an item with missing exact fields', '{"loopId":"loop-test","manifest":[{"path":"report.md","hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1]}]}'],
-])('sync route rejects %s with 400 before boot', async (_label, body) => {
-  const h = handler(SyncRoute, 'POST')
-  const res = await h({ request: new Request('http://localhost:3000/api/machine/sync', {
-    method: 'POST',
-    headers: { authorization: 'Bearer dev-token', 'content-type': 'application/json' },
-    body,
-  }) })
-  expect(res.status).toBe(400)
+test.each(['GET', 'PUT'])('run-files %s route requires a run token before boot', async (method) => {
+  const h = handler(RunFilesRoute, method)
+  const res = await h({ request: new Request('http://localhost:3000/api/machine/run-files/MEMORY.md', { method }) })
+  expect(res.status).toBe(401)
 })
 
-test('sync route enforces its dedicated manifest body cap before boot', async () => {
-  const h = handler(SyncRoute, 'POST')
-  const res = await h({ request: new Request('http://localhost:3000/api/machine/sync', {
-    method: 'POST',
-    headers: {
-      authorization: 'Bearer dev-token',
-      'content-type': 'application/json',
-      'content-length': String(SYNC_BODY_CAP + 1),
-    },
-    body: '{}',
+test('run-files PUT enforces the loop-file byte cap before boot', async () => {
+  const h = handler(RunFilesRoute, 'PUT')
+  const res = await h({ request: new Request('http://localhost:3000/api/machine/run-files/report.html', {
+    method: 'PUT',
+    headers: { authorization: 'Bearer rk_test', 'content-length': String(LOOP_FILE_BYTE_CAP + 1) },
+    body: 'x',
   }) })
   expect(res.status).toBe(413)
 })
@@ -185,9 +172,13 @@ describe('machine routes reject an oversized JSON body with 413', () => {
   test.each([
     ['/api/machine/poll', handler(PollRoute, 'POST')],
     ['/machine/report', handler(ReportRoute, 'POST')],
-    ['/api/machine/cli', handler(CliRoute, 'POST')],
   ])('%s', async (url, h) => {
     const res = await h({ request: oversized(url) })
+    expect(res.status).toBe(413)
+  })
+
+  test('/api/machine/cli allows file set payloads up to its 4 MB cap', async () => {
+    const res = await handler(CliRoute, 'POST')({ request: oversized('/api/machine/cli', 'POST', 4 * 1024 * 1024) })
     expect(res.status).toBe(413)
   })
 })

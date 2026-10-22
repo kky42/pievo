@@ -68,7 +68,8 @@ export const loops = pgTable(
     statusKeep: text("status_keep").notNull(),
     statusNoChange: text("status_no_change").notNull(),
     statusBlock: text("status_block").notNull(),
-    /** Exact workdir-relative artifact paths collected by the daemon after provider exit. */
+    /** Configured artifact file names (`.md`/`.html`), in addition to the
+     *  always-present MEMORY.md. See `gateway/loopFiles.ts`. */
     artifacts: jsonb("artifacts").$type<string[]>().notNull().default([]),
     cron: text("cron").notNull(),
     scheduleMode: text("schedule_mode", { enum: ["cron", "continuous"] }).notNull(),
@@ -138,6 +139,10 @@ export const runs = pgTable(
     cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true, mode: "string" }),
     heartbeatAt: text("heartbeat_at"),
     reportIncident: jsonb("report_incident").$type<ReportIncident>(),
+    /** Loop-file versions this run produced but that were not kept (over limit,
+     *  owner edited during the run, upload lost). Shown on the run and repeated in
+     *  the next run's prompt so the agent can correct course. */
+    fileNotices: jsonb("file_notices").$type<string[]>(),
   },
   (t) => [
     index("runs_loop_idx").on(t.loopId),
@@ -228,9 +233,9 @@ export const connectKeys = pgTable("connect_keys", {
   mintedAt: text("minted_at").notNull(),
 });
 
-// After a run, the daemon reads only configured exact paths. Blob bytes live in
-// the local blob store keyed by sha256, not in the business DB.
-// These tables hold the deduplicated metadata and each loop's current manifest.
+// Loop files (MEMORY.md + configured artifacts). Blob bytes live in the local
+// blob store keyed by sha256, not in the business DB. These tables hold the
+// deduplicated metadata and each loop's current file versions.
 
 /**
  * One content-addressed blob (deduped across every loop/run). The bytes live in
@@ -243,23 +248,25 @@ export const blobs = pgTable("blobs", {
 });
 
 /**
- * The current configured file set of each loop — one row per live or tombstoned
- * relative path. `hash` → `blobs.hash`; null when the file is deleted or oversize
- * (metadata-only, no bytes synced). The
- * unique (loopId, path) index is the upsert key the sync reconciliation drives.
+ * The current file set of each loop — one row per live or tombstoned name.
+ * `hash` → `blobs.hash`; null for a tombstoned (deleted or unconfigured) file.
+ * The unique (loopId, path) index is the upsert key owner writes and run
+ * finalization share.
  */
 export const artifactFiles = pgTable(
   "artifact_files",
   {
     id: text("id").primaryKey(),
     loopId: text("loop_id").notNull(),
-    /** Normalized workdir-relative path (never absolute or escaping the workdir). */
+    /** Loop file name: MEMORY.md or a configured artifact name. */
     path: text("path").notNull(),
     hash: text("hash"),
     size: integer("size"),
-    /** Bytes contain a NUL (set even for oversize metadata-only files). */
+    /** Legacy snapshot/diff metadata. Loop-file ingress rejects NUL, so new rows
+     *  always store false. */
     binary: boolean("binary").notNull().default(false),
-    /** File exceeds the per-file byte cap → metadata-only (path + size), no blob. */
+    /** Legacy snapshot/diff metadata. Loop-file ingress rejects over-limit versions,
+     *  so new rows always store false. */
     oversize: boolean("oversize").notNull().default(false),
     deleted: boolean("deleted").notNull().default(false),
     updatedAt: text("updated_at").notNull(),
@@ -274,12 +281,12 @@ export const artifactFiles = pgTable(
 );
 
 /**
- * One file's metadata in a run snapshot (path → this). Richer than a bare
- * path→hash map so the per-run diff can compute a size delta and pick a render
- * mode (text diff vs "binary changed ±KB") without re-reading current files.
+ * One file's metadata in a run snapshot (name → this). Richer than a bare
+ * name→hash map so the per-run diff can compute a size delta and pick a render
+ * mode without re-reading current files.
  */
 export interface SnapshotEntry {
-  /** → blobs.hash; null for an oversize (metadata-only) file. */
+  /** → blobs.hash; null only for legacy metadata-only entries. */
   hash: string | null;
   size: number | null;
   binary: boolean;
@@ -289,7 +296,7 @@ export interface SnapshotEntry {
 export type SnapshotManifest = Record<string, SnapshotEntry>;
 
 /**
- * The loop's full artifact manifest captured at each run's finalize — the input
+ * The loop's full loop-file manifest captured at each run's finalize — the input
  * to the per-run diff. Written cheaply on report (no diff computed on write);
  * `getRunDiff` lazily compares run N's snapshot with the preceding snapshot.
  * One row per run (runId primary key).

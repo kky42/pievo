@@ -15,8 +15,10 @@ Use this skill for owner-side setup and management. Pievo supplies scheduled run
 with their status and report instructions separately; keep those instructions out of
 the stored prompt.
 
-Artifacts are explicit uploads of exact workdir-relative files, not scans or globs.
-Treat every configured path as a deliberate upload decision.
+Every loop has a server-owned `MEMORY.md` (its memory across runs, 8000 characters)
+and up to four `.md`/`.html` artifact files (2 MB each) the dashboard renders. Runs
+edit them in a private directory, not the workdir. The owner can read or repair them
+with `<pievo-cli> file get|set`.
 
 Use this flow:
 

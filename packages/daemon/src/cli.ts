@@ -48,9 +48,6 @@ async function main(): Promise<number> {
       return (await import("./show.js")).runShow(r.args);
     case "interactive":
       return (await import("./interactive.js")).runInteractive(r.argv);
-    case "runOnlyReport":
-      process.stderr.write("pievo: `report` is available only inside a Pievo run\n");
-      return 2;
     case "home":
       return (await import("./home.js")).runHome();
     case "unknown":

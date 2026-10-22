@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { isAbsoluteWorkdir, scheduleFromLoop, validateArtifactPaths, validateLoopCreate, validateLoopEdit, validateSchedule } from "./loopConfig.js";
+import { isAbsoluteWorkdir, scheduleFromLoop, validateArtifactNames, validateLoopCreate, validateLoopEdit, validateSchedule } from "./loopConfig.js";
 import type { Loop } from "../db/schema.js";
 
 const base = {
@@ -125,13 +125,12 @@ test("workdir is absolute in either supported platform syntax", () => {
   }
 });
 
-test("artifact paths preserve exact literals without glob, count, or path-length caps", () => {
-  const long = `${"a".repeat(5000)}.txt`;
-  const many = Array.from({ length: 300 }, (_, i) => `reports/${i}.md`);
-  const paths = ["reports/latest.md", " report.md ", "reports/*.md", long, ...many];
-  expect(validateArtifactPaths(paths)).toEqual({ ok: true, value: paths });
-  for (const artifactPath of ["/etc/passwd", "C:\\secrets.txt", "../secret", "a/../../secret", "a/./report", "a//report"]) {
-    expect(validateArtifactPaths([artifactPath])).toMatchObject({ ok: false });
+test("artifacts are up to four unique plain .md/.html names other than MEMORY.md", () => {
+  expect(validateArtifactNames(["report.html", "notes.md", "a_b-1.2.md"])).toEqual({ ok: true, value: ["report.html", "notes.md", "a_b-1.2.md"] });
+  expect(validateArtifactNames(["a.md", "b.md", "c.md", "d.md", "e.md"])).toMatchObject({ ok: false });
+  expect(validateArtifactNames(["Report.md", "report.md"])).toMatchObject({ ok: false });
+  for (const name of ["MEMORY.md", "memory.md", "reports/latest.md", "../x.md", "/etc/x.md", "report.txt", ".hidden.md", " report.md", "*.md", `${"a".repeat(65)}.md`]) {
+    expect(validateArtifactNames([name])).toMatchObject({ ok: false });
   }
 });
 

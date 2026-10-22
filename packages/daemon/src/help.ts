@@ -33,7 +33,7 @@ Loop setup and management
   pause <loop>            Pause future runs; the current run continues.
   start <loop>            Start a paused loop using its existing schedule.
   stop <loop>             Pause, cancel queued work, and request run termination.
-  delete <loop> [--force] Stop first, then delete server history and artifacts.
+  delete <loop> [--force] Stop first, then delete server history, memory, and artifacts.
   run stop <run>          Stop one run without pausing its loop.
   show [<loop>]           Show editable config and recent runs (--full, --json).
   log [<loop>]            Show recent runs (--json, --limit N).
@@ -43,9 +43,14 @@ Loop setup and management
   skill [status|install]  Install or inspect the bundled owner-facing Pievo skill.
                           Install overwrites same-named user Pievo skills.
 
-In-run report
-  report --status keep|no-change|block --message <text>
-                          Record the required outcome exactly once.
+  file list <loop>        List the loop's MEMORY.md and artifact files.
+  file get <loop> <name>  Print one loop file.
+  file set <loop> <name> --from <path|->
+                          Replace one loop file (wins over an in-progress run's edit).
+
+Inside a run
+  pievo commands are unavailable. Runs edit loop files in $PIEVO_LOOP_DIR and end
+  their final response with a last line \`STATUS: keep|no-change|block\`.
 
 Upgrade
   npm install -g @kky42/pievo@latest
@@ -86,12 +91,12 @@ Canonical config
                            all loops|active|paused|blocked
     model, reasoningEffort string or null for the provider default
                            Pi thinking: off|minimal|low|medium|high|xhigh|max
-    artifacts              exact workdir-relative file paths; default []
+    artifacts              up to 4 .md/.html file names (2 MB each); default []
     enabled                boolean; default true
 
-  Cron and continuous fields cannot be mixed. Artifact paths are explicit uploads,
-  not globs or directories; missing files are skipped and files over 10 MB are
-  metadata-only. Top-level and nested unknown fields are rejected. Use --dry-run to
+  Cron and continuous fields cannot be mixed. Every loop also has MEMORY.md (8000
+  characters), its memory across runs. Runs edit these files in a private directory
+  and the dashboard renders them; they are not workdir files. Top-level and nested unknown fields are rejected. Use --dry-run to
   validate and preview the normalized config without creating it.`,
   skill: "pievo skill [status|install]\n  Install or inspect the bundled owner-facing Pievo skill. Install copies the current CLI bundle to the Claude and universal agent user directories, overwriting same-named Pievo skills.",
   pause: "pievo pause <loop>\n  Pause future runs; the current run continues.",
@@ -100,7 +105,7 @@ Canonical config
   Pause the loop, cancel queued work, and request current-run termination.
   A running run remains running until the daemon confirms cancellation.`,
   delete: `pievo delete <loop> [--force]
-  Stop first, then delete server history and synced artifact metadata.
+  Stop first, then delete server history, memory, and artifacts.
   Local project files are never deleted. --force requires a prior Delete request,
   this machine's owner authority, and explicit local confirmation; it may retire server
   authority while a local process is still running.`,
@@ -117,9 +122,10 @@ Canonical config
   require a complete replacement value. Use null for the provider-default model or
   reasoning effort. Use --dry-run to preview normalized before/after values without
   changing the loop.`,
-  report: `pievo report --status keep|no-change|block --message <text>
-  In-run only. Record one required outcome exactly once; status and a non-empty
-  message are required. Owner loop-management commands are unavailable inside a run.`,
+  file: `pievo file list <loop> | file get <loop> <name> | file set <loop> <name> --from <path|->
+  Inspect or replace a loop's MEMORY.md and artifact files (use --from - for stdin).
+  An owner edit made while a run is executing wins over that run's version.
+  Limits: MEMORY.md 8000 characters, artifacts 2 MB; over-limit content is rejected.`,
 };
 
 function versionLabel(version: string | undefined): string {

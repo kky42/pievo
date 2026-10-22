@@ -226,6 +226,7 @@ async function detailHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
     errorTruncated: error.truncated,
     finalText: finalText.value,
     finalTextTruncated: finalText.truncated,
+    fileNotices: run.fileNotices ?? [],
     diffAvailable: !!snapshot,
     diff: q.diff ? await boundedDiff(run.id) : { included: false, available: !!snapshot },
   };
@@ -237,6 +238,7 @@ async function detailHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
     ["durationMs", detail.durationMs], ["tokenUsage", detail.tokenUsage], ["message", detail.message],
     ["messageTruncated", detail.messageTruncated], ["error", detail.error], ["errorTruncated", detail.errorTruncated],
     ["finalText", detail.finalText], ["finalTextTruncated", detail.finalTextTruncated],
+    ["fileNotices", { raw: JSON.stringify(detail.fileNotices) }],
     ["diffAvailable", detail.diffAvailable], ["diff", { raw: JSON.stringify(detail.diff) }],
   ]));
 }

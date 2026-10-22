@@ -5,7 +5,6 @@ const CLI_TIMEOUT_MS = 30_000;
 
 export interface PostCliDeps {
   fetchImpl?: typeof fetch;
-  env?: NodeJS.ProcessEnv;
   deviceToken?: string | undefined;
   server?: string;
   serverFlag?: string | undefined;
@@ -17,9 +16,6 @@ export type PostCliResult =
   | { kind: "network-error"; message: string };
 
 export function resolveCredential(deps: PostCliDeps = {}, server?: string): { token: string } | undefined {
-  const env = deps.env ?? process.env;
-  const runToken = env.PIEVO_RUN_TOKEN;
-  if (runToken) return { token: runToken };
   const device = "deviceToken" in deps
     ? deps.deviceToken
     : (server ? connectionFor(server)?.deviceToken : activeConnection()?.deviceToken);

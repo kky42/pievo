@@ -19,7 +19,7 @@ function delivery() {
     },
     roots: [os.tmpdir()],
     task: "Do the work and report.",
-    artifacts: ["report.md"],
+    files: ["MEMORY.md", "report.md"],
   };
 }
 
@@ -27,8 +27,8 @@ function response(overrides: Record<string, unknown> = {}) {
   return { delivery: delivery(), cancelRunIds: [], ...overrides };
 }
 
-describe("protocol-v4 poll response runtime schema", () => {
-  test("accepts the exact complete runner delivery, including Pi on protocol v4", () => {
+describe("protocol-v5 poll response runtime schema", () => {
+  test("accepts the exact complete runner delivery, including Pi on protocol v5", () => {
     expect(parsePollResponse(response())).toEqual({ ok: true, value: response() });
     const pi = response();
     pi.delivery.loop.agent = "pi";
@@ -49,6 +49,12 @@ describe("protocol-v4 poll response runtime schema", () => {
     ["missing task", () => { const value: any = delivery(); delete value.task; return value; }],
     ["unknown nested field", () => ({ ...delivery(), loop: { ...delivery().loop, fallbackAgent: "claude-code" } })],
     ["unknown delivery field", () => ({ ...delivery(), retry: true })],
+    ["old artifacts field", () => { const value: any = delivery(); delete value.files; value.artifacts = ["report.md"]; return value; }],
+    ["missing files", () => { const value: any = delivery(); delete value.files; return value; }],
+    ["missing MEMORY.md", () => ({ ...delivery(), files: ["report.md"] })],
+    ["duplicate file", () => ({ ...delivery(), files: ["MEMORY.md", "MEMORY.md"] })],
+    ["too many files", () => ({ ...delivery(), files: ["MEMORY.md", "a.md", "b.md", "c.md", "d.md", "e.md"] })],
+    ["path in a file name", () => ({ ...delivery(), files: ["MEMORY.md", "../report.md"] })],
   ])("rejects %s before execution", (_label, malformed) => {
     const parsed = parsePollResponse(response({ delivery: malformed() }));
     expect(parsed).toMatchObject({ ok: false, error: expect.any(String) });
@@ -60,13 +66,13 @@ describe("protocol-v4 poll response runtime schema", () => {
     expect(parsePollResponse({
       delivery: null,
       cancelRunIds: [],
-      needsUpdate: { current: null, required: "2.4.0" },
+      needsUpdate: { current: null, required: "4.0.0" },
     })).toMatchObject({ ok: false, error: expect.stringContaining("command") });
   });
 
   test("never accepts a delivery together with an update requirement", () => {
     expect(parsePollResponse(response({
-      needsUpdate: { current: "2.3.0", required: "2.4.0", command: "npm install" },
+      needsUpdate: { current: "3.0.0", required: "4.0.0", command: "npm install" },
     }))).toMatchObject({ ok: false, error: expect.stringContaining("must not deliver") });
   });
 });

@@ -95,8 +95,7 @@ export function saveActiveConnection(serverUrl: string, deviceToken: string, fil
 }
 
 export function resolveServerUrl(flagValue: string | undefined): string {
-  const callbackServer = process.env.PIEVO_RUN_TOKEN ? process.env.PIEVO_SERVER_URL : undefined;
-  return normalizeServerUrl(flagValue || callbackServer || activeConnection()?.serverUrl || "");
+  return normalizeServerUrl(flagValue || activeConnection()?.serverUrl || "");
 }
 
 /** A stable, non-secret server namespace prevents one server's reports being

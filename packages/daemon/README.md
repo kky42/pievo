@@ -76,17 +76,15 @@ Loop setup and management
   stop <loop>
   delete <loop> [--force]
   run stop <run>
+  file list|get|set <loop> [<name>] [--from <path|->]
   skill [status|install]
-
-Inside a run
-  report --status keep|no-change|block --message <text>
 ```
 
 Run `pievo --help` or `<command> --help` for the complete current syntax. `new` also
 accepts `--json -` on stdin. The canonical configuration contains a name, one
 exclusive cron or continuous schedule, an absolute working-directory path, agent,
 stored prompt, and all three status definitions, with optional provider settings,
-enabled state, and exact artifact paths.
+enabled state, and artifact file names.
 
 > `daemon stop --force` and `daemon restart --force` may discard a terminal result
 > that is not durable yet and may leave local or external side effects uncertain.
@@ -98,10 +96,15 @@ once, and saves the terminal payload to an owner-only, server-specific SQLite ou
 until that server accepts it. There is no provider retry or session resume. Different loops may run
 concurrently, while each loop remains serialized.
 
-Artifacts are exact workdir-relative file paths—never globs or directory scans. Pievo
-rejects path escapes and files over 10 MB are metadata-only. Sync is best-effort and
-does not prevent terminal-result persistence. Configuring a path is an explicit upload
-decision; Pievo does not filter files by name, extension, MIME type, or content.
+Each loop has server-owned files: `MEMORY.md` (at most 8000 characters), its memory
+across runs, plus up to four configured `.md`/`.html` artifacts (2 MB each) that the
+dashboard renders. For each run the daemon downloads them into a private
+`~/.pievo/runs/<run>` directory, tells the agent the path, and uploads changed
+versions with the durable terminal report. A version over its limit is rejected and the
+previous one kept; an owner edit (`pievo file set`) made during a run wins.
+
+A run reports through its final response, which must end with a last line
+`STATUS: keep|no-change|block`; `pievo` commands are unavailable inside a run.
 
 ## Local security controls
 

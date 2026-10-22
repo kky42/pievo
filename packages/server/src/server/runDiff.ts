@@ -1,7 +1,7 @@
 /**
- * Per-run artifact diff. Computed lazily on the server at read time
+ * Per-run loop-file diff. Computed lazily on the server at read time
  * (no stored diffs): load run N's snapshot + the previous run's snapshot and diff
- * the two path → metadata maps. For changed TEXT files we load both blobs and
+ * the two name → metadata maps. For changed TEXT files we load both blobs and
  * compute a unified line diff with `diff` (jsdiff) — a pure-string library, no
  * process execution, so the server's zero-exec invariant holds. Binary/oversize
  * files emit a size-delta marker only (no inline diff).
@@ -9,7 +9,7 @@
 import { createTwoFilesPatch } from "diff";
 
 import * as store from "../db/store.js";
-import { getArtifactSync } from "./boot.js";
+import { getLoopFiles } from "./boot.js";
 import type { SnapshotEntry, SnapshotManifest } from "../db/schema.js";
 import type { RunDiffFile, RunDiffResult } from "../types.js";
 
@@ -31,7 +31,7 @@ function withinDiffCap(e: SnapshotEntry | undefined): boolean {
 
 async function bytesOf(e: SnapshotEntry): Promise<Buffer | null> {
   if (!e.hash) return null;
-  return (await (await getArtifactSync()).readBlob(e.hash)) ?? null;
+  return (await (await getLoopFiles()).readBlob(e.hash)) ?? null;
 }
 
 function unified(path: string, oldText: string, newText: string, maxEditLength?: number): string | undefined {
@@ -60,7 +60,7 @@ function expectedInputBytes(change: Change, verifiedSizes: Map<string, number>):
   return sizes.reduce<number>((sum, size) => sum + size!, 0);
 }
 
-/** Compute one run's artifact diff. The default remains the web UI's complete
+/** Compute one run's loop-file diff. The default remains the web UI's complete
  * view. Budgeted callers get explicit totals and stop before blob reads/jsdiff
  * once any work limit is spent. */
 export async function computeRunDiff(runId: string, budget?: RunDiffBudget): Promise<RunDiffResult> {

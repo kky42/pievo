@@ -19,7 +19,7 @@ function detail(summary: LoopSummary, machine: Partial<LoopDetail['machine']> = 
   return {
     loop: { id: summary.id, name: summary.name, tags: summary.tags, schedule: summary.schedule, workdir: summary.workdir, agent: summary.agent, model: summary.model, reasoningEffort: summary.reasoningEffort, prompt: 'Do it.', statusDefinitions: { keep: 'keep', noChange: 'none', block: 'blocked' }, artifacts: [], enabled: summary.enabled },
     summary, runs: summary.runs,
-    machine: { id: 'm1', name: 'MacBook Pro', online: true, presence: 'online', lastSeen: null, daemonProtocol: 4, daemonVersion: '2.4.0', needsUpdate: false, requiredDaemonVersion: '2.4.0', ...machine },
+    machine: { id: 'm1', name: 'MacBook Pro', online: true, presence: 'online', lastSeen: null, daemonProtocol: 5, daemonVersion: '4.0.0', needsUpdate: false, requiredDaemonVersion: '4.0.0', ...machine },
   }
 }
 
@@ -54,7 +54,7 @@ describe('Dashboard lifecycle derivation', () => {
   })
 
   it('reports breaking protocol support explicitly', () => {
-    expect(daemonStopSupport(4)).toEqual({ supported: true, label: 'Daemon protocol 4 · Stop supported' })
+    expect(daemonStopSupport(5)).toEqual({ supported: true, label: 'Daemon protocol 5 · Stop supported' })
     expect(daemonStopSupport(1)).toEqual({ supported: false, label: 'Daemon protocol 1 · upgrade required' })
     expect(daemonStopSupport(null)).toEqual({ supported: false, label: 'Daemon protocol unknown · upgrade required' })
   })

@@ -2,8 +2,8 @@
  * Server functions backing the dashboard. They run server-side (createServerFn
  * → RPC) and call the IN-PROCESS scheduler + store directly — the scheduler
  * lives in this same TanStack process (booted on first call via ensureServer).
- * The machine-facing poll, CLI, report, and artifact-sync endpoints are sibling
- * server routes in this same process, so one process owns the single scheduler.
+ * The machine-facing poll, CLI, report, and run-file endpoints are sibling server
+ * routes in this same process, so one process owns the single scheduler.
  */
 import { createServerFn } from '@tanstack/react-start'
 

@@ -5,6 +5,7 @@ import { dur, fmt, fnum } from '../lib/format'
 import { DAEMON_UPGRADE_REQUIRED, DASHBOARD_PROTOCOL } from '../lib/lifecycleUi'
 import { getLoopDetail, getRunDiff, loadOlderRuns, stopRun } from '../server/loopApi'
 import { DiffView } from './DiffView'
+import { MarkdownView } from './MarkdownView'
 import { btn, btnDanger, Loading, Pill, runPulseStyle, sectionHeadCls, StatusPill } from './ui'
 import { LoadErrorCard } from './actionUi'
 
@@ -284,17 +285,27 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
             </Card>
           )}
 
+          {run.fileNotices && run.fileNotices.length > 0 && (
+            <Card label="Loop files not kept">
+              <ul className="list-disc space-y-1.5 pl-5 text-body text-primary">
+                {run.fileNotices.map((notice) => <li key={notice} className="break-words">{notice}</li>)}
+              </ul>
+            </Card>
+          )}
+
           {run.message && (
             <Card label="Report">
-              <div className="whitespace-pre-wrap break-words rounded-control border border-hairline bg-raised px-4 py-3.5 text-body leading-relaxed text-primary">
-                {run.message}
+              <div className="break-words rounded-control border border-hairline bg-raised text-body leading-relaxed text-primary">
+                <MarkdownView content={run.message} />
               </div>
             </Card>
           )}
 
           <Changes run={run} />
 
-          {run.finalText && (
+          {/* The report is the final response minus its STATUS line; show the raw
+              response only when no report could be taken from it. */}
+          {run.finalText && !run.message && (
             <Card label="Final output">
               <div className="whitespace-pre-wrap break-words text-body text-primary">{run.finalText}</div>
             </Card>

@@ -50,6 +50,7 @@ export function toRunSummary(r: Run, reconciliation?: "blocking" | "report-only"
     error: r.error ?? null,
     sessionId: r.sessionId ?? null,
     reportIncident: r.reportIncident ?? null,
+    fileNotices: r.fileNotices ?? null,
   };
 }
 

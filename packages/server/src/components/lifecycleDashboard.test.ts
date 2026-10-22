@@ -38,7 +38,7 @@ function makeDetail(over: { state?: DetailState; online?: boolean; protocol?: nu
     loop: { id: 'l1', name: 'Lifecycle loop', tags: [], schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' }, workdir: '/tmp/project', agent: 'claude-code', model: null, reasoningEffort: null, prompt: 'Do the work.', statusDefinitions: { keep: 'keep it', noChange: 'nothing needed', block: 'needs help' }, artifacts: [], enabled },
     summary: { id: 'l1', name: 'Lifecycle loop', tags: [], schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' }, workdir: '/tmp/project', agent: 'claude-code', model: null, reasoningEffort: null, machine: { id: 'm1', name: 'MacBook Pro', online: over.online ?? true, presence: (over.online ?? true) ? 'online' : 'offline', lastSeen: null }, enabled, nextRun: null, running, lastRunTs: running ? r.ts : null, deleteRequestedAt, runs: running ? [r] : [], runCount: running ? 1 : 0, recentUsage: { runCount: running ? 1 : 0, tokenCount: 0 } },
     runs: running ? [r] : [],
-    machine: { id: 'm1', name: 'MacBook Pro', online: over.online ?? true, presence: (over.online ?? true) ? 'online' : 'offline', lastSeen: null, daemonProtocol: over.protocol === undefined ? 4 : over.protocol, daemonVersion: '2.4.0', needsUpdate: false, requiredDaemonVersion: '2.4.0' },
+    machine: { id: 'm1', name: 'MacBook Pro', online: over.online ?? true, presence: (over.online ?? true) ? 'online' : 'offline', lastSeen: null, daemonProtocol: over.protocol === undefined ? 5 : over.protocol, daemonVersion: '4.0.0', needsUpdate: false, requiredDaemonVersion: '4.0.0' },
   }
 }
 
@@ -82,7 +82,7 @@ describe('LoopDetailView flat lifecycle actions', () => {
   })
 
   it('enables Stop only for a running run and keeps protocol gating actionable', async () => {
-    await mount(makeDetail({ state: 'paused', running: true, protocol: 4 }))
+    await mount(makeDetail({ state: 'paused', running: true, protocol: 5 }))
     expect(enabled('Stop')).toBe(true)
     await act(async () => { root!.unmount() }); root = null; host!.remove(); host = null
     await mount(makeDetail({ state: 'active', running: true, protocol: 1 }))
@@ -100,7 +100,7 @@ describe('LoopDetailView flat lifecycle actions', () => {
   it('uses one complete Delete confirmation and no force-delete second step', async () => {
     await mount(makeDetail({ state: 'active', online: false, running: true }))
     await act(async () => { button('Delete')!.click(); await Promise.resolve() })
-    expect(host!.textContent).toContain('This stops the loop and deletes server history and collected artifacts.')
+    expect(host!.textContent).toContain('This stops the loop and deletes server history, the loop memory, and artifacts.')
     expect(host!.textContent).toContain('Files in the working directory are not deleted.')
     expect(host!.textContent).toContain('If the machine is unreachable, its local process may continue running.')
     expect(host!.textContent).not.toContain('Delete server data anyway')

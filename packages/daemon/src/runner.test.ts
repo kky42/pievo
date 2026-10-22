@@ -1,10 +1,30 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+// Isolate ~/.pievo BEFORE config.ts loads (PIEVO_DIR is read at import) so run
+// directories are staged under a throwaway home.
+vi.hoisted(() => {
+  process.env.PIEVO_HOME = `/tmp/pievo-runner-test-home-${process.pid}`;
+});
+
 import { buildAgentSpawn, executeDelivery, resolveExecTimeoutMs, type Delivery } from "./runner.js";
 import { makeTerminalCollector } from "./telemetry.js";
+
+function loopFileFetch(files: Record<string, string> = { "MEMORY.md": "memory before the run" }) {
+  return (async (url: string) => {
+    const name = decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "");
+    const content = files[name];
+    if (content === undefined) return new Response(JSON.stringify({ error: "no such loop file" }), { status: 404 });
+    const bytes = Buffer.from(content);
+    return new Response(bytes, {
+      status: 200,
+      headers: { "x-pievo-sha256": createHash("sha256").update(bytes).digest("hex") },
+    });
+  }) as unknown as typeof fetch;
+}
 
 describe("terminal JSONL collectors", () => {
   test("unknown agents fail closed instead of using a provider parser", () => {
@@ -264,6 +284,7 @@ afterEach(() => {
   delete process.env.PIEVO_CODEX_BIN;
   delete process.env.PIEVO_PI_BIN;
   fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(process.env.PIEVO_HOME!, { recursive: true, force: true });
 });
 
 function delivery(overrides: Partial<Delivery> = {}): Delivery {
@@ -281,7 +302,7 @@ function delivery(overrides: Partial<Delivery> = {}): Delivery {
     },
     roots: [],
     task: "ORIGINAL TASK: produce the daily report",
-    artifacts: [],
+    files: ["MEMORY.md"],
     ...overrides,
   };
 }
@@ -324,6 +345,7 @@ function writeFakePi(stopReason = "stop"): string {
   fs.writeFileSync(p, [
     "#!/bin/sh",
     "cat > captured-task.txt",
+    "printf \"%s\" \"$PIEVO_LOOP_DIR\" > captured-loop-dir.txt",
     `echo '{"type":"session","version":3,"id":"pi-session"}'`,
     `echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"pi final"}],"usage":{"input":3,"output":4,"cacheRead":5,"cacheWrite":6},"stopReason":"${stopReason}","errorMessage":"pi provider error"}}'`,
     "exit 0",
@@ -339,16 +361,31 @@ describe("Pi delivery", () => {
     const d = delivery();
     d.loop.agent = "pi";
     d.task = "  composed task\n\nreport contract  \n";
-    const report = await executeDelivery(d, "http://server.test", []);
+    const report = await executeDelivery(d, "http://server.test", [], undefined, loopFileFetch());
     expect(fs.readFileSync(path.join(workdir, "captured-task.txt"), "utf8")).toBe(d.task);
     expect(report).toMatchObject({ result: "success", exitCode: 0, sessionId: "pi-session", finalText: "pi final" });
+  });
+
+  test("downloads loop files, exports PIEVO_LOOP_DIR, and replaces the task placeholder", async () => {
+    process.env.PIEVO_PI_BIN = writeFakePi();
+    const d = delivery();
+    d.loop.agent = "pi";
+    d.task = "Read $PIEVO_LOOP_DIR/MEMORY.md first.";
+    const runDir = path.join(process.env.PIEVO_HOME!, "runs", d.runId);
+
+    const report = await executeDelivery(d, "http://server.test", [], undefined, loopFileFetch());
+    expect(report).toMatchObject({ result: "success" });
+    expect(fs.readFileSync(path.join(workdir, "captured-task.txt"), "utf8"))
+      .toBe(`Read ${runDir}/MEMORY.md first.`);
+    expect(fs.readFileSync(path.join(workdir, "captured-loop-dir.txt"), "utf8")).toBe(runDir);
+    expect(fs.readFileSync(path.join(runDir, "MEMORY.md"), "utf8")).toBe("memory before the run");
   });
 
   test("fails an exit-zero run when Pi's last assistant stopReason is error", async () => {
     process.env.PIEVO_PI_BIN = writeFakePi("error");
     const d = delivery();
     d.loop.agent = "pi";
-    const report = await executeDelivery(d, "http://server.test", []);
+    const report = await executeDelivery(d, "http://server.test", [], undefined, loopFileFetch());
     expect(report).toMatchObject({ result: "failure", exitCode: 0, error: "pi provider error" });
   });
 });

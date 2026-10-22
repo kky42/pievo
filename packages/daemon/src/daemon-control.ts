@@ -5,6 +5,7 @@ import { boundedFetch } from "./http.js";
 import { readPidFile, clearPidFile, isAlive, processStartTime, verifiedRunningPid, type PidRecord } from "./pidfile.js";
 import { readReportDiagnostics, type ReportDiagnostics } from "./report-outbox.js";
 import { readRuntimeDiagnostics, type RuntimeDiagnostics } from "./runtime-diagnostics.js";
+import { DAEMON_PROTOCOL_VERSION } from "./protocol.js";
 
 export type MachineStatus = {
   registered?: boolean;
@@ -119,18 +120,18 @@ export async function runDaemonStatus(args: string[], injected: DaemonControlDep
         d.out("  action:    connect to a server with `pievo daemon connect --server-url <url> --connect-key <dk_…>`\n");
       } else {
         d.out(`  server connectivity: ${view.online ? "online" : "offline"}${view.name ? ` (${view.name})` : ""}\n`);
-        if (view.daemonProtocol === 4) d.out("  daemon protocol: 4\n");
-        else d.out(`  daemon upgrade required: protocol ${view.daemonProtocol ?? "unknown"} -> 4; run \`npm install -g @kky42/pievo@latest\`, then \`pievo daemon restart\`\n`);
+        if (view.daemonProtocol === DAEMON_PROTOCOL_VERSION) d.out(`  daemon protocol: ${DAEMON_PROTOCOL_VERSION}\n`);
+        else d.out(`  daemon upgrade required: protocol ${view.daemonProtocol ?? "unknown"} -> ${DAEMON_PROTOCOL_VERSION}; run \`npm install -g @kky42/pievo@latest\`, then \`pievo daemon restart\`\n`);
         const serverRuns = view.currentRuns ?? [];
         if (!runtimeRuns.length) for (const run of serverRuns) if (!pendingSet.has(run.runId)) d.out(`  current run: ${run.runId} (${run.stage})\n`);
         if (!runtime?.cancelPendingRunIds?.length && serverRuns.some((run) => run.cancelPending)) d.out("  cancel pending: stop requested; waiting for daemon confirmation\n");
       }
     } else {
       d.out("  server connectivity: unknown — server unreachable\n");
-      d.out("  daemon protocol: 4 locally; server support unknown\n");
+      d.out(`  daemon protocol: ${DAEMON_PROTOCOL_VERSION} locally; server support unknown\n`);
     }
   } else {
-    d.out("  daemon protocol: 4 locally; server not configured\n");
+    d.out(`  daemon protocol: ${DAEMON_PROTOCOL_VERSION} locally; server not configured\n`);
   }
   return 0;
 }

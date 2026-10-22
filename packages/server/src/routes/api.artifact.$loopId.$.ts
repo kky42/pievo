@@ -3,8 +3,8 @@ import { safeDecode } from '../lib/url'
 import { imageMime } from '../lib/artifactKind'
 
 /**
- * GET /api/artifact/:loopId/:path - stream one of a loop's live-synced artifact
- * blobs. Two dispositions:
+ * GET /api/artifact/:loopId/:path - stream one of a loop's file blobs.
+ * Two dispositions:
  *  - default: `attachment` (the download affordance for binary/oversize files;
  *    text is shown inline via getArtifact).
  *  - `?view=inline`: for a KNOWN image type only (the `imageMime` allowlist),
@@ -15,10 +15,9 @@ import { imageMime } from '../lib/artifactKind'
  *    scripts - so an inline SVG can't run script against the session even if the
  *    URL is opened directly. Non-image inline requests fall back to attachment.
  *
- * Served to dashboard callers like the server functions. Path-safe: the relative path is
- * normalized + traversal-rejected before it ever reaches a blob, and blob keys
- * are content hashes, never the user path. Reads stream from the local
- * BlobStore; the route never writes.
+ * Served to dashboard callers like the server functions. The path is matched
+ * exactly against a loop's stored file rows, and blob keys are content hashes,
+ * never the user path. Reads stream from the local BlobStore; the route never writes.
  */
 const PREFIX = '/api/artifact/'
 

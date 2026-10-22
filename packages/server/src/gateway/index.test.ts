@@ -12,6 +12,8 @@ let gatewayMod: typeof import("./index.js");
 let cliMod: typeof import("./cli.js");
 let tokens: typeof import("./tokens.js") & { registerRunLease: typeof registerRunLease };
 let schedulerMod: typeof import("../scheduler/index.js");
+let loopFilesMod: typeof import("./loopFiles.js");
+let deliveryMod: typeof import("./delivery.js");
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-gateway-"));
@@ -24,6 +26,8 @@ beforeAll(async () => {
   cliMod = await import("./cli.js");
   tokens = { ...(await import("./tokens.js")), registerRunLease };
   schedulerMod = await import("../scheduler/index.js");
+  loopFilesMod = await import("./loopFiles.js");
+  deliveryMod = await import("./delivery.js");
 });
 
 afterAll(() => {
@@ -31,7 +35,7 @@ afterAll(() => {
 });
 
 beforeEach(async () => {
-  await (db.client as any).exec("DELETE FROM terminal_report_incidents; DELETE FROM run_report_receipts; DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
+  await (db.client as any).exec("DELETE FROM terminal_report_incidents; DELETE FROM run_report_receipts; DELETE FROM run_snapshots; DELETE FROM artifact_files; DELETE FROM blobs; DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
 
 async function createLoop(input: Omit<TestLoopSeed, "workdir"> & { workdir?: string }) {
@@ -95,9 +99,9 @@ function pollV4(
     daemonInstanceId: "test-daemon",
     recoveryComplete: true,
     ...request,
-    protocolVersion: 4,
+    protocolVersion: 5,
     currentRuns: request.currentRuns ?? [],
-    info: { version: "2.4.0", ...request.info },
+    info: { version: "4.0.0", ...request.info },
   });
 }
 
@@ -173,7 +177,7 @@ test("canonical create/edit expose one exclusive schedule union", async () => {
     agent: "claude-code",
     prompt: "Inspect the project.",
     statusDefinitions: { keep: "useful result", noChange: "nothing changed", block: "owner input needed" },
-    artifacts: ["reports/latest.md"],
+    artifacts: ["latest.md"],
     idempotencyKey: "a".repeat(64),
   };
   expect((await gw.createLoop(token, { ...config, cron: "0 7 * * *" } as any)).status).toBe(400);
@@ -252,60 +256,26 @@ test("create transport requires exact idempotency/dryRun fields", async () => {
 
 });
 
-test("minimal report protocol accepts only canonical status, message, and help flags", async () => {
+test("run credentials have no CLI: every verb, including the old report callback, is refused", async () => {
   const { run, rt } = await seededExecRun();
   const gw = gateway();
-  expect((await gw.runCli(rt, ["report", "--status", "invalid", "--message", "bad status"])).status).toBe(400);
-  expect((await gw.runCli(rt, ["report", "--status", "keep", "--message", "ok", "--extra", "value"])).status).toBe(400);
-  expect((await gw.runCli(rt, ["show"])).status).toBe(403);
-  expect((await gw.runCli(rt, ["report", "--status", "keep", "--message", "completed"])).status).toBe(200);
-  expect(await store.getRun(run.id)).toMatchObject({ status: "keep", message: "completed" });
-});
-
-test("a valid report callback after force deletion succeeds as a discarded retired-run no-op", async () => {
-  const { loop, run, rt } = await seededExecRun();
-  expect(await store.forceDeleteLoop(loop.id)).toBe(true);
-
-  const gw = gateway();
-  expect((await gw.runCli(rt, ["report", "--status", "keep"])).status).toBe(400);
-  const response = await gw.runCli(rt, ["report", "--status", "keep", "--message", "completed before deletion"]);
-
-  expect(response).toEqual({
-    status: 200,
-    body: { text: "reported: run retired · result discarded", exitCode: 0 },
-  });
-  expect(await store.getLoop(loop.id)).toBeUndefined();
-  expect(await store.getRun(run.id)).toBeUndefined();
-  expect(await tokens.resolveLease(rt)).toMatchObject({ state: "retired" });
-});
-
-test("report callback is exactly once under the loop lock", async () => {
-  const { run, rt } = await seededExecRun();
-  const gw = gateway();
-  const [a, b] = await Promise.all([
-    gw.runCli(rt, ["report", "--status", "keep", "--message", "first"]),
-    gw.runCli(rt, ["report", "--status", "block", "--message", "second"]),
-  ]);
-  expect([a.status, b.status].sort()).toEqual([200, 409]);
-  const stored = await store.getRun(run.id);
-  expect([
-    { status: "keep", message: "first" },
-    { status: "block", message: "second" },
-  ]).toContainEqual({ status: stored?.status, message: stored?.message });
-  expect((await gw.runCli(rt, ["report", "--status", "no-change", "--message", "third"])).status).toBe(409);
-  expect(await store.getRun(run.id)).toMatchObject({ status: stored?.status, message: stored?.message });
+  for (const argv of [["report", "--status", "keep", "--message", "completed"], ["show"], ["help"], []]) {
+    const res = await gw.runCli(rt, argv);
+    expect(res.status).toBe(403);
+    expect(textOf(res)).toMatch(/not available inside a run.*STATUS: keep\|no-change\|block/);
+  }
+  expect(await store.getRun(run.id)).toMatchObject({ phase: "running", status: null, message: null });
 });
 
 test("block persists telemetry and atomically pauses", async () => {
   const { loop, run, rt } = await seededExecRun();
   const gw = gateway();
-  expect((await gw.runCli(rt, ["report", "--status", "block", "--message", "owner input required"])).status).toBe(200);
   const terminal = await reportV2(gw, rt, {
     result: "success",
     durationMs: 321,
     exitCode: 0,
     sessionId: "session-123",
-    finalText: "provider final response",
+    finalText: "owner input required\n\n**STATUS: block**",
     usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 2 },
   });
   expect(terminal.status).toBe(200);
@@ -314,7 +284,7 @@ test("block persists telemetry and atomically pauses", async () => {
     status: "block",
     message: "owner input required",
     sessionId: "session-123",
-    finalText: "provider final response",
+    finalText: "owner input required\n\n**STATUS: block**",
     usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 2 },
   });
   expect(await store.getLoop(loop.id)).toMatchObject({ enabled: false, nextCadenceAt: null, nextRunAt: null, pauseCause: { kind: "blocked", runId: run.id } });
@@ -359,7 +329,6 @@ async function seededLoop() {
 
 test("report persists normalized terminal telemetry without cost or transcript fields", async () => {
   const { loop, machine, run } = await seededLoop();
-  await store.updateRun(run.id, { message: "agent callback summary" });
   const token = await tokens.registerRunLease({
     runId: run.id, loopId: loop.id, machineId: machine.id,
   });
@@ -369,21 +338,22 @@ test("report persists normalized terminal telemetry without cost or transcript f
     exitCode: 0,
     durationMs: 1234,
     sessionId: "sess-abc",
-    finalText: "provider final output",
+    finalText: "agent summary\nSTATUS: no-change",
     usage: { inputTokens: 120, outputTokens: 9, cacheReadTokens: 40, cacheCreationTokens: 3 },
   });
   expect(res.status).toBe(200);
   const stored = await store.getRun(run.id);
   expect(stored).toMatchObject({
-    exitCode: 0, durationMs: 1234, sessionId: "sess-abc", finalText: "provider final output",
-    message: "agent callback summary",
+    phase: "done", status: "no-change",
+    exitCode: 0, durationMs: 1234, sessionId: "sess-abc", finalText: "agent summary\nSTATUS: no-change",
+    message: "agent summary",
     usage: { inputTokens: 120, outputTokens: 9, cacheReadTokens: 40, cacheCreationTokens: 3 },
   });
   expect(stored && "costUsd" in stored).toBe(false);
   expect(stored && "transcript" in stored).toBe(false);
 });
 
-test("machine finalization turns a successful process into an error when the run skipped its required report", async () => {
+test("machine finalization turns a successful process into an error when the final response has no status line", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
@@ -398,7 +368,8 @@ test("machine finalization turns a successful process into an error when the run
     phase: "error",
     status: null,
     message: null,
-    error: "run protocol incomplete: missing status, message",
+    finalText: "provider claimed success",
+    error: 'run protocol incomplete: the final response has no "STATUS: keep|no-change|block" line',
   });
 });
 
@@ -469,16 +440,16 @@ test("pollV4 with an old or unknown daemon version does not claim pending work",
   const loop = await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
   const run = await store.addRun({ loopId: loop.id, machineId, phase: "pending", ts: new Date().toISOString() });
 
-  const unknown = await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac" } });
+  const unknown = await gateway().pollV4(token, { protocolVersion: 5, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac" } });
   expect(unknown.status).toBe(200);
   expect((unknown.body as any).delivery).toBeNull();
   expect((unknown.body as any).needsUpdate.current).toBeNull();
   expect((await store.getRun(run.id))!.phase).toBe("pending");
 
-  const old = await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", version: "2.0.2" } });
+  const old = await gateway().pollV4(token, { protocolVersion: 5, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", version: "2.0.2" } });
   expect(old.status).toBe(200);
   expect((old.body as any).delivery).toBeNull();
-  expect((old.body as any).needsUpdate).toMatchObject({ current: "2.0.2", required: "2.4.0" });
+  expect((old.body as any).needsUpdate).toMatchObject({ current: "2.0.2", required: "4.0.0" });
   expect((await store.getRun(run.id))!.phase).toBe("pending");
 
   for (const malformed of [
@@ -489,9 +460,9 @@ test("pollV4 with an old or unknown daemon version does not claim pending work",
     "v2.4.0",
     "02.4.0",
   ]) {
-    const rejected = await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", version: malformed } });
+    const rejected = await gateway().pollV4(token, { protocolVersion: 5, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", version: malformed } });
     expect((rejected.body as any).delivery, malformed).toBeNull();
-    expect((rejected.body as any).needsUpdate, malformed).toMatchObject({ current: malformed, required: "2.4.0" });
+    expect((rejected.body as any).needsUpdate, malformed).toMatchObject({ current: malformed, required: "4.0.0" });
     expect((await store.getRun(run.id))!.phase, malformed).toBe("pending");
   }
 });
@@ -502,13 +473,13 @@ test("protocol-v4 recovery fields and exact currentRuns items are required befor
   await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
   const run = await store.addRun({ loopId: loop.id, machineId, phase: "pending", ts: new Date().toISOString() });
-  const base = { protocolVersion: 4, currentRuns: [], info: { version: "2.4.0" } };
+  const base = { protocolVersion: 5, currentRuns: [], info: { version: "4.0.0" } };
 
   const invalidRequests = [
     base,
     { ...base, daemonInstanceId: "test-daemon" },
     { ...base, daemonInstanceId: "", recoveryComplete: true },
-    { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, info: { version: "2.4.0" } },
+    { protocolVersion: 5, daemonInstanceId: "test-daemon", recoveryComplete: true, info: { version: "4.0.0" } },
     { ...base, daemonInstanceId: "test-daemon", recoveryComplete: false },
     { ...base, daemonInstanceId: "test-daemon", recoveryComplete: "true" },
     { ...base, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [{ runId: "", stage: "executing" }] },
@@ -527,7 +498,7 @@ test("pollV4 defensively rejects invalid machine info before any mutation", asyn
   await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: false, daemonProtocol: 3 });
   const loop = await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
   const run = await store.addRun({ loopId: loop.id, machineId, phase: "pending", ts: new Date().toISOString() });
-  const base = { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [] };
+  const base = { protocolVersion: 5, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [] };
 
   for (const info of [
     { host: 42 },
@@ -549,7 +520,7 @@ test("pollV4 with the supported daemon version can claim pending work", async ()
   const loop = await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true, model: "snapshot-model", reasoningEffort: "high", agent: "codex" });
   const run = await store.addRun({ loopId: loop.id, machineId, phase: "pending", ts: new Date().toISOString() });
 
-  const res = await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", version: "2.4.0" } });
+  const res = await gateway().pollV4(token, { protocolVersion: 5, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", version: "4.0.0" } });
   expect(res.status).toBe(200);
   expect((res.body as any).delivery).toMatchObject({ runId: run.id, runIndex: 1 });
   expect((res.body as any).needsUpdate).toBeUndefined();
@@ -557,9 +528,9 @@ test("pollV4 with the supported daemon version can claim pending work", async ()
 
   const secondLoop = await createLoop({ machineId, name: "L2", cron: "0 0 1 1 *", enabled: true });
   const secondRun = await store.addRun({ loopId: secondLoop.id, machineId, phase: "pending", ts: new Date().toISOString() });
-  const omitted = await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac" } });
+  const omitted = await gateway().pollV4(token, { protocolVersion: 5, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac" } });
   expect((omitted.body as any).delivery).toBeNull();
-  expect((omitted.body as any).needsUpdate).toMatchObject({ current: null, required: "2.4.0" });
+  expect((omitted.body as any).needsUpdate).toMatchObject({ current: null, required: "4.0.0" });
   expect((await store.getRun(secondRun.id))?.phase).toBe("pending");
 });
 
@@ -630,28 +601,17 @@ test("editLoop --dry-run returns canonical before and after without persisting",
 test("only a done block terminal auto-pauses", async () => {
   const canceled = await seededExecRun();
   const gw = gateway();
-  expect((await gw.cli(canceled.rt, ["report", "--status", "block", "--message", "owner input needed"])).status).toBe(200);
-  expect((await gw.report(canceled.rt, { result: "canceled", exitCode: 143, durationMs: 1 })).status).toBe(200);
+  const blocked = "owner input needed\nSTATUS: block";
+  expect((await gw.report(canceled.rt, { result: "canceled", exitCode: 143, durationMs: 1, finalText: blocked })).status).toBe(200);
   expect(await store.getLoop(canceled.loop.id)).toMatchObject({ enabled: true, pauseCause: null });
 
   const failed = await seededExecRun();
-  expect((await gw.cli(failed.rt, ["report", "--status", "block", "--message", "owner input needed"])).status).toBe(200);
-  expect((await gw.report(failed.rt, { result: "failure", error: "provider failed", durationMs: 1 })).status).toBe(200);
+  expect((await gw.report(failed.rt, { result: "failure", error: "provider failed", durationMs: 1, finalText: blocked })).status).toBe(200);
   expect(await store.getLoop(failed.loop.id)).toMatchObject({ enabled: true, pauseCause: null });
 
   const done = await seededExecRun();
-  expect((await gw.cli(done.rt, ["report", "--status", "block", "--message", "owner input needed"])).status).toBe(200);
-  expect((await gw.report(done.rt, { result: "success", durationMs: 1 })).status).toBe(200);
+  expect((await gw.report(done.rt, { result: "success", durationMs: 1, finalText: blocked })).status).toBe(200);
   expect(await store.getLoop(done.loop.id)).toMatchObject({ enabled: false, pauseCause: { kind: "blocked", runId: done.run.id } });
-});
-
-test("report requires a valid status and a non-empty message", async () => {
-  const { run, rt } = await seededExecRun();
-  const gw = gateway();
-  expect((await gw.cli(rt, ["report", "--status", "wibble", "--message", "done"])).status).toBe(400);
-  expect((await gw.cli(rt, ["report", "--status", "keep"])).status).toBe(400);
-  expect((await gw.cli(rt, ["report", "--status", "keep", "--message", "   "])).status).toBe(400);
-  expect(await store.getRun(run.id)).toMatchObject({ status: null, message: null });
 });
 
 test("continuous loop stops enqueueing after the 3rd exec error trips the breaker", async () => {
@@ -747,14 +707,11 @@ test("sweep marks a reclaimed run token report-only while preserving one wake-re
   const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId });
 
   const gw = gateway();
-  expect((await gw.runCli(rt, ["show"])).status).toBe(403); // run credentials are report-only even before sweep
   (await gw.sweep());
   expect((await store.getRun(run.id))!.phase).toBe("error");
   expect((await store.getRun(run.id))!.error).toBe("machine timed out / disconnected");
-  // The orphaned agent can no longer MUTATE the loop (reclaimed → 409, not silent),
-  // but the token is not revoked outright: it survives to accept one wake-report.
-  expect((await gw.runCli(rt, ["show"])).status).toBe(409);
-  expect(await tokens.resolveLease(rt)).toBeTruthy();
+  // The token is not revoked outright: it survives to accept one wake-report.
+  expect((await tokens.resolveLease(rt))?.state).toBe("terminal-grace");
 });
 
 test("a stale sweep observation that loses its phase CAS has zero side effects", async () => {
@@ -879,28 +836,22 @@ test("heartbeat refresh throttling stays inside short custom timeout windows", (
   expect(gatewayMod.heartbeatRefreshMs(Number.NaN)).toBe(1);
 });
 
-test("CLI report clips --message to the 2000-char cap", async () => {
+test("the run summary is clipped to the 2000-char cap while finalText keeps the full response", async () => {
   const { run, rt } = (await seededExecRun());
-  const res = (await gateway().runCli(rt, ["report", "--status", "keep", "--message", "m".repeat(5000)]));
+  const res = await gateway().report(rt, { result: "success", finalText: `${"m".repeat(5000)}\nSTATUS: keep` });
   expect(res.status).toBe(200);
-  expect((await store.getRun(run.id))!.message!.length).toBe(2000);
+  const stored = (await store.getRun(run.id))!;
+  expect(stored.message!.length).toBe(2000);
+  expect(stored.finalText!.length).toBe(5013);
 });
 
 test("CLI flags are NUL-stripped before any pg write", async () => {
-  // Postgres text/jsonb REJECT U+0000 (SQLite tolerated it) - a flag value
-  // carrying one (e.g. --file-content inlining a file with a stray NUL) must be
-  // sanitized at the parseFlags chokepoint, not 500 the verb mid-run.
-  const { run, rt } = (await seededExecRun());
-  const res = (await gateway().runCli(rt, [
-    "report",
-    "--status",
-    "keep",
-    "--message",
-    "before\u0000after",
-  ]));
+  // Postgres text/jsonb REJECT U+0000 - a flag value carrying one must be
+  // sanitized at the parseFlags chokepoint, not 500 the verb.
+  const { deviceToken, loop } = (await seededCli());
+  const res = await gateway().cli(deviceToken, ["edit", loop.id, "--json", '{"name":"before\u0000after"}']);
   expect(res.status).toBe(200);
-  const stored = (await store.getRun(run.id))!;
-  expect(stored.message).toBe("beforeafter");
+  expect((await store.getLoop(loop.id))!.name).toBe("beforeafter");
 });
 
 test("report clips valid diagnostic strings and durably rejects a non-string error", async () => {
@@ -927,13 +878,13 @@ test("poll persists the daemon version, updating only when it changes", async ()
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   await tokens.rememberConnectKey(token);
-  await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64", version: "0.8.0" } });
+  await gateway().pollV4(token, { protocolVersion: 5, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64", version: "0.8.0" } });
   expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.8.0");
-  await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64", version: "0.9.0" } });
+  await gateway().pollV4(token, { protocolVersion: 5, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64", version: "0.9.0" } });
   expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.9.0");
-  await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64" } });
+  await gateway().pollV4(token, { protocolVersion: 5, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64" } });
   expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.9.0");
-  await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", version: "9".repeat(200) } });
+  await gateway().pollV4(token, { protocolVersion: 5, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", version: "9".repeat(200) } });
   expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.9.0");
 });
 
@@ -969,13 +920,13 @@ test("cli branches by canonical dk_ and rk_ credential prefixes", async () => {
 
 
 
-test("cli run credential rejects every owner verb with the report-only boundary", async () => {
+test("cli run credential rejects every owner verb", async () => {
   const { runToken } = (await seededCli());
   const gw = gateway();
-  for (const argv of [["new"], ["edit"], ["loops"], ["start"], ["stop"], ["delete"], ["run", "stop", "r"]]) {
+  for (const argv of [["new"], ["edit"], ["loops"], ["start"], ["stop"], ["delete"], ["run", "stop", "r"], ["file", "list"]]) {
     const res = (await gw.cli(runToken, argv));
     expect(res.status).toBe(403);
-    expect((res.body as { text: string }).text).toMatch(/only pievo report|may only report/);
+    expect((res.body as { text: string }).text).toMatch(/not available inside a run/);
   }
 });
 
@@ -1013,7 +964,7 @@ test("cli device stop is update-gated before mutation and never falsely advertis
   expect((await store.getLoop(loop.id))?.enabled).toBe(true);
   expect((await store.getRun(run.id))?.cancelRequestedAt).toBeNull();
 
-  await store.updateMachine(loop.machineId, { daemonProtocol: 4 });
+  await store.updateMachine(loop.machineId, { daemonProtocol: 5 });
   const stopped = await gw.cli(deviceToken, ["stop", loop.id]);
   expect(stopped.status).toBe(200);
   expect(textOf(stopped)).toContain("stop requested; waiting for");
@@ -1045,7 +996,7 @@ test("cli delete is protocol-gated before requesting deletion when a run is acti
 
 test("cli device run stop preserves loop state and reports terminal runs truthfully", async () => {
   const { deviceToken, loop, run } = await seededCli();
-  await store.updateMachine(loop.machineId, { daemonProtocol: 4 });
+  await store.updateMachine(loop.machineId, { daemonProtocol: 5 });
   const gw = gateway();
   const stopped = await gw.cli(deviceToken, ["run", "stop", run.id]);
   expect(stopped.status).toBe(200);
@@ -1056,7 +1007,7 @@ test("cli device run stop preserves loop state and reports terminal runs truthfu
 
 test("cli force delete requires a prior request, explicit marker, and the loop machine", async () => {
   const { deviceToken, loop } = await seededCli();
-  await store.updateMachine(loop.machineId, { daemonProtocol: 4 });
+  await store.updateMachine(loop.machineId, { daemonProtocol: 5 });
   const other = await seededCli();
   const gw = gateway();
 
@@ -1079,7 +1030,7 @@ test("cli force delete requires a prior request, explicit marker, and the loop m
 
 test("cli force delete logs, reports reachability truthfully, and honors a false store result", async () => {
   const first = await seededCli();
-  await store.updateMachine(first.loop.machineId, { daemonProtocol: 4, online: false, lastSeen: null });
+  await store.updateMachine(first.loop.machineId, { daemonProtocol: 5, online: false, lastSeen: null });
   await store.requestDeleteLoop(first.loop.id);
   const audit: Array<Record<string, unknown>> = [];
   const forced = await gateway({ destructiveLog: (event) => audit.push(event) }).cli(first.deviceToken, [
@@ -1109,10 +1060,10 @@ test("cli force delete logs, reports reachability truthfully, and honors a false
   expect(await store.getLoop(second.loop.id)).toBeTruthy();
 });
 
-test("cli device credential: report is run-only", async () => {
+test("cli device credential: report is not a verb", async () => {
   const { deviceToken } = (await seededCli());
   const gw = gateway();
-  expect((await gw.cli(deviceToken, ["report"])).status).toBe(403);
+  expect((await gw.cli(deviceToken, ["report"])).status).toBe(400);
 });
 
 
@@ -1136,4 +1087,237 @@ test("cli device credential: log/show of a loop on ANOTHER machine is a flat 404
   const gw = gateway();
   expect((await gw.cli(deviceToken, ["log", otherLoop.id])).status).toBe(404);
   expect((await gw.cli(deviceToken, ["show", otherLoop.id])).status).toBe(404);
+});
+
+function sha(bytes: Buffer | string): string {
+  return loopFilesMod.sha256Buf(Buffer.from(bytes));
+}
+
+async function seededLoopFiles(artifacts: string[] = ["report.md"]) {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  const loop = await createLoop({ machineId, name: "Files", cron: "0 0 1 1 *", enabled: true, artifacts });
+  const run = await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: new Date().toISOString() });
+  const runToken = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId });
+  return { deviceToken, machineId, loop, run, runToken };
+}
+
+test("loop-file round trip: run-token transfer, terminal apply, and the next delivery", async () => {
+  const { machineId, loop, run, runToken } = await seededLoopFiles();
+  const gw = gateway();
+
+  const initial = await gw.readRunFile(runToken, "MEMORY.md");
+  expect(initial).toMatchObject({ status: 200, hash: loopFilesMod.EMPTY_SHA256 });
+  expect(initial.bytes).toHaveLength(0);
+
+  const memory = Buffer.from("remember the build command");
+  const memoryHash = sha(memory);
+  expect(await gw.storeRunFile(runToken, "MEMORY.md", memory, memoryHash)).toEqual({
+    status: 200,
+    body: { ok: true, hash: memoryHash },
+  });
+
+  const artifact = Buffer.from("<h1>report</h1>");
+  const artifactHash = sha(artifact);
+  expect((await gw.storeRunFile(runToken, "report.md", artifact, artifactHash)).status).toBe(200);
+
+  const terminal = await gw.report(runToken, {
+    result: "success",
+    finalText: "did the work\nSTATUS: keep",
+    files: [
+      { name: "MEMORY.md", baseHash: loopFilesMod.EMPTY_SHA256, hash: memoryHash, size: memory.length },
+      { name: "report.md", baseHash: loopFilesMod.EMPTY_SHA256, hash: artifactHash, size: artifact.length },
+    ],
+  });
+  expect(terminal.status).toBe(200);
+  expect(await store.getRun(run.id)).toMatchObject({ phase: "done", status: "keep", message: "did the work", fileNotices: null });
+  expect(await store.getArtifactFile(loop.id, "MEMORY.md")).toMatchObject({ hash: memoryHash, size: memory.length, deleted: false });
+  expect(await store.getArtifactFile(loop.id, "report.md")).toMatchObject({ hash: artifactHash, size: artifact.length, deleted: false });
+
+  const nextRun = await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: new Date().toISOString() });
+  const nextToken = await tokens.registerRunLease({ runId: nextRun.id, loopId: loop.id, machineId });
+  const delivery = await deliveryMod.buildDelivery(loop, nextRun, nextToken, []);
+  expect(delivery.files).toEqual(["MEMORY.md", "report.md"]);
+  expect(delivery.task).toContain("$PIEVO_LOOP_DIR");
+  expect(delivery.task).not.toContain("Notices from the previous run");
+
+  const downloaded = await gw.readRunFile(nextToken, "MEMORY.md");
+  expect(downloaded).toMatchObject({ status: 200, hash: memoryHash });
+  expect(downloaded.bytes!.toString()).toBe("remember the build command");
+});
+
+test("an owner file edit during a run wins over the run's base-hash version", async () => {
+  const { deviceToken, machineId, loop, run, runToken } = await seededLoopFiles();
+  const gw = gateway();
+
+  const before = Buffer.from("memory before the run");
+  const beforeHash = sha(before);
+  expect((await gw.cli(deviceToken, ["file", "set", loop.id, "MEMORY.md", "--content-base64", before.toString("base64")])).status).toBe(200);
+  expect((await gw.readRunFile(runToken, "MEMORY.md")).hash).toBe(beforeHash);
+
+  const owner = Buffer.from("the owner changed this while the run was active");
+  const ownerHash = sha(owner);
+  expect((await gw.cli(deviceToken, ["file", "set", loop.id, "MEMORY.md", "--content-base64", owner.toString("base64")])).status).toBe(200);
+
+  const agent = Buffer.from("the run changed this from its starting version");
+  const agentHash = sha(agent);
+  expect((await gw.storeRunFile(runToken, "MEMORY.md", agent, agentHash)).status).toBe(200);
+  expect((await gw.report(runToken, {
+    result: "success",
+    finalText: "done\nSTATUS: keep",
+    files: [{ name: "MEMORY.md", baseHash: beforeHash, hash: agentHash, size: agent.length }],
+  })).status).toBe(200);
+
+  expect((await store.getRun(run.id))!.fileNotices).toEqual([expect.stringContaining("changed outside this run")]);
+  expect(await store.getArtifactFile(loop.id, "MEMORY.md")).toMatchObject({ hash: ownerHash });
+  expect((await gw.loopFiles.readBlob(ownerHash))!.toString()).toBe(owner.toString());
+
+  const nextRun = await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: new Date().toISOString() });
+  const delivery = await deliveryMod.buildDelivery(loop, nextRun, "rk_next", []);
+  expect(delivery.task).toContain("Notices from the previous run:");
+  expect(delivery.task).toContain("changed outside this run");
+});
+
+test("an over-limit run version is rejected, kept out, and repeated in the next prompt", async () => {
+  const { machineId, loop, run, runToken } = await seededLoopFiles();
+  const gw = gateway();
+
+  const tooLong = Buffer.from("x".repeat(loopFilesMod.MEMORY_CHAR_CAP + 1));
+  const rejected = await gw.storeRunFile(runToken, "MEMORY.md", tooLong, sha(tooLong));
+  expect(rejected.status).toBe(413);
+  expect((rejected.body as { error: string }).error).toContain(`${loopFilesMod.MEMORY_CHAR_CAP + 1} characters exceeds`);
+
+  const notice = `MEMORY.md: ${loopFilesMod.MEMORY_CHAR_CAP + 1} characters exceeds the ${loopFilesMod.MEMORY_CHAR_CAP}-character limit; the previous version was kept`;
+  expect((await gw.report(runToken, { result: "success", finalText: "done\nSTATUS: keep", fileNotices: [notice] })).status).toBe(200);
+  expect((await store.getRun(run.id))!.fileNotices).toEqual([notice]);
+  expect(await store.getArtifactFile(loop.id, "MEMORY.md")).toBeUndefined();
+
+  const nextRun = await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: new Date().toISOString() });
+  const delivery = await deliveryMod.buildDelivery(loop, nextRun, "rk_next", []);
+  expect(delivery.task).toContain(`Notices from the previous run:\n- ${notice}`);
+});
+
+test("notices come from the immediately previous run, including canceled runs", async () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  const loop = await createLoop({ machineId, name: "Notices", cron: "0 0 1 1 *", enabled: true });
+  const gw = gateway();
+  const run1 = await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: new Date().toISOString() });
+  const token1 = await tokens.registerRunLease({ runId: run1.id, loopId: loop.id, machineId });
+  const stale = "MEMORY.md: 9001 characters exceeds the 8000-character limit; the previous version was kept";
+  expect((await gw.report(token1, { result: "success", finalText: "done\nSTATUS: keep", fileNotices: [stale] })).status).toBe(200);
+
+  const run2 = await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: new Date().toISOString() });
+  const token2 = await tokens.registerRunLease({ runId: run2.id, loopId: loop.id, machineId });
+  const discarded = "MEMORY.md: the run was canceled; this run's edit was discarded";
+  expect((await gw.report(token2, { result: "canceled", fileNotices: [discarded] })).status).toBe(200);
+
+  const run3 = await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: new Date().toISOString() });
+  const delivery = await deliveryMod.buildDelivery(loop, run3, "rk_next", []);
+  expect(delivery.task).toContain(`- ${discarded}`);
+  expect(delivery.task).not.toContain(stale);
+});
+
+test("a report whose size disagrees with the stored blob is not applied", async () => {
+  const { loop, run, runToken } = await seededLoopFiles();
+  const gw = gateway();
+  const bytes = Buffer.from("actual bytes");
+  const hash = sha(bytes);
+  expect((await gw.storeRunFile(runToken, "MEMORY.md", bytes, hash)).status).toBe(200);
+
+  expect((await gw.report(runToken, {
+    result: "success",
+    finalText: "done\nSTATUS: keep",
+    files: [{ name: "MEMORY.md", baseHash: loopFilesMod.EMPTY_SHA256, hash, size: bytes.length + 1 }],
+  })).status).toBe(200);
+  expect((await store.getRun(run.id))!.fileNotices).toEqual([
+    "MEMORY.md: reported size did not match the stored version; the previous version was kept",
+  ]);
+  expect(await store.getArtifactFile(loop.id, "MEMORY.md")).toBeUndefined();
+});
+
+test("run-file transfer enforces run authority, configured names, hashes, and lease state", async () => {
+  const { loop, run, runToken } = await seededLoopFiles();
+  const gw = gateway();
+
+  expect((await gw.readRunFile(`rk_${"0".repeat(32)}`, "MEMORY.md")).status).toBe(401);
+  expect((await gw.readRunFile(runToken, "not-configured.md")).status).toBe(404);
+  expect((await gw.storeRunFile(runToken, "not-configured.md", Buffer.from("x"), null)).status).toBe(404);
+
+  const bytes = Buffer.from("memory");
+  expect((await gw.storeRunFile(runToken, "MEMORY.md", bytes, "0".repeat(64))).status).toBe(400);
+  expect((await gw.storeRunFile(runToken, "MEMORY.md", bytes, null)).status).toBe(200);
+
+  await tokens.terminalizeLease(run.id);
+  expect((await gw.readRunFile(runToken, "MEMORY.md")).status).toBe(409);
+  // A report retry may still upload after the sweep terminalizes the lease.
+  expect((await gw.storeRunFile(runToken, "MEMORY.md", Buffer.from("retry"), null)).status).toBe(200);
+  await tokens.retireLease(runToken);
+  expect((await gw.storeRunFile(runToken, "MEMORY.md", bytes, null)).status).toBe(401);
+  expect(await store.getLoop(loop.id)).toBeTruthy();
+});
+
+test("device file verbs list, get, and set loop files with limits", async () => {
+  const { deviceToken, loop } = await seededLoopFiles(["report.md"]);
+  const gw = gateway();
+
+  const list = await gw.cli(deviceToken, ["file", "list", loop.id]);
+  expect(list.status).toBe(200);
+  expect(textOf(list)).toContain("MEMORY.md");
+  expect(textOf(list)).toContain("report.md");
+  expect(textOf(list)).toContain("8000 characters");
+  expect(textOf(list)).toContain("2 MB");
+
+  expect(textOf(await gw.cli(deviceToken, ["file", "get", loop.id, "MEMORY.md"]))).toBe("\n");
+
+  const content = "# Memory\n- build with pnpm";
+  const set = await gw.cli(deviceToken, ["file", "set", loop.id, "MEMORY.md", "--content-base64", Buffer.from(content).toString("base64")]);
+  expect(set.status).toBe(200);
+  expect(textOf(set)).toContain("updated: true");
+  expect(textOf(await gw.cli(deviceToken, ["file", "get", loop.id, "MEMORY.md"]))).toBe(content);
+
+  const tooLong = "x".repeat(loopFilesMod.MEMORY_CHAR_CAP + 1);
+  const rejected = await gw.cli(deviceToken, ["file", "set", loop.id, "MEMORY.md", "--content-base64", Buffer.from(tooLong).toString("base64")]);
+  expect(rejected.status).toBe(413);
+  expect(textOf(rejected)).toContain("nothing was changed");
+  expect(textOf(await gw.cli(deviceToken, ["file", "get", loop.id, "MEMORY.md"]))).toBe(content);
+
+  expect((await gw.cli(deviceToken, ["file", "set", loop.id, "MEMORY.md", "--content-base64"])).status).toBe(400);
+  expect(textOf(await gw.cli(deviceToken, ["file", "get", loop.id, "MEMORY.md"]))).toBe(content);
+
+  expect((await gw.cli(deviceToken, ["file", "set", loop.id, "other.md", "--content-base64", "eA=="])).status).toBe(404);
+  const other = await seededLoopFiles();
+  expect((await gw.cli(deviceToken, ["file", "list", other.loop.id])).status).toBe(404);
+});
+
+test("protocol v5 is required and the delivery names MEMORY.md plus configured artifacts", async () => {
+  const deviceToken = tokens.mintDeviceToken();
+  const machineId = tokens.machineIdFromToken(deviceToken);
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  const loop = await createLoop({ machineId, name: "Protocol", cron: "0 0 1 1 *", enabled: true, artifacts: ["report.md"] });
+  const gw = gateway();
+  const v4 = await gw.pollV4(deviceToken, {
+    protocolVersion: 4,
+    daemonInstanceId: "test-daemon",
+    recoveryComplete: true,
+    currentRuns: [],
+    info: { version: "4.0.0" },
+  });
+  expect(v4.status).toBe(426);
+
+  const pending = await store.addRun({ loopId: loop.id, machineId, phase: "pending", ts: new Date().toISOString() });
+  const claimed = await gw.pollV4(deviceToken, {
+    protocolVersion: 5,
+    daemonInstanceId: "test-daemon",
+    recoveryComplete: true,
+    currentRuns: [],
+    info: { version: "4.0.0" },
+  });
+  expect(claimed.status).toBe(200);
+  const delivery = (claimed.body as { delivery: any }).delivery;
+  expect(delivery.runId).toBe(pending.id);
+  expect(delivery.files).toEqual(["MEMORY.md", "report.md"]);
+  expect(delivery.task).toContain("$PIEVO_LOOP_DIR");
 });

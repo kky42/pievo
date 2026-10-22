@@ -30,6 +30,7 @@ import {
   type SnapshotManifest,
 } from "./schema.js";
 import type { ReportIncident, ReportIncidentDisposition } from "../types.js";
+import { EMPTY_SHA256, MEMORY_FILE, loopFileNames } from "../gateway/loopFiles.js";
 
 export function newLoopId(): string {
   return `loop-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
@@ -213,7 +214,7 @@ async function updateLoopTx(tx: StoreTx, current: Loop, patch: Partial<NewLoop>,
     );
   }
   if (patch.artifacts !== undefined) {
-    const allowed = new Set(patch.artifacts ?? []);
+    const allowed = new Set([MEMORY_FILE, ...(patch.artifacts ?? [])]);
     const live = await tx.select({ id: artifactFiles.id, path: artifactFiles.path }).from(artifactFiles)
       .where(and(eq(artifactFiles.loopId, current.id), eq(artifactFiles.deleted, false)));
     const removed = live.filter((file) => !allowed.has(file.path)).map((file) => file.id);
@@ -670,41 +671,6 @@ async function activeRunForReportTx(
   return run ? { state: "active", run } : { state: "run-not-running" };
 }
 
-export type RecordRunReportResult =
-  | { state: "applied"; run: Run }
-  | { state: "already-reported" | "missing-loop" | "invalid-lease" | "run-not-running" };
-
-/** Record the agent-authored status/message exactly once. The loop row is the
- * serialization point, so sequential and concurrent duplicate callbacks both
- * lose before any field can be overwritten. */
-export async function recordRunReportOnce(input: {
-  loopId: string;
-  runId: string;
-  leaseTokenHash: string;
-  status: "keep" | "no-change" | "block";
-  message: string;
-}): Promise<RecordRunReportResult> {
-  return db.transaction(async (tx) => {
-    const loop = (await tx.select({ id: loops.id }).from(loops).where(eq(loops.id, input.loopId)).for("update"))[0];
-    if (!loop) return { state: "missing-loop" as const };
-    const active = await activeRunForReportTx(tx, input.loopId, input.runId, input.leaseTokenHash);
-    if (active.state !== "active") return active;
-    if (active.run.status != null || active.run.message != null) return { state: "already-reported" as const };
-    const at = nowIso();
-    const run = (await tx.update(runs)
-      .set({ status: input.status, message: input.message, updatedAt: at })
-      .where(and(
-        eq(runs.id, input.runId),
-        eq(runs.loopId, input.loopId),
-        eq(runs.phase, "running"),
-        isNull(runs.status),
-        isNull(runs.message),
-      ))
-      .returning())[0];
-    return run ? { state: "applied" as const, run } : { state: "already-reported" as const };
-  });
-}
-
 export interface FinalizeRunningRunResult {
   run: Run;
   loop: Loop;
@@ -727,6 +693,47 @@ interface FinalizeTerminalRunInput {
   failureAutopauseStreak: number;
   receipt?: typeof runReportReceipts.$inferInsert;
   reconciliation?: boolean;
+  fileUpdates?: LoopFileUpdate[];
+}
+
+/** One agent-produced loop-file version. `baseHash` is the version the run
+ *  downloaded; the blob for `hash` is already stored. */
+export interface LoopFileUpdate {
+  name: string;
+  baseHash: string;
+  hash: string;
+  size: number;
+}
+
+/** Apply a run's loop-file versions under the loop lock. A file whose current
+ * version is no longer the one the run started from was changed by the owner (or a
+ * newer run) meanwhile; that version wins and the agent's edit becomes a notice. */
+async function applyLoopFileUpdatesTx(
+  tx: StoreTx,
+  loop: Loop,
+  updates: LoopFileUpdate[],
+  at: string,
+): Promise<string[]> {
+  const notices: string[] = [];
+  const configured = new Set(loopFileNames(loop));
+  for (const update of updates) {
+    if (!configured.has(update.name)) {
+      notices.push(`${update.name}: no longer configured on this loop; this run's version was discarded`);
+      continue;
+    }
+    const row = (await tx.select().from(artifactFiles)
+      .where(and(eq(artifactFiles.loopId, loop.id), eq(artifactFiles.path, update.name)))
+      .limit(1).for("update"))[0];
+    const current = row && !row.deleted && row.hash ? row.hash : EMPTY_SHA256;
+    if (current !== update.baseHash) {
+      notices.push(`${update.name}: changed outside this run while it was running; that version was kept and this run's edit was discarded`);
+      continue;
+    }
+    await writeConfiguredArtifactTx(tx, {
+      loopId: loop.id, path: update.name, hash: update.hash, size: update.size, binary: false, oversize: false,
+    }, at);
+  }
+  return notices;
 }
 
 async function finalizeTerminalRunTx(
@@ -749,10 +756,14 @@ async function finalizeTerminalRunTx(
   if (!target) return undefined;
   const runIndex = await ensureRunIndexTx(tx, target);
   const at = typeof input.runPatch.ts === "string" ? input.runPatch.ts : nowIso();
+  const fileNotices = [
+    ...(input.runPatch.fileNotices ?? []),
+    ...(input.fileUpdates?.length ? await applyLoopFileUpdatesTx(tx, current, input.fileUpdates, at) : []),
+  ];
   const run = (
     await tx
       .update(runs)
-      .set({ ...input.runPatch, runIndex, updatedAt: at })
+      .set({ ...input.runPatch, fileNotices: fileNotices.length ? fileNotices : null, runIndex, updatedAt: at })
       .where(and(eq(runs.id, input.runId), eq(runs.loopId, input.loopId), eq(runs.phase, input.runPhase)))
       .returning()
   )[0];
@@ -945,12 +956,14 @@ export async function finalizeRunningRun(
   leaseTokenHash?: string,
   failureAutopauseStreak = 0,
   receipt?: typeof runReportReceipts.$inferInsert,
+  fileUpdates?: LoopFileUpdate[],
 ): Promise<FinalizeRunningRunResult | undefined> {
   return db.transaction(async (tx) => {
     return finalizeTerminalRunTx(tx, {
       loopId,
       runId,
       runPhase: "running",
+      fileUpdates,
       runPatch,
       loopPatch,
       leaseTokenHash,
@@ -1038,12 +1051,14 @@ export async function reconcileReclaimedRun(
   loopPatch: Partial<NewLoop> = {},
   failureAutopauseStreak = 0,
   receipt?: typeof runReportReceipts.$inferInsert,
+  fileUpdates?: LoopFileUpdate[],
 ): Promise<FinalizeRunningRunResult | undefined> {
   return db.transaction(async (tx) => {
     return finalizeTerminalRunTx(tx, {
       loopId,
       runId,
       runPhase: "error",
+      fileUpdates,
       runPatch,
       loopPatch,
       leaseTokenHash,
@@ -1460,26 +1475,6 @@ export async function recordBlob(hash: string, size: number): Promise<void> {
   await db.insert(blobs).values({ hash, size, createdAt: nowIso() }).onConflictDoNothing();
 }
 
-/** Does any LIVE artifact_files row on a loop bound to `machineId` point at `hash`?
- *  Gates putBlob: a device may only upload bytes the sync handshake actually asked
- *  it for (a row a prior sync wrote for one of ITS loops), never arbitrary
- *  self-hashed blobs — otherwise any device token is an uncapped blob write channel. */
-export async function machineReferencesBlob(machineId: string, hash: string): Promise<boolean> {
-  return !!(
-    await db
-      .select({ id: artifactFiles.id })
-      .from(artifactFiles)
-      .innerJoin(loops, eq(artifactFiles.loopId, loops.id))
-      .where(and(
-        eq(loops.machineId, machineId),
-        eq(artifactFiles.hash, hash),
-        eq(artifactFiles.deleted, false),
-        sql`${loops.artifacts} @> jsonb_build_array(${artifactFiles.path})`,
-      ))
-      .limit(1)
-  )[0];
-}
-
 export interface ArtifactFileInput {
   loopId: string;
   path: string;
@@ -1516,43 +1511,31 @@ async function writeConfiguredArtifactTx(tx: StoreTx, input: ArtifactFileInput, 
     });
 }
 
-/** Upsert only while the exact literal path remains configured, serialized with
- * owner edits by the loop row lock. */
-export async function upsertConfiguredArtifactFile(input: ArtifactFileInput): Promise<boolean> {
+/** Owner replacement of one loop file. Serialized with run finalization by the
+ * loop lock, so a run that started from the previous version cannot overwrite it. */
+export async function writeLoopFile(loopId: string, name: string, hash: string, size: number): Promise<boolean> {
   return db.transaction(async (tx) => {
-    const loop = (await tx.select({ artifacts: loops.artifacts }).from(loops)
-      .where(eq(loops.id, input.loopId)).for("update"))[0];
-    if (!loop || !loop.artifacts.includes(input.path)) return false;
-    await writeConfiguredArtifactTx(tx, input, nowIso());
+    const loop = (await tx.select().from(loops).where(eq(loops.id, loopId)).for("update"))[0];
+    if (!loop || !loopFileNames(loop).includes(name)) return false;
+    await writeConfiguredArtifactTx(tx, { loopId, path: name, hash, size, binary: false, oversize: false }, nowIso());
     return true;
   });
 }
 
-/** Reconcile deletions against both the request's starting allowlist and the
- * current locked loop config. Newly-added paths are never tombstoned by an older
- * in-flight manifest; removed paths can never remain live. */
-export async function reconcileConfiguredArtifacts(
-  loopId: string,
-  configuredAtStart: string[],
-  keepPaths: string[],
-): Promise<number> {
-  return db.transaction(async (tx) => {
-    const loop = (await tx.select({ artifacts: loops.artifacts }).from(loops)
-      .where(eq(loops.id, loopId)).for("update"))[0];
-    if (!loop) return 0;
-    const current = new Set(loop.artifacts);
-    const started = new Set(configuredAtStart);
-    const keep = new Set(keepPaths);
-    const live = await tx.select().from(artifactFiles)
-      .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.deleted, false)));
-    const stale = live.filter((file) => !current.has(file.path) || (started.has(file.path) && !keep.has(file.path)));
-    if (!stale.length) return 0;
-    const at = nowIso();
-    await tx.update(artifactFiles)
-      .set({ hash: null, deleted: true, updatedAt: at })
-      .where(inArray(artifactFiles.id, stale.map((file) => file.id)));
-    return stale.length;
-  });
+/** File notices of the immediately previous terminal run, for the next prompt.
+ *  Canceled runs are terminal too: their notices (edits discarded) are repeated,
+ *  and an older run's notice must not masquerade as the previous run's. */
+export async function previousRunFileNotices(loopId: string, beforeRunIndex: number): Promise<string[]> {
+  const row = (await db.select({ fileNotices: runs.fileNotices }).from(runs)
+    .where(and(
+      eq(runs.loopId, loopId),
+      isNotNull(runs.runIndex),
+      lt(runs.runIndex, beforeRunIndex),
+      inArray(runs.phase, ["done", "error", "canceled"]),
+    ))
+    .orderBy(desc(runs.runIndex))
+    .limit(1))[0];
+  return row?.fileNotices ?? [];
 }
 
 export async function listArtifacts(loopId: string): Promise<ArtifactFile[]> {
@@ -1580,8 +1563,8 @@ export async function buildLoopManifest(loopId: string): Promise<SnapshotManifes
   return manifest;
 }
 
-/** Write/overwrite a run's snapshot (path → file metadata). Idempotent on runId
- *  so a re-report of the same run just refreshes the captured artifact state. */
+/** Write/overwrite a run's snapshot (name → file metadata). Idempotent on runId
+ *  so a re-report of the same run just refreshes the captured loop-file state. */
 export async function putRunSnapshot(runId: string, loopId: string, manifest: SnapshotManifest): Promise<void> {
   await db
     .insert(runSnapshots)

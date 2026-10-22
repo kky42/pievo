@@ -69,11 +69,11 @@ function pollV4(
   info?: { host?: string; platform?: string; arch?: string; version?: string },
 ) {
   return gw.pollV4(token, {
-    protocolVersion: 4,
+    protocolVersion: 5,
     daemonInstanceId: "test-daemon",
     recoveryComplete: true,
     currentRuns: [],
-    info: { version: "2.4.0", ...info },
+    info: { version: "4.0.0", ...info },
   });
 }
 

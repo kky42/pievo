@@ -1,9 +1,9 @@
-const INTERACTIVE_VERBS = new Set(["loops", "edit", "pause", "start", "stop", "delete", "run"]);
+const INTERACTIVE_VERBS = new Set(["loops", "edit", "pause", "start", "stop", "delete", "run", "file"]);
 const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 const HELP_FLAG_ARGS = new Set(["--help", "-h"]);
 const VERSION_FLAGS = new Set(["--version", "-v"]);
 const COMMAND_VERBS = new Set(["daemon", "new", "skill", "log", "show", ...INTERACTIVE_VERBS]);
-const HELP_VERBS = new Set([...COMMAND_VERBS, "report"]);
+const HELP_VERBS = new Set(COMMAND_VERBS);
 const DAEMON_SUBCOMMANDS = new Set(["connect", "connections", "start", "stop", "restart", "status"]);
 
 function hasHelpFlag(args: string[]): boolean {
@@ -21,12 +21,11 @@ export type Route =
   | { kind: "log"; args: string[] }
   | { kind: "show"; args: string[] }
   | { kind: "interactive"; argv: string[] }
-  | { kind: "runOnlyReport" }
   | { kind: "home" }
   | { kind: "unknown"; verb: string };
 
 export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
-  if (env.PIEVO_RUN_TOKEN) return { kind: "callback", argv };
+  if (env.PIEVO_IN_RUN) return { kind: "callback", argv };
   const verb = argv[0];
   if (verb !== undefined && HELP_FLAGS.has(verb)) return { kind: "help" };
   if (verb !== undefined && VERSION_FLAGS.has(verb)) return { kind: "version" };
@@ -49,7 +48,6 @@ export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
   if (verb === "log") return { kind: "log", args: argv.slice(1) };
   if (verb === "show") return { kind: "show", args: argv.slice(1) };
   if (verb !== undefined && INTERACTIVE_VERBS.has(verb)) return { kind: "interactive", argv };
-  if (verb === "report") return { kind: "runOnlyReport" };
   if (argv.length === 0) return { kind: "home" };
   return { kind: "unknown", verb: verb! };
 }

@@ -6,7 +6,7 @@ import { RunDetailView } from '../components/RunView'
  * `_` on the `$loopId` segment opts it out of the loop page's component so the run
  * gets its own full surface, deep-linkable + browser-back friendly) rather than a
  * modal or an inline panel. It resolves the run from the loop's detail payload
- * (reusing getLoopDetail) and the existing artifact diff.
+ * (reusing getLoopDetail) and the existing loop-file diff.
  */
 export const Route = createFileRoute('/loops/$loopId_/runs/$runId')({
   ssr: false,
