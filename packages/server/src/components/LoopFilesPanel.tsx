@@ -43,7 +43,7 @@ export function LoopFilesPanel({ loopId, configuredPaths, running }: { loopId: s
 
       {files.length === 0 ? (
         <div className="rounded-card border border-hairline bg-surface px-5 py-10 text-center text-body text-disabled shadow-card">
-          {artifacts == null ? 'Loading…' : 'No loop file has been written yet. Runs create MEMORY.md and any configured artifacts.'}
+          {artifacts == null ? 'Loading…' : 'No files are available for this loop.'}
         </div>
       ) : (
         <div className="grid h-[min(600px,68vh)] grid-cols-1 overflow-hidden rounded-card border border-hairline bg-surface shadow-card sm:grid-cols-[210px_1fr]">

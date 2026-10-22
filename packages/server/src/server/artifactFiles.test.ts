@@ -61,11 +61,25 @@ test("listLoopArtifacts returns name-sorted summaries; readLoopArtifact decodes 
   await writeFile(loop.id, "MEMORY.md", Buffer.from("hello"));
 
   const list = await artifacts.listLoopArtifacts(loop.id);
-  expect(list.map((f) => f.path)).toEqual(["MEMORY.md", "z.md"]);
+  expect(list.map((f) => f.path)).toEqual(["MEMORY.md", "keep.md", "report.html", "z.md"]);
   expect(list[0]).toMatchObject({ path: "MEMORY.md", size: 5, binary: false, oversize: false });
   expect(typeof list[0]!.updatedAt).toBe("string");
 
   expect(await artifacts.readLoopArtifact(loop.id, "MEMORY.md")).toEqual({ text: "hello" });
+});
+
+test("configured files without a stored version appear as empty and read as empty", async () => {
+  const { loop } = await seed();
+  const list = await artifacts.listLoopArtifacts(loop.id);
+  expect(list.map((f) => f.path)).toEqual(["MEMORY.md", "keep.md", "report.html", "z.md"]);
+  for (const file of list) expect(file).toMatchObject({ size: 0, binary: false, oversize: false });
+
+  expect(await artifacts.readLoopArtifact(loop.id, "MEMORY.md")).toEqual({ text: "" });
+  expect(await artifacts.readLoopArtifact(loop.id, "z.md")).toEqual({ text: "" });
+
+  const bytes = await artifacts.readLoopArtifactBytes(loop.id, "z.md");
+  expect(bytes.status).toBe(200);
+  expect(bytes.bytes!.length).toBe(0);
 });
 
 test("an empty loop file reads as empty text without a stored blob", async () => {
