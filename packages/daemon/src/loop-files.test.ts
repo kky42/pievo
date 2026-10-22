@@ -10,7 +10,6 @@ vi.hoisted(() => {
 import {
   ARTIFACT_BYTE_CAP,
   MEMORY_CHAR_CAP,
-  MEMORY_FILE,
   RUNS_DIR,
   collectLoopFiles,
   prepareLoopFiles,

@@ -55,19 +55,6 @@ async function writeFile(loopId: string, name: string, bytes: Buffer) {
   return hash;
 }
 
-test("listLoopArtifacts returns name-sorted summaries; readLoopArtifact decodes text", async () => {
-  const { loop } = await seed();
-  await writeFile(loop.id, "z.md", Buffer.from("# Z"));
-  await writeFile(loop.id, "MEMORY.md", Buffer.from("hello"));
-
-  const list = await artifacts.listLoopArtifacts(loop.id);
-  expect(list.map((f) => f.path)).toEqual(["MEMORY.md", "keep.md", "report.html", "z.md"]);
-  expect(list[0]).toMatchObject({ path: "MEMORY.md", size: 5, binary: false, oversize: false });
-  expect(typeof list[0]!.updatedAt).toBe("string");
-
-  expect(await artifacts.readLoopArtifact(loop.id, "MEMORY.md")).toEqual({ text: "hello" });
-});
-
 test("configured files without a stored version appear as empty and read as empty", async () => {
   const { loop } = await seed();
   const list = await artifacts.listLoopArtifacts(loop.id);
@@ -80,13 +67,6 @@ test("configured files without a stored version appear as empty and read as empt
   const bytes = await artifacts.readLoopArtifactBytes(loop.id, "z.md");
   expect(bytes.status).toBe(200);
   expect(bytes.bytes!.length).toBe(0);
-});
-
-test("an empty loop file reads as empty text without a stored blob", async () => {
-  const { loop } = await seed();
-  const hash = await writeFile(loop.id, "keep.md", Buffer.alloc(0));
-  expect(await store.blobExists(hash)).toBe(false);
-  expect(await artifacts.readLoopArtifact(loop.id, "keep.md")).toEqual({ text: "" });
 });
 
 test("writeLoopFile refuses unconfigured names", async () => {

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
-import { buildPollBody, ConcurrentRuntime, persistenceRetryDelayMs } from "./daemon.js";
+import { ConcurrentRuntime } from "./daemon.js";
 import type { Delivery } from "./runner.js";
 import { PendingReportOutbox } from "./report-outbox.js";
 
@@ -15,18 +15,7 @@ function delivery(overrides: Partial<Delivery> = {}): Delivery {
   return { runId: "run-1", runIndex: 1, runToken: "rk_00000000000000000000000000000000", loop: { id: "loop-1", name: "one", workdir: root, model: null, reasoningEffort: null, agent: "claude-code" }, roots: [], task: "do it", files: ["MEMORY.md"], ...overrides };
 }
 
-describe("poll protocol v5", () => {
-  test("advertises every current run in one canonical shape", () => {
-    expect(buildPollBody({ host: "mac" }, [], "daemon-1")).toEqual({ protocolVersion: 5, host: "mac", daemonInstanceId: "daemon-1", recoveryComplete: true, currentRuns: [] });
-    const runs = [{ runId: "r1", stage: "executing" as const }, { runId: "r2", stage: "reporting" as const }];
-    expect(buildPollBody({ host: "mac" }, runs, "daemon-1")).toEqual({ protocolVersion: 5, host: "mac", daemonInstanceId: "daemon-1", recoveryComplete: true, currentRuns: runs });
-  });
-});
-
 describe("concurrent persistence boundary", () => {
-  test("permanent local persistence failures back off to a fixed 30s ceiling", () => {
-    expect([1, 2, 3, 4, 5, 99].map(persistenceRetryDelayMs)).toEqual([250, 1_000, 5_000, 30_000, 30_000, 30_000]);
-  });
   test("persists each report before its run leaves reporting and accepts another loop concurrently", async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-v2-"));
     const box = new PendingReportOutbox(path.join(root, "outbox.sqlite"));

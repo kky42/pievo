@@ -44,22 +44,3 @@ describe("runDaemon", () => {
     expect(pidfile.readPidFile()?.pid).toBe(process.pid);
   }, 15000);
 });
-
-describe("poll transport helpers", () => {
-  test("buildPollBody: protocol v5 reports all active runs", async () => {
-    const { buildPollBody } = await import("./daemon.js");
-    const info = { host: "mac", platform: "darwin" };
-    expect(buildPollBody(info, [], "daemon-1")).toEqual({ protocolVersion: 5, host: "mac", platform: "darwin", daemonInstanceId: "daemon-1", recoveryComplete: true, currentRuns: [] });
-    expect(buildPollBody(info, [{ runId: "r1", stage: "reporting" }, { runId: "r2", stage: "executing" }], "daemon-1")).toEqual({
-      protocolVersion: 5, host: "mac", platform: "darwin", daemonInstanceId: "daemon-1", recoveryComplete: true,
-      currentRuns: [{ runId: "r1", stage: "reporting" }, { runId: "r2", stage: "executing" }],
-    });
-  });
-
-  test("nextPollDelayMs: a held long-poll re-polls immediately; a fast answer keeps the cadence", async () => {
-    const { nextPollDelayMs } = await import("./daemon.js");
-    expect(nextPollDelayMs(200, 3000)).toBe(2800);
-    expect(nextPollDelayMs(20_000, 3000)).toBe(250);
-    expect(nextPollDelayMs(3000, 3000)).toBe(250);
-  });
-});

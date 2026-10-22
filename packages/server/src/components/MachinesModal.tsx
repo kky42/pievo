@@ -244,8 +244,6 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
       {machines.length === 0 && <div className="py-3 text-body text-secondary">No machines yet.</div>}
       <ul className="flex flex-col gap-2">
         {machines.map((m) => {
-          // Three-state presence: a recently-seen-but-not-polling machine is likely
-          // just ASLEEP (calm yellow) rather than genuinely offline (grey).
           const presence = machinePresence(m.online, m.lastSeen)
           const dotCls = presence === 'online' ? 'bg-rubik-green' : presence === 'asleep' ? 'bg-rubik-yellow' : 'bg-disabled'
           const stateText =
@@ -325,8 +323,6 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
                 <UpgradeCommand cliConfig={cliConfig} configErr={configErr} />
               </div>
             )}
-            {/* Outdated-daemon hint: only when both versions are known and the
-                daemon is genuinely behind (never on unknown/equal/newer). */}
             {!m.needsUpdate && isOutdated(m.daemonVersion, m.latestDaemonVersion) && (
               <div className="flex flex-col gap-1.5">
                 <div className="text-label text-secondary">

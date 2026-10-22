@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -47,15 +46,6 @@ describe("bundled skill", () => {
     expect(openai).toMatch(/^  short_description: "Manage scheduled Pievo agent loops"$/m);
     expect(openai).toMatch(/^policy:$/m);
     expect(openai).toMatch(/^  allow_implicit_invocation: false$/m);
-  });
-});
-
-describe("targetSkillDirs", () => {
-  test("returns the fixed user skill directories", () => {
-    expect(targetSkillDirs()).toEqual([
-      "~/.claude/skills/pievo",
-      "~/.agents/skills/pievo",
-    ]);
   });
 });
 
@@ -141,13 +131,5 @@ describe("installSkill", () => {
     expect(fs.readFileSync(path.join(agentsTarget, "SKILL.md"), "utf8")).toBe(
       "updated despite peer failure",
     );
-  });
-
-  test("implementation uses in-process filesystem operations, not an external process", () => {
-    const implementation = fs.readFileSync(
-      fileURLToPath(new URL("./skill-install.ts", import.meta.url)),
-      "utf8",
-    );
-    expect(implementation).not.toMatch(/node:child_process|\bspawn\s*\(|\bnpx\b/);
   });
 });

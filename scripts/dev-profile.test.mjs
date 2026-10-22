@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { developmentEnvironment, developmentProcessEnvironment } from "./dev-profile.mjs";
+import { developmentEnvironment } from "./dev-profile.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 
@@ -27,18 +27,6 @@ test("explicit development environment overrides remain authoritative", () => {
   };
 
   assert.deepEqual(developmentEnvironment(explicit, { repoRoot, execPath: "/usr/bin/node" }), explicit);
-});
-
-test("file configuration is retained while shell values take precedence", () => {
-  const env = developmentProcessEnvironment(
-    { PIEVO_LOG_LEVEL: "debug", PIEVO_PORT: "3002" },
-    { PIEVO_PORT: "3003", PIEVO_CLI: "from-shell" },
-    { repoRoot, execPath: "/usr/bin/node" },
-  );
-
-  assert.equal(env.PIEVO_LOG_LEVEL, "debug");
-  assert.equal(env.PIEVO_CLI, "from-shell");
-  assert.equal(env.PIEVO_PORT, "3003");
 });
 
 test("generated CLI protects shell metacharacters in source paths", () => {

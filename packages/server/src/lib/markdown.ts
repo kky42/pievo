@@ -2,11 +2,8 @@ import DOMPurify, { type Config } from 'dompurify'
 import { marked } from 'marked'
 
 /**
- * Shared markdown → sanitized HTML pipeline: marked (GFM) → DOMPurify (an
- * allowlisted prose subset, NO script/handlers). ONE sanitizer config for every
- * loop-file markdown surface so the allowlist cannot drift between viewers.
- * Render the output under
- * the `.artifact-markdown` styles.
+ * marked (GFM) → DOMPurify with one allowlisted prose subset (no scripts or
+ * handlers) for every loop-file markdown surface, so viewers cannot drift.
  */
 const MD_SANITIZE: Config = {
   ALLOWED_TAGS: [

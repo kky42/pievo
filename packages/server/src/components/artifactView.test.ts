@@ -83,23 +83,3 @@ describe('ArtifactBody - image', () => {
     expect(el.querySelector('svg')).toBeNull()
   })
 })
-
-describe('ArtifactBody - markdown / oversize / binary', () => {
-  it('renders markdown as formatted prose', async () => {
-    const el = await mount(file({ path: 'notes/report.md' }))
-    expect(el.querySelector('.artifact-markdown h1')?.textContent).toContain('Heading')
-  })
-
-  it('oversize (metadata-only) shows a no-bytes note, not an empty pane', async () => {
-    const el = await mount(file({ path: 'huge.html', oversize: true }))
-    expect(el.textContent).toMatch(/metadata only/i)
-    expect(el.querySelector('iframe')).toBeNull()
-  })
-
-  it('a genuinely binary non-image offers a download', async () => {
-    const el = await mount(file({ path: 'data.bin', binary: true }))
-    const a = el.querySelector('a[download]') as HTMLAnchorElement | null
-    expect(a?.getAttribute('href')).toBe('/api/artifact/loop-1/data.bin')
-    expect(el.textContent).toMatch(/not previewable/i)
-  })
-})

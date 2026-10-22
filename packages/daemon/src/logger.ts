@@ -1,8 +1,7 @@
 /**
  * pino-pretty is wired as a synchronous stream rather than a worker-thread
  * transport so logs flush before process.exit() in the one-shot CLI paths.
- * Writes to stderr (fd 2) so stdout stays clean for the `pievo` shim's protocol
- * output (the text claude reads back from `pievo report` etc.).
+ * Writes to stderr so stdout carries only command output.
  */
 import pino from "pino";
 import pretty from "pino-pretty";

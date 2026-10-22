@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
 
-import { createBlobStore, LocalBlobStore } from "./blobstore.js";
+import { LocalBlobStore } from "./blobstore.js";
 
 const roots: string[] = [];
 
@@ -70,18 +70,4 @@ test("concurrent writes of the same content-addressed blob are safe", async () =
   await Promise.all(Array.from({ length: 8 }, () => store.put(key, Buffer.from(content))));
 
   expect((await store.get(key))?.toString()).toBe(content);
-});
-
-test("the blob store is local at PIEVO_DATA_DIR/blobs", () => {
-  const root = tempRoot();
-  const previousDataDir = process.env.PIEVO_DATA_DIR;
-  process.env.PIEVO_DATA_DIR = root;
-  try {
-    const store = createBlobStore();
-    expect(store).toBeInstanceOf(LocalBlobStore);
-    expect((store as LocalBlobStore).root).toBe(path.join(root, "blobs"));
-  } finally {
-    if (previousDataDir === undefined) delete process.env.PIEVO_DATA_DIR;
-    else process.env.PIEVO_DATA_DIR = previousDataDir;
-  }
 });

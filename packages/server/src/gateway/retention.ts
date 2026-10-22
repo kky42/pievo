@@ -1,29 +1,9 @@
 /**
- * Loop-file storage retention + garbage collection — the policy that keeps the
- * local byte store from growing monotonically.
- *
- * The loop-file pipeline is content-addressed: blob BYTES are keyed by sha256 and
- * deduped across every loop/run. When a file is deleted or its content changes,
- * the OLD blob is no longer pointed at by the current file row — but nothing was
- * reclaiming it, so the byte store grew forever. This module closes that gap with two pieces:
- *
- *   1. pruneSnapshots() — bound the per-loop run-snapshot history to a window, so
- *      old snapshots stop pinning the blobs they referenced for diffs.
- *   2. gcBlobs()        — delete blob bytes no LIVE row needs: a blob is collected
- *      only when NO artifact_files row AND NO retained run_snapshot references its
- *      hash. CORRECTNESS over aggressiveness — a still-referenced blob is never
- *      deleted; a leaked blob is only a cost bug the next pass reclaims.
- *
- * Concurrency: gcBlobs is safe alongside owner writes and run uploads. Three guards
- * combine — a grace window (a blob whose metadata row is younger than the window is
- * never collected, so a blob a run just uploaded is untouchable), a point re-check
- * of each candidate immediately before its bytes are deleted (so a blob
- * re-referenced before we touch it keeps both its bytes and metadata), and a
- * bytes-before-metadata delete ordering: each candidate's bytes are reclaimed
- * FIRST, then its metadata row is dropped unconditionally — so blobExists() goes
- * false and any writer that re-references the hash (even one that raced the byte
- * delete) re-uploads the bytes (self-healing). We never leave a live blobs row
- * pointing at deleted bytes.
+ * Loop-file storage retention. Blob bytes are content-addressed and shared, so
+ * replacing a file never frees its old blob by itself. pruneSnapshots() bounds
+ * per-loop snapshot history; gcBlobs() then deletes bytes no file row and no
+ * retained snapshot references. Correctness wins over aggressiveness: a leaked
+ * blob is a storage cost the next pass reclaims, a deleted live blob is data loss.
  */
 import { logger } from "../logger.js";
 import * as store from "../db/store.js";
@@ -51,28 +31,14 @@ export async function pruneSnapshots(keep: number = SNAPSHOT_RETENTION): Promise
 }
 
 /**
- * Reclaim unreferenced blob bytes. Returns the number of blobs collected.
- *
- * Algorithm:
- *   1. Compute the live keep-set (all hashes any artifact_files row / retained
- *      snapshot references) and the grace-windowed candidate list — both reads are
- *      synchronous (interleave-free under the single-threaded event loop).
- *   2. Garbage = candidates not in the keep-set.
- *   3. For each garbage hash, in order:
- *      a. Pre-delete guard: if a sync re-referenced it since the keep-set was
- *         computed, skip it — leaving both its bytes AND metadata row intact
- *         (a consistent live blob, nothing to heal). The guard is two O(1) checks:
- *         an indexed artifact_files point query (always fresh) plus membership in a
- *         snapshot-hash Set deserialized ONCE per pass and rebuilt only when the
- *         snapshot row count changes (a report() raced us) — never the old
- *         per-candidate full snapshot scan (which was O(garbage × snapshots), since
- *         genuine garbage always misses the file check and fell through to it).
- *      b. Otherwise delete the BYTES (the await), then drop the metadata row
- *         UNCONDITIONALLY. Bytes-before-metadata is the data-loss fix: if a sync
- *         raced the byte delete (re-referencing the hash + recreating the blobs
- *         row mid-await), dropping the metadata still leaves blobExists()=false,
- *         so that file re-uploads its bytes on the next sync. We never leave a
- *         live blobs row pointing at deleted bytes.
+ * Reclaim unreferenced blob bytes; returns the number collected. Safe alongside
+ * owner writes and run uploads because of three guards:
+ *  - grace window: blobs whose metadata row is younger than `graceMs` are skipped;
+ *  - per-candidate re-check right before deletion: an indexed file-row lookup plus
+ *    a snapshot-hash set rebuilt only when the snapshot count changes (a concurrent
+ *    report), instead of an O(garbage x snapshots) scan;
+ *  - bytes before metadata: the metadata row is dropped after the bytes even if a
+ *    writer raced the delete, so blobExists() is false and that writer re-uploads.
  */
 export async function gcBlobs(blobStore: BlobStore, graceMs: number = BLOB_GC_GRACE_MS): Promise<number> {
   const refs = await store.liveBlobRefs();
@@ -80,10 +46,6 @@ export async function gcBlobs(blobStore: BlobStore, graceMs: number = BLOB_GC_GR
   const candidates = await store.blobHashesOlderThan(cutoff);
   const garbage = candidates.filter((h) => !refs.has(h));
 
-  // Precompute the snapshot-referenced hash set ONCE (one full scan), refreshed only
-  // when the snapshot row count changes — so a snapshot a concurrent report() writes
-  // mid-pass is still caught while genuine garbage costs an O(1) Set lookup, not a
-  // per-candidate full snapshot scan.
   let snapCount = await store.countRunSnapshots();
   let snapRefs = await store.snapshotBlobRefs();
 
@@ -97,12 +59,8 @@ export async function gcBlobs(blobStore: BlobStore, graceMs: number = BLOB_GC_GR
     if ((await store.artifactFileReferencesHash(hash)) || snapRefs.has(hash)) continue;
     try {
       await blobStore.delete(hash);
-      // Delete metadata unconditionally after bytes. If a sync raced the await and re-referenced
-      // the hash, dropping the (possibly sync-recreated) blobs row forces blobExists()
-      // false so the bytes self-heal on the next sync; if not, this is plain cleanup.
-      // No post-delete recheck: deleteBlob runs regardless, so re-scanning snapshots
-      // here would only adjust a counter while paying another snapshot scan on the
-      // common genuine-garbage path. The pre-delete guard above is the correctness gate.
+      // Unconditional: if a writer re-referenced the hash during the await, dropping its
+      // row makes it re-upload the bytes. The pre-delete guard is the correctness gate.
       await store.deleteBlob(hash);
       reclaimed++;
     } catch (err) {

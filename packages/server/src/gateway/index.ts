@@ -1,20 +1,14 @@
 /**
- * Machine gateway - the run-lifecycle core of the HTTP surface the daemon talks
- * to (poll transport: short-poll while a run is in flight, opt-in server-held
- * long-poll while idle). Framework-agnostic like the rest of the gateway
- * (return `{ status, body }` so the methods can be mounted on a plain http
- * server or TanStack server routes):
+ * Machine gateway: the run-lifecycle core the daemon talks to. Methods return
+ * transport-free `{ status, body }` results for the thin route shells:
  *
- *   POST /api/machine/poll   (Bearer device token) → claim pending runs, deliver
- *   POST /machine/report     (Bearer run token)    → finalize a run
- *   GET|PUT /api/machine/run-files/:name (Bearer run token) → loop-file transfer
+ *   POST /api/machine/poll                (device token) claim and deliver runs
+ *   POST /machine/report                  (run token)    finalize a run
+ *   GET|PUT /api/machine/run-files/:name  (run token)    loop-file transfer
  *
- * plus owner create/list/edit methods and retention.
- * Also exposes `dispatcher` (a `Dispatcher` for the Scheduler: "is the machine
- * online?") and `sweep()` (mark stale machines offline, reclaim stuck runs).
- * CLI verb dispatch at `/api/machine/cli` lives in `gateway/cli.ts`
- * (`CliGateway`), which reuses this class's owner methods;
- * canonical loop configuration validation lives in `gateway/loopConfig.ts`.
+ * Idle polls may be held open (long-poll) until the scheduler's dispatcher wakes
+ * them. `sweep()` marks stale machines offline and reclaims silent runs. CLI verbs
+ * live in `cli.ts`; loop config validation lives in `loopConfig.ts`.
  */
 import { Cron } from "croner";
 
@@ -328,13 +322,11 @@ function coerceTelemetry(body: MachineReportBody): Partial<Pick<NewRun, "duratio
 export class MachineGateway {
   constructor(
     readonly scheduler: Scheduler,
-    /** Loop-file bytes (local filesystem; injectable in tests). */
     private readonly blobStore: BlobStore = createBlobStore(),
   ) {
     this.loopFiles = new LoopFiles(blobStore);
   }
 
-  /** Loop-file bytes over the same blob store that maintenance garbage-collects. */
   readonly loopFiles: LoopFiles;
 
   /** In-flight latch: the maintenance pass is sequential and the first post-deploy
@@ -446,20 +438,12 @@ export class MachineGateway {
     }
   }
 
-  /** Finalize one stuck run as an error (the sweep's reclaim path): persist the
-   *  failure, TERMINALIZE its run lease (flip it to `terminal-grace` rather than
-   *  retiring it outright), while preserving a bounded reconciliation window.
-   *
-   *  Why terminalize, not retire: the usual cause is a laptop that merely fell
-   *  ASLEEP mid-run. When it wakes, claude finishes and the daemon delivers the real
-   *  (often SUCCESSFUL) result. Retiring the lease here would 401 that late report
-   *  and strand the run as a permanent false failure with its message lost (the
-   *  investigated bug). So the lease survives a bounded grace window
-   *  (`TERMINAL_GRACE_MS`) during which exactly ONE late wake-report may reconcile
-   *  the run — see `report()`'s terminal-grace branch. The credential is still
-   *  bounded: CLI mutations are refused while terminal-grace, and the
-   *  reconciliation retires the lease single-shot. Pending rows are durable inbox
-   *  entries and are never reclaimed by this path. */
+  /** Reclaim one silent running run as an error, but terminalize its lease instead
+   *  of retiring it. The usual cause is a laptop that fell asleep mid-run; on wake
+   *  the daemon delivers the real (often successful) result, and a retired lease
+   *  would 401 it and leave a false failure. During TERMINAL_GRACE_MS exactly one
+   *  late report may reconcile the run (see `report()`); CLI mutations stay refused.
+   *  Pending rows are durable queue entries and never reach this path. */
   private async reclaimRun(run: Run, reason: string): Promise<void> {
     if (run.phase !== "running") return;
     const at = nowIso();
@@ -662,11 +646,8 @@ export class MachineGateway {
     }
   }
 
-  /**
-   * Whether this machine (by device token) currently has a live daemon — so
-   * Claude Code can avoid starting a duplicate. `online` is fresh-checked against
-   * the poll TTL, not just the stored flag.
-   */
+  /** Whether this machine has a live daemon. `online` is fresh-checked against the
+   *  poll TTL, not just the stored flag. */
   async status(deviceToken: string): Promise<HttpResult> {
     const auth = await authenticateDeviceToken(deviceToken, { allowUnknown: true });
     if (!auth.ok) return auth.response;
@@ -1272,11 +1253,8 @@ export interface Applied {
   status?: number;
 }
 
-// Each builds the `text` a CLI verb carries; the CLI-only renders live with their
-// verbs in `cli.ts` (whose `finalizeCli` strips non-transport fields at the
-// `/api/machine/cli` boundary). Pure — no I/O,
-// no clock — so they're exercised both here (via the verb tests) and directly in
-// `toon.test.ts`. Shared formatters are exported for identical CLI rendering.
+// Pure, clock-free TOON renderers shared by CLI verbs. CLI-only renders live with
+// their verbs in `cli.ts`, whose `finalizeCli` strips non-transport fields.
 
 /** Compact a stored ISO timestamp to `YYYY-MM-DD HH:MM` (UTC, as stored) for a TOON
  *  cell — a date the agent reads at a glance without the `T`/seconds/zone noise. */

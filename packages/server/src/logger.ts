@@ -1,7 +1,7 @@
 /**
- * Uses pino-pretty as a *synchronous* destination stream (not a worker-thread
- * transport) so logs flush before process.exit() in the one-shot CLIs. Writes to
- * stderr (fd 2) to keep stdout clean for QR codes and human CLI output.
+ * pino-pretty as a synchronous destination stream (not a worker-thread transport)
+ * so logs flush before process.exit() in the one-shot CLIs. Writes to stderr so
+ * stdout carries only CLI output.
  */
 import pino from "pino";
 import pretty from "pino-pretty";

@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { isAlive } from "./pidfile.js";
-import { allowlistEnv, execEnv, runProcess } from "./spawn.js";
+import { execEnv, runProcess } from "./spawn.js";
 
 const saved = new Map<string, string | undefined>();
 function setEnv(k: string, v: string): void {

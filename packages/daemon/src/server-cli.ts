@@ -1,12 +1,10 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 
-/** The installed `@kky42/pievo-server` launcher. */
 export function serverLauncherPath(): string {
   return createRequire(import.meta.url).resolve("@kky42/pievo-server/scripts/pievo-server.mjs");
 }
 
-/** `pievo server …` delegates verbatim to the server package's lifecycle launcher. */
 export async function runServer(args: string[]): Promise<number> {
   const child = spawn(process.execPath, [serverLauncherPath(), ...args], { stdio: "inherit" });
   // A terminal Ctrl-C already reaches the child through the shared process group;

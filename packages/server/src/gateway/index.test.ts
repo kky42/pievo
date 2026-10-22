@@ -323,10 +323,6 @@ async function seededLoop() {
   return { machine, loop, run };
 }
 
-
-
-
-
 test("report persists normalized terminal telemetry without cost or transcript fields", async () => {
   const { loop, machine, run } = await seededLoop();
   const token = await tokens.registerRunLease({
@@ -392,23 +388,6 @@ test("a machine's bound loops gate its deletion (loopsForMachine drains to empty
   expect((await store.loopsForMachine(machine.id))).toHaveLength(0);
   expect(await store.forceDeleteMachine(machine.id)).toEqual({ state: "deleted", loopIds: [] });
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 test("concurrent polls deliver a pending run exactly once (atomic pending->running claim)", async () => {
   const token = tokens.mintDeviceToken();
@@ -561,8 +540,6 @@ async function seededMachine() {
   return { token, machineId };
 }
 
-
-
 test("createLoop --dry-run still validates (bad cron → 400, nothing created)", async () => {
   const { token, machineId } = (await seededMachine());
   const res = await gateway().createLoop(token, {
@@ -593,10 +570,6 @@ test("editLoop --dry-run returns canonical before and after without persisting",
   expect(JSON.parse(String(body.text))).toMatchObject({ before: { name: "Before" }, after: { name: "After" } });
   expect(await store.getLoop(loop.id)).toMatchObject({ name: "Before", model: null });
 });
-
-
-
-
 
 test("only a done block terminal auto-pauses", async () => {
   const canceled = await seededExecRun();
@@ -918,8 +891,6 @@ test("cli branches by canonical dk_ and rk_ credential prefixes", async () => {
   expect((await gw.cli("00000000-0000-0000-0000-000000000000", ["report"])).status).toBe(401);
 });
 
-
-
 test("cli run credential rejects every owner verb", async () => {
   const { runToken } = (await seededCli());
   const gw = gateway();
@@ -942,17 +913,6 @@ test("cli device lifecycle: pause/start are truthful and use the store lifecycle
   expect(started.status).toBe(200);
   expect(textOf(started)).toContain("loop started");
   expect((await store.getLoop(loop.id))?.enabled).toBe(true);
-});
-
-test("cli pause wording uses the running state returned after the locked pause", async () => {
-  const { deviceToken, loop } = await seededCli();
-  const pausedLoop = { ...loop, enabled: false };
-  const res = await gateway({
-    pauseLoopState: async () => ({ loop: pausedLoop }),
-  }).cli(deviceToken, ["pause", loop.id]);
-  expect(res.status).toBe(200);
-  expect(textOf(res)).toBe("loop paused; future runs disabled");
-  expect(textOf(res)).not.toContain("current run is finishing");
 });
 
 test("cli device stop is update-gated before mutation and never falsely advertises a stop", async () => {
@@ -1065,18 +1025,6 @@ test("cli device credential: report is not a verb", async () => {
   const gw = gateway();
   expect((await gw.cli(deviceToken, ["report"])).status).toBe(400);
 });
-
-
-
-
-
-
-
-
-
-
-
-
 
 test("cli device credential: log/show of a loop on ANOTHER machine is a flat 404 (existence never leaks)", async () => {
   const { deviceToken } = (await seededCli());

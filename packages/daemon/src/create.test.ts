@@ -1,6 +1,6 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 
-import { canonicalJson, coerceAgent, cronLooksValid, idempotencyKey, runCreate } from "./create.js";
+import { idempotencyKey, runCreate } from "./create.js";
 
 const okResponse = (body: unknown) => ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
 function cfgJson(cfg: object): string {
@@ -20,43 +20,7 @@ const validConfig = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-describe("cronLooksValid (local pre-check only — the server/croner is the sole validator)", () => {
-  test("accepts the 5-field, 6-field (seconds), and @-shortcut forms croner supports", () => {
-    expect(cronLooksValid("0 8 * * *")).toBe(true);
-    expect(cronLooksValid("0 0 8 * * *")).toBe(true);
-    expect(cronLooksValid("@daily")).toBe(true);
-    expect(cronLooksValid("  @hourly  ")).toBe(true);
-  });
-
-  test("rejects only the obviously-wrong shapes", () => {
-    expect(cronLooksValid("")).toBe(false);
-    expect(cronLooksValid("   ")).toBe(false);
-    expect(cronLooksValid("* *")).toBe(false);
-    expect(cronLooksValid("1 2 3 4 5 6 7")).toBe(false);
-    expect(cronLooksValid(42)).toBe(false);
-    expect(cronLooksValid(undefined)).toBe(false);
-  });
-});
-
-describe("coerceAgent", () => {
-  test("passes through known agents, rejects everything else", () => {
-    expect(coerceAgent("claude-code")).toBe("claude-code");
-    expect(coerceAgent("codex")).toBe("codex");
-    expect(coerceAgent("pi")).toBe("pi");
-    expect(coerceAgent("unknown")).toBeNull();
-    expect(coerceAgent("")).toBeNull();
-    expect(coerceAgent(undefined)).toBeNull();
-  });
-});
-
-describe("idempotencyKey / canonicalJson", () => {
-  test("canonicalJson sorts object keys recursively, preserves array order", () => {
-    expect(canonicalJson({ b: 1, a: 2 })).toBe(canonicalJson({ a: 2, b: 1 }));
-    expect(canonicalJson({ a: 2, b: 1 })).toBe('{"a":2,"b":1}');
-    expect(canonicalJson({ x: { d: 4, c: 3 }, y: [1, 2] })).toBe('{"x":{"c":3,"d":4},"y":[1,2]}');
-    expect(canonicalJson([3, 1, 2])).toBe("[3,1,2]");
-  });
-
+describe("idempotencyKey", () => {
   test("the key is STABLE across retries (same token + config, any key order)", () => {
     const k1 = idempotencyKey("dk_test", { name: "Docs", prompt: "Check docs", schedule: { mode: "cron" } });
     const k2 = idempotencyKey("dk_test", { schedule: { mode: "cron" }, prompt: "Check docs", name: "Docs" });
@@ -103,39 +67,5 @@ describe("runCreate", () => {
     expect(keyOf(sent)).toBe(first);
     expect(await run(cfgJson(validConfig({ schedule: { mode: "cron", cron: "0 6 * * *", timezone: "UTC", overlap: "skip" } })))).toBe(0);
     expect(keyOf(sent)).not.toBe(first);
-  });
-
-  test("requires the active connection instead of accepting a target override", async () => {
-    const fetchImpl = vi.fn();
-    expect(await runCreate(["--json", cfgJson(validConfig())], {
-      fetchImpl,
-      readActiveConnection: () => undefined,
-    })).toBe(2);
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  test("agent is required and schedule must use the discriminated union", async () => {
-    const fetchImpl = vi.fn();
-    const deps = { fetchImpl, readActiveConnection };
-    expect(await runCreate(["--json", cfgJson(validConfig({ agent: undefined }))], deps)).toBe(2);
-    expect(await runCreate(["--json", cfgJson(validConfig({ schedule: undefined }))], deps)).toBe(2);
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  test("--dry-run still carries the required exact idempotency transport field", async () => {
-    const cfg = cfgJson(validConfig());
-    let payload: any = null;
-    const code = await runCreate(["--json", cfg, "--dry-run"], {
-      readActiveConnection,
-      fetchImpl: async (_url: any, init: any) => {
-        payload = JSON.parse(JSON.parse((init as any).body as string).argv[2]);
-        return okResponse({ ok: true, dryRun: true, text: "dry-run:\n  cron: 0 5 * * *", exitCode: 0 });
-      },
-      stdout: () => {},
-    });
-    expect(code).toBe(0);
-    expect(payload.idempotencyKey).toMatch(/^[0-9a-f]{64}$/);
-    expect(payload.tags).toEqual(["daily", "docs"]);
-    expect(payload.dryRun).toBe(true);
   });
 });

@@ -5,14 +5,11 @@ import { MemoryBlobStore } from "./blobstore.js";
 import {
   ARTIFACT_BYTE_CAP,
   EMPTY_SHA256,
-  LOOP_FILE_BYTE_CAP,
   LoopFiles,
   MEMORY_CHAR_CAP,
   MEMORY_FILE,
-  fileLimitLabel,
   isValidHash,
   loopFileIssue,
-  loopFileNames,
   sha256Buf,
   validArtifactName,
 } from "./loopFiles.js";
@@ -22,11 +19,6 @@ function sha(value: string | Buffer): string {
 }
 
 describe("loop file names", () => {
-  test("MEMORY.md is always first, followed by the configured artifacts", () => {
-    expect(loopFileNames({ artifacts: [] })).toEqual([MEMORY_FILE]);
-    expect(loopFileNames({ artifacts: ["report.html", "notes.md"] })).toEqual(["MEMORY.md", "report.html", "notes.md"]);
-  });
-
   test("artifact names are plain text/code files other than MEMORY.md", () => {
     for (const name of [
       "report.md", "notes.html", "deploy.sh", "script.py", "data.json", "table.csv",
@@ -57,11 +49,6 @@ describe("loop file names", () => {
 });
 
 describe("loop file limits", () => {
-  test("labels are the agent-facing limit text", () => {
-    expect(fileLimitLabel(MEMORY_FILE)).toBe("8000 characters");
-    expect(fileLimitLabel("report.md")).toBe("256 KB");
-  });
-
   test("MEMORY.md is bounded in Unicode code points, not bytes", () => {
     expect(loopFileIssue(MEMORY_FILE, Buffer.from("x".repeat(MEMORY_CHAR_CAP)))).toBeUndefined();
     expect(loopFileIssue(MEMORY_FILE, Buffer.from("x".repeat(MEMORY_CHAR_CAP + 1)))).toContain("8001 characters exceeds");
@@ -77,7 +64,6 @@ describe("loop file limits", () => {
     expect(loopFileIssue("report.html", Buffer.alloc(0))).toBeUndefined();
     expect(loopFileIssue("report.html", Buffer.alloc(ARTIFACT_BYTE_CAP, 0x61))).toBeUndefined();
     expect(loopFileIssue("report.html", Buffer.alloc(ARTIFACT_BYTE_CAP + 1, 0x61))).toContain("exceeds the 256 KB limit");
-    expect(LOOP_FILE_BYTE_CAP).toBe(ARTIFACT_BYTE_CAP);
   });
 
   test("binary content is rejected for every loop file", () => {

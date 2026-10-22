@@ -88,22 +88,55 @@ server (or use `--host 127.0.0.1` and Tailscale HTTPS only) on untrusted network
 If a browser cannot open `*.ts.net` URLs while the IP URLs work, a system HTTP proxy
 is likely capturing those names: add `*.ts.net` to its bypass/direct rules.
 
-## Server commands
+## Commands
 
-```bash
-pievo server start              # detached; idempotent
-pievo server start --foreground # supervisor or debugging
-pievo server status             # pid and every reachable URL
-pievo server restart            # keeps the recorded host, port, and HTTPS choice
-pievo server stop
+```text
+pievo                         Show this machine's loops and recent runs.
+
+Server (dashboard device)
+  server start [--foreground] [--port <n>] [--host <addr>] [--no-https] [--data-dir <path>]
+  server status | stop | restart
+
+Daemon (every device that runs loops)
+  daemon connect --server-url <url> [--connect-key <dk_…>]
+  daemon connections
+  daemon start [--foreground]
+  daemon stop [--force]
+  daemon restart [--force]
+  daemon status
+
+Loops
+  new --json '<config>' [--dry-run]
+  loops [--fields a,b] [--json]
+  show [<loop>] [--full] [--json]
+  log [<loop>] [--limit N] [--status keep|no-change|block] [--json]
+  edit <loop> --json '<patch>' [--dry-run]
+  pause <loop> | start <loop> | stop <loop>
+  delete <loop> [--force]
+  run stop <run>
+  file list|get|set <loop> [<name>] [--from <path|->]
+  skill [status|install]
 ```
 
-Options: `--port <n>` (default 3000), `--host <addr>` (default `0.0.0.0`),
-`--no-https`, and `--data-dir <path>`. The server stores its embedded database,
-loop memory and artifact bytes, log, and pid record in `~/.pievo-server`; the daemon
-keeps its connection, logs, report outbox, and per-run loop-file directories in
-`~/.pievo`. Run exactly one server per data
-directory, and stop it before backing up `~/.pievo-server`.
+Run `pievo --help` or `<command> --help` for the full syntax and the loop config
+contract.
+
+- `server start` is detached and idempotent; `--foreground` stays attached for a
+  supervisor. `server restart` keeps the recorded host, port, and HTTPS choice.
+  Defaults: port 3000, host `0.0.0.0`.
+- `daemon connect` saves a per-server machine credential in owner-only
+  `~/.pievo/connections.json`, selects that server, and starts the daemon. A saved
+  URL can be selected again without a key; switching servers stops the current
+  daemon and its runs first.
+- `daemon start` waits for a fresh server heartbeat and prints `daemon online`.
+- `daemon stop --force` and `daemon restart --force` may discard a terminal result
+  that is not durable yet and leave local or external side effects uncertain.
+- Restart never updates npm; see [Upgrade](#upgrade).
+
+The server keeps its embedded database, loop file bytes, log, and pid record in
+`~/.pievo-server`; the daemon keeps its connections, logs, report outbox, and
+per-run directories in `~/.pievo`. Run exactly one server per data directory, and
+stop it before backing up `~/.pievo-server`.
 
 ## How it works
 
@@ -114,8 +147,43 @@ flowchart LR
   Daemon --> Agent["Claude Code, Codex, or Pi"]
 ```
 
-Different loops may run concurrently, while each loop remains serialized. `keep` and
-`no-change` continue its schedule; `block` pauses it.
+The daemon has no inbound listener. It polls the server, runs each delivered prompt
+once (no provider retry or session resume), and saves the terminal result to a
+server-specific SQLite outbox until the server accepts it. Different loops may run
+concurrently, while each loop stays serialized.
+
+A run reports through its final response, which must end with the line
+`STATUS: keep|no-change|block`. `keep` and `no-change` continue the schedule;
+`block` pauses the loop. `pievo` commands are unavailable inside a run.
+
+Each loop has server-owned files: `MEMORY.md` (at most 8000 characters) plus up to
+four text/code artifacts (256 KB each) that the dashboard renders and diffs. For
+each run the daemon downloads them into a private `~/.pievo/runs/<run>` directory,
+tells the agent the path, and uploads changed versions with the terminal report. A
+version over its limit is rejected and the previous one kept; an owner edit
+(`pievo file set`) made during a run wins.
+
+## Local security controls
+
+- `PIEVO_ROOTS=/allowed/root,/another/root` is an always-applied working-directory
+  jail; roots sent by the server can only narrow it. Empty means unrestricted.
+- Each agent gets an allowlisted environment: Claude Code receives only
+  Claude/Anthropic credentials, Codex only Codex/OpenAI credentials, and Pi its
+  documented config and built-in provider keys.
+- Device and run credentials never appear in process arguments, and local
+  credential files are owner-only. The initial `--connect-key` command is the
+  exception: treat it and your shell history as secrets.
+- Cancellation stops the agent's whole process group (TERM, then KILL). Runs time
+  out after 12 hours unless `PIEVO_EXEC_TIMEOUT_MS` sets a positive override.
+- `PIEVO_CLAUDE_BIN`, `PIEVO_CODEX_BIN`, and `PIEVO_PI_BIN` override agent binaries.
+
+## Owner skill
+
+The CLI bundles a small skill for connecting devices and creating or editing loops.
+`daemon start` copies it to `~/.claude/skills/pievo` and `~/.agents/skills/pievo`
+(used by Codex and Pi), replacing any skill with that name. Installation failure
+never blocks the daemon, and runs do not depend on the skill. Inspect or refresh it
+with `pievo skill status|install`.
 
 ## Upgrade
 
@@ -127,6 +195,10 @@ pievo daemon restart
 ```
 
 On the server device, also run `pievo server restart`.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

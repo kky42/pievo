@@ -21,14 +21,6 @@ export const useHydrated = (): boolean =>
     () => false,
   )
 
-/*
- * Shared control/field tokens (single source so they can't drift across forms/
- * modals). Buttons: sans 13px/500, Apple control radius, Geist state
- * progression - primary is the display-ink fill, secondary is a surface card
- * with a wire border that raises on hover, destructive fills with the Rubik
- * red. The double focus ring (surface 2px + interactive blue 4px) is shared by
- * every control.
- */
 export const focusRing = 'focus-visible:outline-none focus-visible:shadow-focus'
 const btnBase = `inline-flex cursor-pointer items-center gap-1.5 rounded-control px-4 py-2 text-body font-medium transition-colors duration-150 disabled:cursor-default disabled:opacity-40 ${focusRing}`
 export const btn = `${btnBase} border border-wire bg-surface text-primary hover:bg-raised`
@@ -59,7 +51,6 @@ export const runPulseStyle = {
   ...runPulseAnim,
 } as const
 
-/* Centralized so error affordances stay consistent across modals and detail views. */
 export function ErrorBanner({
   message,
   onDismiss,

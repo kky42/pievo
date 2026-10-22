@@ -11,7 +11,7 @@ export function cronLooksValid(cron: unknown): cron is string {
   if (typeof cron !== "string") return false;
   const s = cron.trim();
   if (!s) return false;
-  if (s.startsWith("@")) return true; // @daily/@hourly/… — let the server judge
+  if (s.startsWith("@")) return true;
   const fields = s.split(/\s+/).length;
   return fields === 5 || fields === 6;
 }

@@ -37,7 +37,6 @@ export function validServerUrl(value: string): boolean {
   }
 }
 
-/** Invalid or absent config is treated as unconfigured. */
 export function readConnections(file = CONNECTIONS_FILE): ConnectionsConfig {
   try {
     const raw = JSON.parse(fs.readFileSync(file, "utf8")) as unknown;

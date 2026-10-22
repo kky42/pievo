@@ -3,21 +3,12 @@ import { safeDecode } from '../lib/url'
 import { imageMime } from '../lib/artifactKind'
 
 /**
- * GET /api/artifact/:loopId/:path - stream one of a loop's file blobs.
- * Two dispositions:
- *  - default: `attachment` (the download affordance for binary/oversize files;
- *    text is shown inline via getArtifact).
- *  - `?view=inline`: for a KNOWN image type only (the `imageMime` allowlist),
- *    served `inline` with the real image content-type so an <img> can render it.
- *    Hardened against a direct navigation turning the byte stream into a scripted
- *    document on the app origin: `X-Content-Type-Options: nosniff` pins the type
- *    and `Content-Security-Policy: sandbox` loads it in an opaque origin with no
- *    scripts - so an inline SVG can't run script against the session even if the
- *    URL is opened directly. Non-image inline requests fall back to attachment.
- *
- * Served to dashboard callers like the server functions. The path is matched
- * exactly against a loop's stored file rows, and blob keys are content hashes,
- * never the user path. Reads stream from the local BlobStore; the route never writes.
+ * GET /api/artifact/:loopId/:path streams one loop file. Default disposition is
+ * `attachment`. `?view=inline` is honored only for the `imageMime` allowlist, and
+ * is hardened against a direct navigation scripting the app origin:
+ * `nosniff` pins the type and `Content-Security-Policy: sandbox` gives the
+ * document an opaque origin, so an SVG opened directly cannot run script. The path
+ * must match a stored file row exactly; blob keys are content hashes.
  */
 const PREFIX = '/api/artifact/'
 
@@ -30,7 +21,6 @@ export const Route = createFileRoute('/api/artifact/$loopId/$')({
         const after = pathname.slice(PREFIX.length)
         const slash = after.indexOf('/')
         if (slash < 0) return Response.json({ error: 'missing path' }, { status: 400 })
-        // Malformed percent-encoding must be a clean 400, never a thrown 500.
         const loopId = safeDecode(after.slice(0, slash))
         if (loopId === null) return Response.json({ error: 'bad loop id' }, { status: 400 })
         const segments = after
@@ -50,8 +40,6 @@ export const Route = createFileRoute('/api/artifact/$loopId/$')({
           return Response.json({ error: 'not found' }, { status: r.status })
 
         const filename = (r.filename || 'file').replace(/["\\\r\n]/g, '_')
-        // Inline image render (the viewer's <img>): only for the KNOWN image
-        // allowlist, and only hardened so a direct hit can't script the origin.
         const inline = new URL(request.url).searchParams.get('view') === 'inline'
         const mime = inline ? imageMime(relPath) : null
         if (mime) {

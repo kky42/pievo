@@ -1,17 +1,6 @@
 /**
- * Pure classification of a loop file by its name extension, shared by the
- * in-browser viewer (`artifactView.tsx`) and the byte-serving route
- * (`api.artifact.$loopId.$.ts`). No I/O, no React - just the display kind and the
- * safe image MIME allowlist, so the two surfaces can't drift on what renders how.
- *
- * The kinds map to how the viewer renders each type:
- *  - `image`  - served from the hardened inline route and shown via <img>, NEVER
- *               inlined into the app DOM (SVG is scriptable, so it rides as an
- *               image too - <img> does not execute embedded scripts).
- *  - `html`   - rendered in a strict sandboxed iframe (no allow-same-origin), so
- *               run-written markup is isolated from the app's session/origin.
- *  - `markdown` - rendered as formatted prose (the shared markdown pipeline).
- *  - `text`   - shown as monospace source.
+ * Display kind and inline-image MIME allowlist by file extension, shared by the
+ * viewer and the byte-serving route so they cannot disagree on what renders how.
  */
 
 export type ArtifactKind = 'image' | 'html' | 'markdown' | 'text'

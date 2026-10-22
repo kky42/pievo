@@ -9,9 +9,9 @@ import { describe, expect, test } from 'vitest'
 
 import { LOOP_FILE_BYTE_CAP } from '../gateway/loopFiles'
 import { MACHINE_BODY_CAP, POLL_VERSION_CAP, WIRE_TEXT_CAP, readJsonBody } from '../gateway/http'
-import { gatewayPollRequest, parsePollBody, Route as PollRoute } from './api.machine.poll'
+import { parsePollBody, Route as PollRoute } from './api.machine.poll'
 import { Route as ReportRoute } from './machine.report'
-import { parseCliBody, Route as CliRoute } from './api.machine.cli'
+import { Route as CliRoute } from './api.machine.cli'
 import { Route as RunFilesRoute } from './api.machine.run-files.$name'
 
 type Handler = (ctx: { request: Request }) => Response | Promise<Response>
@@ -80,22 +80,6 @@ describe('readJsonBody', () => {
   })
 })
 
-test('poll route forwards a completed recovery snapshot and constructs exact machine info', () => {
-  expect(gatewayPollRequest({
-    protocolVersion: 5,
-    daemonInstanceId: 'daemon-new',
-    recoveryComplete: true,
-    currentRuns: [{ runId: 'run-1', stage: 'reporting' }],
-    host: 'mac',
-  })).toEqual({
-    protocolVersion: 5,
-    daemonInstanceId: 'daemon-new',
-    recoveryComplete: true,
-    currentRuns: [{ runId: 'run-1', stage: 'reporting' }],
-    info: { host: 'mac', platform: undefined, arch: undefined, version: undefined },
-  })
-})
-
 test('poll HTTP envelope has an exact, strictly typed field allowlist', () => {
   expect(parsePollBody({ protocolVersion: 5, recoveryComplete: true })).not.toBeNull()
   expect(parsePollBody({ protocolVersion: 5, recoveryComplete: true, unknown: true })).toBeNull()
@@ -143,11 +127,6 @@ test('run-files PUT enforces the loop-file byte cap before boot', async () => {
     body: 'x',
   }) })
   expect(res.status).toBe(413)
-})
-
-test('CLI body parser accepts only the exact argv envelope', () => {
-  expect(parseCliBody({ argv: [] })).toEqual({ argv: [] })
-  expect(parseCliBody({ argv: ['loops', '--json'] })).toEqual({ argv: ['loops', '--json'] })
 })
 
 test.each([

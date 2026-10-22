@@ -83,8 +83,6 @@ export function ensureBinShim(injected: BinShimDeps = {}): BinShimResult {
   const writeShim = injected.writeShim ?? defaultWriteShim;
   const out = injected.out ?? ((s: string) => void process.stdout.write(s));
 
-  // A shim re-execing an npx/npm cache path breaks once that cache is pruned; don't
-  // write a durable shim from an ephemeral install — point at a global install instead.
   if (isEphemeralEntry(entry)) {
     out("pievo: skipped the PATH shim (running from an npx cache); install globally for a stable bin: npm install -g @kky42/pievo@latest\n");
     return { path: null, onPath: false, written: false };
@@ -103,8 +101,6 @@ export function ensureBinShim(injected: BinShimDeps = {}): BinShimResult {
     if (sameFile(shimPath, entry)) {
       return { path: shimPath, onPath: dirOnPath(dir, env.PATH), written: false };
     }
-    // Never clobber a foreign `pievo`; only refresh our OWN prior shim. A missing file
-    // (null) is free to write.
     const existing = readShim(shimPath);
     if (existing !== null && !existing.startsWith(SHIM_MARKER)) continue;
     try {

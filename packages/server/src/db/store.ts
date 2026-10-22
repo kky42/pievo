@@ -1,7 +1,4 @@
-/**
- * Data-access layer over Drizzle. Loop-locked state transitions live here; every
- * DB-touching function is async, while the pure helpers stay sync.
- */
+/** Data-access layer over Drizzle. Loop-locked state transitions live here. */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { Cron } from "croner";
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";

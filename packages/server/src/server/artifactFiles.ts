@@ -1,12 +1,5 @@
-/**
- * Server-side reads over a loop's current files (MEMORY.md + artifacts). Pure helpers
- * (no request/session context) so they're shared by the lazy server fns
- * (`getArtifacts` / `getArtifact` in loopApi) AND the download route, and are
- * directly unit-testable against an injected blob store.
- *
- * The bytes live in the gateway's local BlobStore; here we only read them — never write — so the feature is strictly read-only and
- * the server's zero-exec invariant holds (it decodes text, never interprets it).
- */
+/** Read-only access to a loop's current files, shared by the dashboard server
+ * functions and the download route. Bytes are decoded as text, never interpreted. */
 import * as store from "../db/store.js";
 import { getLoopFiles } from "./boot.js";
 import { loopFileNames } from "../gateway/loopFiles.js";
@@ -40,7 +33,6 @@ export async function readLoopArtifact(loopId: string, rawPath: string): Promise
   if (!row || row.deleted) {
     return loopFileNames(loop).includes(rawPath) ? { text: "" } : { error: "file not found" };
   }
-  // Genuinely binary or oversize → download-only marker (the UI offers the route).
   if (row.binary || row.oversize) {
     return { binary: true, size: row.size ?? null, oversize: row.oversize };
   }

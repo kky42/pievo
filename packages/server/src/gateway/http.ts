@@ -6,11 +6,8 @@
  * route can share it.
  */
 
-/**
- * Body cap for standard machine routes (poll / report / CLI).
- * 2MB — generously above the largest legitimate terminal report or loop edit.
- * The exact-manifest sync route has its own 32 MB JSON-body cap.
- */
+/** Body cap for poll, report, and CLI routes. 2 MB is well above the largest
+ *  legitimate terminal report or loop edit. */
 export const MACHINE_BODY_CAP = 2 * 1024 * 1024;
 
 export type ByteBodyResult =
@@ -79,9 +76,8 @@ export async function readJsonBody(request: Request, maxBytes: number): Promise<
   }
 }
 
-// Generic plumbing shared by every gateway module (index / cli / sync). It lives
-// here - a leaf module with no gateway imports - so index.ts stays pure
-// run-lifecycle core instead of doubling as the toolbox (pinned by layout.test.ts).
+// Generic plumbing shared by the gateway modules. It stays a leaf module with no
+// gateway imports so index.ts remains the run-lifecycle core.
 
 /** Transport-free HTTP result: gateway methods decide status + body; the thin
  *  route shells just `Response.json(r.body, { status: r.status })`. */
@@ -102,11 +98,8 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
-/** Strip NUL (U+0000) from a wire string: Postgres text/jsonb columns REJECT the
- *  NUL byte (SQLite tolerated it), so a daemon-supplied string carrying one would
- *  throw mid-finalize on the DB write. The single sanitizing primitive behind
- *  `clipText` - and used directly by `cli.ts`
- *  (parseFlags/validateState, the same one-chokepoint discipline). */
+/** Postgres text/jsonb columns reject NUL, so a daemon-supplied string carrying
+ *  one would fail mid-finalize. The single sanitizer behind `clipText` and `cli.ts`. */
 export function stripNul(s: string): string {
   return s.replace(/\u0000/g, "");
 }

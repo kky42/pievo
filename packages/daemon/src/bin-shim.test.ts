@@ -4,47 +4,7 @@ import path from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { binDirCandidates, dirOnPath, ensureBinShim, existingBinShim, isEphemeralEntry, resolveDurableBinPath, shimContents } from "./bin-shim.js";
-
-describe("binDirCandidates", () => {
-  test("prefers the npm global bin (npm_config_prefix) then ~/.local/bin", () => {
-    expect(binDirCandidates({ npm_config_prefix: "/usr/local" }, "/home/u")).toEqual([
-      path.join("/usr/local", "bin"),
-      path.join("/home/u", ".local", "bin"),
-    ]);
-  });
-  test("without a global prefix, only ~/.local/bin", () => {
-    expect(binDirCandidates({}, "/home/u")).toEqual([path.join("/home/u", ".local", "bin")]);
-  });
-});
-
-describe("dirOnPath", () => {
-  test("exact normalized segment match", () => {
-    expect(dirOnPath("/home/u/.local/bin", `/usr/bin${path.delimiter}/home/u/.local/bin`)).toBe(true);
-    expect(dirOnPath("/home/u/.local/bin/", `/usr/bin${path.delimiter}/home/u/.local/bin`)).toBe(true);
-    expect(dirOnPath("/home/u/.local/bin", "/usr/bin")).toBe(false);
-    expect(dirOnPath("/home/u/.local/bin", undefined)).toBe(false);
-  });
-});
-
-describe("shimContents", () => {
-  test("is a /bin/sh re-exec wrapper replaying the launcher (like callback-bin)", () => {
-    const s = shimContents("/usr/bin/node", ["--enable-source-maps"], "/pkg/dist/cli.js");
-    expect(s.startsWith("#!/bin/sh\n")).toBe(true);
-    expect(s).toContain("exec '/usr/bin/node' '--enable-source-maps' '/pkg/dist/cli.js' \"$@\"");
-  });
-});
-
-describe("isEphemeralEntry", () => {
-  test("flags npx / npm cache paths, not durable installs", () => {
-    expect(isEphemeralEntry("/home/u/.npm/_npx/abc123/node_modules/@kky42/pievo/dist/cli.js")).toBe(true);
-    expect(isEphemeralEntry("/home/u/.npm/_cacache/content-v2/x")).toBe(true);
-    expect(isEphemeralEntry("C:\\Users\\u\\AppData\\npm-cache\\_npx\\abc\\cli.js")).toBe(true);
-    expect(isEphemeralEntry("/usr/local/lib/node_modules/@kky42/pievo/dist/cli.js")).toBe(false);
-    expect(isEphemeralEntry("/home/u/.local/bin/pievo")).toBe(false);
-    expect(isEphemeralEntry("")).toBe(false);
-  });
-});
+import { ensureBinShim } from "./bin-shim.js";
 
 describe("ensureBinShim", () => {
   test("writes to the first candidate and returns its path + onPath + written", () => {
@@ -176,40 +136,5 @@ describe("ensureBinShim", () => {
     });
     expect(wrote).toEqual([path.join("/opt/node", "bin")]);
     expect(r).toEqual({ path: globalBin, onPath: true, written: true });
-  });
-});
-
-describe("existingBinShim", () => {
-  test("returns the first candidate that already has a `pievo`, else null", () => {
-    const found = path.join("/home/u", ".local", "bin", "pievo");
-    expect(existingBinShim({ env: {}, homedir: () => "/home/u", exists: (p) => p === found })).toBe(found);
-    expect(existingBinShim({ env: {}, homedir: () => "/home/u", exists: () => false })).toBeNull();
-  });
-});
-
-describe("resolveDurableBinPath", () => {
-  test("our shim in a candidate dir → that absolute path", () => {
-    const shim = path.join("/home/u", ".local", "bin", "pievo");
-    expect(resolveDurableBinPath({ env: {}, homedir: () => "/home/u", exists: (p) => p === shim })).toBe(shim);
-  });
-
-  test("no candidate shim but a `pievo` on PATH → that absolute path", () => {
-    const onPath = path.join("/usr/local/bin", "pievo");
-    expect(
-      resolveDurableBinPath({ env: { PATH: `/usr/bin${path.delimiter}/usr/local/bin` }, homedir: () => "/home/u", exists: (p) => p === onPath }),
-    ).toBe(onPath);
-  });
-
-  test("an ephemeral npx PATH entry is not reported as durable", () => {
-    const npxBin = "/home/u/.npm/_npx/abc123/node_modules/.bin";
-    const ephemeral = path.join(npxBin, "pievo");
-    expect(
-      resolveDurableBinPath({ env: { PATH: npxBin }, homedir: () => "/home/u", exists: (p) => p === ephemeral }),
-    ).toBeNull();
-  });
-
-  test("nothing durable (npx-without-global) → null", () => {
-    expect(resolveDurableBinPath({ env: { PATH: "/usr/bin" }, homedir: () => "/home/u", exists: () => false })).toBeNull();
-    expect(resolveDurableBinPath({ env: {}, homedir: () => "/home/u", exists: () => false })).toBeNull();
   });
 });

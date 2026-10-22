@@ -1,11 +1,5 @@
-/**
- * Server boot — idempotent one-time init of the in-process backend: apply
- * migrations, wire the machine gateway's dispatcher into the Scheduler, start
- * the Scheduler + an offline-sweep interval. Guarded on `globalThis` so it
- * survives dev HMR and runs at most once per process. Call `ensureServer()`
- * from any server-side entry (the standalone machine server / TanStack server
- * fns); the first call boots, the rest share the same instance.
- */
+/** One-time, idempotent in-process backend boot (migrations, scheduler, sweep and
+ * storage-maintenance intervals). Guarded on `globalThis` to survive dev HMR. */
 import { runMigrations, closeClient } from "../db/index.js";
 import { repairTerminalRunLeases } from "../db/store.js";
 import { logger } from "../logger.js";
@@ -68,9 +62,8 @@ async function boot(): Promise<Booted> {
 
   await scheduler.start(abort.signal);
 
-  // sweep() is async now: a rejected promise off a bare timer callback is an
-  // unhandled rejection (Node can terminate). Catch it so a transient sweep error
-  // just logs and the interval keeps ticking.
+  // A rejected promise from a bare timer callback is an unhandled rejection that
+  // can terminate Node; log it and keep the interval ticking.
   const sweep = setInterval(
     () => void gateway.sweep().catch((err) => logger.error({ err: String(err) }, "sweep tick failed")),
     ONLINE_TTL_MS,
@@ -78,11 +71,8 @@ async function boot(): Promise<Booted> {
   sweep.unref?.();
   abort.signal.addEventListener("abort", () => clearInterval(sweep), { once: true });
 
-  // Storage maintenance (prune snapshots → GC unreferenced blob bytes) on its own
-  // slower cadence — keeps blob storage from growing monotonically. Async +
-  // best-effort, so a slow byte delete can't block the loop; catch the promise (same unhandled-rejection
-  // guard as sweep — the method is not supposed to throw, but a timer must never let
-  // one escape).
+  // Storage maintenance runs on its own slower cadence with the same
+  // unhandled-rejection guard as the sweep.
   const gc = setInterval(
     () => void gateway.maintainStorage().catch((err) => logger.error({ err: String(err) }, "gc tick failed")),
     GC_INTERVAL_MS,

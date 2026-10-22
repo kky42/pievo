@@ -281,12 +281,6 @@
 .artifact-markdown th, .artifact-markdown td { border: 1px solid var(--color-hairline); padding: 4px 8px; text-align: left; white-space: nowrap; }
 .artifact-markdown img { max-width: 100%; }
 
-/*
- * Minimal scrollbars - thin, trackless, monochrome. Firefox uses
- * scrollbar-width; WebKit/Blink get a slim thumb that darkens on hover, no
- * arrows or track chrome. Tracks stay transparent so they read as part of the
- * surface. Follows light/dark via the theme tokens.
- */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--color-wire) transparent;
@@ -318,11 +312,7 @@
   background: transparent;
 }
 
-/*
- * Styled <select> - drops the clunky native chevron for a thin caret, with real
- * breathing room on the right (the native arrow crowds the edge). The caret is
- * a data-URI SVG tinted to a mid gray that reads in both modes.
- */
+/* The native select arrow crowds the edge; a data-URI caret leaves room on the right. */
 .lp-select {
   appearance: none;
   -webkit-appearance: none;

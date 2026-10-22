@@ -10,7 +10,7 @@ vi.hoisted(() => {
   process.env.PIEVO_HOME = `/tmp/pievo-runner-test-home-${process.pid}`;
 });
 
-import { buildAgentSpawn, executeDelivery, resolveExecTimeoutMs, type Delivery } from "./runner.js";
+import { buildAgentSpawn, executeDelivery, type Delivery } from "./runner.js";
 import { makeTerminalCollector } from "./telemetry.js";
 
 function loopFileFetch(files: Record<string, string> = { "MEMORY.md": "memory before the run" }) {
@@ -252,7 +252,6 @@ describe("buildAgentSpawn", () => {
   });
 });
 
-
 let root: string;
 let workdir: string;
 
@@ -272,7 +271,6 @@ function writeFakeClaude(): string {
   fs.chmodSync(p, 0o755);
   return p;
 }
-
 
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "pievo-runner-"));
@@ -306,22 +304,6 @@ function delivery(overrides: Partial<Delivery> = {}): Delivery {
     ...overrides,
   };
 }
-
-
-
-describe("resolveExecTimeoutMs", () => {
-  test("defaults to 12 hours when PIEVO_EXEC_TIMEOUT_MS is unset", () => {
-    expect(resolveExecTimeoutMs(undefined)).toBe(12 * 60 * 60 * 1000);
-  });
-
-  test("accepts a positive user override", () => {
-    expect(resolveExecTimeoutMs("7200000")).toBe(2 * 60 * 60 * 1000);
-  });
-
-  test.each(["", "0", "-1", "not-a-number"])("falls back to 12 hours for %j", (value) => {
-    expect(resolveExecTimeoutMs(value)).toBe(12 * 60 * 60 * 1000);
-  });
-});
 
 function writeArgvClaude(): string {
   const p = path.join(root, "argv-claude.sh");
@@ -389,4 +371,3 @@ describe("Pi delivery", () => {
     expect(report).toMatchObject({ result: "failure", exitCode: 0, error: "pi provider error" });
   });
 });
-

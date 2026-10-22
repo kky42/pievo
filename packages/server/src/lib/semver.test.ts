@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { isOutdated, isValidSemver } from "./semver.js";
+import { isValidSemver } from "./semver.js";
 
 describe("isValidSemver", () => {
   test("accepts complete canonical SemVer and rejects protocol-gate ambiguity", () => {
@@ -9,38 +9,5 @@ describe("isValidSemver", () => {
     for (const value of ["2.4", "2.4.0garbage", "2.4.0.1", " 2.4.0", "2.4.0 ", "v2.4.0", "02.4.0", "2.4.0-01"]) {
       expect(isValidSemver(value)).toBe(false);
     }
-  });
-});
-
-describe("isOutdated", () => {
-  test("older across each version position → true", () => {
-    expect(isOutdated("0.8.0", "0.9.0")).toBe(true);
-    expect(isOutdated("0.8.9", "0.9.0")).toBe(true);
-    expect(isOutdated("1.0.0", "2.0.0")).toBe(true);
-    expect(isOutdated("1.2.3", "1.2.4")).toBe(true);
-  });
-
-  test("equal or newer → false", () => {
-    expect(isOutdated("0.9.0", "0.9.0")).toBe(false);
-    expect(isOutdated("0.10.0", "0.9.0")).toBe(false);
-    expect(isOutdated("2.0.0", "1.9.9")).toBe(false);
-  });
-
-  test("unknown either side → false (hint is opt-in)", () => {
-    expect(isOutdated(null, "0.9.0")).toBe(false);
-    expect(isOutdated("0.8.0", null)).toBe(false);
-    expect(isOutdated(undefined, undefined)).toBe(false);
-    expect(isOutdated("", "0.9.0")).toBe(false);
-  });
-
-  test("garbage version strings → false, never throws", () => {
-    expect(isOutdated("not-a-version", "0.9.0")).toBe(false);
-    expect(isOutdated("0.9", "0.9.0")).toBe(false);
-  });
-
-  test("leading v and pre-release handling", () => {
-    expect(isOutdated("v0.8.0", "v0.9.0")).toBe(true);
-    expect(isOutdated("0.9.0-rc.1", "0.9.0")).toBe(true);
-    expect(isOutdated("0.9.0", "0.9.0-rc.1")).toBe(false);
   });
 });

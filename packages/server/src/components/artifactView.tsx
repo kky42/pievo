@@ -6,22 +6,9 @@ import { downloadHref, inlineHref } from './artifactUrls'
 import { MarkdownView } from './MarkdownView'
 
 /**
- * Shared pieces of the artifact content viewer. The Files panel uses this one
- * dispatch so binary/oversize copy and type-appropriate rendering cannot drift.
- *
- * Display types (see `lib/artifactKind`):
- *  - HTML   → a STRICT sandboxed iframe (`sandbox="allow-scripts"`, deliberately
- *             NO `allow-same-origin`): user-machine-synced markup renders richly
- *             but in an opaque origin, so its scripts can't read the app's
- *             cookies/session or reach `parent` - stored-XSS is contained by
- *             design. A Preview/Source toggle exposes the raw markup too.
- *  - image  → an <img> pointed at the hardened inline route (`inlineHref`); the
- *             bytes are NEVER inlined into the app DOM (SVG is scriptable, so it
- *             rides as an image, which does not execute embedded scripts).
- *  - markdown → the shared markdown pipeline (Preview) with a raw Source toggle.
- *  - text   → monospace source.
- * Everything keeps a Download fallback; a legacy oversize/binary entry has no
- * renderable bytes, so it says so rather than showing an empty pane.
+ * One viewer dispatch for every loop file, so binary/oversize copy and rendering
+ * cannot drift between surfaces. Images, including scriptable SVG, always load
+ * through the hardened inline route and are never inlined into the app DOM.
  */
 
 export function ViewerHead({
@@ -218,9 +205,8 @@ export function ArtifactBody({ loopId, file }: { loopId: string; file: ArtifactS
   const kind = artifactKind(file.path)
 
   if (file.oversize) return <BinaryNotice loopId={loopId} path={file.path} oversize />
-  // Images (incl. SVG) render via the inline route, never inlined into the DOM.
-  // Key by path AND updatedAt so a new file resets the inner state (failed) and a
-  // re-synced same-path image (no-store, unchanged src URL) remounts to refetch.
+  // Key by path AND updatedAt so a new file resets the failed state and a re-synced
+  // same-path image (no-store, unchanged src URL) remounts to refetch.
   if (kind === 'image')
     return <ImageView key={`${file.path}:${file.updatedAt ?? ''}`} loopId={loopId} file={file} />
   if (file.binary) return <BinaryNotice loopId={loopId} path={file.path} oversize={false} />

@@ -1,13 +1,8 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { RunDetailView } from '../components/RunView'
 
-/**
- * Run detail PAGE — `/loops/$loopId/runs/$runId`. A standalone page (the trailing
- * `_` on the `$loopId` segment opts it out of the loop page's component so the run
- * gets its own full surface, deep-linkable + browser-back friendly) rather than a
- * modal or an inline panel. It resolves the run from the loop's detail payload
- * (reusing getLoopDetail) and the existing loop-file diff.
- */
+/** The trailing `_` on `$loopId` opts the run page out of the loop page's component,
+ * so a run gets its own deep-linkable, back-button-friendly page. */
 export const Route = createFileRoute('/loops/$loopId_/runs/$runId')({
   ssr: false,
   component: RunDetailPage,

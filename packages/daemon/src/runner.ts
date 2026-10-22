@@ -62,8 +62,7 @@ export interface AgentSpawn {
  * Provider CLIs intentionally keep distinct argument surfaces. Codex flags were
  * verified against codex-cli 0.143.0; inheriting the complete allowlisted child
  * environment preserves the run-scoped callback shim through Codex's shell policy.
- * Provider JSONL remains
- * terminal-only and is never exposed as live progress through the daemon protocol.
+ * Provider JSONL stays terminal-only and is never exposed as live progress.
  */
 export function buildAgentSpawn(opts: {
   agent: CodingAgent;
@@ -146,8 +145,6 @@ export async function executeDelivery(
   if (canceled()) return terminalReport({ runId: d.runId, exitCode: null, durationMs: 0, error: "canceled before execution" }, false, "canceled");
   const completeRun = (body: ReportBody, forcedResult?: TerminalResult, okOverride?: boolean): TerminalReport =>
     terminalReport(body, okOverride ?? body.error === undefined, forcedResult);
-  // The LOCAL env jail (PIEVO_ROOTS) always applies when set; server-sent
-  // roots can only narrow it — a hostile server must not widen the jail.
   const jail = effectiveRoots(roots, d.roots);
   let workdir: string;
   try {

@@ -5,18 +5,10 @@ import { dotColor, dotLabel, dotOpacity, dur, fmt, until } from '../lib/format'
 import { runPulseAnim, useHydrated } from './ui'
 
 /*
- * The signature data viz: a segmented bar of cube-sticker blocks (slight 4px
- * corner, hairline gaps) — one block per run, colored by phase/status (mono ink for
- * the quiet "no update" baseline, color only for meaning). Up to WINDOW blocks
- * show at once; older/newer overflow collapses into clickable "+N" pagers that
- * are themselves the SAME block shape, so the row reads as one continuous strip
- * with no reserved left whitespace. The NEXT scheduled run is a single hollow
- * dot past a dashed connector. Done/paused loops have no next dot.
- *
- * Paging is lazy: the card seeds the timeline with the newest page; clicking the
- * left "+N" steps a full window (WINDOW) back and, when it runs past the loaded
- * runs, fetches the next older page via onLoadMore before sliding. The "+N"
- * counts reflect the loop's TRUE total (`total`), not just what's loaded.
+ * One block per run, at most WINDOW at a time. Overflow collapses into "+N" pagers
+ * drawn as the same block shape, so the strip reserves no whitespace. Paging is
+ * lazy: stepping past the loaded runs fetches the next older page via onLoadMore,
+ * and the "+N" counts use the loop's true `total`, not just what is loaded.
  */
 export const WINDOW = 16
 const PAGE = WINDOW
@@ -149,19 +141,13 @@ export function Timeline({
   // while it executes (the live block already stands in for "what's next").
   const running = !!(loop.running || loop.queued) && atLatest
 
-  // Right edge: at the live edge we show the next-run marker; otherwise the
-  // forward "+N" pager for the newer runs currently scrolled out of view.
   const showNext = atLatest && en && !!loop.nextRun && !running
 
   return (
-    // Contain the strip to its track. A full WINDOW of fixed-width (shrink-0) run
-    // blocks plus the next-run marker can be wider than a narrow rail (e.g. the loop
-    // page's ~320px runs rail) — left unbounded those blocks paint past the card's
-    // right edge and force a page-level horizontal scrollbar (against the hard
-    // no-page-scroll rule). `min-w-0` lets the row shrink below its content and
-    // `overflow-x-auto` scrolls any surplus INSIDE its own box, so the strip never
-    // widens the card. Behavior is preserved: tooltips/next-run popups portal out of
-    // the scroll box, and the +N pagers still page the window.
+    // A full WINDOW of fixed-width blocks can be wider than a narrow rail (the loop
+    // page's ~320px runs rail). min-w-0 + overflow-x-auto scroll the surplus inside
+    // this box so the card never forces page-level horizontal scroll; tooltips portal
+    // out of the scroll box.
     <div className="flex min-w-0 items-center gap-[3px] overflow-x-auto">
       <Pager count={olderHidden} onClick={pageBack} loading={loading} />
       {visible.map((r) => (

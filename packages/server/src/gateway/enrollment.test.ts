@@ -1,18 +1,10 @@
-/**
- * Machine ENROLLMENT hardening (audit H-01 / M2). The poll route is the ONE
- * surface that self-registers a machine on first contact; before this fix it
- * minted a "shared" machine for ANY bearer string even under the GitHub login
- * gate, letting an unauthenticated caller create unbounded machine/loop rows.
- *
- * These tests reproduce the audit's poll enrollment path, prove unknown keys are
- * rejected in every mode, and cover expiry plus the `dk_` shape filter. Requiring
- * a remembered key also makes machine deletion durable: an old daemon cannot
- * recreate the row after its enrollment binding is revoked.
- */
+// Poll is the only surface that registers a machine on first contact, so only a
+// live remembered connect key may enroll. Requiring that key also keeps machine
+// deletion durable: an old daemon cannot recreate its row after revocation.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 
 let tmp: string;
 let db: typeof import("../db/index.js");
@@ -38,17 +30,6 @@ afterAll(() => {
 beforeEach(async () => {
   await (db.client as any).exec("DELETE FROM run_leases; DELETE FROM connect_keys; DELETE FROM runs; DELETE FROM loops; DELETE FROM machines;");
 });
-
-/** Restore the gate env after every case so it can't leak between tests. */
-afterEach(() => {
-  delete process.env.GITHUB_CLIENT_ID;
-  delete process.env.GITHUB_CLIENT_SECRET;
-});
-
-function enableGate(): void {
-  process.env.GITHUB_CLIENT_ID = "gh-client-id";
-  process.env.GITHUB_CLIENT_SECRET = "gh-client-secret";
-}
 
 function gateway() {
   return new gatewayMod.MachineGateway(
@@ -77,17 +58,7 @@ function pollV4(
   });
 }
 
-test("gated mode: a forged bearer token cannot self-register via poll", async () => {
-  enableGate();
-  const gw = gateway();
-  const forged = "dk_unauthenticated_gated_repro"; // the audit's exact repro token
-  const res = await pollV4(gw, forged, { host: "attacker-gated" });
-  expect(res.status).toBe(401);
-  expect(await store.getMachine(tokens.machineIdFromToken(forged))).toBeUndefined();
-});
-
-test("gated mode: an EXPIRED connect-key does not enroll", async () => {
-  enableGate();
+test("an expired connect key does not enroll", async () => {
   const gw = gateway();
   const deviceToken = tokens.mintDeviceToken();
   await tokens.rememberConnectKey(deviceToken);

@@ -1,17 +1,13 @@
 /**
- * Machine + run credential helpers. Device tokens (`dk_…`) identify a machine
- * (its id is derived from the token: `m-sha256(token)[:16]`). A run
- * LEASE (`rk_…`) is minted per delivery, bound to one run, and carries the
- * run's least-privilege caps — the CLI dispatch authorizes the `pievo` shim
- * against it. Its lifecycle is a small state machine (`active` →
- * `terminal-grace` → `reconciliation-only`/`retired`), not a mint→revoke pair;
- * see `RunLease` below.
+ * Machine and run credentials. A device token (`dk_…`) identifies a machine whose
+ * id is derived from it (`m-sha256(token)[:16]`). A run lease (`rk_…`) is minted per
+ * delivery and authorizes only that run's loop-file transfer and terminal report;
+ * its lifecycle is the state machine on `RunLease`.
  *
- * Leases and connect-key bindings are DURABLE (run_leases / connect_keys
- * tables): they must survive a deploy, or every restart 401s the in-flight
- * runs' callbacks/finalize and prevents a freshly connected machine from
- * enrolling. The 15-minute `new` idempotency window stays in-process;
- * losing it only degrades retry deduplication, never persisted data.
+ * Leases and connect-key bindings are durable so a restart neither rejects
+ * in-flight reports nor blocks a just-connected machine from enrolling. The
+ * 15-minute `new` idempotency window stays in memory; losing it on restart only
+ * weakens retry deduplication.
  */
 import { createHash, randomBytes } from "node:crypto";
 
@@ -135,13 +131,9 @@ export async function resolveLease(token: string, now: number = Date.now()): Pro
   return leaseFromRow(row);
 }
 
-/** Terminalize the lease(s) for `runId`: flip `active` → `terminal-grace`, opening
- *  the reconcile grace window (`TERMINAL_GRACE_MS`). This is the ONE transition the
- *  sweep uses when it reclaims a stuck run as a false failure — the lease survives
- *  so exactly ONE late wake-report can reconcile the run if the machine was merely
- *  asleep (see gateway `report()`). Idempotent: only an `active` lease flips (a
- *  re-terminalize keeps the first window), and it's a no-op for a run with no lease
- *  (e.g. a still-pending run). */
+/** Flip `active` → `terminal-grace` when the sweep reclaims a silent run, so one
+ *  late wake-report can still reconcile it. Idempotent: a repeat keeps the first
+ *  window, and a run with no lease (still pending) is a no-op. */
 export async function terminalizeLease(runId: string, now: number = Date.now()): Promise<void> {
   await db
     .update(runLeases)

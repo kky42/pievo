@@ -1,17 +1,7 @@
 /**
- * Latest published @kky42/pievo version — a cached, fail-silent lookup of the
- * npm dist-tag `latest`, so the web can tell a user their daemon is outdated and
- * show the exact update command.
- *
- * Zero-exec invariant: this is a plain HTTP GET against the public npm registry —
- * the server runs no LLM and executes no user code. It NEVER surfaces an error:
- * if npm is unreachable/slow/garbage, the cache simply stays as-is (undefined at
- * first) and the web shows no update hint. Bounded timeout + ~1h in-memory cache
- * so the machine-list hot path never blocks on the network.
- *
- * The fetch is injectable (mirroring the gateway's injectable notifier/blobStore)
- * so tests need no network: construct a `LatestDaemonVersion` with a fake fetch
- * and `now`, or call the pure `fetchNpmLatest` directly.
+ * Latest published @kky42/pievo version for the dashboard's update hint: a plain
+ * GET of the npm `latest` dist-tag. Fail-silent with a bounded timeout and a ~1h
+ * in-memory cache, so the machine list never blocks on or surfaces npm errors.
  */
 
 const NPM_URL = "https://registry.npmjs.org/@kky42/pievo";
@@ -21,11 +11,7 @@ const FETCH_TIMEOUT_MS = 4000;
 type FetchLike = typeof fetch;
 type NowFn = () => number;
 
-/**
- * One npm `latest` read — bounded + fail-silent. Returns the version string or
- * null (unreachable/timeout/malformed). Pure w.r.t. the injected fetch, so it's
- * directly unit-testable with no network.
- */
+/** One bounded npm `latest` read; null when unreachable, slow, or malformed. */
 export async function fetchNpmLatest(fetchImpl: FetchLike, timeoutMs = FETCH_TIMEOUT_MS): Promise<string | null> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);

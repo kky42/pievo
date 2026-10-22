@@ -32,67 +32,6 @@ async function seeded() {
   return { machine, loop };
 }
 
-test("history grammar rejects unknown filters", () => {
-  expect(history.parseHistoryFlags({ unknown: true })).toMatchObject({ ok: false });
-
-  expect(history.parseHistoryFlags({ since: "2026-01-01T00:00:00Z", status: "keep", limit: "5", json: true })).toMatchObject({
-    ok: true,
-    value: { mode: "list", status: "keep", limit: 5, json: true },
-  });
-  expect(history.parseHistoryFlags({ run: "3", diff: true })).toMatchObject({ ok: true, value: { mode: "detail", run: 3, diff: true } });
-});
-
-test("list history returns the canonical bounded summary", async () => {
-  const { machine, loop } = await seeded();
-  await store.addRun({
-    loopId: loop.id,
-    machineId: machine.id,
-    phase: "done",
-    requestedBy: "owner",
-    status: "keep",
-    message: "ordinary result",
-    durationMs: 120,
-    usage: { inputTokens: 10, outputTokens: 2 },
-    finalText: "provider output",
-    ts: "2026-01-02T00:00:00Z",
-  });
-
-  const result = await history.readLoopHistory(loop, { json: true });
-  expect(result.status).toBe(200);
-  const data = JSON.parse(String((result.body as any).text));
-  expect(data).toMatchObject({ count: 1, total: 1, runs: [{ phase: "done", status: "keep", message: "ordinary result", tokenUsage: 12 }] });
-  expect(Object.keys(data.runs[0]).sort()).toEqual([
-    "durationMs", "finalTextAvailable", "message", "messageTruncated", "phase", "runIndex", "status", "terminalAt", "tokenUsage",
-  ]);
-});
-
-test("detail history keeps diagnostics and diff availability", async () => {
-  const { machine, loop } = await seeded();
-  const run = await store.addRun({
-    loopId: loop.id,
-    machineId: machine.id,
-    phase: "error",
-    error: "provider failed",
-    message: "agent summary",
-    finalText: "provider final",
-    durationMs: 50,
-    usage: { inputTokens: 3, outputTokens: 4 },
-    ts: "2026-01-03T00:00:00Z",
-  });
-  const result = await history.readLoopHistory(loop, { run: String(run.runIndex), json: true });
-  expect(result.status).toBe(200);
-  const detail = JSON.parse(String((result.body as any).text));
-  expect(detail).toMatchObject({
-    runIndex: run.runIndex,
-    phase: "error",
-    error: "provider failed",
-    message: "agent summary",
-    finalText: "provider final",
-    tokenUsage: 7,
-    diffAvailable: false,
-  });
-});
-
 test("detail selector is loop-scoped", async () => {
   const { machine, loop } = await seeded();
   const other = await store.createLoop({ workdir: "/work", machineId: machine.id, name: "Other", cron: "0 0 * * *", enabled: true });

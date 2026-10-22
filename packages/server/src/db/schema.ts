@@ -27,10 +27,6 @@ export interface RunUsage {
 /** Queue authority, not scheduling provenance. Owner intent may promote a
  * system row, and no later system event may downgrade it. */
 export type RunRequester = "owner" | "system";
-/** `skipped`: a pending run retired without executing (pause/retention cleanup,
- *  queue coalescing, or the offline catch-up window elapsed).
- *  Neither success nor failure — excluded from the failure streak (it rides
- *  phase `canceled`, and the streak counts only phase `error`). */
 export const machines = pgTable(
   "machines",
   {
@@ -68,8 +64,8 @@ export const loops = pgTable(
     statusKeep: text("status_keep").notNull(),
     statusNoChange: text("status_no_change").notNull(),
     statusBlock: text("status_block").notNull(),
-    /** Configured artifact file names (`.md`/`.html`), in addition to the
-     *  always-present MEMORY.md. See `gateway/loopFiles.ts`. */
+    /** Configured artifact names, in addition to the always-present MEMORY.md.
+     *  See `gateway/loopFiles.ts`. */
     artifacts: jsonb("artifacts").$type<string[]>().notNull().default([]),
     cron: text("cron").notNull(),
     scheduleMode: text("schedule_mode", { enum: ["cron", "continuous"] }).notNull(),
@@ -83,11 +79,8 @@ export const loops = pgTable(
     pauseCause: jsonb("pause_cause").$type<PauseCause>(),
     model: text("model"),
     reasoningEffort: text("reasoning_effort"),
-    /** Coding agent this loop is BOUND TO and EXECUTED with: the daemon's
-     *  `buildAgentSpawn` branches on this value (`claude-code` → claude,
-     *  `codex` → `codex exec`, `pi` → Pi print mode). Measured from the creating CLI's env when
-     *  detectable, else the declared/selected value. The text column carries
-     *  both a TypeScript enum and a database CHECK constraint. */
+    /** The daemon launches this agent for every run (`buildAgentSpawn`). Enforced by
+     *  both the TypeScript enum and a database CHECK constraint. */
     agent: text("agent", { enum: CODING_AGENTS }).notNull(),
     enabled: boolean("enabled").notNull().default(true),
     nextRunAt: text("next_run_at"),
@@ -120,6 +113,9 @@ export const runs = pgTable(
     model: text("model"),
     reasoningEffort: text("reasoning_effort"),
     runIndex: integer("run_index"),
+    /** A pending run retired without executing (pause, retention cleanup, queue
+     *  coalescing, or an elapsed offline catch-up window) is `canceled`, not `error`,
+     *  so it never counts toward the failure streak. */
     phase: text("phase", { enum: ["pending", "running", "done", "error", "canceled"] }).notNull(),
     /** Durable queue authority. It only promotes system→owner; diagnostic trigger
      * reasons, if added later, must never drive lifecycle state. */
@@ -258,7 +254,6 @@ export const artifactFiles = pgTable(
   {
     id: text("id").primaryKey(),
     loopId: text("loop_id").notNull(),
-    /** Loop file name: MEMORY.md or a configured artifact name. */
     path: text("path").notNull(),
     hash: text("hash"),
     size: integer("size"),

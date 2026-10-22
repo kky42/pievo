@@ -1,16 +1,8 @@
 /**
- * CLI dispatch - the credential-keyed verb router half of the machine gateway,
- * split out of `MachineGateway` (which keeps poll/report/sweep/owner verbs).
- * Same wire surface, framework-agnostic like the rest of the gateway
- * (`{ status, body }` results):
- *
- *   POST /api/machine/cli  (Bearer device OR run credential) → unified dispatch
- *
- * The verb router keys authority on credential type first (`dk_` device prefix
- * vs `rk_` run lease) and reuses the core gateway
- * methods (`createLoop`/`editLoop`) through the injected `MachineGateway`,
- * plus the credential-neutral history module. Run credentials authorize no CLI
- * verb: a run reports through its final response, not a callback.
+ * `/api/machine/cli` verb router. Authority keys on credential type: a device
+ * (`dk_`) token gets owner verbs over loops bound to its machine, reusing
+ * `MachineGateway`'s owner methods; a run (`rk_`) token gets no verb, because a
+ * run reports only through its final response.
  */
 import path from "node:path";
 
@@ -70,14 +62,6 @@ export class CliGateway {
     this.destructiveLog = deps.destructiveLog ?? ((event) => cliLog.warn(event, "force-delete: destructive server authority removal"));
   }
 
-  /**
-   * The unified CLI endpoint. It is a ROUTER in front of the gateway logic that
-   * already exists — never a rewrite — that keys authority on the credential type:
-   *   · DEVICE credential (`dk_`-prefixed) → owner authority over any loop bound to
-   *     the machine: `new`→createLoop, `loops`→listLoops, `edit`→editLoop,
-   *     `log`→readLoopHistory, `show`→describe, `file`→loop files.
-   *   · RUN credential (`rk_` run lease) → rejected; runs have no CLI.
-   */
   async cli(token: string, argv: string[]): Promise<HttpResult> {
     const res = token.startsWith("dk_") ? await this.deviceCli(token, argv) : await this.runCli(token, argv);
     return finalizeCli(res);
@@ -557,11 +541,6 @@ function renderShowText(
     helpBlock(help),
   );
 }
-
-// Bare `pievo` renders a live machine dashboard for a device credential. The
-// server owns the TOON render; the daemon passes local facts it alone knows
-// (`--bin`/`--pid`/`--server`/`--cwd`/`--home`) as context flags. Everything
-// below is pure so it is exercised in verb tests.
 
 interface HomeContext {
   bin: string | null;

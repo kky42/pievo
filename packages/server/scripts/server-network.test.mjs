@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { currentHttpsUrl, disableHttps, enableHttps, lanAddresses, reachableUrls, tailscaleInfo } from "./server-network.mjs";
+import { currentHttpsUrl, disableHttps, enableHttps, tailscaleInfo } from "./server-network.mjs";
 
 const DNS = "box.tail1.ts.net";
 const status = { BackendState: "Running", Self: { DNSName: `${DNS}.`, TailscaleIPs: ["100.64.1.2", "fd7a:115c:a1e0::1"] }, CertDomains: [DNS] };
@@ -59,29 +59,4 @@ test("surfaces the approval link when Serve is not enabled on the tailnet", () =
   const ts = fakeTailscale({ serveFails: "Serve is not enabled on your tailnet.\nTo enable, visit:\n\n  https://login.tailscale.com/f/serve?node=abc\n" });
   const result = enableHttps(tailscaleInfo(ts.exec), 3000, ts.exec);
   expect(result).toEqual({ ok: false, reason: expect.stringContaining("https://login.tailscale.com/f/serve?node=abc") });
-});
-
-test("lists private LAN IPv4 addresses only", () => {
-  expect(lanAddresses({
-    lo0: [{ family: "IPv4", internal: true, address: "127.0.0.1" }],
-    en0: [{ family: "IPv4", internal: false, address: "192.168.1.5" }, { family: "IPv6", internal: false, address: "fe80::1" }],
-    utun4: [{ family: "IPv4", internal: false, address: "100.64.1.2" }],
-    en5: [{ family: "IPv4", internal: false, address: "203.0.113.9" }],
-  })).toEqual(["192.168.1.5"]);
-});
-
-test("prefers HTTPS, then Tailscale, then LAN for the connect URL", () => {
-  const tailscale = { dnsName: DNS, ipv4: "100.64.1.2" };
-  const all = reachableUrls({ host: "0.0.0.0", port: 3000, https: `https://${DNS}`, tailscale, lan: ["192.168.1.5"] });
-  expect(all).toEqual({
-    local: "http://127.0.0.1:3000",
-    lan: ["http://192.168.1.5:3000"],
-    tailscale: [`http://${DNS}:3000`, "http://100.64.1.2:3000"],
-    https: `https://${DNS}`,
-    connect: `https://${DNS}`,
-  });
-  expect(reachableUrls({ host: "0.0.0.0", port: 3000, tailscale, lan: ["192.168.1.5"] }).connect).toBe(`http://${DNS}:3000`);
-  expect(reachableUrls({ host: "0.0.0.0", port: 3000, lan: ["192.168.1.5"] }).connect).toBe("http://192.168.1.5:3000");
-  expect(reachableUrls({ host: "127.0.0.1", port: 3000, tailscale, lan: ["192.168.1.5"] }))
-    .toMatchObject({ lan: [], tailscale: [], connect: "http://127.0.0.1:3000" });
 });

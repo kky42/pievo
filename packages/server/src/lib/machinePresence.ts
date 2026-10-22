@@ -1,18 +1,10 @@
 /**
- * Machine presence derivation — a single, shared, three-state view of a machine's
- * connectivity used by both the server projections and the web UI, so the dashboard
- * and loop-detail banner never drift on where the thresholds sit.
- *
- * The daemon heartbeats every poll (~3s), stamping `lastSeen`. A laptop that
- * merely fell ASLEEP (or briefly dropped its network) stops heartbeating but is
- * almost always back on its own within seconds of waking — that is the common,
- * NON-alarming case. We surface it distinctly from a machine that's been gone
- * long enough to actually treat as disconnected:
- *
- *   - `online`  : polled within `MACHINE_ONLINE_TTL_MS` (a live daemon).
- *   - `asleep`  : not online, but seen within `MACHINE_ASLEEP_TTL_MS` (calm — the
- *                 machine is likely asleep/idle and resumes automatically).
- *   - `offline` : never seen, or last seen beyond the asleep window (treat as gone).
+ * Three-state machine presence shared by server projections and the UI:
+ *   - `online`:  polled within MACHINE_ONLINE_TTL_MS;
+ *   - `asleep`:  not online but seen within MACHINE_ASLEEP_TTL_MS. A laptop that
+ *                slept or dropped its network usually resumes on its own, so this
+ *                is deliberately calm rather than an alarm;
+ *   - `offline`: never seen, or last seen beyond the asleep window.
  */
 
 export const MACHINE_ONLINE_TTL_MS = 30_000;

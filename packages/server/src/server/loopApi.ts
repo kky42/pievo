@@ -33,27 +33,20 @@ async function findLoop(id: string) {
   return loop ? { loop } : undefined
 }
 
-/**
- * Client config. `pievoCli` is the CLI invocation prefix the skill + connect
- * dialog use for every verb (`daemon start`, `new`, …) — defaults to the globally
- * installed `pievo`. Set PIEVO_CLI locally to a runnable command that points at the in-repo
- * daemon, e.g. `tsx /abs/packages/daemon/src/cli.ts` or
- * `node /abs/packages/daemon/dist/cli.js`, so loops created from THIS server tell
- * Claude Code to run your local code instead of the registry build.
- */
+/** `pievoCli` prefixes every command the dashboard shows. PIEVO_CLI points it at an
+ *  in-repo daemon (e.g. `node /abs/packages/daemon/dist/cli.js`) so loops created
+ *  from this server run local code instead of the registry build. */
 export const getConfig = createServerFn({ method: 'GET' }).handler(() => {
   const custom = process.env.PIEVO_CLI?.trim()
   return {
     pievoCli: custom || 'pievo',
-    /** True when a non-default (dev) CLI is configured — the New-loop paste then
-     *  carries an explicit `pievo-cli:` line so Claude Code uses it verbatim. */
+    /** A custom CLI is shown verbatim, without the global npm install step. */
     customCli: !!custom,
     /** Best URL for other devices, published by the launcher (HTTPS, Tailscale, then LAN). */
     publicUrl: process.env.PIEVO_PUBLIC_URL?.trim() || null,
   }
 })
 
-/** GET — visible loops as compact summaries, most recently run first. */
 export const listLoops = createServerFn({ method: 'GET' })
   .handler(async () => {
     await backend()
@@ -98,9 +91,8 @@ export const getArtifact = createServerFn({ method: 'GET' })
     return readLoopArtifact(data.loopId, data.path)
   })
 
-/** GET — a run's per-file diff vs the previous run. Lazy by runId like
- *  computed on the server at read time (no stored diffs). Old runs
- *  with no snapshot return `hasSnapshot: false` for the degrade copy. */
+/** A run's per-file diff against the previous run, computed at read time. Runs
+ *  without a snapshot return `hasSnapshot: false`. */
 export const getRunDiff = createServerFn({ method: 'GET' })
   .validator((d: { runId: string }) => d)
   .handler(async ({ data }): Promise<RunDiffResult> => {

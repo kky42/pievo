@@ -13,13 +13,9 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const INTERNAL_DAEMON_CHILD = "PIEVO_INTERNAL_DAEMON_CHILD";
 
-/**
- * The argv/env plan for the detached daemon spawn (pure, exported for tests).
- * The device token travels via ENV (PIEVO_TOKEN — runDaemon reads it), NEVER
- * argv: argv is visible in `ps` for the daemon's whole lifetime while the token
- * file is carefully 0600. The child re-enters through the public nested command;
- * a private environment marker prevents it duplicating the parent's refresh.
- */
+/** The device token reaches the detached daemon through PIEVO_TOKEN, never argv:
+ * argv stays visible in `ps` for the daemon's lifetime while the token file is 0600.
+ * A private environment marker stops the child repeating the parent's refresh. */
 export function buildDaemonSpawn(token: string): { args: string[]; env: NodeJS.ProcessEnv } {
   const args = [...process.execArgv, process.argv[1] ?? "", "daemon", "start", "--foreground"];
   return { args, env: { ...process.env, PIEVO_TOKEN: token, [INTERNAL_DAEMON_CHILD]: "1" } };

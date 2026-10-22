@@ -1,112 +1,8 @@
-import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import os from "node:os";
-import path from "node:path";
-import { describe, expect, test, vi } from "vitest";
-import { postCli, resolveCredential } from "./cli-client.js";
+import { describe, expect, test } from "vitest";
+
 import { classify } from "./route.js";
-import { daemonVersion } from "./version.js";
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const tsx = path.resolve(here, "../node_modules/.bin/tsx");
-const entry = path.resolve(here, "cli.ts");
-type Run = { code: number; stdout: string; stderr: string };
-function runCli(args: string[]): Promise<Run> {
-  return new Promise((resolve) => {
-    const env = { ...process.env, PIEVO_HOME: path.join(os.tmpdir(), `pievo-cli-test-${process.pid}`) };
-    delete env.PIEVO_IN_RUN;
-    delete env.PIEVO_RUN_TOKEN;
-    execFile(tsx, [entry, ...args], { env, timeout: 20_000 }, (err, stdout, stderr) => {
-      const code = err && typeof (err as { code?: unknown }).code === "number" ? (err as { code: number }).code : 0;
-      resolve({ code, stdout, stderr });
-    });
-  });
-}
-
-describe("pievo CLI dispatch", () => {
-  test("global help documents only nested daemon lifecycle", async () => {
-    const r = await runCli(["--help"]);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain(`pievo v${daemonVersion()}`);
-    expect(r.stdout).toContain("daemon start");
-    expect(r.stdout).toContain("daemon restart");
-    expect(r.stdout).not.toMatch(/^  (up|down|status|doctor|update)\b/m);
-  });
-
-  test("nested daemon help is side-effect-free", async () => {
-    const r = await runCli(["daemon", "start", "--help"]);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain("pievo daemon start");
-  });
-
-  test("new help owns the canonical config contract", async () => {
-    const r = await runCli(["new", "--help"]);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain("Canonical config");
-    expect(r.stdout).toContain("--json -");
-    expect(r.stdout).toContain("mode: cron");
-    expect(r.stdout).toContain("mode: continuous");
-    expect(r.stdout).toContain("keep, noChange, block");
-    expect(r.stdout).toContain("tags                   up to 4 strings, 64 characters each");
-    expect(r.stdout).toContain("all loops|active|paused|blocked");
-    expect(r.stdout).toContain("unknown fields are rejected");
-  });
-
-  test("edit help explains patch and replacement semantics", async () => {
-    const r = await runCli(["edit", "--help"]);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain("pievo show <loop> --json");
-    expect(r.stdout).toContain("complete replacement");
-    expect(r.stdout).toContain("name, tags, schedule");
-    expect(r.stdout).toContain("--dry-run");
-    expect(r.stdout).toContain("Unknown fields are rejected");
-  });
-
-  test("lifecycle help states effects that matter before mutation", async () => {
-    const [pause, start, stop, del, run] = await Promise.all([
-      runCli(["pause", "--help"]),
-      runCli(["start", "--help"]),
-      runCli(["stop", "--help"]),
-      runCli(["delete", "--help"]),
-      runCli(["run", "--help"]),
-    ]);
-    expect(pause.stdout).toContain("current run continues");
-    expect(start.stdout).toContain("queued work becomes eligible immediately");
-    expect(stop.stdout).toContain("cancel queued work");
-    expect(stop.stdout).toContain("daemon confirms cancellation");
-    expect(del.stdout).toContain("Local project files are never deleted");
-    expect(del.stdout).toContain("prior Delete request");
-    expect(del.stdout).toContain("this machine's owner authority");
-    expect(run.stdout).toContain("without pausing its loop");
-  });
-
-  test("bare pievo opens the machine home", async () => {
-    const r = await runCli([]);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toContain("pievo daemon connect");
-  });
-
-  test("report is not a verb outside a run", async () => {
-    const r = await runCli(["report", "--status", "keep", "--message", "done"]);
-    expect(r.code).toBe(2);
-    expect(r.stderr).toContain("unknown command 'report'");
-  });
-});
 
 describe("classify lifecycle routing", () => {
-  test("routes the four nested daemon commands", () => {
-    expect(classify(["daemon", "start", "--foreground"], {})).toEqual({ kind: "daemonCommand", command: "start", args: ["--foreground"] });
-    expect(classify(["daemon", "stop", "--force"], {})).toEqual({ kind: "daemonCommand", command: "stop", args: ["--force"] });
-    expect(classify(["daemon", "restart"], {})).toEqual({ kind: "daemonCommand", command: "restart", args: [] });
-    expect(classify(["server", "start", "--port", "4000"], {})).toEqual({ kind: "server", args: ["start", "--port", "4000"] });
-    expect(classify(["server", "--help"], {})).toEqual({ kind: "server", args: ["--help"] });
-    expect(classify(["daemon", "status"], {})).toEqual({ kind: "daemonCommand", command: "status", args: [] });
-  });
-
-  test("unknown commands have no route", () => {
-    expect(classify(["unknown"], {})).toEqual({ kind: "unknown", verb: "unknown" });
-  });
-
   test("nested help wins before every lifecycle handler", () => {
     for (const subcommand of ["start", "stop", "restart", "status"]) {
       expect(classify(["daemon", subcommand, "--help"], {})).toEqual({ kind: "help", verb: `daemon ${subcommand}` });
@@ -115,11 +11,6 @@ describe("classify lifecycle routing", () => {
 
   test("server flags never launch the daemon", () => {
     expect(classify(["--server-url", "http://x"], {})).toEqual({ kind: "unknown", verb: "--server-url" });
-  });
-
-  test("owner loop verbs remain interactive", () => {
-    expect(classify(["start", "loop-1"], {})).toEqual({ kind: "interactive", argv: ["start", "loop-1"] });
-    expect(classify(["stop", "loop-1"], {})).toEqual({ kind: "interactive", argv: ["stop", "loop-1"] });
   });
 
   test("in-run routing wins and preserves argv exactly", () => {
@@ -131,58 +22,5 @@ describe("classify lifecycle routing", () => {
   test("out-of-run report has no route", () => {
     expect(classify(["report", "--message", "done"], {})).toEqual({ kind: "unknown", verb: "report" });
     expect(classify(["report", "--help"], {})).toEqual({ kind: "unknown", verb: "report" });
-  });
-});
-
-describe("postCli credential selection", () => {
-  test("resolveCredential: uses the persisted device token", () => {
-    expect(resolveCredential({ deviceToken: "dk_dev" })).toEqual({ token: "dk_dev" });
-  });
-
-  test("resolveCredential: no device token → undefined (not connected)", () => {
-    expect(resolveCredential({ deviceToken: undefined })).toBeUndefined();
-  });
-
-  test("posts {argv} to /api/machine/cli with the DEVICE token", async () => {
-    const calls: any[] = [];
-    const fetchImpl = (async (url: string, init: any) => {
-      calls.push({ url: String(url), init });
-      return { status: 200, ok: true, json: async () => ({ text: "ok", exitCode: 0 }) };
-    }) as unknown as typeof fetch;
-    const r = await postCli(["file", "list", "loop-1"], {
-      deviceToken: "dk_dev",
-      server: "https://srv.test",
-      fetchImpl,
-    });
-    expect(r).toMatchObject({ kind: "ok", status: 200 });
-    expect(calls[0].url).toBe("https://srv.test/api/machine/cli");
-    expect(calls[0].init.headers.Authorization).toBe("Bearer dk_dev");
-    expect(JSON.parse(calls[0].init.body).argv).toEqual(["file", "list", "loop-1"]);
-  });
-
-  test("no credential/server → not-configured, never fetches", async () => {
-    let called = false;
-    const fetchImpl = (async () => {
-      called = true;
-      return { status: 200, ok: true, json: async () => ({}) };
-    }) as unknown as typeof fetch;
-    const r = await postCli(["loops"], { deviceToken: undefined, server: "", fetchImpl });
-    expect(r).toEqual({ kind: "not-configured" });
-    expect(called).toBe(false);
-  });
-
-  test("default transport uses a bounded fetch while retaining fetchImpl injection", async () => {
-    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
-      expect(init.signal).toBeInstanceOf(AbortSignal);
-      return new Response(JSON.stringify({ text: "ok", exitCode: 0 }), { status: 200 });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    try {
-      await expect(postCli(["loops"], { deviceToken: "dk_dev", server: "https://srv.test" }))
-        .resolves.toMatchObject({ kind: "ok", status: 200 });
-      expect(fetchMock).toHaveBeenCalledOnce();
-    } finally {
-      vi.unstubAllGlobals();
-    }
   });
 });

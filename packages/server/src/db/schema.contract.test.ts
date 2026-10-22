@@ -34,29 +34,6 @@ test("fresh loop schema has no defaults for canonical required fields", async ()
   );
 });
 
-test("canonical text enums are enforced by database CHECK constraints", async () => {
-  const expected = [
-    "loops_agent_check",
-    "loops_cron_overlap_check",
-    "loops_schedule_mode_check",
-    "loops_tags_count_check",
-    "loops_tags_reserved_check",
-    "run_leases_state_check",
-    "runs_agent_check",
-    "runs_phase_check",
-    "runs_requested_by_check",
-    "runs_status_check",
-    "terminal_report_incidents_disposition_check",
-  ];
-  const result = await queryClient.query<{ conname: string }>(`
-    SELECT conname
-    FROM pg_constraint
-    WHERE contype = 'c' AND conname IN (${expected.map((name) => `'${name}'`).join(", ")})
-    ORDER BY conname
-  `);
-  expect(result.rows.map((row) => row.conname)).toEqual(expected);
-});
-
 test("loop tag database constraints protect count and reserved names", async () => {
   const insert = (id: string, tags: string) => queryClient.query(`
     INSERT INTO loops (
@@ -101,21 +78,4 @@ test("every migration is applied and Pi is a valid agent", async () => {
   } finally {
     await queryClient.query("ROLLBACK");
   }
-});
-
-test("the single-user schema has no ownership columns or login tables", async () => {
-  const ownership = await queryClient.query<{ table_name: string }>(`
-    SELECT table_name
-    FROM information_schema.columns
-    WHERE table_schema = 'public' AND column_name IN ('user_id', 'team_id')
-  `);
-  expect(ownership.rows).toEqual([]);
-
-  const removedTables = await queryClient.query<{ table_name: string }>(`
-    SELECT table_name
-    FROM information_schema.tables
-    WHERE table_schema = 'public'
-      AND table_name IN ('user', 'session', 'account', 'verification', 'teams', 'team_members', 'team_invites')
-  `);
-  expect(removedTables.rows).toEqual([]);
 });

@@ -58,14 +58,13 @@ export const client: PGlite = opened.client;
  */
 function migrationsDir(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const devDir = path.resolve(here, "..", "..", "drizzle"); // dev: src/db → package root
-  const builtDir = path.resolve(here, "..", "drizzle"); // built: .output/server/{_ssr,_libs} → .output/server/drizzle
+  const devDir = path.resolve(here, "..", "..", "drizzle");
+  const builtDir = path.resolve(here, "..", "drizzle");
   if (fs.existsSync(devDir)) return devDir;
   if (fs.existsSync(builtDir)) return builtDir;
   return devDir;
 }
 
-/** Apply generated migrations in-process (idempotent). */
 export async function runMigrations(): Promise<void> {
   const dir = migrationsDir();
   if (!fs.existsSync(dir)) return; // not generated yet (pre-`db:generate`)

@@ -1,16 +1,8 @@
 import type { MachinePresence } from './lib/machinePresence'
 
-/** The coding agent a loop is bound to AND executed with (BYOA on the owner's
- *  machine): `claude-code` → Claude Code, `codex` → `codex exec`, `pi` → Pi.
- *  Non-Claude agents may still have thinner daemon telemetry until stream
- *  integration lands; execution itself is real for every value.
- *
- *  Runtime SINGLE SOURCE (anti-drift): every server consumer DERIVES from this
- *  array — the `CodingAgent` type here, the `db/schema.ts` `CodingAgent` type AND
- *  the `loops.agent` column enum, the edit validator (`coerceCodingAgent`), and the
- *  web agent `<select>` (LoopForm). So widening the set is a one-line edit HERE with
- *  no other server change (the daemon's own enum in `packages/daemon/src/create.ts`
- *  is a separate package, widened alongside). */
+/** Single source for coding agents: server types, the `loops.agent` column enum,
+ *  validators, and the dashboard select all derive from this array. The daemon
+ *  keeps its own copy in `packages/daemon/src/create.ts`; widen both together. */
 export const CODING_AGENTS = ['claude-code', 'codex', 'pi'] as const
 export type CodingAgent = (typeof CODING_AGENTS)[number]
 
@@ -106,9 +98,8 @@ export interface MachineSummary {
   latestDaemonVersion: string | null
   needsUpdate: boolean
   requiredDaemonVersion: string
-  /** Plaintext device token (so the UI can re-show the connect command). Under
-   *  the auth gate it is serialized ONLY to the machine's owner — null for
-   *  everyone else (the token fully impersonates the machine). */
+  /** Plaintext device token, so the UI can re-show the connect command. It fully
+   *  impersonates the machine. */
   token: string | null
   /** Loops bound to this machine; machine deletion removes them after confirmation. */
   loopCount: number
@@ -176,9 +167,7 @@ export interface LoopDetail {
 }
 
 export interface ArtifactSummary {
-  /** Normalized, loop-folder-relative path. */
   path: string
-  /** Byte size (null when unknown). */
   size: number | null
   updatedAt: string
   /** The bytes contain a NUL → download-only (no inline text render). */

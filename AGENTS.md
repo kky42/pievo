@@ -5,6 +5,17 @@ devices on a LAN or tailnet. The TanStack Start server owns scheduling, queueing
 persistence, and byte serving; the `@kky42/pievo` CLI runs the server (`pievo server`)
 and the daemon (`pievo daemon`), which runs Claude Code, Codex, or Pi on each device.
 
+## Documents
+
+- `HUMAN.md`: the owner's statement of purpose and meta design. Read it before
+  design decisions. Only the owner edits it; never change it, even to fix a typo.
+- `AGENTS.md` (this file, also `CLAUDE.md`): rules and guidelines for agents.
+- `README.md`: user documentation. Update it when user-visible behavior changes.
+- `CONTRIBUTING.md`: setup, commands, the end-to-end recipe, migrations, and release.
+
+Do not add other documentation files. Durable knowledge goes in one of these four,
+in code, or in tests.
+
 ## Invariants
 
 - **Zero exec:** server code never launches an LLM or executes user code. Only the
@@ -52,15 +63,57 @@ and the daemon (`pievo daemon`), which runs Claude Code, Codex, or Pi on each de
   environment overrides are intentional opt-outs. Never auto-start the daemon from
   the development server.
 
-## Comment standard
+## Verification
 
-- Keep comments only when they add durable context absent from the code: why and
-  trade-offs, default-value rationale, TODOs, protocol/compatibility/security
-  constraints, deliberate compromises, applicability limits, or non-obvious risks.
-- Delete comments that paraphrase symbols, branches, return types, CSS properties,
-  section headings, tests, or assertions. Prefer clear names, types, and tests.
-- For limits and defaults, record the unit, rationale or source, and consequence of
-  changing them. Keep comments next to the invariant and update them with behavior.
+Pievo's executors are coding agents and its interface is a dashboard, so the proof
+that a change works is an end-to-end run, not a unit test. Follow the recipe in
+`CONTRIBUTING.md` ("End-to-end check").
+
+- **Agent behavior** (prompt, delivery, runner, provider spawn, telemetry, status
+  parsing, loop files, protocol, scheduling, lifecycle): run a real loop with a real
+  agent on the dev server and confirm the run's terminal state, status, summary, and
+  file updates. Use a disposable working directory, the cheapest suitable model, and
+  a small prompt.
+- **Dashboard** (components, styles, routes, server functions): open the dev
+  dashboard in a real browser, check how it renders, and use the changed flow the
+  way the owner would: clicks, forms, confirmations, loading/empty/error states,
+  light and dark mode, and a narrow window with no horizontal page scroll.
+- **CLI and skill**: run the changed commands through `pnpm dev:daemon` against the
+  dev server.
+- Always also run `pnpm -r typecheck` and both test suites.
+- Report what you ran and what you saw. If you could not run the end-to-end check
+  (for example, no provider credentials), say so plainly; never call the change
+  verified. Clean up dev daemons, loops, and scratch directories you created.
+
+## Tests
+
+Unit tests guard core mechanisms that are hard to reach end to end: loop-locked
+state transitions, leases and report durability, protocol decoding, loop-file limits
+and conflict rules, scheduling and cadence, process and pid safety, and security
+boundaries (network guard, roots jail, environment allowlists, token handling,
+artifact-serving headers, request size caps).
+
+- Add a regression test at the lowest level that reproduces a bug in one of those
+  mechanisms.
+- Do not add tests that compare copy, labels, help text, CSS classes, or formatted
+  strings; restate constants or file lists; assert values a mock was told to return;
+  or cover trivial mappers. Verify those end to end instead.
+- When a change leaves an existing test trivial or redundant, delete it.
+
+## Comments
+
+Code should explain itself through names, types, and structure. Keep a comment only
+for what the code cannot say:
+
+- why: trade-offs, rejected alternatives, deliberate compromises;
+- magic numbers and defaults: the unit, where the value came from (measurement,
+  experiment, external limit), and what changing it breaks;
+- protocol, compatibility, and security constraints, and non-obvious risks;
+- TODOs with enough context to act on.
+
+Delete comments that paraphrase the code: symbols, branches, return types, CSS,
+section headings, tests, or assertions. Keep each comment next to the code it
+explains and update it when the behavior changes.
 
 ## Module map
 
@@ -81,38 +134,10 @@ and the daemon (`pievo daemon`), which runs Claude Code, Codex, or Pi on each de
 - `packages/daemon/src/report-outbox.ts`: durable terminal report persistence/retry.
 - `packages/daemon/src/loop-files.ts`: per-run loop-file download, collection, and upload.
 
-## Commands
+## Changes that need extra care
 
-```bash
-pnpm dev
-pnpm --filter @kky42/pievo-server test
-pnpm --filter @kky42/pievo test
-pnpm -r typecheck
-pnpm --filter @kky42/pievo-server db:generate
-```
-
-Server typecheck generates `src/routeTree.gen.ts`. Run one Vitest file by appending
-its path. Live provider-schema validation is the explicit spend-bearing exception:
-
-```bash
-PIEVO_REAL_LLM_TESTS=1 pnpm --filter @kky42/pievo test src/telemetry.real.test.ts
-```
-
-## Release and deployment sharp edges
-
-- Keep SQL migrations reviewed: `0000_baseline` defines the 3.x schema and later
-  schema changes append forward migrations, applied in-process at boot. Do not commit
-  generated Drizzle snapshots. Document data-loss risks of destructive migrations.
-- `server-v*` publishes only `@kky42/pievo-server`; `v*` publishes only
-  `@kky42/pievo`, which depends on the server by semver range. Publish the server
-  first. Tag and package versions must match.
-- Publishing uses npm OIDC/trusted publishing and repository provenance. Do not add
-  `registry-url` or `NPM_TOKEN`; pnpm comes from the root `packageManager`.
-- Keep server runtime output, public assets, PGlite assets, migrations, launcher
-  scripts, and provenance metadata in the published package
-  (`verify:package` checks this).
-- Public install prose uses `@latest`. Development servers may provide `PIEVO_CLI`
-  verbatim and must not add a global-install step.
+Migrations, releases, and publishing follow `CONTRIBUTING.md` exactly. Server
+typecheck regenerates `src/routeTree.gen.ts`.
 
 Keep this file concise and durable. Prefer authoritative modules and tests over copied
 implementation detail or task history.
