@@ -1,5 +1,4 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { machineRouteLimit } from '../gateway/rateLimit'
 
 export const Route = createFileRoute('/api/machine/status')({
   server: {
@@ -7,8 +6,6 @@ export const Route = createFileRoute('/api/machine/status')({
       GET: async ({ request }: { request: Request }) => {
         const auth = request.headers.get('authorization') ?? ''
         const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
-        const limited = machineRouteLimit(request, token || undefined)
-        if (limited) return limited
         if (!token) return Response.json({ error: 'missing device token' }, { status: 401 })
         const { getGateway } = await import('../server/boot.js')
         const r = await (await getGateway()).status(token)

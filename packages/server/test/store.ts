@@ -15,10 +15,10 @@ import {
 } from "../src/db/schema.js";
 
 type StoreModule = typeof Store;
-type LoopSeedRequired = Pick<Store.CreateLoopInput, "userId" | "machineId" | "name" | "cron" | "workdir">;
+type LoopSeedRequired = Pick<Store.CreateLoopInput, "machineId" | "name" | "cron" | "workdir">;
 export type TestLoopSeed = LoopSeedRequired & Partial<Omit<Store.CreateLoopInput, keyof LoopSeedRequired>>;
 type MachineCreateInput = Parameters<StoreModule["createMachine"]>[0];
-type MachineSeedRequired = Pick<MachineCreateInput, "id" | "userId" | "name" | "tokenHash">;
+type MachineSeedRequired = Pick<MachineCreateInput, "id" | "name" | "tokenHash">;
 export type TestMachineSeed = MachineSeedRequired & Partial<Omit<MachineCreateInput, keyof MachineSeedRequired>>;
 
 export type TestStore = Omit<StoreModule, "createLoop" | "createMachine"> & {

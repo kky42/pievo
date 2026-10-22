@@ -8,17 +8,10 @@ import { DashboardView, type DashboardData } from './DashboardView'
 const h = vi.hoisted(() => ({
   listLoops: vi.fn(async () => [] as LoopSummary[]),
   navigate: vi.fn(),
-  invalidate: vi.fn(),
-  signOut: vi.fn(async () => undefined),
 }))
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => h.navigate,
-  useRouter: () => ({ invalidate: h.invalidate }),
-}))
-vi.mock('../lib/auth-client', () => ({
-  signOut: h.signOut,
-  useSession: () => ({ data: { user: { name: 'Alice', email: 'alice@example.com' } }, isPending: false }),
 }))
 vi.mock('../server/loopApi', () => ({ listLoops: h.listLoops }))
 vi.mock('../server/machineFns', () => ({ listMachines: vi.fn(async () => []) }))
@@ -62,14 +55,14 @@ const initial = (loops: LoopSummary[]): DashboardData => ({
 let host: HTMLDivElement | null = null
 let root: Root | null = null
 
-async function render(data: DashboardData, mode: 'auth' | 'open' = 'open') {
+async function render(data: DashboardData) {
   if (!root) {
     host = document.createElement('div')
     document.body.appendChild(host)
     root = createRoot(host)
   }
   await act(async () => {
-    root!.render(createElement(DashboardView, { initial: data, mode }))
+    root!.render(createElement(DashboardView, { initial: data }))
     await Promise.resolve()
   })
 }
@@ -82,8 +75,6 @@ afterEach(async () => {
   h.listLoops.mockReset()
   h.listLoops.mockResolvedValue([])
   h.navigate.mockReset()
-  h.invalidate.mockReset()
-  h.signOut.mockClear()
   if (root) await act(async () => root!.unmount())
   host?.remove()
   host = null
@@ -91,31 +82,6 @@ afterEach(async () => {
 })
 
 describe('DashboardView loader and live data ordering', () => {
-  it('shows the shared-administration warning only in open mode', async () => {
-    await render(initial([]), 'open')
-    expect(host!.textContent).toContain('anyone who can reach this server can view and manage every loop')
-    expect(host!.textContent).toContain('authenticated reverse proxy')
-
-    await render(initial([]), 'auth')
-    expect(host!.textContent).not.toContain('Open mode:')
-  })
-
-  it('shows the signed-in account and invalidates the dashboard after logout', async () => {
-    await render(initial([]), 'auth')
-    expect(host!.textContent).toContain('alice@example.com')
-    const button = [...host!.querySelectorAll('button')].find((candidate) => candidate.textContent === 'Sign out')
-    expect(button).toBeDefined()
-
-    await act(async () => {
-      button!.click()
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-    expect(h.signOut).toHaveBeenCalledOnce()
-    expect(h.navigate).toHaveBeenCalledWith({ to: '/' })
-    expect(h.invalidate).toHaveBeenCalledOnce()
-  })
-
   it('filters by one lifecycle or custom tag while keeping global counts visible', async () => {
     const loops = [
       loopSummary('active', 'Active loop', { tags: ['daily', 'project'] }),

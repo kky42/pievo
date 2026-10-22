@@ -6,25 +6,15 @@
  * from any server-side entry (the standalone machine server / TanStack server
  * fns); the first call boots, the rest share the same instance.
  */
-import { sql } from "drizzle-orm";
-
-import { runMigrations, closeClient, db } from "../db/index.js";
+import { runMigrations, closeClient } from "../db/index.js";
 import { repairTerminalRunLeases } from "../db/store.js";
 import { logger } from "../logger.js";
 import { MachineGateway, ONLINE_TTL_MS } from "../gateway/index.js";
-import { loginGateEnabled } from "../lib/loginGate.js";
 import { ArtifactSync } from "../gateway/sync.js";
 import { CliGateway } from "../gateway/cli.js";
 import { createBlobStore } from "../gateway/blobstore.js";
-import {
-  gcIntervalMs,
-  dbWatchdogEnabled,
-  dbWatchdogIntervalMs,
-  dbWatchdogTimeoutMs,
-  dbWatchdogFailureThreshold,
-} from "../env.js";
+import { GC_INTERVAL_MS } from "../env.js";
 import { Scheduler, type Dispatcher } from "../scheduler/index.js";
-import { startDbWatchdog } from "./dbWatchdog.js";
 
 interface Booted {
   scheduler: Scheduler;
@@ -53,14 +43,12 @@ export function ensureServer(): Promise<Booted> {
 }
 
 async function boot(): Promise<Booted> {
-  loginGateEnabled();
   await runMigrations();
   await repairTerminalRunLeases();
 
   const abort = new AbortController();
-  // Drain the runtime postgres pool on clean shutdown (main.ts aborts on
-  // SIGINT/SIGTERM); no-op for the pglite tier. The managed npm launcher awaits
-  // `shutdown`; abort listeners retain the best-effort signal path.
+  // Close PGlite on clean shutdown. The managed launcher awaits `shutdown`;
+  // abort listeners retain the best-effort signal path.
   let closePromise: Promise<void> | undefined;
   const close = () => closePromise ??= closeClient();
   abort.signal.addEventListener("abort", () => void close(), { once: true });
@@ -100,30 +88,10 @@ async function boot(): Promise<Booted> {
   // one escape).
   const gc = setInterval(
     () => void gateway.maintainStorage().catch((err) => logger.error({ err: String(err) }, "gc tick failed")),
-    gcIntervalMs(),
+    GC_INTERVAL_MS,
   );
   gc.unref?.();
   abort.signal.addEventListener("abort", () => clearInterval(gc), { once: true });
-
-  // DB watchdog — the ACTUAL auto-recovery backstop for a wedged postgres pool
-  // (Fly's failing health check only de-routes; it never restarts the VM). Pings
-  // `select 1` under a hard deadline and exits after a sustained wedge so Fly's
-  // on-failure restart brings up a fresh pool. Hosted-postgres tier only; see
-  // env.ts `dbWatchdogEnabled` + server/dbWatchdog.ts for the full rationale.
-  if (dbWatchdogEnabled()) {
-    const intervalMs = dbWatchdogIntervalMs();
-    const timeoutMs = dbWatchdogTimeoutMs();
-    const failureThreshold = dbWatchdogFailureThreshold();
-    logger.info({ intervalMs, timeoutMs, failureThreshold }, "db watchdog: armed");
-    const stopWatchdog = startDbWatchdog({
-      probe: () => db.execute(sql`select 1`),
-      exit: (code) => process.exit(code),
-      intervalMs,
-      timeoutMs,
-      failureThreshold,
-    });
-    abort.signal.addEventListener("abort", () => stopWatchdog(), { once: true });
-  }
 
   logger.info("pievo server booted");
   return { scheduler, gateway, artifactSync, cliGateway, abort, shutdown };

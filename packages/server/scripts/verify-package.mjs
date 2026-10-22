@@ -24,7 +24,7 @@ try {
   requireFile("LICENSE");
   requireFile("scripts/pievo-server.mjs");
   requireFile("scripts/server-cli-lib.mjs");
-  requireFile("scripts/prestart.mjs");
+  requireFile("scripts/server-network.mjs");
   requireFile(".output/server/index.mjs");
   requireFile(".output/server/drizzle/meta/_journal.json");
   requireFile("drizzle/meta/_journal.json");

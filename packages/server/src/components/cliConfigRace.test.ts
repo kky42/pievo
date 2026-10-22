@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ComposeModal } from './ComposeModal'
 import { MachinesModal } from './MachinesModal'
 
-type CliConfig = { pievoCli: string; customCli: boolean }
+type CliConfig = { pievoCli: string; customCli: boolean; publicUrl: string | null }
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (reason?: unknown) => void }
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void
@@ -67,7 +67,7 @@ describe('custom PIEVO_CLI config ordering', () => {
     expect(copy.disabled).toBe(true)
 
     const custom = 'tsx /repo/packages/daemon/src/cli.ts'
-    await act(async () => h.config!.resolve({ pievoCli: custom, customCli: true }))
+    await act(async () => h.config!.resolve({ pievoCli: custom, customCli: true, publicUrl: null }))
     expect(bodyText()).toContain(`${custom} daemon connect`)
     expect(bodyText()).toContain('--connect-key dk_connect')
     expect(bodyText()).toContain('Run this command in your terminal')
@@ -93,7 +93,7 @@ describe('custom PIEVO_CLI config ordering', () => {
     expect(bodyText()).not.toContain('pievo daemon connect')
 
     const custom = 'node /repo/packages/daemon/dist/cli.js'
-    await act(async () => h.config!.resolve({ pievoCli: custom, customCli: true }))
+    await act(async () => h.config!.resolve({ pievoCli: custom, customCli: true, publicUrl: null }))
     expect(bodyText()).toContain(`${custom} daemon connect`)
     expect(bodyText()).not.toContain('npm install -g')
   })

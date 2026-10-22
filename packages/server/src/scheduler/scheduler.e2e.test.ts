@@ -41,13 +41,11 @@ async function makeLoop(
 ): Promise<Loop> {
   const machine = await store.createMachine({
     id: `m-${suffix}`,
-    userId: "u1",
     name: "M",
     tokenHash: `h-${suffix}`,
     online: true,
   });
   return store.createLoop({ workdir: "/work",
-    userId: "u1",
     machineId: machine.id,
     name: suffix,
     cron: "*/5 * * * *",

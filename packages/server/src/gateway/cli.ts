@@ -212,7 +212,7 @@ export class CliGateway {
       const deleted = await this.forceDeleteLoop(loop.id);
       if (!deleted) return { status: 409, body: { error: "force delete failed; server data was not deleted" } };
       this.gateway.scheduler.removeLoop(loop.id);
-      this.destructiveLog({ action: "force-delete", loopId: loop.id, machineId, actorUserId: loop.userId, machineReachability: reachability });
+      this.destructiveLog({ action: "force-delete", loopId: loop.id, machineId, machineReachability: reachability });
       return { status: 200, body: { text: forceDeleteWarning(reachability) } };
     }
     const target = await store.runningRunForLoop(loop.id);

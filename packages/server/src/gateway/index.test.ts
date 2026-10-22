@@ -109,7 +109,7 @@ test("machine status distinguishes an unregistered identity without rejecting it
   });
 
   const connectKey = tokens.mintDeviceToken();
-  await tokens.rememberConnectKey(connectKey, { userId: "u1" });
+  await tokens.rememberConnectKey(connectKey);
   expect(await gateway().status(connectKey)).toEqual({
     status: 200,
     body: { registered: false, claimValid: true, online: false, name: null, lastSeen: null, daemonProtocol: null },
@@ -117,7 +117,7 @@ test("machine status distinguishes an unregistered identity without rejecting it
 
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: false });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: false });
   expect(await gateway().status(token)).toMatchObject({ status: 200, body: { registered: true } });
 });
 
@@ -133,8 +133,8 @@ test("protocol rejection uses upgrade terminology and gives the restart flow", a
 async function seededExecRun() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const loop = (await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
+  (await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: new Date().toISOString() }));
   const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId });
   return { machineId, loop, run, rt };
@@ -143,8 +143,8 @@ async function seededExecRun() {
 test("every index/CLI device surface rejects a full-token-hash collision", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "different-full-hash", online: true });
-  const loop = await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: "different-full-hash", online: true });
+  const loop = await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
   const gw = gateway();
 
   const results = await Promise.all([
@@ -163,7 +163,7 @@ test("every index/CLI device surface rejects a full-token-hash collision", async
 test("canonical create/edit expose one exclusive schedule union", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
   const gw = gateway();
   const config = {
     name: "Prompt runner",
@@ -206,7 +206,7 @@ test("canonical create/edit expose one exclusive schedule union", async () => {
 test("owner CLI creates, edits, and shows normalized tags through the agent-facing path", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
   const gw = gateway();
   const config = {
     name: "Tagged CLI loop",
@@ -233,7 +233,7 @@ test("owner CLI creates, edits, and shows normalized tags through the agent-faci
 test("create transport requires exact idempotency/dryRun fields", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
   const config = {
     name: "Strict transport",
     schedule: { mode: "continuous", delayMinutes: 5 },
@@ -337,9 +337,8 @@ test("three ordinary errors trigger the failure-streak pause", async () => {
 });
 
 async function seededLoop() {
-  const machine = (await store.createMachine({ id: "m-gateway", userId: "u1", name: "M", tokenHash: "h", online: true }));
+  const machine = (await store.createMachine({ id: "m-gateway", name: "M", tokenHash: "h", online: true }));
   const loop = (await createLoop({
-    userId: "u1",
     machineId: machine.id,
     name: "L",
     cron: "0 0 1 1 *",
@@ -387,9 +386,8 @@ test("report persists normalized terminal telemetry without cost or transcript f
 test("machine finalization turns a successful process into an error when the run skipped its required report", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = await createLoop({
-    userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true,
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true,
   });
   const run = await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: new Date().toISOString() });
   const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId });
@@ -444,8 +442,8 @@ test("a machine's bound loops gate its deletion (loopsForMachine drains to empty
 test("concurrent polls deliver a pending run exactly once (atomic pending->running claim)", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const loop = (await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
+  (await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "pending", ts: new Date().toISOString() }));
 
   // Two polls in flight at once (an HTTP retry racing its timed-out original, or
@@ -467,8 +465,8 @@ test("concurrent polls deliver a pending run exactly once (atomic pending->runni
 test("pollV4 with an old or unknown daemon version does not claim pending work", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
   const run = await store.addRun({ loopId: loop.id, machineId, phase: "pending", ts: new Date().toISOString() });
 
   const unknown = await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac" } });
@@ -501,8 +499,8 @@ test("pollV4 with an old or unknown daemon version does not claim pending work",
 test("protocol-v4 recovery fields and exact currentRuns items are required before claiming", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
   const run = await store.addRun({ loopId: loop.id, machineId, phase: "pending", ts: new Date().toISOString() });
   const base = { protocolVersion: 4, currentRuns: [], info: { version: "2.4.0" } };
 
@@ -526,8 +524,8 @@ test("protocol-v4 recovery fields and exact currentRuns items are required befor
 test("pollV4 defensively rejects invalid machine info before any mutation", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: false, daemonProtocol: 3 });
-  const loop = await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: false, daemonProtocol: 3 });
+  const loop = await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
   const run = await store.addRun({ loopId: loop.id, machineId, phase: "pending", ts: new Date().toISOString() });
   const base = { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [] };
 
@@ -547,8 +545,8 @@ test("pollV4 defensively rejects invalid machine info before any mutation", asyn
 test("pollV4 with the supported daemon version can claim pending work", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, model: "snapshot-model", reasoningEffort: "high", agent: "codex" });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true, model: "snapshot-model", reasoningEffort: "high", agent: "codex" });
   const run = await store.addRun({ loopId: loop.id, machineId, phase: "pending", ts: new Date().toISOString() });
 
   const res = await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", version: "2.4.0" } });
@@ -557,7 +555,7 @@ test("pollV4 with the supported daemon version can claim pending work", async ()
   expect((res.body as any).needsUpdate).toBeUndefined();
   expect((await store.getRun(run.id))!).toMatchObject({ phase: "running", runIndex: 1, agent: "codex", model: "snapshot-model", reasoningEffort: "high" });
 
-  const secondLoop = await createLoop({ userId: "u1", machineId, name: "L2", cron: "0 0 1 1 *", enabled: true });
+  const secondLoop = await createLoop({ machineId, name: "L2", cron: "0 0 1 1 *", enabled: true });
   const secondRun = await store.addRun({ loopId: secondLoop.id, machineId, phase: "pending", ts: new Date().toISOString() });
   const omitted = await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac" } });
   expect((omitted.body as any).delivery).toBeNull();
@@ -568,7 +566,7 @@ test("pollV4 with the supported daemon version can claim pending work", async ()
 test("createLoop always persists the authenticated machine owner", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
 
   const result = await gateway().createLoop(token, {
     name: "Machine owner loop",
@@ -582,14 +580,13 @@ test("createLoop always persists the authenticated machine owner", async () => {
 
   expect(result.status).toBe(200);
   const loop = await store.getLoop((result.body as { id: string }).id);
-  expect(loop).toMatchObject({ userId: "u1", machineId });
-  expect(loop).not.toHaveProperty("teamId");
+  expect(loop).toMatchObject({ machineId });
 });
 
 async function seededMachine() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  (await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true }));
   return { token, machineId };
 }
 
@@ -608,7 +605,7 @@ test("createLoop --dry-run still validates (bad cron → 400, nothing created)",
 
 test("editLoop --dry-run returns canonical before and after without persisting", async () => {
   const { token, machineId } = await seededMachine();
-  const loop = await createLoop({ userId: "u1", machineId, name: "Before", cron: "0 8 * * *", enabled: true });
+  const loop = await createLoop({ machineId, name: "Before", cron: "0 8 * * *", enabled: true });
 
   const res = await gateway().editLoop(token, loop.id, { name: "  After  ", model: "  opus  " }, true);
 
@@ -660,9 +657,8 @@ test("report requires a valid status and a non-empty message", async () => {
 test("continuous loop stops enqueueing after the 3rd exec error trips the breaker", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
   const loop = await createLoop({
-    userId: "u1",
     machineId,
     name: "Continuous",
     cron: "0 0 1 1 *",
@@ -695,8 +691,8 @@ test("continuous loop stops enqueueing after the 3rd exec error trips the breake
 test("circuit breaker pauses after the configured failure streak", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const loop = (await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
+  (await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
   const gw = gateway();
 
   const base = Date.now() - 60 * 60_000;
@@ -713,8 +709,8 @@ test("circuit breaker pauses after the configured failure streak", async () => {
 test("manual follow-ups are not reclaimed while blocked by a running run or a long-offline machine", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
   await store.addRun({ loopId: loop.id, machineId, phase: "running", requestedBy: "owner", ts: new Date().toISOString() });
   const queued = await store.addRun({ loopId: loop.id, machineId, phase: "pending", requestedBy: "owner", ts: new Date(Date.now() - 8 * 86_400_000).toISOString() });
   const gw = gateway();
@@ -729,8 +725,8 @@ test("manual follow-ups are not reclaimed while blocked by a running run or a lo
 test("an auto deferred pending run past the catch-up horizon retires as `skipped` — no error, no alert", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: false, lastSeen: "2000-01-01T00:00:00Z" }));
-  const loop = (await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
+  (await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: false, lastSeen: "2000-01-01T00:00:00Z" }));
+  const loop = (await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
   const gw = gateway();
 
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "pending", ts: new Date(Date.now() - 8 * 86_400_000).toISOString() }));
@@ -744,8 +740,8 @@ test("an auto deferred pending run past the catch-up horizon retires as `skipped
 test("sweep marks a reclaimed run token report-only while preserving one wake-report", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const loop = (await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
+  (await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
   const staleTs = new Date(Date.now() - 30 * 60_000).toISOString();
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: staleTs }));
   const rt = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId });
@@ -781,8 +777,8 @@ test("a stale sweep observation that loses its phase CAS has zero side effects",
 test("a pending reclaim CAS cannot overwrite a concurrent poll claim", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
   const queued = await store.enqueueRun(loop.id, { requestedBy: "system" });
   if (!("run" in queued)) throw new Error("expected queued run");
   const stalePending = queued.run;
@@ -800,9 +796,9 @@ test("a pending reclaim CAS cannot overwrite a concurrent poll claim", async () 
 test("sweep keeps an online pending row as durable queued work", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const activeLoop = await createLoop({ userId: "u1", machineId, name: "active", cron: "0 0 1 1 *", enabled: true });
-  const waitingLoop = await createLoop({ userId: "u1", machineId, name: "waiting", cron: "0 0 1 1 *", enabled: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
+  const activeLoop = await createLoop({ machineId, name: "active", cron: "0 0 1 1 *", enabled: true });
+  const waitingLoop = await createLoop({ machineId, name: "waiting", cron: "0 0 1 1 *", enabled: true });
   await store.addRun({ loopId: activeLoop.id, machineId, phase: "running", ts: new Date().toISOString() });
   const old = new Date(Date.now() - 30 * 60_000).toISOString();
   const waiting = await store.addRun({
@@ -817,8 +813,8 @@ test("sweep keeps an online pending row as durable queued work", async () => {
 test("stale offline expiration cannot cancel a concurrently promoted/coalesced row", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: false });
-  const loop = await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: false });
+  const loop = await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
   const old = new Date(Date.now() - 8 * 86_400_000).toISOString();
   const pending = await store.addRun({
     loopId: loop.id, machineId, phase: "pending",
@@ -840,8 +836,8 @@ test("stale offline expiration cannot cancel a concurrently promoted/coalesced r
 test("sweep is INACTIVITY-based: a >20min run reported in currentRuns is NOT reclaimed", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const loop = (await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
+  (await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
   const staleTs = new Date(Date.now() - 30 * 60_000).toISOString();
   const run = (await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: staleTs }));
 
@@ -864,8 +860,8 @@ test("sweep is INACTIVITY-based: a >20min run reported in currentRuns is NOT rec
 test("currentRuns heartbeat refresh is scoped to the owning machine", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = await createLoop({ userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await createLoop({ machineId, name: "L", cron: "0 0 1 1 *", enabled: true });
   const run = await store.addRun({ id: "single-active", loopId: loop.id, machineId, phase: "running", ts: new Date().toISOString() });
   await pollV4(gateway(), token, {
     currentRuns: [
@@ -930,7 +926,7 @@ test("report clips valid diagnostic strings and durably rejects a non-string err
 test("poll persists the daemon version, updating only when it changes", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await tokens.rememberConnectKey(token, { userId: "shared" });
+  await tokens.rememberConnectKey(token);
   await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64", version: "0.8.0" } });
   expect((await store.getMachine(machineId))!.daemonVersion).toBe("0.8.0");
   await gateway().pollV4(token, { protocolVersion: 4, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { host: "mac", platform: "darwin", arch: "arm64", version: "0.9.0" } });
@@ -944,9 +940,8 @@ test("poll persists the daemon version, updating only when it changes", async ()
 async function seededCli() {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true }));
+  (await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(deviceToken), online: true }));
   const loop = (await createLoop({
-    userId: "u1",
     machineId,
     name: "L",
     cron: "0 0 1 1 *",
@@ -1029,7 +1024,7 @@ test("cli device stop is update-gated before mutation and never falsely advertis
 
 test("cli stop finds the requested loop's run when another loop is also running", async () => {
   const { deviceToken, machineId } = await seededCli();
-  const target = await createLoop({ userId: "u1", machineId, name: "target", cron: "0 0 1 1 *", enabled: true });
+  const target = await createLoop({ machineId, name: "target", cron: "0 0 1 1 *", enabled: true });
   const targetRun = await store.addRun({ loopId: target.id, machineId, phase: "running", ts: new Date().toISOString() });
   await tokens.registerRunLease({ runId: targetRun.id, loopId: target.id, machineId });
 
@@ -1136,8 +1131,8 @@ test("cli device credential: log/show of a loop on ANOTHER machine is a flat 404
   const { deviceToken } = (await seededCli());
   const otherDevice = tokens.mintDeviceToken();
   const otherMachineId = tokens.machineIdFromToken(otherDevice);
-  (await store.createMachine({ id: otherMachineId, userId: "u2", name: "M2", tokenHash: tokens.sha256(otherDevice), online: true }));
-  const otherLoop = (await createLoop({ userId: "u2", machineId: otherMachineId, name: "Other", cron: "0 0 1 1 *", enabled: true }));
+  (await store.createMachine({ id: otherMachineId, name: "M2", tokenHash: tokens.sha256(otherDevice), online: true }));
+  const otherLoop = (await createLoop({ machineId: otherMachineId, name: "Other", cron: "0 0 1 1 *", enabled: true }));
   const gw = gateway();
   expect((await gw.cli(deviceToken, ["log", otherLoop.id])).status).toBe(404);
   expect((await gw.cli(deviceToken, ["show", otherLoop.id])).status).toBe(404);

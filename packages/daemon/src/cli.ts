@@ -36,6 +36,8 @@ async function main(): Promise<number> {
       return (await import("./help.js")).printVersion();
     case "daemonCommand":
       return runDaemonCommand(r.command, r.args);
+    case "server":
+      return (await import("./server-cli.js")).runServer(r.args);
     case "create":
       return (await import("./create.js")).runCreate(r.args);
     case "skill":

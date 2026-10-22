@@ -1,7 +1,7 @@
 {
   "name": "@kky42/pievo",
-  "version": "2.4.10",
-  "description": "Pievo daemon — runs on your machine, connects to a Pievo server, and executes scheduled loops via your local coding agent (Claude Code, Codex, or Pi). One binary, two roles (daemon / loop callback).",
+  "version": "3.0.0",
+  "description": "Pievo — run scheduled coding-agent loops (Claude Code, Codex, or Pi) across your devices. `pievo server` hosts the dashboard; `pievo daemon` runs loops on each device.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -31,6 +31,7 @@
     "prepublishOnly": "node scripts/clean-dist.mjs && tsc"
   },
   "dependencies": {
+    "@kky42/pievo-server": "^3.0.0",
     "pino": "^10.3.1",
     "pino-pretty": "^13.1.3"
   },

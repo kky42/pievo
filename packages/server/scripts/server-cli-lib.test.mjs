@@ -29,6 +29,8 @@ const tempDir = () => {
 describe("pievo-server argument parser", () => {
   test("parses detached and foreground starts", () => {
     expect(parseArgs(["start"])).toMatchObject({ command: "start", foreground: false });
+    expect(parseArgs(["start"])).not.toHaveProperty("https");
+    expect(parseArgs(["restart", "--no-https"])).toMatchObject({ command: "restart", https: false });
     expect(parseArgs(["start", "--foreground", "--host=0.0.0.0", "--port", "4000"]))
       .toMatchObject({ command: "start", foreground: true, host: "0.0.0.0", port: "4000" });
   });
@@ -37,44 +39,44 @@ describe("pievo-server argument parser", () => {
     expect(() => parseArgs(["update"])).toThrow(/unknown command/);
     expect(() => parseArgs(["start", "--wat"])).toThrow(/unknown option/);
     expect(() => parseArgs(["status", "--port", "4000"])).toThrow(/only accepts --data-dir/);
+    expect(() => parseArgs(["stop", "--no-https"])).toThrow(/unknown option/);
   });
 });
 
 describe("launcher environment plan", () => {
   test("published defaults remain user-level and production-only", () => {
     const plan = buildEnvPlan({ command: "start" }, {});
-    expect(plan.dataDir).toBe(path.join(os.homedir(), ".pievo"));
+    expect(plan.dataDir).toBe(path.join(os.homedir(), ".pievo-server"));
     expect(plan.port).toBe(3000);
     expect(plan.env.NODE_ENV).toBe("production");
   });
 
-  test("is local-only, persistent, and pglite by default", () => {
+  test("listens on every interface with Tailscale HTTPS by default", () => {
     const plan = buildEnvPlan({ command: "start", dataDir: "./state" }, {});
-    expect(plan.host).toBe("127.0.0.1");
+    expect(plan.host).toBe("0.0.0.0");
     expect(plan.port).toBe(3000);
-    expect(plan.env.PIEVO_DB).toBe("pglite");
+    expect(plan.https).toBe(true);
     expect(plan.pidFile).toBe(`${plan.dataDir}/server.pid`);
     expect(plan.logFile).toBe(`${plan.dataDir}/server.log`);
     expect(plan.readyUrl).toBe("http://127.0.0.1:3000/api/ready");
   });
 
-  test("respects external database and explicit bind environment", () => {
+  test("respects explicit bind environment", () => {
     const plan = buildEnvPlan({ command: "start" }, {
-      DATABASE_URL: "postgres://db/x",
       HOST: "::1",
       PORT: "4321",
       PIEVO_DATA_DIR: "/var/lib/pievo",
     });
     expect(plan.host).toBe("::1");
     expect(plan.port).toBe(4321);
-    expect(plan.env.PIEVO_DB).toBeUndefined();
+    expect(plan.dataDir).toBe("/var/lib/pievo");
     expect(plan.readyUrl).toBe("http://[::1]:4321/api/ready");
   });
 
   test("restart preserves the recorded bind unless a flag or environment overrides it", () => {
-    const record = { host: "192.0.2.4", port: 4567 };
+    const record = { host: "192.0.2.4", port: 4567, https: false };
     expect(buildRestartPlan({ command: "restart", dataDir: "/tmp/x" }, {}, record))
-      .toMatchObject({ host: "192.0.2.4", port: 4567, dataDir: "/tmp/x" });
+      .toMatchObject({ host: "192.0.2.4", port: 4567, dataDir: "/tmp/x", https: false });
     expect(buildRestartPlan({ command: "restart", dataDir: "/tmp/x", host: "localhost" }, { PORT: "9999" }, record))
       .toMatchObject({ host: "localhost", port: 9999, dataDir: "/tmp/x" });
   });
@@ -94,9 +96,8 @@ describe("launcher environment plan", () => {
       KEEP_ME: "yes",
       NODE_ENV: "production",
       PIEVO_DATA_DIR: "/tmp/pievo-fg",
-      PIEVO_DB: "pglite",
-      NITRO_HOST: "127.0.0.1",
-      HOST: "127.0.0.1",
+      NITRO_HOST: "0.0.0.0",
+      HOST: "0.0.0.0",
       NITRO_PORT: "4567",
       PORT: "4567",
     });

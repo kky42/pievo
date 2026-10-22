@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useRouter } from '@tanstack/react-router'
+import { useNavigate } from '@tanstack/react-router'
 import { Tooltip } from '@base-ui/react/tooltip'
 import { listLoops } from '../server/loopApi'
 import { listMachines } from '../server/machineFns'
@@ -8,10 +8,8 @@ import { LoopCard } from './LoopCard'
 import { LoopFilterBar } from './LoopFilterBar'
 import { MachinesModal } from './MachinesModal'
 import { ComposeModal } from './ComposeModal'
-import { OpenModeWarning } from './OpenModeWarning'
 import { PievoLogo } from './PievoLogo'
 import { GITHUB_URL, GitHubIcon } from './SocialLinks'
-import { signOut, useSession } from '../lib/auth-client'
 import { filterLoops, loopFilterKey, loopFilterOptions, type LoopFilter } from '../lib/loopFilters'
 
 export interface DashboardData {
@@ -19,20 +17,12 @@ export interface DashboardData {
   machines: MachineSummary[]
 }
 
-/** Loops and machines change between polls. Authorization is derived server-side
- * from the current session; clients do not send tenant identifiers. */
-export async function fetchLiveData() {
+export async function fetchLiveData(): Promise<DashboardData> {
   const [loops, machines] = await Promise.all([listLoops(), listMachines()])
   return { loops, machines }
 }
 
-export function DashboardView({
-  initial,
-  mode,
-}: {
-  initial: DashboardData
-  mode: 'auth' | 'open'
-}) {
+export function DashboardView({ initial }: { initial: DashboardData }) {
   // Render loader data until the first successful in-page refresh. This matters
   // when TanStack Router re-enters with cached data and then supplies its fresh
   // loader result: copying `initial` into a one-time state seed would ignore that
@@ -42,23 +32,9 @@ export function DashboardView({
   const { loops, machines } = live ?? initial
   const online = machines.filter((m) => m.online).length
   const navigate = useNavigate()
-  const router = useRouter()
-  const { data: session } = useSession()
-  const [signingOut, setSigningOut] = useState(false)
   const [composeOpen, setComposeOpen] = useState(false)
   const [machinesOpen, setMachinesOpen] = useState(false)
   const [filter, setFilter] = useState<LoopFilter>({ kind: 'all' })
-
-  async function logout() {
-    setSigningOut(true)
-    try {
-      await signOut()
-      await navigate({ to: '/' })
-      await router.invalidate()
-    } finally {
-      setSigningOut(false)
-    }
-  }
 
   // Silent background refresh — fetch-then-set (like the detail pages), NOT
   // router.invalidate: invalidate re-runs the loader, whose Promise.all THROWS
@@ -110,21 +86,11 @@ export function DashboardView({
       <header className="glass glass-bar sticky top-0 z-50">
         <div className="mx-auto flex max-w-[1180px] items-center gap-2 px-4 py-2.5 sm:gap-3 sm:px-8">
           <span className="shrink-0"><PievoLogo size={30} /></span>
-          <span className={`shrink-0 text-[18px] font-semibold tracking-[-0.015em] text-display ${mode === 'auth' ? 'hidden sm:inline' : ''}`}>Pievo</span>
+          <span className="shrink-0 text-[18px] font-semibold tracking-[-0.015em] text-display">Pievo</span>
           <div className="flex-1" />
           <a href={GITHUB_URL} target="_blank" rel="noreferrer" aria-label="GitHub repository" title="GitHub" className={`${headerIconBtn} hidden sm:inline-flex`}>
             <GitHubIcon className="size-[17px]" />
           </a>
-          {mode === 'auth' && (
-            <div className="flex shrink-0 items-center gap-2">
-              <span className="hidden max-w-48 truncate text-label text-secondary md:inline" title={session?.user.email ?? session?.user.name ?? 'Account'}>
-                {session?.user.email ?? session?.user.name ?? 'Account'}
-              </span>
-              <button onClick={() => void logout()} disabled={signingOut} className={headerBtn}>
-                {signingOut ? 'Signing out…' : 'Sign out'}
-              </button>
-            </div>
-          )}
           <button onClick={() => setMachinesOpen(true)} aria-label={`${online} ${online === 1 ? 'machine' : 'machines'} online`} className={`${headerBtn} gap-1.5 px-2 sm:px-3`}>
             <span className={`inline-block size-1.5 rounded-full ${online ? 'bg-rubik-green' : 'bg-disabled'}`} />
             <span className="sm:hidden">{online}</span>
@@ -140,7 +106,6 @@ export function DashboardView({
       </header>
 
       <main className="mx-auto max-w-[1180px] px-8 pb-24">
-        {mode === 'open' && <OpenModeWarning className="mt-6" />}
         <section className="pb-2 pt-14 text-center">
           <h1 className="font-pixel text-[clamp(28px,4.5vw,38px)] leading-[1.15] text-display">What should happen while you sleep?</h1>
           <div className="mt-7"><button onClick={() => setComposeOpen(true)} className="inline-flex cursor-pointer items-center gap-1.5 rounded-full bg-display px-6 py-2.5 text-body font-medium text-paper transition-opacity hover:opacity-85">Start a new loop <span aria-hidden>→</span></button></div>

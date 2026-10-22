@@ -2,11 +2,9 @@
  * Server-side reads over a loop's current exact artifacts. Pure helpers
  * (no request/session context) so they're shared by the lazy server fns
  * (`getArtifacts` / `getArtifact` in loopApi) AND the download route, and are
- * directly unit-testable against an injected blob store — authorization is the
- * caller's loop (the server fn via `ownedLoop`, the route via `canAccessLoop`).
+ * directly unit-testable against an injected blob store.
  *
- * The bytes live in the gateway's BlobStore (local by default, R2 when configured);
- * here we only read them — never write — so the feature is strictly read-only and
+ * The bytes live in the gateway's local BlobStore; here we only read them — never write — so the feature is strictly read-only and
  * the server's zero-exec invariant holds (it decodes text, never interprets it).
  */
 import * as store from "../db/store.js";

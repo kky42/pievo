@@ -1,11 +1,6 @@
 /**
- * Data-access layer over Drizzle — replaces c0's file-per-loop store. The API is
- * function-style; persistence is relational (loops and runs are separate tables,
- * and `owner: PeerRef` is gone → `userId` + `machineId`).
- *
- * Under Postgres (postgres-js / pglite) the drizzle session is ASYNC, so every
- * DB-touching function returns a Promise. The 5 pure, DB-free helpers stay sync.
- * Using Drizzle (not raw SQL) keeps the dialect swap a swap, not a rewrite.
+ * Data-access layer over Drizzle. Loop-locked state transitions live here; every
+ * DB-touching function is async, while the pure helpers stay sync.
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { Cron } from "croner";
@@ -64,10 +59,6 @@ export async function listLoops(): Promise<Loop[]> {
   return db.select().from(loops);
 }
 
-export async function listLoopsForUser(userId: string): Promise<Loop[]> {
-  return db.select().from(loops).where(eq(loops.userId, userId));
-}
-
 export async function getLoop(id: string): Promise<Loop | undefined> {
   return (await db.select().from(loops).where(eq(loops.id, id)))[0];
 }
@@ -115,12 +106,9 @@ export async function createLoop(input: CreateLoopInput): Promise<Loop> {
   return db.transaction(async (tx) => {
     // Fence machine deletion: a loop can only commit while its machine exists,
     // and forceDeleteMachine's UPDATE lock waits for this key-share lock.
-    const machine = (await tx.select({ id: machines.id, userId: machines.userId }).from(machines)
+    const machine = (await tx.select({ id: machines.id }).from(machines)
       .where(eq(machines.id, input.machineId)).for("key share"))[0];
     if (!machine) throw new Error(`machine ${input.machineId} does not exist`);
-    if (machine.userId !== input.userId) {
-      throw new Error(`machine ${input.machineId} is owned by a different user`);
-    }
     return (await tx.insert(loops).values(row).returning())[0]!;
   });
 }
@@ -1418,12 +1406,6 @@ export async function listMachines(): Promise<Machine[]> {
   return db.select().from(machines).orderBy(asc(machines.name), asc(machines.id));
 }
 
-export async function listMachinesForUser(userId: string): Promise<Machine[]> {
-  return db.select().from(machines)
-    .where(eq(machines.userId, userId))
-    .orderBy(asc(machines.name), asc(machines.id));
-}
-
 export async function getMachine(id: string): Promise<Machine | undefined> {
   return (await db.select().from(machines).where(eq(machines.id, id)))[0];
 }
@@ -1439,22 +1421,16 @@ export async function updateMachine(id: string, patch: Partial<NewMachine>): Pro
 
 export type ForceDeleteMachineResult =
   | { state: "deleted"; loopIds: string[] }
-  | { state: "not-found" }
-  | { state: "forbidden" };
+  | { state: "not-found" };
 
 /** Atomically retire all loop authority, remove server-owned machine data, revoke
- * enrollment, and delete the machine. Auth-mode callers pass `ownerUserId` so
- * ownership is rechecked under the same lock as deletion; open/server callers omit it. */
-export async function forceDeleteMachine(id: string, ownerUserId?: string): Promise<ForceDeleteMachineResult> {
+ * enrollment, and delete the machine. */
+export async function forceDeleteMachine(id: string): Promise<ForceDeleteMachineResult> {
   return db.transaction(async (tx) => {
-    const machine = (await tx.select({ id: machines.id, userId: machines.userId })
+    const machine = (await tx.select({ id: machines.id })
       .from(machines).where(eq(machines.id, id)).for("update"))[0];
     if (!machine) return { state: "not-found" };
-    if (ownerUserId !== undefined && machine.userId !== ownerUserId) return { state: "forbidden" };
     const ownedLoops = await tx.select().from(loops).where(eq(loops.machineId, id)).for("update");
-    if (ownerUserId !== undefined && ownedLoops.some((loop) => loop.userId !== ownerUserId)) {
-      return { state: "forbidden" };
-    }
     for (const loop of ownedLoops) {
       if (!(await forceDeleteLoopTx(tx, loop.id))) throw new Error(`failed to delete loop ${loop.id}`);
     }

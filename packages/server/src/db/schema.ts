@@ -1,14 +1,7 @@
 /**
- * Pievo business schema (Drizzle, Postgres `pg-core` dialect).
- *
- * Core machine / loop / run tables live alongside Better Auth ownership data.
- * `userId` is the owning user's id. We use
- * Drizzle (not raw SQL) so the store is single-sourced across the driver tiers
- * (postgres-js on Supabase; embedded pglite for local/self-host + tests) — the
- * query-builder API is identical, only `db/index.ts` branches the driver.
- *
- * Timestamp values are represented as ISO strings across both drivers. JSON
- * columns use `jsonb().$type<>()`; booleans use native `boolean()`.
+ * Pievo schema (Drizzle, Postgres `pg-core` dialect, served by embedded PGlite).
+ * Pievo is single-user: no row carries an owner. Timestamp values are ISO
+ * strings; JSON columns use `jsonb().$type<>()`.
  */
 import { sql } from "drizzle-orm";
 import { pgTable, text, integer, boolean, jsonb, index, uniqueIndex, timestamp, check } from "drizzle-orm/pg-core";
@@ -42,7 +35,6 @@ export const machines = pgTable(
   "machines",
   {
     id: text("id").primaryKey(),
-    userId: text("user_id").notNull(),
     name: text("name").notNull(),
     hostname: text("hostname"),
     platform: text("platform"),
@@ -62,14 +54,12 @@ export const machines = pgTable(
     online: boolean("online").notNull().default(false),
     createdAt: text("created_at").notNull(),
   },
-  (t) => [index("machines_user_idx").on(t.userId)],
 );
 
 export const loops = pgTable(
   "loops",
   {
     id: text("id").primaryKey(),
-    userId: text("user_id").notNull(),
     /** Execution machine (set at creation; no cross-machine fallback). */
     machineId: text("machine_id").notNull(),
     name: text("name").notNull(),
@@ -109,7 +99,6 @@ export const loops = pgTable(
     updatedAt: text("updated_at").notNull(),
   },
   (t) => [
-    index("loops_user_idx").on(t.userId),
     index("loops_machine_idx").on(t.machineId),
     index("delete_requested_loops").on(t.deleteRequestedAt).where(sql`${t.deleteRequestedAt} IS NOT NULL`),
     check("loops_agent_check", sql`${t.agent} IN ('claude-code', 'codex', 'pi')`),
@@ -229,18 +218,18 @@ export const terminalReportIncidents = pgTable(
 );
 
 // One row per minted connect key, keyed by the machine id derived from it
-// (`m-sha256(token)[:16]`) so enrollment can recover the owner without storing
-// the key itself. Rows expire after CONNECT_KEY_TTL_MS (lazy on read + pruned on
-// write).
+// (`m-sha256(token)[:16]`) so first-poll enrollment can be authorized without
+// storing the key itself. Machine deletion removes the row, so a still-running
+// daemon cannot re-register a deleted machine. Rows expire after
+// CONNECT_KEY_TTL_MS (lazy on read + pruned on write).
 export const connectKeys = pgTable("connect_keys", {
   machineId: text("machine_id").primaryKey(),
-  userId: text("user_id").notNull(),
   /** Mint time (ISO) — drives the TTL. */
   mintedAt: text("minted_at").notNull(),
 });
 
 // After a run, the daemon reads only configured exact paths. Blob bytes live in
-// local or configured object storage keyed by sha256, not in the business DB.
+// the local blob store keyed by sha256, not in the business DB.
 // These tables hold the deduplicated metadata and each loop's current manifest.
 
 /**

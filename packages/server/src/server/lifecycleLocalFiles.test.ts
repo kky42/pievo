@@ -29,8 +29,8 @@ beforeAll(async () => {
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
 
 async function loop(id: string, machineId: string) {
-  await store.createMachine({ id: machineId, userId: 'owner', name: machineId, tokenHash: `hash-${machineId}`, online: true, daemonProtocol: 4 })
-  return store.createLoop({ id, userId: 'owner', machineId, name: id, cron: '0 6 * * *', workdir, enabled: true })
+  await store.createMachine({ id: machineId, name: machineId, tokenHash: `hash-${machineId}`, online: true, daemonProtocol: 4 })
+  return store.createLoop({ id, machineId, name: id, cron: '0 6 * * *', workdir, enabled: true })
 }
 
 function expectSentinel() {
@@ -66,17 +66,17 @@ test('Pause, Stop, Delete, and Force-delete only mutate server state and never r
 test('machine force-delete atomically removes its loops and revokes enrollment', async () => {
   const token = tokens.mintDeviceToken()
   const machineId = tokens.machineIdFromToken(token)
-  await tokens.rememberConnectKey(token, { userId: 'owner' })
-  await store.createMachine({ id: machineId, userId: 'owner', name: 'cascade-machine', tokenHash: tokens.sha256(token), online: true })
-  const first = await store.createLoop({ id: 'cascade-a', userId: 'owner', machineId, name: 'cascade-a', cron: '0 6 * * *', workdir, enabled: true })
-  const second = await store.createLoop({ id: 'cascade-b', userId: 'owner', machineId, name: 'cascade-b', cron: '0 7 * * *', workdir, enabled: true })
+  await tokens.rememberConnectKey(token)
+  await store.createMachine({ id: machineId, name: 'cascade-machine', tokenHash: tokens.sha256(token), online: true })
+  const first = await store.createLoop({ id: 'cascade-a', machineId, name: 'cascade-a', cron: '0 6 * * *', workdir, enabled: true })
+  const second = await store.createLoop({ id: 'cascade-b', machineId, name: 'cascade-b', cron: '0 7 * * *', workdir, enabled: true })
 
-  const deleted = await store.forceDeleteMachine(machineId, 'owner')
+  const deleted = await store.forceDeleteMachine(machineId)
   expect(deleted.state).toBe('deleted')
   if (deleted.state === 'deleted') expect(deleted.loopIds).toEqual(expect.arrayContaining([first.id, second.id]))
   expect(await store.getMachine(machineId)).toBeUndefined()
   expect(await store.getLoop(first.id)).toBeUndefined()
   expect(await store.getLoop(second.id)).toBeUndefined()
-  expect(await tokens.readConnectKeyBinding(token)).toBeUndefined()
+  expect(await tokens.connectKeyValid(token)).toBe(false)
   expectSentinel()
 })

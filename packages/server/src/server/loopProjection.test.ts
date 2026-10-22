@@ -30,9 +30,8 @@ beforeEach(async () => {
 });
 
 async function seed(agent: "claude-code" | "codex" | "pi") {
-  await store.createMachine({ id: "m-a", userId: "u1", name: "M", tokenHash: "h", online: true });
+  await store.createMachine({ id: "m-a", name: "M", tokenHash: "h", online: true });
   return store.createLoop({
-    userId: "u1",
     machineId: "m-a",
     name: "L",
     cron: "0 8 * * *",

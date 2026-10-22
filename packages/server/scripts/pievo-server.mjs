@@ -24,6 +24,7 @@ import {
   withLaunchNonce,
   writePidRecord,
 } from "./server-cli-lib.mjs";
+import { currentHttpsUrl, disableHttps, enableHttps, reachableUrls, tailscaleInfo } from "./server-network.mjs";
 
 const scriptFile = fileURLToPath(import.meta.url);
 const packageRoot = path.resolve(path.dirname(scriptFile), "..");
@@ -37,7 +38,6 @@ const LOCK_HANDOFF_TIMEOUT_MS = 5_000;
 function installShutdown(plan, expected) {
   let stopping = false;
   let stopSignal;
-  let prestartChild;
   let nitroLoaded = false;
   let replayedForNitro = false;
 
@@ -55,9 +55,6 @@ function installShutdown(plan, expected) {
       stopSignal = signal;
       console.log(`[pievo-server] received ${signal}; shutting down`);
       shutdownApplication();
-      if (prestartChild?.exitCode === null && prestartChild?.signalCode === null) {
-        try { prestartChild.kill(signal); } catch {}
-      }
     }
   };
 
@@ -69,8 +66,6 @@ function installShutdown(plan, expected) {
 
   return {
     get stopping() { return stopping; },
-    trackPrestart(child) { prestartChild = child; },
-    clearPrestart(child) { if (prestartChild === child) prestartChild = undefined; },
     nitroLoaded() {
       nitroLoaded = true;
       // If the first signal arrived while Nitro was importing, its graceful HTTP
@@ -94,25 +89,32 @@ function installShutdown(plan, expected) {
   };
 }
 
-async function runPrestart(plan, shutdown) {
-  const child = spawn(process.execPath, [path.join(packageRoot, "scripts", "prestart.mjs")], {
-    cwd: packageRoot,
-    env: plan.env,
-    stdio: "inherit",
-  });
-  shutdown.trackPrestart(child);
-  try {
-    const result = await new Promise((resolve, reject) => {
-      child.once("error", reject);
-      child.once("exit", (code, signal) => resolve({ code, signal }));
-    });
-    if (shutdown.stopping) throw new Error("startup interrupted by shutdown signal");
-    if (result.code !== 0) {
-      throw new Error(`migration prestart failed (${result.signal ? `signal ${result.signal}` : `exit ${result.code ?? "unknown"}`})`);
-    }
-  } finally {
-    shutdown.clearPrestart(child);
+/** Publish Tailscale HTTPS (when enabled) and pass the best connect URL to the server. */
+function publishNetwork(plan) {
+  const tailscale = tailscaleInfo();
+  let https;
+  let httpsNote;
+  if (plan.https && tailscale) {
+    const result = enableHttps(tailscale, plan.port);
+    if (result.ok) https = result.url;
+    else httpsNote = result.reason;
   }
+  const urls = reachableUrls({ host: plan.host, port: plan.port, https, tailscale });
+  return { urls, httpsNote, plan: { ...plan, env: { ...plan.env, PIEVO_PUBLIC_URL: urls.connect } } };
+}
+
+function retractHttps(record) {
+  if (record?.https === false) return;
+  const tailscale = tailscaleInfo();
+  if (tailscale) disableHttps(tailscale, record.port);
+}
+
+function printUrls(urls, httpsNote) {
+  console.log(`  local      ${urls.local}`);
+  if (urls.lan.length) console.log(`  lan        ${urls.lan.join("   ")}`);
+  if (urls.tailscale.length) console.log(`  tailscale  ${urls.tailscale.join("   ")}`);
+  if (urls.https) console.log(`  https      ${urls.https}`);
+  if (httpsNote) console.log(`  https      unavailable: ${httpsNote}`);
 }
 
 async function waitForPidAuthority(plan, expected, shutdown) {
@@ -127,7 +129,7 @@ async function waitForPidAuthority(plan, expected, shutdown) {
 
 async function serve(plan, expected) {
   // Signal handling comes first: startup remains controllable while waiting for
-  // the parent record and while the async migration child is running.
+  // the parent record.
   const shutdown = installShutdown(plan, expected);
   if (!(await waitForPidAuthority(plan, expected, shutdown))) {
     throw new Error("launcher did not establish pid authority before startup");
@@ -137,15 +139,6 @@ async function serve(plan, expected) {
   const current = pidStatus(plan.pidFile);
   if (current.state !== "running" || current.record.pid !== process.pid || current.record.startTime !== expected.startTime) {
     throw new Error("pid authority changed before startup");
-  }
-
-  await runPrestart(plan, shutdown);
-  if (shutdown.stopping) return;
-  const afterPrestart = readPidRecord(plan.pidFile);
-  if (afterPrestart?.pid !== expected.pid
-    || afterPrestart.startTime !== expected.startTime
-    || afterPrestart.launchNonce !== expected.launchNonce) {
-    throw new Error("pid authority changed during migration prestart");
   }
 
   try {
@@ -160,7 +153,7 @@ async function serve(plan, expected) {
     if (shutdown.stopping) return;
     if (!ready) throw new Error(`server did not become ready at ${plan.readyUrl}`);
     updatePidRecordState(plan, expected, "running");
-    console.log(`[pievo-server] ready at http://${plan.host}:${plan.port} (pid ${process.pid})`);
+    console.log(`[pievo-server] ready on ${plan.host}:${plan.port} (pid ${process.pid})`);
   } catch (error) {
     // Once Nitro may own a listening socket, ask its srvx signal handler to drain
     // HTTP rather than forcing process.exit from our application handler.
@@ -196,6 +189,7 @@ async function waitForDetachedReady(plan, expected) {
 }
 
 async function cleanFailedLaunch(plan, expected) {
+  retractHttps(expected);
   const state = recordedProcessState(expected);
   if (state.state === "gone") {
     clearPidRecord(plan.pidFile, expected);
@@ -212,7 +206,7 @@ async function cleanFailedLaunch(plan, expected) {
 async function start(basePlan, foreground) {
   const existing = pidStatus(basePlan.pidFile);
   if (existing.state === "running") {
-    console.log(`pievo-server is already ${existing.record.state === "starting" ? "starting" : "running"} (pid ${existing.record.pid}, http://${existing.record.host}:${existing.record.port})`);
+    console.log(`pievo server is already ${existing.record.state === "starting" ? "starting" : "running"} (pid ${existing.record.pid}); run \`pievo server status\` for its URLs`);
     return;
   }
   if (existing.state === "unsafe") throw new Error(`${existing.error}; refusing to start over the existing pid record`);
@@ -221,13 +215,15 @@ async function start(basePlan, foreground) {
   try {
     const raced = pidStatus(basePlan.pidFile);
     if (raced.state === "running") {
-      console.log(`pievo-server is already ${raced.record.state === "starting" ? "starting" : "running"} (pid ${raced.record.pid})`);
+      console.log(`pievo server is already ${raced.record.state === "starting" ? "starting" : "running"} (pid ${raced.record.pid})`);
       return;
     }
     if (raced.state === "unsafe") throw new Error(`${raced.error}; refusing to start over the existing pid record`);
 
-    const plan = withLaunchNonce(basePlan);
+    const published = publishNetwork(basePlan);
+    const plan = withLaunchNonce(published.plan);
     if (foreground) {
+      printUrls(published.urls, published.httpsNote);
       applyProcessEnv(plan.env);
       const record = writePidRecord(plan, {
         launchNonce: plan.launchNonce,
@@ -274,8 +270,9 @@ async function start(basePlan, foreground) {
       }
       throw error;
     }
-    console.log(`pievo-server started (pid ${child.pid}, http://${plan.host}:${plan.port})`);
-    console.log(`log: ${plan.logFile}`);
+    console.log(`pievo server started (pid ${child.pid})`);
+    printUrls(published.urls, published.httpsNote);
+    console.log(`  log        ${plan.logFile}`);
   } finally {
     release();
   }
@@ -319,8 +316,10 @@ async function stop(plan) {
       clearPidRecord(plan.pidFile, stoppedRecord);
     }
 
-    if (stoppedRecord) console.log(`pievo-server stopped (pid ${stoppedRecord.pid})`);
-    else console.log("pievo-server is not running");
+    if (stoppedRecord) {
+      retractHttps(stoppedRecord);
+      console.log(`pievo server stopped (pid ${stoppedRecord.pid})`);
+    } else console.log("pievo server is not running");
   } finally {
     release?.();
   }
@@ -329,17 +328,20 @@ async function stop(plan) {
 function status(plan) {
   const current = pidStatus(plan.pidFile);
   if (current.state === "running") {
-    console.log(`pievo-server is ${current.record.state === "starting" ? "starting" : "running"} (pid ${current.record.pid})`);
-    console.log(`url: http://${current.record.host}:${current.record.port}`);
-    console.log(`data: ${plan.dataDir}`);
+    const { host, port } = current.record;
+    const tailscale = tailscaleInfo();
+    const https = tailscale ? currentHttpsUrl(tailscale, port) : undefined;
+    console.log(`pievo server is ${current.record.state === "starting" ? "starting" : "running"} (pid ${current.record.pid})`);
+    printUrls(reachableUrls({ host, port, https, tailscale }));
+    console.log(`  data       ${plan.dataDir}`);
     return 0;
   }
   if (current.state === "unsafe") {
     const pid = current.record?.pid ? ` (pid ${current.record.pid})` : "";
-    console.error(`pievo-server status is unsafe: ${current.error}${pid}`);
+    console.error(`pievo server status is unsafe: ${current.error}${pid}`);
     return 1;
   }
-  console.log(`pievo-server is stopped${current.stale ? " (cleared stale pid file)" : ""}`);
+  console.log(`pievo server is stopped${current.stale ? " (cleared stale pid file)" : ""}`);
   return 1;
 }
 

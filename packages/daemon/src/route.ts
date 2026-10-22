@@ -15,6 +15,7 @@ export type Route =
   | { kind: "help"; verb?: string }
   | { kind: "version" }
   | { kind: "daemonCommand"; command?: string; args: string[] }
+  | { kind: "server"; args: string[] }
   | { kind: "create"; args: string[] }
   | { kind: "skill"; args: string[] }
   | { kind: "log"; args: string[] }
@@ -29,6 +30,9 @@ export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
   const verb = argv[0];
   if (verb !== undefined && HELP_FLAGS.has(verb)) return { kind: "help" };
   if (verb !== undefined && VERSION_FLAGS.has(verb)) return { kind: "version" };
+
+  // The server launcher owns its own flags and help.
+  if (verb === "server") return { kind: "server", args: argv.slice(1) };
 
   if (verb === "daemon") {
     const command = argv[1];

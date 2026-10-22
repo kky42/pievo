@@ -1,18 +1,21 @@
 # @kky42/pievo
 
-The machine-side daemon and CLI for [Pievo](https://github.com/kky42/pievo), a
-self-hosted scheduled prompt runner. It polls a Pievo server, launches Claude Code,
-Codex, or Pi in a configured local working directory, and durably reports the result.
+The CLI for [Pievo](https://github.com/kky42/pievo), a single-user scheduled prompt
+runner for your own devices. `pievo server` hosts the dashboard and scheduler on one
+device (via the bundled `@kky42/pievo-server`); `pievo daemon` runs on every device
+that executes loops. The daemon polls the server, launches Claude Code, Codex, or Pi
+in a configured local working directory, and durably reports the result.
 
-Pievo is BYOA. The server schedules, authenticates, and stores data but never starts an
-LLM or executes user code. This package is the execution plane and uses the provider
-credentials, files, and tools available on your machine.
+The server schedules and stores data but never starts an LLM or executes user code.
+The daemon is the execution plane and uses the provider credentials, files, and tools
+available on its device. See the [project README](https://github.com/kky42/pievo#readme)
+for server setup and LAN/Tailscale access.
 
 ## Requirements
 
 - Node.js `>=22.13` (Pi 0.82.1 itself requires Node.js `>=22.19`)
 - Claude Code (`claude`), Codex (`codex`), or Pi (`pi`) installed and authenticated
-- a Pievo server URL and secret device/connect credential from its web UI
+- a Pievo server URL and connect command from its dashboard
 
 > The daemon launches coding agents in unattended mode. They can use the files,
 > commands, and credentials exposed to the process. Use a disposable project or set
@@ -49,6 +52,10 @@ pievo daemon restart
 
 ```text
 pievo                         Show this machine's loops and recent runs.
+
+Server (dashboard device)
+  server start [--foreground] [--port <n>] [--host <addr>] [--no-https]
+  server status | stop | restart
 
 Daemon lifecycle
   daemon connect --server-url <url> [--connect-key <dk_…>]

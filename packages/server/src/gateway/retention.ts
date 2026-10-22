@@ -1,6 +1,6 @@
 /**
  * Artifact-storage retention + garbage collection — the policy that keeps the
- * local/R2 byte store from growing monotonically.
+ * local byte store from growing monotonically.
  *
  * The artifact pipeline is content-addressed: blob BYTES are keyed by sha256 and
  * deduped across every loop/run. When a path is deleted or its content changes,
@@ -27,7 +27,7 @@
  */
 import { logger } from "../logger.js";
 import * as store from "../db/store.js";
-import { blobGcGraceMs, snapshotRetention } from "../env.js";
+import { BLOB_GC_GRACE_MS, SNAPSHOT_RETENTION } from "../env.js";
 import type { BlobStore } from "./blobstore.js";
 
 const log = logger.child({ mod: "retention" });
@@ -42,7 +42,7 @@ export interface MaintainResult {
  * (most-recent-N). Returns the total number pruned. This is what makes an old
  * snapshot's now-unreferenced blobs collectable by gcBlobs().
  */
-export async function pruneSnapshots(keep: number = snapshotRetention()): Promise<number> {
+export async function pruneSnapshots(keep: number = SNAPSHOT_RETENTION): Promise<number> {
   let pruned = 0;
   for (const loopId of await store.loopIdsWithSnapshots()) {
     pruned += await store.pruneRunSnapshots(loopId, keep);
@@ -74,7 +74,7 @@ export async function pruneSnapshots(keep: number = snapshotRetention()): Promis
  *         so that file re-uploads its bytes on the next sync. We never leave a
  *         live blobs row pointing at deleted bytes.
  */
-export async function gcBlobs(blobStore: BlobStore, graceMs: number = blobGcGraceMs()): Promise<number> {
+export async function gcBlobs(blobStore: BlobStore, graceMs: number = BLOB_GC_GRACE_MS): Promise<number> {
   const refs = await store.liveBlobRefs();
   const cutoff = new Date(Date.now() - graceMs).toISOString();
   const candidates = await store.blobHashesOlderThan(cutoff);
@@ -120,9 +120,14 @@ export async function gcBlobs(blobStore: BlobStore, graceMs: number = blobGcGrac
  * same pass reclaim the blobs it just unpinned. Idempotent and safe with no
  * garbage (returns zeros).
  */
-export async function maintainStorage(blobStore: BlobStore): Promise<MaintainResult> {
-  const snapshotsPruned = await pruneSnapshots();
-  const blobsReclaimed = await gcBlobs(blobStore);
+export interface MaintainOptions {
+  keep?: number;
+  graceMs?: number;
+}
+
+export async function maintainStorage(blobStore: BlobStore, options: MaintainOptions = {}): Promise<MaintainResult> {
+  const snapshotsPruned = await pruneSnapshots(options.keep);
+  const blobsReclaimed = await gcBlobs(blobStore, options.graceMs);
   if (snapshotsPruned || blobsReclaimed) {
     log.info({ snapshotsPruned, blobsReclaimed }, "storage maintenance");
   }

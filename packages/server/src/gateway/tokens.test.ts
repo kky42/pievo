@@ -125,11 +125,10 @@ test("pruneExpiredLeases retires expired grace while preserving active, in-windo
   expect((await tokens.resolveLease(alreadyRetired))?.state).toBe("retired");
 });
 
-test("rememberConnectKey durably binds only the machine owner", async () => {
+test("rememberConnectKey stores only the derived machine id", async () => {
   const key = tokens.mintDeviceToken();
-  await tokens.rememberConnectKey(key, { userId: "u-mint" });
-  expect(await tokens.readConnectKeyBinding(key)).toEqual({ userId: "u-mint" });
-  expect(await tokens.readConnectKeyBinding(key)).toEqual({ userId: "u-mint" });
+  await tokens.rememberConnectKey(key);
+  expect(await tokens.connectKeyValid(key)).toBe(true);
 
   const { connectKeys } = await import("../db/schema.js");
   const { eq } = await import("drizzle-orm");
@@ -137,20 +136,19 @@ test("rememberConnectKey durably binds only the machine owner", async () => {
     .where(eq(connectKeys.machineId, tokens.machineIdFromToken(key))))[0];
   expect(row).toEqual({
     machineId: tokens.machineIdFromToken(key),
-    userId: "u-mint",
     mintedAt: expect.any(String),
   });
 });
 
-test("connect-key bindings expire after the TTL (lazy on read)", async () => {
+test("connect keys expire after the TTL (lazy on read)", async () => {
   const key = tokens.mintDeviceToken();
-  await tokens.rememberConnectKey(key, { userId: "u-ttl" });
+  await tokens.rememberConnectKey(key);
   const past = Date.now() + tokens.CONNECT_KEY_TTL_MS + 1;
-  expect(await tokens.readConnectKeyBinding(key, past)).toBeUndefined();
+  expect(await tokens.connectKeyValid(key, past)).toBe(false);
 });
 
-test("readConnectKeyBinding tolerates an absent or unknown key", async () => {
-  expect(await tokens.readConnectKeyBinding(null)).toBeUndefined();
-  expect(await tokens.readConnectKeyBinding(undefined)).toBeUndefined();
-  expect(await tokens.readConnectKeyBinding("never-minted-key")).toBeUndefined();
+test("connectKeyValid tolerates an absent or unknown key", async () => {
+  expect(await tokens.connectKeyValid(null)).toBe(false);
+  expect(await tokens.connectKeyValid(undefined)).toBe(false);
+  expect(await tokens.connectKeyValid("never-minted-key")).toBe(false);
 });

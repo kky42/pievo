@@ -1,13 +1,20 @@
 import { daemonVersion } from "./version.js";
 
-const HELP_BODY = ` connects this machine to a Pievo server and runs scheduled prompts locally.
+const HELP_BODY = ` runs scheduled coding-agent prompts across your devices.
 
 Usage: pievo [command] [options]
 
   pievo                   Show this machine's loops and recent runs.
 
-Install and daemon lifecycle
+Server (on the device that hosts the dashboard)
   npm install -g @kky42/pievo@latest
+  server start [--foreground] [--port <n>] [--no-https]
+                          Serve the dashboard to this machine, your LAN, and Tailscale.
+  server status           Show the server process and every URL it is reachable at.
+  server stop | server restart
+                          See \`pievo server --help\` for all options.
+
+Daemon (on every device that runs loops)
   daemon connect --server-url <url> [--connect-key <dk_…>]
                           Save/select a server and ensure its daemon is running.
   daemon connections      List saved servers; * marks the active server.
@@ -42,7 +49,7 @@ In-run report
 
 Upgrade
   npm install -g @kky42/pievo@latest
-  pievo daemon restart
+  pievo daemon restart    (and \`pievo server restart\` on the server device)
 
   -h, --help              Show this help.
   -v, --version           Print the daemon version and exit.

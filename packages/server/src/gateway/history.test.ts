@@ -27,8 +27,8 @@ beforeEach(async () => {
 });
 
 async function seeded() {
-  const machine = await store.createMachine({ id: "m-history", userId: "u1", name: "M", tokenHash: "h", online: true });
-  const loop = await store.createLoop({ workdir: "/work", userId: "u1", machineId: machine.id, name: "History", cron: "0 0 * * *", enabled: true });
+  const machine = await store.createMachine({ id: "m-history", name: "M", tokenHash: "h", online: true });
+  const loop = await store.createLoop({ workdir: "/work", machineId: machine.id, name: "History", cron: "0 0 * * *", enabled: true });
   return { machine, loop };
 }
 
@@ -95,7 +95,7 @@ test("detail history keeps diagnostics and diff availability", async () => {
 
 test("detail selector is loop-scoped", async () => {
   const { machine, loop } = await seeded();
-  const other = await store.createLoop({ workdir: "/work", userId: "u1", machineId: machine.id, name: "Other", cron: "0 0 * * *", enabled: true });
+  const other = await store.createLoop({ workdir: "/work", machineId: machine.id, name: "Other", cron: "0 0 * * *", enabled: true });
   const foreign = await store.addRun({ loopId: other.id, machineId: machine.id, phase: "done", ts: "2026-01-04T00:00:00Z" });
   expect((await history.readLoopHistory(loop, { run: foreign.id, json: true })).status).toBe(404);
 });

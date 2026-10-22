@@ -97,6 +97,8 @@ describe("classify lifecycle routing", () => {
     expect(classify(["daemon", "start", "--foreground"], {})).toEqual({ kind: "daemonCommand", command: "start", args: ["--foreground"] });
     expect(classify(["daemon", "stop", "--force"], {})).toEqual({ kind: "daemonCommand", command: "stop", args: ["--force"] });
     expect(classify(["daemon", "restart"], {})).toEqual({ kind: "daemonCommand", command: "restart", args: [] });
+    expect(classify(["server", "start", "--port", "4000"], {})).toEqual({ kind: "server", args: ["start", "--port", "4000"] });
+    expect(classify(["server", "--help"], {})).toEqual({ kind: "server", args: ["--help"] });
     expect(classify(["daemon", "status"], {})).toEqual({ kind: "daemonCommand", command: "status", args: [] });
   });
 

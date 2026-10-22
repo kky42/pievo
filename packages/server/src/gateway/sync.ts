@@ -33,7 +33,7 @@ async function mapConcurrent<T>(items: T[], limit: number, visit: (item: T) => P
 
 export class ArtifactSync {
   constructor(
-    /** Artifact bytes (local filesystem by default, R2 when configured; injectable in tests). */
+    /** Artifact bytes (local filesystem; injectable in tests). */
     private readonly blobStore: BlobStore = createBlobStore(),
   ) {}
 
@@ -60,7 +60,7 @@ export class ArtifactSync {
     const needHashes = new Set<string>();
     // Metadata and byte storage are separate durability facts. Cache their joined
     // state per hash so a manifest that reuses one blob performs at most one DB
-    // lookup and one filesystem/R2 probe.
+    // lookup and one filesystem probe.
     const storedState = new Map<string, { metadata: boolean; bytes: boolean }>();
     const stateFor = async (hash: string): Promise<{ metadata: boolean; bytes: boolean }> => {
       const cached = storedState.get(hash);
@@ -70,9 +70,8 @@ export class ArtifactSync {
       storedState.set(hash, state);
       return state;
     };
-    // Presence checks can be filesystem stats or R2 HEAD requests. Prewarm each
-    // in-cap hash with bounded concurrency so missing byte objects are repaired
-    // without serializing remote round trips.
+    // Prewarm each in-cap hash's presence check with bounded concurrency so
+    // missing byte objects are repaired without serializing filesystem stats.
     const manifestHashes = new Set(
       manifest.flatMap((entry) => entry.oversize ? [] : [entry.hash]),
     );

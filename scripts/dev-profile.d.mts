@@ -7,7 +7,6 @@ export interface DevelopmentEnvironment {
   PIEVO_DATA_DIR: string;
   PIEVO_HOME: string;
   PIEVO_PORT: string;
-  PIEVO_BASE_URL: string;
   PIEVO_CLI: string;
 }
 

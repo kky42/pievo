@@ -1,21 +1,11 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
-const h = vi.hoisted(() => ({
-  scope: { enforce: true, userId: 'user-a' as string | null },
-  readBytes: vi.fn(),
-}))
+const h = vi.hoisted(() => ({ readBytes: vi.fn() }))
 
 vi.mock('../db/store.js', () => ({
   getLoop: vi.fn(async (id: string) => {
-    if (id === 'loop-a') return { id, userId: 'user-a' }
-    if (id === 'loop-b') return { id, userId: 'user-b' }
-    return undefined
+    return id === 'loop-a' ? { id } : undefined
   }),
-}))
-vi.mock('../auth.js', () => ({
-  requestScope: vi.fn(async () => h.scope),
-  canAccessLoop: (loopUserId: string | null | undefined, scope: typeof h.scope) =>
-    !scope.enforce || (!!scope.userId && loopUserId === scope.userId),
 }))
 vi.mock('../server/artifactFiles.js', () => ({ readLoopArtifactBytes: (...args: unknown[]) => h.readBytes(...args) }))
 
@@ -31,7 +21,6 @@ const call = (pathname: string) =>
 const bytes = Buffer.from([1, 2, 3, 4])
 
 beforeEach(() => {
-  h.scope = { enforce: true, userId: 'user-a' }
   h.readBytes.mockReset()
   h.readBytes.mockResolvedValue({ status: 200, bytes, binary: true, filename: 'pic.png' })
 })
@@ -60,28 +49,17 @@ describe('/api/artifact/$loopId/$ validation', () => {
   })
 })
 
-describe('/api/artifact/$loopId/$ owner authorization', () => {
-  test('a known cross-user loop and a missing loop return the same 404', async () => {
-    const crossUser = await call('/api/artifact/loop-b/report.md')
-    const missing = await call('/api/artifact/missing/report.md')
-    expect(crossUser.status).toBe(404)
-    expect(missing.status).toBe(404)
-    expect(await crossUser.json()).toEqual({ error: 'not found' })
-    expect(await missing.json()).toEqual({ error: 'not found' })
+describe('/api/artifact/$loopId/$ lookup', () => {
+  test('a missing loop returns 404 without reading bytes', async () => {
+    const res = await call('/api/artifact/missing/report.md')
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ error: 'not found' })
     expect(h.readBytes).not.toHaveBeenCalled()
   })
 
-  test('signed-out auth mode cannot download an artifact', async () => {
-    h.scope = { enforce: true, userId: null }
-    const res = await call('/api/artifact/loop-a/report.md')
-    expect(res.status).toBe(404)
-    expect(await res.json()).toEqual({ error: 'not found' })
-  })
-
-  test('open mode can download artifacts regardless of stored owner', async () => {
-    h.scope = { enforce: false, userId: null }
-    expect((await call('/api/artifact/loop-b/report.md')).status).toBe(200)
-    expect(h.readBytes).toHaveBeenCalledWith('loop-b', 'report.md')
+  test('an existing loop streams the requested path', async () => {
+    expect((await call('/api/artifact/loop-a/report.md')).status).toBe(200)
+    expect(h.readBytes).toHaveBeenCalledWith('loop-a', 'report.md')
   })
 })
 

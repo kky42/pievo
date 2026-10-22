@@ -61,9 +61,9 @@ const MIN = 60_000;
 async function seedMachineLoop(lastSeenAgoMs: number) {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "Laptop", tokenHash: tokens.sha256(token), online: true }));
+  (await store.createMachine({ id: machineId, name: "Laptop", tokenHash: tokens.sha256(token), online: true }));
   (await store.updateMachine(machineId, { lastSeen: isoAgo(lastSeenAgoMs) }));
-  const loop = (await store.createLoop({ workdir: "/work", userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
+  const loop = (await store.createLoop({ workdir: "/work", machineId, name: "L", cron: "0 0 1 1 *", enabled: true }));
   return { machineId, loop };
 }
 

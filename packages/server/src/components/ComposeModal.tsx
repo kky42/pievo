@@ -1,19 +1,19 @@
 import { useEffect, useState } from 'react'
 import { getConfig, mintConnectKey } from '../server/loopApi'
-import { daemonConnectCommand } from '../lib/daemonCommands'
+import { connectServerUrl, daemonConnectCommand } from '../lib/daemonCommands'
 import { Modal, ModalHead } from './Modal'
 import { btnSm } from './ui'
 
 export function ComposeModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [token, setToken] = useState<string | null>(null)
-  const [config, setConfig] = useState<{ pievoCli: string; customCli: boolean } | null>(null)
+  const [config, setConfig] = useState<{ pievoCli: string; customCli: boolean; publicUrl: string | null } | null>(null)
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [configError, setConfigError] = useState(false)
 
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
   const command = token && config
-    ? daemonConnectCommand(origin, token, config.pievoCli, config.customCli)
+    ? daemonConnectCommand(connectServerUrl(origin, config.publicUrl), token, config.pievoCli, config.customCli)
     : ''
 
   useEffect(() => {
@@ -32,11 +32,7 @@ export function ComposeModal({ open, onClose }: { open: boolean; onClose: () => 
       .then((value) => { if (active) setConfig(value) })
       .catch(() => { if (active) setConfigError(true) })
     void mintConnectKey()
-      .then((result) => {
-        if (!active) return
-        if ('token' in result) setToken(result.token)
-        else setError(result.error)
-      })
+      .then((result) => { if (active) setToken(result.token) })
       .catch(() => { if (active) setError('could not mint a connect key') })
     return () => { active = false }
   }, [open])

@@ -59,15 +59,15 @@ const TEST_ARTIFACTS = [
 async function seed() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
-  const loop = (await store.createLoop({ workdir: "/work", userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, artifacts: TEST_ARTIFACTS }));
+  (await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true }));
+  const loop = (await store.createLoop({ workdir: "/work", machineId, name: "L", cron: "0 0 1 1 *", enabled: true, artifacts: TEST_ARTIFACTS }));
   return { token, machineId, loop };
 }
 
 test("sync and blob ingress reject a truncated-machine-id collision", async () => {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "different-full-hash", online: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: "different-full-hash", online: true });
   const art = syncWithStore().art;
 
   expect((await art.sync(token, { loopId: "loop-any", manifest: [] })).status).toBe(401);
@@ -271,7 +271,7 @@ test("device-token auth is exact: malformed/unknown credentials are 401; another
 
   const otherToken = tokens.mintDeviceToken();
   const otherId = tokens.machineIdFromToken(otherToken);
-  (await store.createMachine({ id: otherId, userId: "u2", name: "B", tokenHash: tokens.sha256(otherToken), online: true }));
+  (await store.createMachine({ id: otherId, name: "B", tokenHash: tokens.sha256(otherToken), online: true }));
   const wrong = await art.sync(otherToken, { loopId: loop.id, manifest: [] });
   expect(wrong.status).toBe(404);
 });
@@ -341,7 +341,7 @@ test("putBlob refuses a blob the sync handshake never asked this machine for (40
   const { art, blobs } = syncWithStore();
 
   // A well-formed, self-consistent blob that NO artifact_files row references —
-  // accepting it would make any device token an uncapped R2 write channel.
+  // accepting it would make any device token an uncapped storage write channel.
   const content = "unsolicited bytes";
   const hash = sha256(content);
   const res = await art.putBlob(token, hash, Buffer.from(content));
@@ -359,7 +359,7 @@ test("putBlob refuses a hash only ANOTHER machine's loop references (per-machine
 
   const tokenB = tokens.mintDeviceToken();
   const machineB = tokens.machineIdFromToken(tokenB);
-  (await store.createMachine({ id: machineB, userId: "u2", name: "B", tokenHash: tokens.sha256(tokenB), online: true }));
+  (await store.createMachine({ id: machineB, name: "B", tokenHash: tokens.sha256(tokenB), online: true }));
   const denied = await art.putBlob(tokenB, hash, Buffer.from(content));
   expect(denied.status).toBe(403);
   expect(await blobs.has(hash)).toBe(false);

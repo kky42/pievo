@@ -24,11 +24,11 @@ import type { ReportIncident, ReportIncidentCode, ReportIncidentFaultDomain } fr
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery } from "./delivery.js";
 import { createBlobStore, type BlobStore } from "./blobstore.js";
-import { maintainStorage, type MaintainResult } from "./retention.js";
+import { maintainStorage, type MaintainOptions, type MaintainResult } from "./retention.js";
 import { isValidSemver } from "../lib/semver.js";
-import { snapshotRetention } from "../env.js";
+import { SNAPSHOT_RETENTION } from "../env.js";
 import {
-  readConnectKeyBinding,
+  connectKeyValid,
   TERMINAL_GRACE_MS,
   resolveLease,
   retireLease,
@@ -74,7 +74,7 @@ const RUN_TIMEOUT_MS = Number.isFinite(configuredRunTimeoutMs) && configuredRunT
   : 20 * 60_000;
 /** The ONLY keys an owner `editLoop` patch may touch. A key outside this set is
  *  rejected (400) rather than silently ignored, so a `--json` typo fails loudly
- *  and identity/ownership columns (id/userId/machineId/timestamps) can never be
+ *  and identity columns (id/machineId/timestamps) can never be
  *  patched over the device-token edit surface. Exported for `cli.ts`
  *  (the `new`/`edit` verb help lists these keys). */
 export const EDITABLE_LOOP_FIELDS = LOOP_EDIT_FIELDS;
@@ -265,7 +265,7 @@ function coerceTelemetry(body: MachineReportBody): Partial<Pick<NewRun, "duratio
 export class MachineGateway {
   constructor(
     readonly scheduler: Scheduler,
-    /** Artifact bytes (local filesystem default, R2 when configured; injectable in tests).
+    /** Artifact bytes (local filesystem; injectable in tests).
      *  Only `maintainStorage` (retention/GC) reads it here - the byte-ingress
      *  methods live on `ArtifactSync` (`sync.ts`), and boot hands BOTH classes
      *  the same instance. */
@@ -418,14 +418,14 @@ export class MachineGateway {
    * grace window + final re-check protect freshly-written/referenced blobs) and
    * idempotent with no garbage. Best-effort — never throws into the caller.
    */
-  async maintainStorage(): Promise<MaintainResult> {
+  async maintainStorage(options?: MaintainOptions): Promise<MaintainResult> {
     if (this.maintenanceRunning) {
       log.info("storage maintenance already in progress — skipping this tick");
       return { snapshotsPruned: 0, blobsReclaimed: 0 };
     }
     this.maintenanceRunning = true;
     try {
-      return await maintainStorage(this.blobStore);
+      return await maintainStorage(this.blobStore, options);
     } catch (err) {
       log.warn({ err: err instanceof Error ? err.message : String(err) }, "storage maintenance failed");
       return { snapshotsPruned: 0, blobsReclaimed: 0 };
@@ -446,16 +446,13 @@ export class MachineGateway {
     const { machineId } = auth;
     let machine = auth.machine;
     if (!machine) {
-      // First contact requires a live connect-key binding in every deployment
-      // mode. Machine deletion revokes that binding, so a still-running daemon
-      // cannot recreate server data after the owner deletes it.
-      const binding = await readConnectKeyBinding(deviceToken);
-      if (!binding) {
+      // First contact requires a live connect-key binding. Machine deletion
+      // revokes it, so a still-running daemon cannot recreate a deleted machine.
+      if (!(await connectKeyValid(deviceToken))) {
         return { status: 401, body: { error: "unknown device token — connect this machine first" } };
       }
       machine = await store.createMachine({
         id: machineId,
-        userId: binding.userId,
         // Always name it (never blank) — listMachines hides empty-name rows, so a
         // self-registered machine must carry a name to show up + be counted.
         name: info?.host || `machine-${machineId.slice(2, 8)}`,
@@ -611,8 +608,8 @@ export class MachineGateway {
     // Unknown or deleted identity: keep the response enumeration-safe while
     // telling the local CLI that its saved identity must be replaced explicitly.
     if (!machine) {
-      const connectKeyValid = (await readConnectKeyBinding(deviceToken)) !== undefined;
-      return { status: 200, body: { registered: false, claimValid: connectKeyValid, online: false, name: null, lastSeen: null, daemonProtocol: null } };
+      const claimValid = await connectKeyValid(deviceToken);
+      return { status: 200, body: { registered: false, claimValid, online: false, name: null, lastSeen: null, daemonProtocol: null } };
     }
     const fresh = !!machine.lastSeen && Date.now() - Date.parse(machine.lastSeen) < ONLINE_TTL_MS;
     const online = !!machine.online && fresh;
@@ -656,7 +653,6 @@ export class MachineGateway {
     const auth = await authenticateDeviceToken(deviceToken);
     if (!auth.ok) return auth.response;
     const { machineId } = auth;
-    const machine = auth.machine!;
 
     // Envelope fields are transport concerns; loopConfig.ts validates every
     // configuration field together. Unknown config keys fail loudly.
@@ -685,7 +681,6 @@ export class MachineGateway {
         return { status: 200, body: { ok: true, id: existing.id, name: existing.name, idempotent: true, text: `loop: ${existing.name}\nid: ${existing.id}\nreplayed: true` } };
       }
       const loop = await store.createLoop({
-        userId: machine.userId,
         machineId,
         ...row,
       });
@@ -918,7 +913,7 @@ export class MachineGateway {
   private async captureRunSnapshot(runId: string, loopId: string): Promise<void> {
     try {
       await store.putRunSnapshot(runId, loopId, await store.buildLoopManifest(loopId));
-      await store.pruneRunSnapshots(loopId, snapshotRetention());
+      await store.pruneRunSnapshots(loopId, SNAPSHOT_RETENTION);
     } catch (err) {
       log.warn({ runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
     }

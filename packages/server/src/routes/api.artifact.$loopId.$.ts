@@ -15,11 +15,10 @@ import { imageMime } from '../lib/artifactKind'
  *    scripts - so an inline SVG can't run script against the session even if the
  *    URL is opened directly. Non-image inline requests fall back to attachment.
  *
- * Authed via the web session (not a machine token) and scoped to the loop owner,
- * mirroring the server functions' `ownedLoop` gate. Path-safe: the relative path is
+ * Served to dashboard callers like the server functions. Path-safe: the relative path is
  * normalized + traversal-rejected before it ever reaches a blob, and blob keys
- * are content hashes, never the user path. Reads stream from the BlobStore
- * (local by default, R2 when configured); the route never writes.
+ * are content hashes, never the user path. Reads stream from the local
+ * BlobStore; the route never writes.
  */
 const PREFIX = '/api/artifact/'
 
@@ -45,9 +44,6 @@ export const Route = createFileRoute('/api/artifact/$loopId/$')({
         const store = await import('../db/store.js')
         const loop = await store.getLoop(loopId)
         if (!loop) return Response.json({ error: 'not found' }, { status: 404 })
-        const { requestScope, canAccessLoop } = await import('../auth.js')
-        if (!canAccessLoop(loop.userId, await requestScope()))
-          return Response.json({ error: 'not found' }, { status: 404 })
 
         const { readLoopArtifactBytes } = await import('../server/artifactFiles.js')
         const r = await readLoopArtifactBytes(loopId, relPath)

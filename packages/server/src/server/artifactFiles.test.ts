@@ -13,7 +13,6 @@ let store: TestStore;
 let boot: typeof import("./boot.js");
 let tokens: typeof import("../gateway/tokens.js");
 let artifacts: typeof import("./artifactFiles.js");
-let auth: typeof import("../auth.js");
 let art: Awaited<ReturnType<typeof import("./boot.js")["getArtifactSync"]>>;
 
 beforeAll(async () => {
@@ -26,7 +25,6 @@ beforeAll(async () => {
   boot = await import("./boot.js");
   tokens = await import("../gateway/tokens.js");
   artifacts = await import("./artifactFiles.js");
-  auth = await import("../auth.js");
   art = await boot.getArtifactSync();
 });
 
@@ -43,9 +41,8 @@ function sha256(s: string | Buffer): string {
 async function seed() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true });
-  const loop = await store.createLoop({ workdir: "/work",
-    userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true,
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true });
+  const loop = await store.createLoop({ workdir: "/work", machineId, name: "L", cron: "0 0 1 1 *", enabled: true,
     artifacts: ["z.md", "a/b.txt", "logo.png", "big.bin", "keep.md", "data/raw.json", "huge.bin"],
   });
   return { token, machineId, loop };
@@ -133,11 +130,4 @@ test("readLoopArtifactBytes: path-safe (400), oversize/missing (404), valid byte
   expect((await art.putBlob(token, sha256(bytes), bytes)).status).toBe(200);
   expect((await artifacts.readLoopArtifactBytes(loop.id, "huge.bin")).status).toBe(404);
   expect((await artifacts.readLoopArtifactBytes(loop.id, "ghost.md")).status).toBe(404);
-});
-
-test("canAccessLoop isolates owners in auth mode and shares loops in open mode", () => {
-  expect(auth.canAccessLoop("user-b", { enforce: false, userId: null })).toBe(true);
-  expect(auth.canAccessLoop("user-a", { enforce: true, userId: "user-a" })).toBe(true);
-  expect(auth.canAccessLoop("user-b", { enforce: true, userId: "user-a" })).toBe(false);
-  expect(auth.canAccessLoop("user-a", { enforce: true, userId: null })).toBe(false);
 });

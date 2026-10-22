@@ -10,7 +10,7 @@
  * Leases and connect-key bindings are DURABLE (run_leases / connect_keys
  * tables): they must survive a deploy, or every restart 401s the in-flight
  * runs' callbacks/finalize and prevents a freshly connected machine from
- * enrolling under its owner. The 15-minute `new` idempotency window stays in-process;
+ * enrolling. The 15-minute `new` idempotency window stays in-process;
  * losing it only degrades retry deduplication, never persisted data.
  */
 import { createHash, randomBytes } from "node:crypto";
@@ -41,12 +41,8 @@ export function isDeviceTokenShape(token: string): boolean {
   return DEVICE_TOKEN_RE.test(token);
 }
 
-// The durable binding enrolls one machine under the minting user. Bindings are
+// A durable binding authorizes one machine's first-poll enrollment. Bindings are
 // keyed by the derived machine id, so the key itself is never stored.
-export interface ConnectKeyBinding {
-  userId: string;
-}
-
 /** Keep bindings long enough for a leisurely paste, then drop (bounded table). */
 export const CONNECT_KEY_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -54,23 +50,21 @@ function connectKeyFresh(mintedAt: string, now: number): boolean {
   return now - Date.parse(mintedAt) <= CONNECT_KEY_TTL_MS;
 }
 
-/** Bind a freshly minted connect key to its owner and prune expired rows. */
-export async function rememberConnectKey(connectKey: string, binding: ConnectKeyBinding): Promise<void> {
+/** Record a freshly minted connect key and prune expired rows. */
+export async function rememberConnectKey(connectKey: string): Promise<void> {
   const now = new Date();
   await db.delete(connectKeys).where(lt(connectKeys.mintedAt, new Date(now.getTime() - CONNECT_KEY_TTL_MS).toISOString()));
   const row = {
     machineId: machineIdFromToken(connectKey),
-    userId: binding.userId,
     mintedAt: now.toISOString(),
   };
   await db.insert(connectKeys).values(row).onConflictDoUpdate({ target: connectKeys.machineId, set: row });
 }
 
-export async function readConnectKeyBinding(connectKey: string | null | undefined, now: number = Date.now()): Promise<ConnectKeyBinding | undefined> {
-  if (!connectKey) return undefined;
+export async function connectKeyValid(connectKey: string | null | undefined, now: number = Date.now()): Promise<boolean> {
+  if (!connectKey) return false;
   const row = (await db.select().from(connectKeys).where(eq(connectKeys.machineId, machineIdFromToken(connectKey))))[0];
-  if (!row || !connectKeyFresh(row.mintedAt, now)) return undefined;
-  return { userId: row.userId };
+  return !!row && connectKeyFresh(row.mintedAt, now);
 }
 
 /**

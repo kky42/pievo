@@ -42,11 +42,11 @@ test("machine terminal payload has one exact top-level allowlist", () => {
 });
 
 async function seedMachine(id = "m-life") {
-  return store.createMachine({ id, userId: "u1", name: id, tokenHash: id, online: true });
+  return store.createMachine({ id, name: id, tokenHash: id, online: true });
 }
 
 async function seedLoop(machineId: string, enabled = true) {
-  return store.createLoop({ workdir: "/work", userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled });
+  return store.createLoop({ workdir: "/work", machineId, name: "L", cron: "0 0 1 1 *", enabled });
 }
 
 test("pause leaves a running run and lease intact, preserving its queued owner follow-up", async () => {
@@ -135,7 +135,7 @@ test("delete waits for execution authority and force delete retires it", async (
 test("protocol v4 rejects old protocols and repeats per-run cancellation", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
   const loop = await seedLoop(machineId);
   const run = await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: new Date().toISOString() });
   await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId });
@@ -154,7 +154,7 @@ test("a complete recovery snapshot keeps a reclaimed run blocking while it is ex
   for (const stage of ["executing", "reporting"] as const) {
     const deviceToken = tokens.mintDeviceToken();
     const machineId = tokens.machineIdFromToken(deviceToken);
-    await store.createMachine({ id: machineId, userId: "u1", name: stage, tokenHash: tokens.sha256(deviceToken), online: true });
+    await store.createMachine({ id: machineId, name: stage, tokenHash: tokens.sha256(deviceToken), online: true });
     const loop = await seedLoop(machineId);
     const interrupted = await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: new Date().toISOString() });
     const runToken = await tokens.registerRunLease({ runId: interrupted.id, loopId: loop.id, machineId });
@@ -173,7 +173,7 @@ test("a complete recovery snapshot keeps a reclaimed run blocking while it is ex
 test("protocol v4 skips a local run's loop and returns one delivery per poll", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
   const occupiedLoop = await seedLoop(machineId);
   const freeLoop = await seedLoop(machineId);
   const older = await store.addRun({
@@ -197,7 +197,7 @@ test("protocol v4 skips a local run's loop and returns one delivery per poll", a
 test("repeated v4 polls accumulate cross-loop concurrency and target cancellations", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
   const a = await seedLoop(machineId);
   const b = await seedLoop(machineId);
   await store.enqueueRun(a.id, { requestedBy: "owner" });
@@ -229,7 +229,7 @@ test("repeated v4 polls accumulate cross-loop concurrency and target cancellatio
 test("an active v4 poll never enters the idle long-poll", async () => {
   const deviceToken = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(deviceToken);
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
   const result = await Promise.race([
     gateway().pollV4Wait(deviceToken, {
       protocolVersion: 4,
@@ -476,7 +476,7 @@ test("cancellation is terminal only when the daemon reports canceled", async () 
 
 test("continuous stop-run restores cadence while loop stop remains unscheduled", async () => {
   const machine = await seedMachine();
-  const runOnlyLoop = await store.createLoop({ workdir: "/work", userId: "u1", machineId: machine.id, name: "run-only", cron: "0 0 1 1 *", scheduleMode: "continuous", continuousDelayMinutes: 5, enabled: true });
+  const runOnlyLoop = await store.createLoop({ workdir: "/work", machineId: machine.id, name: "run-only", cron: "0 0 1 1 *", scheduleMode: "continuous", continuousDelayMinutes: 5, enabled: true });
   const runOnly = await store.addRun({ loopId: runOnlyLoop.id, machineId: machine.id, phase: "running", ts: new Date().toISOString() });
   const runOnlyToken = await tokens.registerRunLease({ runId: runOnly.id, loopId: runOnlyLoop.id, machineId: machine.id });
   await store.requestRunCancel(runOnlyLoop.id, runOnly.id);
@@ -484,7 +484,7 @@ test("continuous stop-run restores cadence while loop stop remains unscheduled",
   expect((await store.getLoop(runOnlyLoop.id))?.nextCadenceAt).toBeTruthy();
 
   const stoppedMachine = await seedMachine("m-continuous-stop");
-  const stoppedLoop = await store.createLoop({ workdir: "/work", userId: "u1", machineId: stoppedMachine.id, name: "stopped", cron: "0 0 1 1 *", scheduleMode: "continuous", continuousDelayMinutes: 5, enabled: true });
+  const stoppedLoop = await store.createLoop({ workdir: "/work", machineId: stoppedMachine.id, name: "stopped", cron: "0 0 1 1 *", scheduleMode: "continuous", continuousDelayMinutes: 5, enabled: true });
   const stopped = await store.addRun({ loopId: stoppedLoop.id, machineId: stoppedMachine.id, phase: "running", ts: new Date().toISOString() });
   const stoppedToken = await tokens.registerRunLease({ runId: stopped.id, loopId: stoppedLoop.id, machineId: stoppedMachine.id });
   await store.stopLoop(stoppedLoop.id);

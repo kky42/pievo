@@ -26,7 +26,7 @@ const machine: MachineSummary = {
   loopCount: 2,
 }
 
-vi.mock('../server/loopApi', () => ({ getConfig: vi.fn(async () => ({ pievoCli: 'pievo', customCli: false })) }))
+vi.mock('../server/loopApi', () => ({ getConfig: vi.fn(async () => ({ pievoCli: 'pievo', customCli: false, publicUrl: null })) }))
 vi.mock('../server/machineFns', () => ({
   listMachines: h.listMachines,
   createMachine: vi.fn(),

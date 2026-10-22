@@ -5,18 +5,13 @@
  * loop/run). The store ONLY writes/reads bytes — it never executes or interprets
  * them — preserving the server's zero-exec invariant.
  *
- * Three implementations behind one small interface:
- *   • LocalBlobStore — durable filesystem default under PIEVO_DATA_DIR/blobs.
- *   • R2BlobStore — Cloudflare R2 (S3-compatible) when credentials are configured.
- *   • MemoryBlobStore — explicit ephemeral selection or injected test fake.
- *
- * The S3 client is dynamic-imported inside R2BlobStore so tests (and any deploy
- * without R2 creds) never load the AWS SDK, and it stays out of the client bundle.
+ * `LocalBlobStore` is the durable store under `<dataDir>/blobs`;
+ * `MemoryBlobStore` is the injected test fake.
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { dataDir, r2Config, type R2Config } from "../env.js";
+import { dataDir } from "../env.js";
 import { logger } from "../logger.js";
 
 const log = logger.child({ mod: "blobstore" });
@@ -72,9 +67,8 @@ export class LocalBlobStore implements BlobStore {
   private ensureInitialized(): Promise<void> {
     return this.initialized ??= (async () => {
       await fs.mkdir(this.root, { recursive: true });
-      // Persist every possibly-new directory entry in the root chain. This matters
-      // with external Postgres: its metadata must never outlive a newly-created
-      // PIEVO_DATA_DIR that vanished after an acknowledged first write.
+      // Persist every possibly-new directory entry in the root chain so blob
+      // metadata never outlives a newly-created data dir after a crash.
       await this.syncDir(path.dirname(path.dirname(this.root)));
       await this.syncDir(path.dirname(this.root));
       await this.syncDir(this.root);
@@ -167,107 +161,8 @@ export class MemoryBlobStore implements BlobStore {
   }
 }
 
-function blobKey(hash: string): string {
-  return `blobs/${hash}`;
-}
-
-export class R2BlobStore implements BlobStore {
-  // Lazily-constructed S3 client (dynamic import keeps the SDK out of tests/bundle).
-  private client: unknown;
-  constructor(private readonly cfg: R2Config) {}
-
-  private async s3(): Promise<any> {
-    if (this.client) return this.client;
-    const { S3Client } = await import("@aws-sdk/client-s3");
-    this.client = new S3Client({
-      region: this.cfg.region,
-      endpoint: this.cfg.endpoint,
-      credentials: { accessKeyId: this.cfg.accessKeyId, secretAccessKey: this.cfg.secretAccessKey },
-      // R2 requires path-style addressing.
-      forcePathStyle: true,
-    });
-    return this.client;
-  }
-
-  async has(hash: string): Promise<boolean> {
-    const { HeadObjectCommand } = await import("@aws-sdk/client-s3");
-    const client = await this.s3();
-    try {
-      await client.send(new HeadObjectCommand({ Bucket: this.cfg.bucket, Key: blobKey(hash) }));
-      return true;
-    } catch (err) {
-      if (isNotFound(err)) return false;
-      throw err;
-    }
-  }
-
-  async put(hash: string, bytes: Buffer): Promise<void> {
-    const { PutObjectCommand } = await import("@aws-sdk/client-s3");
-    const client = await this.s3();
-    await client.send(
-      new PutObjectCommand({ Bucket: this.cfg.bucket, Key: blobKey(hash), Body: bytes, ContentLength: bytes.length }),
-    );
-  }
-
-  async get(hash: string): Promise<Buffer | null> {
-    const { GetObjectCommand } = await import("@aws-sdk/client-s3");
-    const client = await this.s3();
-    try {
-      const res = await client.send(new GetObjectCommand({ Bucket: this.cfg.bucket, Key: blobKey(hash) }));
-      const body = res.Body as { transformToByteArray?: () => Promise<Uint8Array> } | undefined;
-      if (!body?.transformToByteArray) return null;
-      return Buffer.from(await body.transformToByteArray());
-    } catch (err) {
-      if (isNotFound(err)) return null;
-      throw err;
-    }
-  }
-
-  async delete(hash: string): Promise<void> {
-    const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
-    const client = await this.s3();
-    // S3/R2 DELETE is idempotent — deleting an absent key succeeds — so no
-    // not-found special-casing is needed here.
-    await client.send(new DeleteObjectCommand({ Bucket: this.cfg.bucket, Key: blobKey(hash) }));
-  }
-}
-
-function isNotFound(err: unknown): boolean {
-  const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-  return e?.name === "NotFound" || e?.name === "NoSuchKey" || e?.$metadata?.httpStatusCode === 404;
-}
-
-/**
- * The configured blob store: durable local filesystem under PIEVO_DATA_DIR by
- * default; complete R2 credentials preserve the existing R2 selection behavior,
- * while memory requires an explicit selector. Constructed once and shared by every
- * gateway so writes, reads, and GC use the same adapter.
- */
+/** The one local blob store shared by sync writes, artifact reads, and GC. */
 export function createBlobStore(): BlobStore {
-  const selection = process.env.PIEVO_BLOB_STORE?.trim().toLowerCase();
-  if (selection && !["local", "r2", "memory"].includes(selection)) {
-    throw new Error("PIEVO_BLOB_STORE must be local, r2, or memory");
-  }
-  if (selection === "memory") {
-    log.warn(
-      "blob store: EPHEMERAL MEMORY explicitly selected; all artifact bytes are lost on restart",
-    );
-    return new MemoryBlobStore();
-  }
-  if (selection === "local") {
-    const local = new LocalBlobStore();
-    log.info({ root: local.root }, "blob store: local filesystem (explicit)");
-    return local;
-  }
-
-  const cfg = r2Config();
-  if (selection === "r2" && !cfg) {
-    throw new Error("PIEVO_BLOB_STORE=r2 requires complete PIEVO_R2_* configuration");
-  }
-  if (cfg) {
-    log.info({ bucket: cfg.bucket, endpoint: cfg.endpoint }, "blob store: Cloudflare R2");
-    return new R2BlobStore(cfg);
-  }
   const local = new LocalBlobStore();
   log.info({ root: local.root }, "blob store: local filesystem");
   return local;

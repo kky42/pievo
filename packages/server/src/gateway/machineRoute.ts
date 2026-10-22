@@ -1,5 +1,4 @@
 import { MACHINE_BODY_CAP, readJsonBody } from "./http";
-import { machineRouteLimit } from "./rateLimit";
 
 type MachineRouteOptions<T> = {
   missingCredential: string;
@@ -13,8 +12,6 @@ type MachineRouteOptions<T> = {
 export async function machineJsonRoute<T>(request: Request, options: MachineRouteOptions<T>): Promise<Response> {
   const auth = request.headers.get("authorization") ?? "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  const limited = machineRouteLimit(request, token || undefined);
-  if (limited) return limited;
   if (!token) return Response.json({ error: options.missingCredential }, { status: 401 });
 
   const parsed = await readJsonBody(request, MACHINE_BODY_CAP);

@@ -13,7 +13,6 @@ test("development entrypoints use repo-local state and a non-production port", (
   assert.equal(env.PIEVO_DATA_DIR, path.join(repoRoot, ".pievo", "development", "server"));
   assert.equal(env.PIEVO_HOME, path.join(repoRoot, ".pievo", "development", "daemon"));
   assert.equal(env.PIEVO_PORT, "3001");
-  assert.equal(env.PIEVO_BASE_URL, "http://127.0.0.1:3001");
   assert.notEqual(env.PIEVO_DATA_DIR, path.join(os.homedir(), ".pievo"));
   assert.notEqual(env.PIEVO_HOME, path.join(os.homedir(), ".pievo"));
   assert.match(env.PIEVO_CLI, /packages\/daemon\/scripts\/dev\.mjs/);
@@ -24,7 +23,6 @@ test("explicit development environment overrides remain authoritative", () => {
     PIEVO_DATA_DIR: "/custom/server",
     PIEVO_HOME: "/custom/daemon",
     PIEVO_PORT: "4123",
-    PIEVO_BASE_URL: "https://dev.example",
     PIEVO_CLI: "custom-pievo",
   };
 
@@ -33,15 +31,14 @@ test("explicit development environment overrides remain authoritative", () => {
 
 test("file configuration is retained while shell values take precedence", () => {
   const env = developmentProcessEnvironment(
-    { GITHUB_CLIENT_ID: "from-file", PIEVO_PORT: "3002" },
-    { PIEVO_PORT: "3003", PIEVO_AUTH_SECRET: "from-shell" },
+    { PIEVO_LOG_LEVEL: "debug", PIEVO_PORT: "3002" },
+    { PIEVO_PORT: "3003", PIEVO_CLI: "from-shell" },
     { repoRoot, execPath: "/usr/bin/node" },
   );
 
-  assert.equal(env.GITHUB_CLIENT_ID, "from-file");
-  assert.equal(env.PIEVO_AUTH_SECRET, "from-shell");
+  assert.equal(env.PIEVO_LOG_LEVEL, "debug");
+  assert.equal(env.PIEVO_CLI, "from-shell");
   assert.equal(env.PIEVO_PORT, "3003");
-  assert.equal(env.PIEVO_BASE_URL, "http://127.0.0.1:3003");
 });
 
 test("generated CLI protects shell metacharacters in source paths", () => {

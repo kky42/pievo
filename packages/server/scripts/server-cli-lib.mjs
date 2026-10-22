@@ -4,30 +4,32 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const DEFAULT_HOST = "127.0.0.1";
+const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_PORT = 3000;
 const MALFORMED_LOCK_GRACE_MS = 5_000;
 
 export function usage() {
-  return `Usage: pievo-server <start|status|restart|stop> [options]
+  return `Usage: pievo server <start|status|restart|stop> [options]
 
 Commands:
   start                 start in the background (idempotent)
   start --foreground    run in the foreground
-  status                show local process status
+  status                show process status and every URL the server is reachable at
   restart               stop, then start the currently installed server
   stop                  gracefully stop the local server
 
 Options:
-  --host <host>          bind host (default: HOST/NITRO_HOST or 127.0.0.1)
+  --host <host>          bind host (default: HOST/NITRO_HOST or 0.0.0.0)
   --port <port>          bind port (default: PORT/NITRO_PORT/PIEVO_PORT or 3000)
+  --no-https             do not publish https://<device>.ts.net via Tailscale Serve
   --data-dir <path>      select the instance (database, blobs, pid, lock, and log)
   -h, --help             show this help
   -v, --version          print the server version and exit
 
-Restart preserves the recorded instance host/port unless a flag or bind environment
-variable overrides it. The default bind is local-only. Set --host 0.0.0.0 only with
-appropriate auth and network controls.`;
+The server accepts requests only from this machine, private LAN addresses, and
+Tailscale peers. When Tailscale is running, start also publishes the dashboard at
+https://<device>.ts.net (tailnet-only). Restart preserves the recorded host, port,
+and HTTPS choice unless a flag or bind environment variable overrides it.`;
 }
 
 export function parseArgs(argv) {
@@ -42,6 +44,10 @@ export function parseArgs(argv) {
     const arg = argv[i];
     if (arg === "--foreground" && (command === "start" || command === "restart")) {
       out.foreground = true;
+      continue;
+    }
+    if (arg === "--no-https" && (command === "start" || command === "restart")) {
+      out.https = false;
       continue;
     }
     const match = arg.match(/^--(host|port|data-dir)(?:=(.*))?$/);
@@ -74,7 +80,7 @@ function firstSet(env, names) {
 }
 
 export function buildEnvPlan(options, baseEnv = process.env) {
-  const dataDir = path.resolve(options.dataDir || baseEnv.PIEVO_DATA_DIR?.trim() || path.join(os.homedir(), ".pievo"));
+  const dataDir = path.resolve(options.dataDir || baseEnv.PIEVO_DATA_DIR?.trim() || path.join(os.homedir(), ".pievo-server"));
   const host = String(options.host || firstSet(baseEnv, ["NITRO_HOST", "HOST"]) || DEFAULT_HOST).trim();
   if (!host) throw new Error("host cannot be empty");
   const port = validPort(options.port || firstSet(baseEnv, ["NITRO_PORT", "PORT", "PIEVO_PORT"]) || DEFAULT_PORT);
@@ -88,12 +94,12 @@ export function buildEnvPlan(options, baseEnv = process.env) {
     PORT: String(port),
   };
   delete env.PIEVO_SERVER_LAUNCH_NONCE;
-  if (!env.DATABASE_URL && !env.PIEVO_DB) env.PIEVO_DB = "pglite";
   return {
     env,
     dataDir,
     host,
     port,
+    https: options.https !== false,
     pidFile: path.join(dataDir, "server.pid"),
     lockFile: path.join(dataDir, "server.start.lock"),
     logFile: path.join(dataDir, "server.log"),
@@ -102,7 +108,7 @@ export function buildEnvPlan(options, baseEnv = process.env) {
 }
 
 /** Replace the current process environment with the launch plan. Foreground
- * starts need the same bind/database/nonce environment a detached child gets. */
+ * starts need the same bind/data-dir/nonce environment a detached child gets. */
 export function applyProcessEnv(nextEnv, currentEnv = process.env) {
   for (const key of Object.keys(currentEnv)) {
     if (!(key in nextEnv)) delete currentEnv[key];
@@ -118,6 +124,7 @@ export function buildRestartPlan(options, baseEnv, record) {
   if (preserved.port === undefined && firstSet(baseEnv, ["NITRO_PORT", "PORT", "PIEVO_PORT"]) === undefined && record?.port) {
     preserved.port = String(record.port);
   }
+  if (preserved.https === undefined && record?.https === false) preserved.https = false;
   return buildEnvPlan(preserved, baseEnv);
 }
 
@@ -168,7 +175,8 @@ function validPidRecord(value) {
     && ['starting', 'running'].includes(value.state)
     && typeof value.launchNonce === "string"
     && !!value.launchNonce
-    && typeof value.managedGroup === "boolean";
+    && typeof value.managedGroup === "boolean"
+    && (value.https === undefined || typeof value.https === "boolean");
 }
 
 function readPidResult(pidFile) {
@@ -219,6 +227,7 @@ export function writePidRecord(plan, options = {}) {
     startTime,
     host: plan.host,
     port: plan.port,
+    https: plan.https,
     state: options.state ?? "starting",
     launchNonce: options.launchNonce,
     managedGroup: options.managedGroup ?? false,

@@ -90,7 +90,7 @@ test("gated mode: an EXPIRED connect-key does not enroll", async () => {
   enableGate();
   const gw = gateway();
   const deviceToken = tokens.mintDeviceToken();
-  await tokens.rememberConnectKey(deviceToken, { userId: "u1" });
+  await tokens.rememberConnectKey(deviceToken);
   await (db.client as any).exec(
     `UPDATE connect_keys SET minted_at = '${new Date(Date.now() - tokens.CONNECT_KEY_TTL_MS - 1000).toISOString()}'`,
   );
@@ -108,7 +108,7 @@ test("malformed device tokens are rejected early with 401", async () => {
   }
 });
 
-test("open mode: an unknown dk_ token cannot self-register", async () => {
+test("an unknown dk_ token cannot self-register", async () => {
   const gw = gateway();
   const token = tokens.mintDeviceToken();
   const res = await pollV4(gw, token, { host: "dev-box" });
@@ -116,22 +116,21 @@ test("open mode: an unknown dk_ token cannot self-register", async () => {
   expect(await store.getMachine(tokens.machineIdFromToken(token))).toBeUndefined();
 });
 
-test("a remembered connect key enrolls a machine for its bound user", async () => {
+test("a remembered connect key enrolls its machine", async () => {
   const gw = gateway();
   const token = tokens.mintDeviceToken();
-  await tokens.rememberConnectKey(token, { userId: "u1" });
+  await tokens.rememberConnectKey(token);
   const res = await pollV4(gw, token, { host: "dev-box" });
   expect(res.status).toBe(200);
   const machine = await store.getMachine(tokens.machineIdFromToken(token));
-  expect(machine).toMatchObject({ userId: "u1", name: "dev-box" });
-  expect(machine).not.toHaveProperty("teamId");
+  expect(machine).toMatchObject({ name: "dev-box" });
 });
 
 test("a deleted machine cannot recreate itself with its revoked token", async () => {
   const gw = gateway();
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  await tokens.rememberConnectKey(token, { userId: "shared" });
+  await tokens.rememberConnectKey(token);
   expect((await pollV4(gw, token, { host: "dev-box" })).status).toBe(200);
   expect((await store.forceDeleteMachine(machineId)).state).toBe("deleted");
   expect((await pollV4(gw, token, { host: "dev-box" })).status).toBe(401);
@@ -143,7 +142,7 @@ test("a token whose id collides with a registered machine but whose hash differs
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
   // A pre-existing machine on that id, but registered under a DIFFERENT token hash.
-  await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: "some-other-hash", online: true });
+  await store.createMachine({ id: machineId, name: "M", tokenHash: "some-other-hash", online: true });
   const res = await pollV4(gw, token, { host: "x" });
   expect(res.status).toBe(401);
   expect((res.body as { error: string }).error).toMatch(/mismatch/);

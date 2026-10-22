@@ -66,9 +66,9 @@ function gatewayWithStore(): {
 async function seed() {
   const token = tokens.mintDeviceToken();
   const machineId = tokens.machineIdFromToken(token);
-  (await store.createMachine({ id: machineId, userId: "u1", name: "M", tokenHash: tokens.sha256(token), online: true }));
+  (await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(token), online: true }));
   const loop = (await store.createLoop({
-    workdir: "/work", userId: "u1", machineId, name: "L", cron: "0 0 1 1 *", enabled: true,
+    workdir: "/work", machineId, name: "L", cron: "0 0 1 1 *", enabled: true,
     artifacts: ["a.txt", "b.txt", "report.md", "racer.txt", "f.md"],
   }));
   return { token, machineId, loop };
@@ -202,7 +202,7 @@ test("snapshot retention prunes the oldest beyond the window, keeps the newest N
 
 test("pruneSnapshots applies the window across every loop", async () => {
   const { machineId } = (await seed());
-  const l2 = (await store.createLoop({ workdir: "/work", userId: "u1", machineId, name: "L2", cron: "0 0 1 1 *", enabled: true }));
+  const l2 = (await store.createLoop({ workdir: "/work", machineId, name: "L2", cron: "0 0 1 1 *", enabled: true }));
   for (const loopId of [l2.id]) {
     for (let i = 0; i < 4; i++) {
       const run = (await store.addRun({ loopId, machineId, phase: "done", ts: new Date().toISOString() }));
@@ -285,7 +285,6 @@ test("deleting a loop cascades runs/artifact_files/run_snapshots so its blobs be
 });
 
 test("maintainStorage skips a concurrent pass while one is already running (in-flight guard)", async () => {
-  process.env.PIEVO_BLOB_GC_GRACE_MS = "1";
   const base = new MemoryBlobStore();
   const content = "garbage bytes";
   const hash = sha256(content);
@@ -310,8 +309,8 @@ test("maintainStorage skips a concurrent pass while one is already running (in-f
   };
   const gw = new gatewayMod.MachineGateway(scheduler, blocking as any);
 
-  try {
-    const p1 = gw.maintainStorage();
+  {
+    const p1 = gw.maintainStorage({ graceMs: 1 });
     await new Promise((r) => setTimeout(r, 5));
     // A second tick fired while the first is in-flight must SKIP, not run a second
     // pass concurrently (which would re-scan + race the same deletes).
@@ -325,8 +324,6 @@ test("maintainStorage skips a concurrent pass while one is already running (in-f
     expect(await base.has(hash)).toBe(false);
     const r3 = await gw.maintainStorage();
     expect(r3).toEqual({ snapshotsPruned: 0, blobsReclaimed: 0 });
-  } finally {
-    delete process.env.PIEVO_BLOB_GC_GRACE_MS;
   }
 });
 
@@ -351,19 +348,10 @@ test("maintainStorage prunes snapshots then reclaims the blobs they freed", asyn
   (await store.putRunSnapshot(r2.id, loop.id, { "f.md": { hash: recent, size: 18, binary: false, oversize: false } }));
 
   // Window of 1: prune the older snapshot → its blob `old` becomes collectable.
-  // (Use a forced grace via the lower-level call after pruning, since maintainStorage
-  // uses the configured grace; here we drive the env knob to elapse the window.)
-  process.env.PIEVO_BLOB_GC_GRACE_MS = "1";
-  process.env.PIEVO_SNAPSHOT_RETENTION = "1";
   await new Promise((r) => setTimeout(r, 5));
-  try {
-    const res = await gw.maintainStorage();
-    expect(res.snapshotsPruned).toBe(1);
-    expect(res.blobsReclaimed).toBe(1);
-    expect(await blobs.has(old)).toBe(false);
-    expect(await blobs.has(recent)).toBe(true);
-  } finally {
-    delete process.env.PIEVO_BLOB_GC_GRACE_MS;
-    delete process.env.PIEVO_SNAPSHOT_RETENTION;
-  }
+  const res = await gw.maintainStorage({ keep: 1, graceMs: 1 });
+  expect(res.snapshotsPruned).toBe(1);
+  expect(res.blobsReclaimed).toBe(1);
+  expect(await blobs.has(old)).toBe(false);
+  expect(await blobs.has(recent)).toBe(true);
 });

@@ -1,13 +1,16 @@
 # Pievo agent guide
 
-Pievo is a user-isolated scheduled prompt runner and status ledger. The TanStack Start
-server owns scheduling, queueing, auth, persistence, and byte serving; the
-`@kky42/pievo` daemon runs Claude Code, Codex, or Pi on a user's machine.
+Pievo is a single-user scheduled prompt runner and status ledger for one person's
+devices on a LAN or tailnet. The TanStack Start server owns scheduling, queueing,
+persistence, and byte serving; the `@kky42/pievo` CLI runs the server (`pievo server`)
+and the daemon (`pievo daemon`), which runs Claude Code, Codex, or Pi on each device.
 
 ## Invariants
 
 - **Zero exec:** server code never launches an LLM or executes user code. Only the
-  daemon is an execution plane; server computations must be bounded and pure.
+  daemon is an execution plane; server computations must be bounded and pure. The
+  server launcher may run the local `tailscale` CLI (bounded) to publish HTTPS;
+  request handling never spawns processes.
 - A loop has one exclusive cron or continuous schedule, one machine/workdir/agent,
   a non-empty stored prompt, all three status definitions, optional model/effort and
   exact artifact paths, and an enabled state. `packages/server/src/gateway/loopConfig.ts` is
@@ -28,17 +31,18 @@ server owns scheduling, queueing, auth, persistence, and byte serving; the
 - Artifact sync accepts configured exact workdir-relative paths only: no scan or
   globbing. Enforce lexical and realpath containment, regular files, and the 10 MB
   per-file rule. Every configured path is an explicit upload decision.
-- Device tokens impersonate machines; run tokens authorize only report/help. Auth
-  mode scopes human access by stored `userId`; keep ownership checks enumeration-safe.
-  Open mode grants shared administration to every caller and must remain network-
-  restricted. `PIEVO_ROOTS` is an always-applied daemon cwd
-  jail, and server roots may only narrow it.
-- Exactly one server process owns a database. Production must explicitly select
-  PGlite when `DATABASE_URL` is absent. Keep heavy/native server dependencies out of
-  client bundles via dynamic imports.
-- Source development entrypoints use repo-local, mutually isolated server/daemon
-  state and a non-production port; published entrypoints retain user-level defaults.
-  Tests use temporary state and discard inherited deployment credentials. Explicit
+- No login: the network is the human access boundary. `src/start.ts` rejects every
+  request whose peer is not loopback, private LAN, or Tailscale
+  (`server/networkAccess.ts`); `tailscale serve` traffic arrives from loopback. Never
+  add a route that bypasses it. Device tokens impersonate machines and first contact
+  requires a live connect key; run tokens authorize only report/help. `PIEVO_ROOTS`
+  is an always-applied daemon cwd jail, and server roots may only narrow it.
+- Exactly one server process owns a data directory (embedded PGlite plus local
+  blobs). Keep heavy/native server dependencies out of client bundles via dynamic
+  imports.
+- Server state lives in `~/.pievo-server`, daemon state in `~/.pievo`. Source
+  development entrypoints use repo-local, mutually isolated server/daemon state and a
+  non-production port bound to loopback. Tests use temporary state. Explicit
   environment overrides are intentional opt-outs. Never auto-start the daemon from
   the development server.
 
@@ -61,10 +65,12 @@ server owns scheduling, queueing, auth, persistence, and byte serving; the
 - `packages/server/src/db/{schema,store}.ts`: baseline schema and loop-locked state
   transitions.
 - `packages/server/src/server/boot.ts`: singleton scheduler/gateway/blob-store boot.
-- `packages/server/src/auth.ts`: request/user ownership authorization.
+- `packages/server/src/{start.ts,server/networkAccess.ts}`: network access guard.
+- `packages/server/scripts/{pievo-server,server-cli-lib,server-network}.mjs`: server
+  lifecycle launcher, pid/lock safety, and LAN/Tailscale URL publishing.
 - `packages/server/src/types.ts`: client-safe shared types and coding-agent enum.
-- `packages/daemon/src/{route,runner,cli-client}.ts`: command routing, provider spawn,
-  and server-rendered CLI transport.
+- `packages/daemon/src/{route,runner,cli-client,server-cli}.ts`: command routing,
+  provider spawn, server-rendered CLI transport, and `pievo server` delegation.
 - `packages/daemon/src/report-outbox.ts`: durable terminal report persistence/retry.
 - `packages/daemon/src/artifacts.ts`: exact local artifact collection.
 
@@ -76,7 +82,6 @@ pnpm --filter @kky42/pievo-server test
 pnpm --filter @kky42/pievo test
 pnpm -r typecheck
 pnpm --filter @kky42/pievo-server db:generate
-pnpm --filter @kky42/pievo-server db:migrate
 ```
 
 Server typecheck generates `src/routeTree.gen.ts`. Run one Vitest file by appending
@@ -88,17 +93,17 @@ PIEVO_REAL_LLM_TESTS=1 pnpm --filter @kky42/pievo test src/telemetry.real.test.t
 
 ## Release and deployment sharp edges
 
-- Keep SQL migrations reviewed: `0000_baseline` defines the original schema and
-  deployed schema changes append forward migrations. Do not commit generated Drizzle
-  snapshots. Back up before destructive migrations and coordinate incompatible server
-  upgrades; ownership-removal migrations must document access loss. Hosted migrations
-  require a direct Postgres URL when runtime uses a transaction pooler.
+- Keep SQL migrations reviewed: `0000_baseline` defines the 3.x schema and later
+  schema changes append forward migrations, applied in-process at boot. Do not commit
+  generated Drizzle snapshots. Document data-loss risks of destructive migrations.
 - `server-v*` publishes only `@kky42/pievo-server`; `v*` publishes only
-  `@kky42/pievo`. Tag and package versions must match.
+  `@kky42/pievo`, which depends on the server by semver range. Publish the server
+  first. Tag and package versions must match.
 - Publishing uses npm OIDC/trusted publishing and repository provenance. Do not add
   `registry-url` or `NPM_TOKEN`; pnpm comes from the root `packageManager`.
 - Keep server runtime output, public assets, PGlite assets, migrations, launcher
-  scripts, and provenance metadata in the published package.
+  scripts, and provenance metadata in the published package
+  (`verify:package` checks this).
 - Public install prose uses `@latest`. Development servers may provide `PIEVO_CLI`
   verbatim and must not add a global-install step.
 

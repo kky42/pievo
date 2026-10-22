@@ -14,12 +14,12 @@ import {
 } from '../server/machineFns'
 import { getConfig } from '../server/loopApi'
 import { isOutdated } from '../lib/semver'
-import { daemonConnectCommand, daemonUpgradeCommand } from '../lib/daemonCommands'
+import { connectServerUrl, daemonConnectCommand, daemonUpgradeCommand } from '../lib/daemonCommands'
 import type { MachineSummary } from '../types'
 
-function connectCmd(token: string, cli: string, customCli: boolean): string {
+function connectCmd(token: string, config: CliConfig): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:3000'
-  return daemonConnectCommand(origin, token, cli, customCli)
+  return daemonConnectCommand(connectServerUrl(origin, config.publicUrl), token, config.pievoCli, config.customCli)
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -38,7 +38,7 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
-type CliConfig = { pievoCli: string; customCli: boolean }
+type CliConfig = { pievoCli: string; customCli: boolean; publicUrl: string | null }
 
 function UpgradeCommand({ cliConfig, configErr }: { cliConfig: CliConfig | null; configErr: boolean }) {
   const command = cliConfig ? daemonUpgradeCommand(cliConfig.pievoCli, cliConfig.customCli) : null
@@ -134,10 +134,6 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
     setDelErr(null)
     try {
       const r = await createMachine()
-      if ('error' in r) {
-        setDelErr(r.error)
-        return
-      }
       setStatus(null)
       setName('')
       setPending(r)
@@ -191,9 +187,9 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
             {cliConfig ? (
               <div className="mt-2 flex items-start gap-2">
                 <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-control bg-display p-4 font-mono text-label leading-relaxed text-paper">
-                  {connectCmd(pending.token, cliConfig.pievoCli, cliConfig.customCli)}
+                  {connectCmd(pending.token, cliConfig)}
                 </pre>
-                <CopyButton text={connectCmd(pending.token, cliConfig.pievoCli, cliConfig.customCli)} />
+                <CopyButton text={connectCmd(pending.token, cliConfig)} />
               </div>
             ) : (
               <div className="mt-2 text-body text-secondary">
@@ -301,11 +297,7 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
             {!daemonStopSupport(m.daemonProtocol).supported && (
               <div className="text-label text-accent">Daemon upgrade required to stop a running process</div>
             )}
-            {/* Offline machines can reconnect with the same token. In auth mode the
-                server serializes it only to the owning user. */}
-            {!m.online && !m.token && (
-              <div className="text-label text-secondary">Reconnect command available from the machine owner's account.</div>
-            )}
+            {/* Offline machines can reconnect with the same token. */}
             {!m.online && m.token && !cliConfig && (
               <div className="text-label text-secondary">
                 {configErr ? 'Could not load the reconnect command. Close and try again.' : 'Loading reconnect command…'}
@@ -318,9 +310,9 @@ export function MachinesModal({ open, onClose }: { open: boolean; onClose: () =>
                 </summary>
                 <div className="mt-2 flex items-start gap-2">
                   <pre className="flex-1 overflow-x-auto whitespace-pre-wrap break-all rounded-control bg-display p-3 font-mono text-caption leading-relaxed text-paper">
-                    {connectCmd(m.token, cliConfig.pievoCli, cliConfig.customCli)}
+                    {connectCmd(m.token, cliConfig)}
                   </pre>
-                  <CopyButton text={connectCmd(m.token, cliConfig.pievoCli, cliConfig.customCli)} />
+                  <CopyButton text={connectCmd(m.token, cliConfig)} />
                 </div>
               </details>
             )}
