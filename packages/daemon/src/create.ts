@@ -19,7 +19,7 @@ export function cronLooksValid(cron: unknown): cron is string {
 /**
  * Deterministic JSON: object keys sorted recursively so two logically-identical
  * configs (any key order) serialize identically. Arrays keep their order (order is
- * meaningful — e.g. configured artifact names). The idempotency key hashes this.
+ * meaningful — e.g. tags). The idempotency key hashes this.
  */
 export function canonicalJson(v: unknown): string {
   if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";

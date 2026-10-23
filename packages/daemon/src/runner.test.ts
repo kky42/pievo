@@ -13,19 +13,6 @@ vi.hoisted(() => {
 import { buildAgentSpawn, executeDelivery, type Delivery } from "./runner.js";
 import { makeTerminalCollector } from "./telemetry.js";
 
-function loopFileFetch(files: Record<string, string> = { "MEMORY.md": "memory before the run" }) {
-  return (async (url: string) => {
-    const name = decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "");
-    const content = files[name];
-    if (content === undefined) return new Response(JSON.stringify({ error: "no such loop file" }), { status: 404 });
-    const bytes = Buffer.from(content);
-    return new Response(bytes, {
-      status: 200,
-      headers: { "x-pievo-sha256": createHash("sha256").update(bytes).digest("hex") },
-    });
-  }) as unknown as typeof fetch;
-}
-
 describe("terminal JSONL collectors", () => {
   test("unknown agents fail closed instead of using a provider parser", () => {
     expect(() => makeTerminalCollector("unknown" as any)).toThrow("unsupported coding agent: unknown");
@@ -290,6 +277,7 @@ function delivery(overrides: Partial<Delivery> = {}): Delivery {
     runId: "run-1",
     runIndex: 1,
     runToken: "tok-1",
+    contextToken: "rc-1",
     loop: {
       id: "loop-1",
       name: "cookie-report",
@@ -300,7 +288,7 @@ function delivery(overrides: Partial<Delivery> = {}): Delivery {
     },
     roots: [],
     task: "ORIGINAL TASK: produce the daily report",
-    files: ["MEMORY.md"],
+    memory: { text: "memory before the run" },
     ...overrides,
   };
 }
@@ -328,6 +316,9 @@ function writeFakePi(stopReason = "stop"): string {
     "#!/bin/sh",
     "cat > captured-task.txt",
     "printf \"%s\" \"$PIEVO_LOOP_DIR\" > captured-loop-dir.txt",
+    "printf \"%s\" \"$PIEVO_RUN_CONTEXT\" > captured-context.txt",
+    "cp \"$PIEVO_LOOP_DIR/MEMORY.md\" captured-memory.txt",
+    "printf \"%s\" \"- learned\" > \"$PIEVO_LOOP_DIR/MEMORY.md\"",
     `echo '{"type":"session","version":3,"id":"pi-session"}'`,
     `echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"pi final"}],"usage":{"input":3,"output":4,"cacheRead":5,"cacheWrite":6},"stopReason":"${stopReason}","errorMessage":"pi provider error"}}'`,
     "exit 0",
@@ -343,31 +334,34 @@ describe("Pi delivery", () => {
     const d = delivery();
     d.loop.agent = "pi";
     d.task = "  composed task\n\nreport contract  \n";
-    const report = await executeDelivery(d, "http://server.test", [], undefined, loopFileFetch());
+    const report = await executeDelivery(d, "http://server.test", []);
     expect(fs.readFileSync(path.join(workdir, "captured-task.txt"), "utf8")).toBe(d.task);
     expect(report).toMatchObject({ result: "success", exitCode: 0, sessionId: "pi-session", finalText: "pi final" });
   });
 
-  test("downloads loop files, exports PIEVO_LOOP_DIR, and replaces the task placeholder", async () => {
+  test("stages memory, exports the run context, and reports the edited memory with its base hash", async () => {
     process.env.PIEVO_PI_BIN = writeFakePi();
     const d = delivery();
     d.loop.agent = "pi";
     d.task = "Read $PIEVO_LOOP_DIR/MEMORY.md first.";
     const runDir = path.join(process.env.PIEVO_HOME!, "runs", d.runId);
 
-    const report = await executeDelivery(d, "http://server.test", [], undefined, loopFileFetch());
+    const report = await executeDelivery(d, "http://server.test", []);
     expect(report).toMatchObject({ result: "success" });
     expect(fs.readFileSync(path.join(workdir, "captured-task.txt"), "utf8"))
       .toBe(`Read ${runDir}/MEMORY.md first.`);
     expect(fs.readFileSync(path.join(workdir, "captured-loop-dir.txt"), "utf8")).toBe(runDir);
-    expect(fs.readFileSync(path.join(runDir, "MEMORY.md"), "utf8")).toBe("memory before the run");
+    expect(fs.readFileSync(path.join(workdir, "captured-context.txt"), "utf8")).toBe("rc-1");
+    expect(fs.readFileSync(path.join(workdir, "captured-memory.txt"), "utf8")).toBe("memory before the run");
+    expect(report.memory).toEqual({ baseHash: createHash("sha256").update("memory before the run").digest("hex"), text: "- learned" });
+    expect(fs.existsSync(runDir)).toBe(false);
   });
 
   test("fails an exit-zero run when Pi's last assistant stopReason is error", async () => {
     process.env.PIEVO_PI_BIN = writeFakePi("error");
     const d = delivery();
     d.loop.agent = "pi";
-    const report = await executeDelivery(d, "http://server.test", [], undefined, loopFileFetch());
+    const report = await executeDelivery(d, "http://server.test", []);
     expect(report).toMatchObject({ result: "failure", exitCode: 0, error: "pi provider error" });
   });
 });

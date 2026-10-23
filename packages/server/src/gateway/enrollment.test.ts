@@ -40,7 +40,6 @@ function gateway() {
       removeLoop(): void {},
       runNow(): void {},
     } as any,
-    undefined,
   );
 }
 
@@ -50,11 +49,11 @@ function pollV4(
   info?: { host?: string; platform?: string; arch?: string; version?: string },
 ) {
   return gw.pollV4(token, {
-    protocolVersion: 5,
+    protocolVersion: 7,
     daemonInstanceId: "test-daemon",
     recoveryComplete: true,
     currentRuns: [],
-    info: { version: "4.0.0", ...info },
+    info: { version: "6.0.0", ...info },
   });
 }
 

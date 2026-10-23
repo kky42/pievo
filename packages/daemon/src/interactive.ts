@@ -1,10 +1,8 @@
 import fs from "node:fs";
-import path from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import { postCli, printCliResponse } from "./cli-client.js";
 import { buildPostCliDeps, serverFlag } from "./cli-deps.js";
-import { expandTilde } from "./loopdir.js";
 import { parseLongOptions } from "./long-options.js";
 
 type Flags = Record<string, string | boolean>;
@@ -32,8 +30,6 @@ const EDIT_FLAGS = new Set(["json", "dry-run", "server-url"]);
 /** Parse option syntax locally, but leave `--fields` value semantics to the server. */
 const LOOPS_FLAGS = new Set(["fields", "json", "help", "server-url"]);
 const LIFECYCLE_VERBS = new Set(["pause", "start", "stop", "delete", "run"]);
-const FILE_FLAGS = new Set(["from", "server-url"]);
-const FILE_USAGE = "pievo file list <loop> | file get <loop> <name> | file set <loop> <name> --from <path|->";
 const FORCE_DELETE_CONFIRMATION = "delete-server-data-anyway";
 
 async function confirmForceDeleteInteractive(): Promise<boolean> {
@@ -75,7 +71,7 @@ export function buildPatch(flags: Flags): Record<string, unknown> {
 const USAGE =
   "pievo: usage: pievo edit <loop-id> [options]\n" +
   "  --json '<json-object>'|-    patch name/tags/schedule/workdir/agent/model/reasoningEffort/\n" +
-  "                              prompt/artifacts/enabled\n" +
+  "                              prompt/enabled\n" +
   "                              e.g. '{\"schedule\":{\"mode\":\"continuous\",\"delayMinutes\":5}}'\n" +
   "  --dry-run                   validate + preview before/after, change nothing\n" +
   "  the server validates every field; unknown keys are rejected.\n";
@@ -160,31 +156,6 @@ export async function runInteractive(argv: string[], injected: InteractiveDeps =
     return printCliResponse(r.body, r.status, out);
   }
 
-  if (verb === "file") {
-    const [sub, id, name] = positional;
-    const unknown = Object.keys(flags).filter((k) => !FILE_FLAGS.has(k));
-    const shapeOk = (sub === "list" && positional.length === 2)
-      || (sub === "get" && positional.length === 3 && flags["from"] === undefined)
-      || (sub === "set" && positional.length === 3 && typeof flags["from"] === "string");
-    if (!id || !shapeOk || unknown.length || (sub !== "set" && flags["from"] !== undefined)) return err(`pievo: usage: ${FILE_USAGE}\n`), 2;
-    const cliArgv = ["file", sub!, id, ...(name ? [name] : [])];
-    if (sub === "set") {
-      let bytes: Buffer;
-      try {
-        bytes = flags["from"] === "-"
-          ? fs.readFileSync(0)
-          : fs.readFileSync(path.resolve(expandTilde(String(flags["from"]))));
-      } catch (e) {
-        return err(`pievo: could not read ${String(flags["from"])}: ${e instanceof Error ? e.message : String(e)}\n`), 1;
-      }
-      cliArgv.push("--content-base64", bytes.toString("base64"));
-    }
-    const r = await postCli(cliArgv, cliDeps);
-    if (r.kind === "not-configured") return notConnected(), 2;
-    if (r.kind === "network-error") return err(`pievo: ${r.message}\n`), 1;
-    return printCliResponse(r.body, r.status, out);
-  }
-
-  err(`pievo: unknown command "${verb ?? ""}" (try: loops, edit, pause, start, stop, delete, run, file)\n`);
+  err(`pievo: unknown command "${verb ?? ""}" (try: loops, edit, pause, start, stop, delete, run)\n`);
   return 2;
 }

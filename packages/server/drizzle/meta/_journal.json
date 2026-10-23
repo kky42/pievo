@@ -29,6 +29,13 @@
       "when": 1793100000000,
       "tag": "0003_run_status_ok",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793200000000,
+      "tag": "0004_loop_memory",
+      "breakpoints": true
     }
   ]
 }

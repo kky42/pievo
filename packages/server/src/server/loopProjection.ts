@@ -1,6 +1,6 @@
 import * as store from "../db/store.js";
-import type { ArtifactFile, Loop, Machine, Run } from "../db/schema.js";
-import type { ArtifactSummary, LoopDetail, LoopFull, LoopSummary, RunSummary } from "../types.js";
+import type { Loop, Machine, Run } from "../db/schema.js";
+import type { LoopDetail, LoopFull, LoopSummary, RunSummary } from "../types.js";
 import { machinePresence } from "../lib/machinePresence.js";
 import { MIN_DAEMON_VERSION, daemonNeedsUpdate } from "../gateway/protocol.js";
 import { canonicalLoopEnvelope, canonicalLoopSummary } from "../gateway/loopConfig.js";
@@ -28,6 +28,7 @@ export function toRunSummary(r: Run, reconciliation?: "blocking" | "report-only"
   return {
     id: r.id,
     loopId: r.loopId,
+    runIndex: r.runIndex ?? null,
     ts: r.ts,
     phase: r.phase,
     ...(reconciliation ? { reconciliation } : {}),
@@ -51,23 +52,13 @@ export function toRunSummary(r: Run, reconciliation?: "blocking" | "report-only"
     error: r.error ?? null,
     sessionId: r.sessionId ?? null,
     reportIncident: r.reportIncident ?? null,
-    fileNotices: r.fileNotices ?? null,
+    notices: r.notices ?? null,
   };
 }
 
 export async function toRunSummaries(loopId: string, rows: Run[]): Promise<RunSummary[]> {
   const states = await store.reconciliationStatesForRuns(loopId, rows.map((run) => run.id));
   return rows.map((run) => toRunSummary(run, states.get(run.id)));
-}
-
-export function toArtifactSummary(row: ArtifactFile): ArtifactSummary {
-  return {
-    path: row.path,
-    size: row.size ?? null,
-    updatedAt: row.updatedAt,
-    binary: row.binary,
-    oversize: row.oversize,
-  };
 }
 
 async function toLoopSummaryWithMachine(loop: Loop, machine: Machine | undefined): Promise<LoopSummary> {
@@ -107,6 +98,7 @@ export async function toLoopSummaries(loops: Loop[], machines: Machine[]): Promi
 function toLoopFull(loop: Loop): LoopFull {
   return {
     ...canonicalLoopEnvelope(loop),
+    memory: loop.memory,
     pauseCause: loop.pauseCause ?? null,
     createdAt: loop.createdAt,
     updatedAt: loop.updatedAt,

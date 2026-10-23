@@ -9,6 +9,7 @@ function delivery() {
     runId: "run-1",
     runIndex: 1,
     runToken: "rk_00000000000000000000000000000000",
+    contextToken: "rc_00000000000000000000000000000000",
     loop: {
       id: "loop-1",
       name: "Canonical loop",
@@ -19,7 +20,7 @@ function delivery() {
     },
     roots: [os.tmpdir()],
     task: "Do the work and report.",
-    files: ["MEMORY.md", "report.md"],
+    memory: { text: "- a lesson" },
   };
 }
 
@@ -27,8 +28,8 @@ function response(overrides: Record<string, unknown> = {}) {
   return { delivery: delivery(), cancelRunIds: [], ...overrides };
 }
 
-describe("protocol-v5 poll response runtime schema", () => {
-  test("accepts the exact complete runner delivery, including Pi on protocol v5", () => {
+describe("protocol-v7 poll response runtime schema", () => {
+  test("accepts the exact complete runner delivery, including Pi", () => {
     expect(parsePollResponse(response())).toEqual({ ok: true, value: response() });
     const pi = response();
     pi.delivery.loop.agent = "pi";
@@ -49,12 +50,12 @@ describe("protocol-v5 poll response runtime schema", () => {
     ["missing task", () => { const value: any = delivery(); delete value.task; return value; }],
     ["unknown nested field", () => ({ ...delivery(), loop: { ...delivery().loop, fallbackAgent: "claude-code" } })],
     ["unknown delivery field", () => ({ ...delivery(), retry: true })],
-    ["old artifacts field", () => { const value: any = delivery(); delete value.files; value.artifacts = ["report.md"]; return value; }],
-    ["missing files", () => { const value: any = delivery(); delete value.files; return value; }],
-    ["missing MEMORY.md", () => ({ ...delivery(), files: ["report.md"] })],
-    ["duplicate file", () => ({ ...delivery(), files: ["MEMORY.md", "MEMORY.md"] })],
-    ["too many files", () => ({ ...delivery(), files: ["MEMORY.md", "a.md", "b.md", "c.md", "d.md", "e.md"] })],
-    ["path in a file name", () => ({ ...delivery(), files: ["MEMORY.md", "../report.md"] })],
+    ["old files field", () => ({ ...delivery(), files: ["MEMORY.md"] })],
+    ["missing memory", () => { const value: any = delivery(); delete value.memory; return value; }],
+    ["over-limit memory", () => ({ ...delivery(), memory: { text: "x".repeat(8001) } })],
+        ["unknown memory field", () => ({ ...delivery(), memory: { text: "", hash: "x" } })],
+    ["missing context token", () => { const value: any = delivery(); delete value.contextToken; return value; }],
+    ["report token as context token", () => ({ ...delivery(), contextToken: delivery().runToken })],
   ])("rejects %s before execution", (_label, malformed) => {
     const parsed = parsePollResponse(response({ delivery: malformed() }));
     expect(parsed).toMatchObject({ ok: false, error: expect.any(String) });
@@ -66,13 +67,13 @@ describe("protocol-v5 poll response runtime schema", () => {
     expect(parsePollResponse({
       delivery: null,
       cancelRunIds: [],
-      needsUpdate: { current: null, required: "4.0.0" },
+      needsUpdate: { current: null, required: "5.0.0" },
     })).toMatchObject({ ok: false, error: expect.stringContaining("command") });
   });
 
   test("never accepts a delivery together with an update requirement", () => {
     expect(parsePollResponse(response({
-      needsUpdate: { current: "3.0.0", required: "4.0.0", command: "npm install" },
+      needsUpdate: { current: "3.0.0", required: "5.0.0", command: "npm install" },
     }))).toMatchObject({ ok: false, error: expect.stringContaining("must not deliver") });
   });
 });

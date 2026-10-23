@@ -12,7 +12,6 @@ import type {
 import { CODING_AGENTS, coerceCodingAgent } from "../types.js";
 import { validateLoopTags } from "../lib/loopTags.js";
 import { WIRE_TEXT_CAP } from "./http.js";
-import { ARTIFACT_EXTENSIONS, MAX_ARTIFACTS, MEMORY_FILE, validArtifactName } from "./loopFiles.js";
 
 const LOOP_CONFIG_FIELDS = [
   "name",
@@ -23,7 +22,6 @@ const LOOP_CONFIG_FIELDS = [
   "model",
   "reasoningEffort",
   "prompt",
-  "artifacts",
   "enabled",
 ] as const;
 
@@ -41,7 +39,6 @@ export interface CanonicalLoopConfig {
   model: string | null;
   reasoningEffort: string | null;
   prompt: string;
-  artifacts: string[];
   enabled: boolean;
 }
 
@@ -63,7 +60,6 @@ export interface ValidatedLoopCreate {
     | "model"
     | "reasoningEffort"
     | "prompt"
-    | "artifacts"
     | "enabled"
   > & { timezone: string | null };
 }
@@ -179,24 +175,6 @@ export function validateSchedule(value: unknown): Validation<LoopSchedule> {
   return { ok: false, detail: "schedule.mode must be cron|continuous" };
 }
 
-export function validateArtifactNames(value: unknown): Validation<string[]> {
-  if (value === undefined || value === null) return { ok: true, value: [] };
-  if (!Array.isArray(value)) return { ok: false, detail: "artifacts must be an array of file names" };
-  if (value.length > MAX_ARTIFACTS) return { ok: false, detail: `at most ${MAX_ARTIFACTS} artifacts are allowed` };
-  const names: string[] = [];
-  const seen = new Set<string>();
-  for (const entry of value) {
-    if (!validArtifactName(entry)) {
-      return { ok: false, detail: `artifact must be a plain text/code file name other than ${MEMORY_FILE} (supported extensions: ${ARTIFACT_EXTENSIONS.join(", ")}; letters, digits, . _ -; at most 64 characters before the extension): ${JSON.stringify(entry)}` };
-    }
-    const key = entry.toLowerCase();
-    if (seen.has(key)) return { ok: false, detail: `duplicate artifact name: ${entry}` };
-    seen.add(key);
-    names.push(entry);
-  }
-  return { ok: true, value: names };
-}
-
 function rowSchedule(schedule: LoopSchedule, retainedCron = SAFE_RETAINED_CRON): Pick<NewLoop, "cron" | "scheduleMode" | "cronOverlap" | "continuousDelayMinutes" | "timezone"> & { timezone: string | null } {
   return schedule.mode === "cron"
     ? {
@@ -235,7 +213,6 @@ export function canonicalLoopEnvelope(loop: Loop): CanonicalLoopConfig & { id: s
   return {
     ...canonicalLoopSummary(loop),
     prompt: loop.prompt,
-    artifacts: loop.artifacts,
     enabled: loop.enabled,
   };
 }
@@ -268,8 +245,6 @@ export function validateLoopCreate(value: unknown): Validation<ValidatedLoopCrea
   if (!prompt.ok) return prompt;
   const schedule = validateSchedule(raw.schedule);
   if (!schedule.ok) return schedule;
-  const artifacts = validateArtifactNames(raw.artifacts);
-  if (!artifacts.ok) return artifacts;
   const model = optionalProvider(raw.model, "model");
   if (!model.ok) return model;
   const agent = coerceCodingAgent(raw.agent);
@@ -286,7 +261,6 @@ export function validateLoopCreate(value: unknown): Validation<ValidatedLoopCrea
     model: model.value,
     reasoningEffort: reasoningEffort.value,
     prompt: prompt.value,
-    artifacts: artifacts.value,
     enabled: raw.enabled !== false,
   };
   return {
@@ -302,7 +276,6 @@ export function validateLoopCreate(value: unknown): Validation<ValidatedLoopCrea
         model: config.model,
         reasoningEffort: config.reasoningEffort,
         prompt: config.prompt,
-        artifacts: config.artifacts,
         enabled: config.enabled,
       },
     },
@@ -339,11 +312,6 @@ export function validateLoopEdit(loop: Loop, value: unknown): Validation<Partial
     const result = validateSchedule(raw.schedule);
     if (!result.ok) return result;
     Object.assign(update, rowSchedule(result.value, loop.cron));
-  }
-  if (raw.artifacts !== undefined) {
-    const result = validateArtifactNames(raw.artifacts);
-    if (!result.ok) return result;
-    update.artifacts = result.value;
   }
   if (raw.model !== undefined) {
     const result = optionalProvider(raw.model, "model");

@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import type { Delivery } from "./runner.js";
-import { MEMORY_FILE, validLoopFileName } from "./loop-files.js";
+import { MEMORY_CHAR_CAP } from "./loop-files.js";
 
 interface NeedsUpdate {
   current: string | null;
@@ -18,11 +18,13 @@ export interface PollResponse {
 type Decode<T> = { ok: true; value: T } | { ok: false; error: string };
 type JsonObject = Record<string, unknown>;
 
-const DELIVERY_FIELDS = new Set(["runId", "runIndex", "runToken", "loop", "roots", "task", "files"]);
+const DELIVERY_FIELDS = new Set(["runId", "runIndex", "runToken", "contextToken", "loop", "roots", "task", "memory"]);
+const MEMORY_FIELDS = new Set(["text"]);
 const LOOP_FIELDS = new Set(["id", "name", "workdir", "model", "reasoningEffort", "agent"]);
 const RESPONSE_FIELDS = new Set(["delivery", "cancelRunIds", "needsUpdate"]);
 const UPDATE_FIELDS = new Set(["current", "required", "command"]);
 const RUN_TOKEN_RE = /^rk_[0-9a-f]{32}$/;
+const CONTEXT_TOKEN_RE = /^rc_[0-9a-f]{32}$/;
 
 function record(value: unknown, label: string): Decode<JsonObject> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -95,6 +97,18 @@ function decodeLoop(value: unknown): Decode<Delivery["loop"]> {
   };
 }
 
+function decodeMemory(value: unknown): Decode<Delivery["memory"]> {
+  const decoded = record(value, "delivery.memory");
+  if (!decoded.ok) return decoded;
+  const raw = decoded.value;
+  const keyError = exactKeys(raw, MEMORY_FIELDS, "delivery.memory");
+  if (keyError) return { ok: false, error: keyError };
+  if (typeof raw.text !== "string" || raw.text.includes("\0") || Array.from(raw.text).length > MEMORY_CHAR_CAP) {
+    return { ok: false, error: `delivery.memory.text must be NUL-free text of at most ${MEMORY_CHAR_CAP} characters` };
+  }
+  return { ok: true, value: { text: raw.text } };
+}
+
 function decodeDelivery(value: unknown): Decode<Delivery | null> {
   if (value === null) return { ok: true, value: null };
   const decoded = record(value, "delivery");
@@ -111,6 +125,9 @@ function decodeDelivery(value: unknown): Decode<Delivery | null> {
   if (typeof raw.runToken !== "string" || !RUN_TOKEN_RE.test(raw.runToken)) {
     return { ok: false, error: "delivery.runToken has an invalid wire shape" };
   }
+  if (typeof raw.contextToken !== "string" || !CONTEXT_TOKEN_RE.test(raw.contextToken)) {
+    return { ok: false, error: "delivery.contextToken has an invalid wire shape" };
+  }
   const loop = decodeLoop(raw.loop);
   if (!loop.ok) return loop;
   const roots = textArray(raw.roots, "delivery.roots");
@@ -122,13 +139,8 @@ function decodeDelivery(value: unknown): Decode<Delivery | null> {
   }
   const task = text(raw.task, "delivery.task");
   if (!task.ok) return task;
-  const files = textArray(raw.files, "delivery.files");
-  if (!files.ok) return files;
-  if (files.value.length > 5 || !files.value.includes(MEMORY_FILE)
-    || new Set(files.value).size !== files.value.length
-    || files.value.some((name) => !validLoopFileName(name))) {
-    return { ok: false, error: `delivery.files must be at most 5 unique plain file names including ${MEMORY_FILE}` };
-  }
+  const memory = decodeMemory(raw.memory);
+  if (!memory.ok) return memory;
 
   return {
     ok: true,
@@ -136,10 +148,11 @@ function decodeDelivery(value: unknown): Decode<Delivery | null> {
       runId: runId.value,
       runIndex: raw.runIndex,
       runToken: raw.runToken,
+      contextToken: raw.contextToken,
       loop: loop.value,
       roots: roots.value,
       task: task.value,
-      files: files.value,
+      memory: memory.value,
     },
   };
 }

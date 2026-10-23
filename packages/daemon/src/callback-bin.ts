@@ -2,7 +2,8 @@
  * The run-scoped `pievo` shim. Replaying exactly how the daemon was started keeps
  * it on the same version (`execPath` + `execArgv` + entry script), so the global
  * install, `node dist/cli.js`, and `tsx src/cli.ts` all route an in-run `pievo …`
- * to runCallback, which refuses it (execArgv carries the tsx loader in dev).
+ * to runCallback, which serves only read-only commands (execArgv carries the tsx
+ * loader in dev).
  */
 import fs from "node:fs";
 import path from "node:path";

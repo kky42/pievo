@@ -12,7 +12,7 @@ export function LoopFilterBar({
 }) {
   return (
     <div className="scrollbar-none -mx-1 overflow-x-auto px-1 pb-1">
-      <div role="group" aria-label="Loop filters" className="flex min-w-max items-center gap-1.5">
+      <div role="group" aria-label="Loop filters" className="flex flex-wrap items-center gap-1.5">
         {options.map((option) => {
           const selected = option.key === selectedKey
           return (

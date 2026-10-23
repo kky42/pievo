@@ -15,12 +15,13 @@
  *   1. Geist-style RULES - 4px spacing rhythm, state progression, WCAG contrast,
  *      color never signals alone (a dot always has a text label beside it).
  *   2. LIQUID GLASS is the floating layer ONLY - the sticky header, Dialog/Menu
- *      popups and status pills get `.glass`; content surfaces (cards, files
- *      panel and diff) stay opaque for reading density.
+ *      popups and status pills get `.glass`; content surfaces (cards and panels)
+ *      stay opaque for reading density.
  *   3. RUBIK SEMANTIC HUES - the six cube colors each own ONE meaning:
- *      green = success/resolved/completed, red = error/destructive,
- *      orange = warning/failure streak, yellow = running/pending,
- *      blue = interactive/new, white = surface itself.
+ *      green = attention (good news: an improvement or something new),
+ *      red = block/destructive, orange = error/warning, yellow = unused,
+ *      blue = interactive, white = surface itself. Routine ok runs are a
+ *      quiet neutral so only the runs worth the owner's time carry color.
  *      The raw cube hue is a "signal light" (dots, solid fills) and stays
  *      identical across modes; text/borders use the contrast-tuned base tokens
  *      below, and `-soft` steps tint chip/hint backgrounds.
@@ -100,35 +101,26 @@
   --color-interactive-soft: rgba(0, 70, 173, 0.08);
   --color-warn: #c44700;
   --color-warn-soft: rgba(255, 88, 0, 0.1);
-  /* Yellow is reserved for attention: this ink/soft pair is its text and pill. */
-  --color-attention: #8a6d00;
-  --color-attention-soft: rgba(255, 213, 0, 0.16);
+  /* Green is reserved for attention: this ink/soft pair is its text and pill. */
+  --color-attention: #00813c;
+  --color-attention-soft: rgba(0, 155, 72, 0.12);
 
   /*
    * Run swatches (lib/format.ts runSwatch). Every state has its own look:
-   * block (deliberate stop) is solid red, error (something broke) is striped
-   * orange so the two differ without relying on color, and the two transient
-   * states (queued, reconciling) are hollow outlines.
+   * routine ok is a quiet neutral, attention is the vivid green the eye
+   * should find, block (deliberate stop) is solid red, error (something broke)
+   * is striped orange so the two differ without relying on color, and the two
+   * transient states (queued, reconciling) are hollow outlines.
    */
-  --color-run-ok: var(--color-success);
+  --color-run-ok: #c3c8d1;
   --color-run-block: var(--color-accent);
-  --color-run-attention: var(--color-rubik-yellow);
+  --color-run-attention: var(--color-rubik-green);
   --color-run-error: var(--color-warn);
   --color-run-error-stripe: #e8762e;
   --color-run-reconciling: var(--color-display);
   --color-run-canceled: var(--color-disabled);
   --color-run-queued: var(--color-secondary);
   --color-run-active: var(--color-display);
-
-  /*
-   * Diff line tints for the run-detail Changes view - green = added, red =
-   * removed, kept as low-alpha row backgrounds; the gutter glyph uses the
-   * full-strength success/accent ink. Light-mode alphas.
-   */
-  --color-diff-add-bg: rgba(0, 155, 72, 0.1);
-  --color-diff-del-bg: rgba(183, 18, 52, 0.08);
-  --color-diff-hunk-bg: var(--color-raised);
-
 }
 
 /*
@@ -169,12 +161,11 @@
     --color-interactive-soft: rgba(92, 157, 255, 0.13);
     --color-warn: #ff7a3d;
     --color-warn-soft: rgba(255, 122, 61, 0.14);
-    --color-attention: #ffd500;
-    --color-attention-soft: rgba(255, 213, 0, 0.12);
+    --color-attention: #33c56f;
+    --color-attention-soft: rgba(51, 197, 111, 0.14);
+    --color-run-ok: #4a4a52;
+    --color-run-attention: #2fbf68;
     --color-run-error-stripe: #c45a22;
-
-    --color-diff-add-bg: rgba(0, 155, 72, 0.18);
-    --color-diff-del-bg: rgba(255, 93, 117, 0.14);
 
     --glass-highlight: rgba(255, 255, 255, 0.09);
     --glass-shadow:
@@ -213,39 +204,39 @@
 }
 
 /*
- * Rendered artifact markdown - a calm document inside the app. Sans body for
+ * Rendered markdown (memory, run summaries) - a calm document inside the app. Sans body for
  * prose, ink headings, mono ONLY for code; no card/box. Prose wraps naturally,
  * so the raw file's runaway horizontal scroll is gone - only fenced code may
  * scroll across.
  */
-.artifact-markdown {
+.md-view {
   font-family: var(--font-sans);
   font-size: 13px;
   line-height: 1.6;
   color: var(--color-secondary);
 }
-.artifact-markdown > :first-child { margin-top: 0; }
-.artifact-markdown h1, .artifact-markdown h2, .artifact-markdown h3, .artifact-markdown h4 {
+.md-view > :first-child { margin-top: 0; }
+.md-view h1, .md-view h2, .md-view h3, .md-view h4 {
   color: var(--color-display);
   font-weight: 600;
   line-height: 1.3;
   margin: 1.1em 0 0.4em;
 }
-.artifact-markdown h1 { font-size: 15px; }
-.artifact-markdown h2 { font-size: 13.5px; }
-.artifact-markdown h3, .artifact-markdown h4 { font-size: 12.5px; }
-.artifact-markdown p { margin: 0.5em 0; }
-.artifact-markdown ul, .artifact-markdown ol { margin: 0.5em 0; padding-left: 1.3em; }
-.artifact-markdown ul { list-style: disc; }
-.artifact-markdown ol { list-style: decimal; }
-.artifact-markdown li { margin: 0.2em 0; }
-.artifact-markdown a {
+.md-view h1 { font-size: 15px; }
+.md-view h2 { font-size: 13.5px; }
+.md-view h3, .md-view h4 { font-size: 12.5px; }
+.md-view p { margin: 0.5em 0; }
+.md-view ul, .md-view ol { margin: 0.5em 0; padding-left: 1.3em; }
+.md-view ul { list-style: disc; }
+.md-view ol { list-style: decimal; }
+.md-view li { margin: 0.2em 0; }
+.md-view a {
   color: var(--color-interactive);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.artifact-markdown strong { color: var(--color-primary); font-weight: 600; }
-.artifact-markdown code {
+.md-view strong { color: var(--color-primary); font-weight: 600; }
+.md-view code {
   font-family: var(--font-mono);
   font-size: 0.9em;
   background: var(--color-surface);
@@ -253,7 +244,7 @@
   border-radius: 4px;
   overflow-wrap: anywhere;
 }
-.artifact-markdown pre {
+.md-view pre {
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
@@ -264,22 +255,22 @@
   overflow-wrap: anywhere;
   margin: 0.6em 0;
 }
-.artifact-markdown pre code { background: none; padding: 0; }
-.artifact-markdown blockquote {
+.md-view pre code { background: none; padding: 0; }
+.md-view blockquote {
   border-left: 2px solid var(--color-wire);
   padding-left: 12px;
   color: var(--color-disabled);
   margin: 0.6em 0;
 }
-.artifact-markdown hr { border: 0; border-top: 1px solid var(--color-hairline); margin: 1em 0; }
+.md-view hr { border: 0; border-top: 1px solid var(--color-hairline); margin: 1em 0; }
 /*
  * A wide table scrolls WITHIN its own pane instead of stretching the panel (and
  * with it the whole page) - the GitHub-markdown pattern: a max-content block
  * capped at 100% of the container, scrolling horizontally past that. Without
- * this a multi-column table in a synced artifact shoves the runs rail
+ * this a multi-column table in a run summary shoves the side column
  * off-screen.
  */
-.artifact-markdown table {
+.md-view table {
   display: block;
   width: max-content;
   max-width: 100%;
@@ -287,8 +278,8 @@
   border-collapse: collapse;
   margin: 0.6em 0;
 }
-.artifact-markdown th, .artifact-markdown td { border: 1px solid var(--color-hairline); padding: 4px 8px; text-align: left; white-space: nowrap; }
-.artifact-markdown img { max-width: 100%; }
+.md-view th, .md-view td { border: 1px solid var(--color-hairline); padding: 4px 8px; text-align: left; white-space: nowrap; }
+.md-view img { max-width: 100%; }
 
 * {
   scrollbar-width: thin;

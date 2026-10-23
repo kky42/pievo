@@ -14,7 +14,6 @@ const validConfig = (overrides: Record<string, unknown> = {}) => ({
   workdir: "/tmp/docs",
   agent: "claude-code",
   prompt: "Review the docs.",
-  artifacts: [],
   enabled: true,
   ...overrides,
 });

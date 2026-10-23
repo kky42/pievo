@@ -4,7 +4,6 @@ import path from "node:path";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 
 import { boundedFetch } from "./http.js";
-import type { ReportedLoopFile } from "./loop-files.js";
 
 /** Node 22–24 labels its built-in SQLite API experimental even though Pievo uses
  * only its stable synchronous surface. Suppress exactly that import-time warning;
@@ -32,8 +31,9 @@ export interface TerminalReport {
   usage?: unknown;
   error?: string;
   finalText?: string;
-  files?: ReportedLoopFile[];
-  fileNotices?: string[];
+  /** The MEMORY.md the run left, when it changed, and the hash it started from. */
+  memory?: { baseHash: string; text: string };
+  notices?: string[];
 }
 
 export interface PersistedReport {

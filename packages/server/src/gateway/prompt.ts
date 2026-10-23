@@ -1,5 +1,5 @@
-import type { Loop, RunStatus } from "../db/schema.js";
-import { MEMORY_CHAR_CAP, MEMORY_FILE, fileLimitLabel } from "./loopFiles.js";
+import type { Loop, Run, RunStatus } from "../db/schema.js";
+import { MEMORY_CHAR_CAP, MEMORY_FILE } from "./memory.js";
 
 /** Literal placeholder the daemon replaces with the run's absolute loop-file
  *  directory before launch (and exports as an env var of the same name). */
@@ -10,31 +10,57 @@ const ATTENTION_LINE_RE = /^ATTENTION:\s*(.*)$/i;
 /** Characters; one dashboard line. Longer reasons are clipped, not rejected,
  *  because the run has already finished when the server reads them. */
 export const ATTENTION_CAP = 200;
+/** A failed previous run's error is echoed only as a hint; 300 characters
+ *  keeps a stack trace from dominating the prompt. */
+const PREVIOUS_ERROR_CAP = 300;
+
+export interface RunContext {
+  runIndex: number;
+  now: string;
+  previous?: Pick<Run, "runIndex" | "ts" | "phase" | "status" | "attention" | "message" | "error" | "notices">;
+}
+
+function scheduleText(loop: Loop): string {
+  return loop.scheduleMode === "continuous"
+    ? `continuous, ${loop.continuousDelayMinutes} min after each run`
+    : `cron \`${loop.cron}\` (${loop.timezone ?? "UTC"})`;
+}
+
+function previousText(previous: RunContext["previous"]): string {
+  if (!previous) return "Previous run: none, this is the first run.";
+  const outcome = previous.phase === "done" ? previous.status : previous.phase;
+  const attention = previous.phase === "done" && previous.status === "ok" ? previous.attention : null;
+  const lines = [`Previous run: #${previous.runIndex} at ${previous.ts}, ${outcome}${attention ? `, attention: ${attention}` : ""}.`];
+  if (previous.message) lines.push(`Previous summary:\n${previous.message.split("\n").map((line) => `> ${line}`).join("\n")}`);
+  if (previous.phase === "error" && previous.error) {
+    lines.push(`Previous error: ${previous.error.length > PREVIOUS_ERROR_CAP ? `${previous.error.slice(0, PREVIOUS_ERROR_CAP - 1)}…` : previous.error}`);
+  }
+  for (const notice of previous.notices ?? []) lines.push(`Notice: ${notice}`);
+  return lines.join("\n");
+}
 
 /**
- * Deliver the user's prompt unchanged, followed by the loop-file contract and the
- * final-line status contract. The run index
- * intentionally remains an internal history fact.
+ * The run header (time, index, previous outcome), the owner's prompt unchanged,
+ * then Pievo's contract: memory, history access, attention, and the final-line
+ * status. Times are UTC ISO so the agent can pass them to `pievo log --since`.
  */
-export function buildRunTask(loop: Loop, previousNotices: string[] = []): string {
-  const files = [
-    `- ${MEMORY_FILE}: this loop's long-term experience (max ${MEMORY_CHAR_CAP} characters). Read it first and follow it. Before finishing, record only lessons this run learned the hard way that make later runs faster or safer: a pitfall hit, a workaround found, an environment fact discovered. One line each; correct or delete lessons that proved wrong. Never restate the task or these instructions, and never store state, results, baselines, trends, or run logs (those go in an artifact). Most runs add nothing.`,
-    ...loop.artifacts.map((name) => `- ${name}: artifact shown on the Pievo dashboard (max ${fileLimitLabel(name)}). Update it only as the task above asks.`),
-  ];
-  const notices = previousNotices.length
-    ? `\n\nNotices from the previous run:\n${previousNotices.map((notice) => `- ${notice}`).join("\n")}`
-    : "";
-  return `${loop.prompt}
+export function buildRunTask(loop: Loop, context: RunContext): string {
+  return `Pievo run #${context.runIndex} of loop "${loop.name}" (${scheduleText(loop)}).
+Now: ${context.now}.
+${previousText(context.previous)}
 
-Loop files in ${LOOP_DIR_PLACEHOLDER}:
-${files.join("\n")}
-A file over its limit is rejected and its previous version kept. Other files in that directory are discarded.${notices}
+${loop.prompt}
 
-Be concise in everything you write: lead with what changed or needs action; prefer tables and short lists; no filler or restated instructions.
+---
+Pievo contract:
+- Memory: ${LOOP_DIR_PLACEHOLDER}/${MEMORY_FILE} (max ${MEMORY_CHAR_CAP} characters). Read it first and follow it. Before finishing, record only lessons this run learned the hard way that make later runs faster or safer: a pitfall hit, a workaround found, an environment fact discovered. One line each; correct or delete lessons that proved wrong. Never restate the task or these instructions, and never store results, state, or run logs there. Most runs add nothing. A version over the limit is rejected and the previous one kept.
+- State: keep task state the next run needs (items already seen, baselines, best scores) in files in your working directory, or in your summary, which the next run receives.
+- History: \`pievo log\` lists this loop's recent runs (time, status, attention, summary, tokens); \`pievo log --since <ISO>\` or \`--run <index>\` narrows it; \`pievo show\` prints the loop's config and run counts. They are read-only. The previous run above is usually enough.
 
-Your final response is only: a summary of at most five short lines (no headings, no repeated tables or file contents); if the owner should look at something, one line \`ATTENTION: <reason>\`; then exactly one last line:
+Your final response is only: a summary of at most five short lines (what you did and found, plus any fact the next run needs to tell what is new; no headings or tables); if the run is ok and the owner should look, one line \`ATTENTION: <reason>\`; then exactly one last line:
 STATUS: ok|block
-- ok: the loop keeps running on schedule. Findings and alerts are ok; flag them with ATTENTION.
+- ATTENTION marks an ok run worth the owner's time: a metric improved or a new best, or something new or changed in what you watch. Routine work is not attention: a digest or crawl that ran as usual, a check that found nothing new, a run that just produced this period's data. When unsure, leave it out. Never add attention when you block; the pause already tells the owner.
+- ok: the loop keeps running on schedule.
 - block: the loop must stop until the owner acts, because the task says to stop or the next run cannot proceed safely (missing access, broken environment, unsafe next step). Block pauses the loop.`;
 }
 

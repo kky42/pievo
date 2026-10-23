@@ -6,7 +6,7 @@ import path from "node:path";
 import { boundedFetch } from "./http.js";
 import { logger } from "./logger.js";
 import { executeDelivery, RUN_CANCEL_REASON, type Delivery } from "./runner.js";
-import { PendingReportOutbox, readReportDiagnostics, sendTerminalReport, type PersistedReport, type ReportAck, type TerminalReport } from "./report-outbox.js";
+import { PendingReportOutbox, sendTerminalReport, type PersistedReport, type ReportAck, type TerminalReport } from "./report-outbox.js";
 import { activeConnection, PIEVO_DIR, serverOutboxPath } from "./config.js";
 import { ensureCallbackBin } from "./callback-bin.js";
 import { writePidFile, clearPidFile, verifiedRunningPid } from "./pidfile.js";
@@ -14,7 +14,7 @@ import { daemonVersion } from "./version.js";
 import { writeRuntimeDiagnostics } from "./runtime-diagnostics.js";
 import { parsePollResponse } from "./poll-protocol.js";
 import { DAEMON_PROTOCOL_VERSION } from "./protocol.js";
-import { pruneRunDirs, removeRunDir, uploadLoopFiles } from "./loop-files.js";
+import { pruneRunDirs } from "./loop-files.js";
 
 const POLL_MS = Number(process.env.PIEVO_POLL_MS || 3000);
 const POLL_TIMEOUT_MS = 30_000;
@@ -28,17 +28,6 @@ export type CurrentRun = { runId: string; stage: RunStage };
 
 type Execute = (delivery: Delivery, serverUrl: string, roots: string[], signal: AbortSignal) => Promise<TerminalReport>;
 type SendReport = (serverUrl: string, report: PersistedReport, signal: AbortSignal) => Promise<ReportAck>;
-
-/** Upload the report's changed loop files, then send the report itself. A
- * retryable upload failure keeps the report pending so the files go first. */
-export async function sendReportWithFiles(serverUrl: string, report: PersistedReport, signal: AbortSignal): Promise<ReportAck> {
-  const payload = JSON.parse(report.payloadJson) as TerminalReport;
-  if (payload.files?.length) {
-    const uploaded = await uploadLoopFiles({ serverUrl, runToken: report.runToken, runId: report.runId, files: payload.files, signal });
-    if (!uploaded.ok) return { kind: "retry", reportId: report.reportId, error: uploaded.error };
-  }
-  return sendTerminalReport(serverUrl, report, undefined, signal);
-}
 
 export function persistenceRetryDelayMs(attempt: number): number {
   return PERSIST_RETRY_MS[Math.min(Math.max(1, attempt) - 1, PERSIST_RETRY_MS.length - 1)]!;
@@ -57,7 +46,7 @@ export class ConcurrentRuntime {
     private readonly outbox: PendingReportOutbox,
     private readonly execute: Execute = executeDelivery,
     private readonly onState: (state: { currentRuns: CurrentRun[]; cancelPendingRunIds: string[]; persistenceError?: string; outboxPath: string }) => void = () => {},
-    private readonly sendReport: SendReport = sendReportWithFiles,
+    private readonly sendReport: SendReport = (serverUrl, report, signal) => sendTerminalReport(serverUrl, report, undefined, signal),
   ) {
     for (const pending of outbox.all()) {
       this.active.set(pending.runId, { stage: "reporting", abortController: new AbortController(), cancelRequested: false });
@@ -180,10 +169,7 @@ export class ConcurrentRuntime {
             const ack = await this.sendReport(serverUrl, report, this.reportAbort.signal);
             if (this.reportAbort.signal.aborted) return;
             this.outbox.applyAck(ack);
-            if (!this.outbox.get(report.reportId)) {
-              this.active.delete(report.runId);
-              removeRunDir(report.runId);
-            }
+            if (!this.outbox.get(report.reportId)) this.active.delete(report.runId);
             this.emitState();
           } catch (error) {
             // A broken injected/custom transport must not prevent independent rows
@@ -239,11 +225,8 @@ export async function runDaemon(args: string[] = []): Promise<number> {
   const pollAbort = new AbortController();
   let stopping = false;
   const outbox = new PendingReportOutbox(serverOutboxPath(server));
-  // Run dirs of reports still pending for ANY saved server stay staged for upload;
-  // the rest are crash leftovers.
-  pruneRunDirs(fs.readdirSync(PIEVO_DIR)
-    .filter((name) => /^pending-reports-[0-9a-f]+\.sqlite$/.test(name))
-    .flatMap((name) => readReportDiagnostics(path.join(PIEVO_DIR, name)).pendingRunIds));
+  // Reports carry memory inline, so every run dir present at startup is a crash leftover.
+  pruneRunDirs();
   const runtimeStatusFile = path.join(PIEVO_DIR, "runtime-status.json");
   let lastNeedsUpdateKey: string | undefined;
   let runtimeState: { currentRuns: CurrentRun[]; cancelPendingRunIds: string[]; persistenceError?: string; outboxPath?: string } = { currentRuns: [], cancelPendingRunIds: [] };

@@ -17,9 +17,10 @@ project files on the device that runs each loop.
 ## What Pievo does
 
 A loop combines a prompt, a cron or continuous schedule, a project folder on one
-device, and one of two outcomes per run: `ok` or `block`. Each loop keeps a
-memory file its runs read and update, so later runs avoid earlier mistakes, and can
-maintain Markdown, HTML, or text/code artifacts the dashboard renders and diffs.
+device, and one of two outcomes per run: `ok` or `block`. A run that finds
+something worth your time (a metric improved, something new appeared) flags
+**attention**, shown in green; routine runs stay quiet. Each loop keeps a short
+memory of lessons its runs learned the hard way, so later runs get faster and safer.
 
 Pievo is personal software for one user. One device runs the **server** (dashboard,
 scheduler, history). Every device that runs loops runs the **daemon**, which polls
@@ -109,12 +110,12 @@ Loops
   new --json '<config>' [--dry-run]
   loops [--fields a,b] [--json]
   show [<loop>] [--full] [--json]
-  log [<loop>] [--limit N] [--status ok|block] [--json]
+  log [<loop>] [--since ISO] [--until ISO] [--attention] [--run N] [--json]
+  memory [<loop>] | memory set <loop> --from <path|->
   edit <loop> --json '<patch>' [--dry-run]
   pause <loop> | start <loop> | stop <loop>
   delete <loop> [--force]
   run stop <run>
-  file list|get|set <loop> [<name>] [--from <path|->]
   skill [status|install]
 ```
 
@@ -133,7 +134,7 @@ contract.
   that is not durable yet and leave local or external side effects uncertain.
 - Restart never updates npm; see [Upgrade](#upgrade).
 
-The server keeps its embedded database, loop file bytes, log, and pid record in
+The server keeps its embedded database, log, and pid record in
 `~/.pievo-server`; the daemon keeps its connections, logs, report outbox, and
 per-run directories in `~/.pievo`. Run exactly one server per data directory, and
 stop it before backing up `~/.pievo-server`.
@@ -157,17 +158,28 @@ A run reports through its final response, which must end with the line
 `block` means the loop cannot continue safely without the owner and pauses it. A
 response without that line is recorded as a failed run, and consecutive failures
 (3 by default, `PIEVO_FAILURE_AUTOPAUSE_STREAK`) pause the loop. A line
-`ATTENTION: <reason>` just above the status flags the run for the owner (a yellow
-mark on the dashboard) without pausing the loop. `pievo` commands are unavailable inside a run.
+`ATTENTION: <reason>` just above the status flags an `ok` run for the owner (green
+on the dashboard) without pausing the loop. Runs flag attention only when something
+improved or changed; a digest or crawl that simply did its job does not. A `block`
+is its own signal: it pauses the loop and never needs attention.
 
-Each loop has server-owned files: `MEMORY.md` (at most 8000 characters) plus up to
-four text/code artifacts (256 KB each) that the dashboard renders and diffs.
-`MEMORY.md` holds only the loop's long-term experience (lessons runs learned the hard
-way); task state, results, and history belong in an artifact. For
-each run the daemon downloads them into a private `~/.pievo/runs/<run>` directory,
-tells the agent the path, and uploads changed versions with the terminal report. A
-version over its limit is rejected and the previous one kept; an owner edit
-(`pievo file set`) made during a run wins.
+Every run's prompt starts with a header: the run number, the current time, and the
+previous run's time, outcome, and summary. Run history is the loop's record of
+results: time, status, attention, the final summary, duration, and tokens. Task
+state a run needs next time belongs in the project folder or in its summary.
+
+Each loop has a server-owned `MEMORY.md` (at most 8000 characters) holding only
+lessons runs learned the hard way. The daemon writes it into a private
+`~/.pievo/runs/<run>` directory, tells the agent the path, and sends changed
+memory back with the terminal report together with the hash of the memory it
+started from. A run's edit applies only if that hash still matches the current
+memory, so an owner edit (`pievo memory set`) made during a run wins. Memory over
+the limit is rejected and the previous one kept. The dashboard shows the current
+memory and lets the owner edit it.
+
+Inside a run, `pievo log`, `pievo show`, and `pievo memory` work read-only for that
+loop only, through a credential that expires when the run ends. The owner's agent
+uses the same commands, so both see the same history.
 
 ## Local security controls
 

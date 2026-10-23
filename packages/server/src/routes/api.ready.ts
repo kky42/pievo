@@ -4,7 +4,7 @@ import { ensureServer } from '../server/boot.js'
 
 /**
  * Deep readiness for process launchers. Unlike /api/health, this waits for the
- * one-time backend boot (migrations, blob-store selection, and scheduler start).
+ * one-time backend boot (migrations and scheduler start).
  * The per-launch nonce lets a launcher reject a different process already bound
  * to the requested port.
  */

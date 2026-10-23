@@ -1,8 +1,9 @@
 /**
  * Machine and run credentials. A device token (`dk_…`) identifies a machine whose
  * id is derived from it (`m-sha256(token)[:16]`). A run lease (`rk_…`) is minted per
- * delivery and authorizes only that run's loop-file transfer and terminal report;
- * its lifecycle is the state machine on `RunLease`.
+ * delivery and authorizes only that run's terminal report; its lifecycle is the
+ * state machine on `RunLease`. A run context token (`rc_…`), minted with the
+ * lease, lets the in-run agent read its own loop's history while it executes.
  *
  * Leases and connect-key bindings are durable so a restart neither rejects
  * in-flight reports nor blocks a just-connected machine from enrolling. The
@@ -147,6 +148,20 @@ export async function terminalizeLease(runId: string, now: number = Date.now()):
  * one single-shot commit. */
 export async function retireLease(token: string): Promise<void> {
   await db.delete(runLeases).where(eq(runLeases.tokenHash, sha256(token)));
+}
+
+const CONTEXT_TOKEN_RE = /^rc_[0-9a-f]{32}$/;
+export function isContextTokenShape(token: string): boolean {
+  return CONTEXT_TOKEN_RE.test(token);
+}
+
+/** The executing run a context token belongs to. Authority ends when the run
+ *  stops executing: a reclaimed or finished run's agent has nothing to read for. */
+export async function resolveContextToken(token: string): Promise<RunLease | undefined> {
+  if (!isContextTokenShape(token)) return undefined;
+  const row = (await db.select().from(runLeases)
+    .where(and(eq(runLeases.contextHash, sha256(token)), eq(runLeases.state, "active"))))[0];
+  return row ? leaseFromRow(row) : undefined;
 }
 
 /** State-aware lease maintenance. Expired reconciliation authority becomes a

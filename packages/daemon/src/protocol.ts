@@ -1,1 +1,1 @@
-export const DAEMON_PROTOCOL_VERSION = 5 as const;
+export const DAEMON_PROTOCOL_VERSION = 7 as const;

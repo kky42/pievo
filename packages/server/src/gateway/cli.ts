@@ -1,8 +1,10 @@
 /**
  * `/api/machine/cli` verb router. Authority keys on credential type: a device
  * (`dk_`) token gets owner verbs over loops bound to its machine, reusing
- * `MachineGateway`'s owner methods; a run (`rk_`) token gets no verb, because a
- * run reports only through its final response.
+ * `MachineGateway`'s owner methods; a run context (`rc_`) token gets the same
+ * read-only verbs (`show`, `log`, `memory`) over its own loop, so the owner's
+ * agent and the in-run agent see one view of a loop; a run report (`rk_`) token
+ * gets no verb, because a run reports only through its final response.
  */
 import path from "node:path";
 
@@ -10,7 +12,7 @@ import * as store from "../db/store.js";
 import type { Loop, NewRun, Run } from "../db/schema.js";
 import { machinePresence, type MachinePresence } from "../lib/machinePresence.js";
 import { logger } from "../logger.js";
-import { resolveLease } from "./tokens.js";
+import { isContextTokenShape, resolveContextToken, resolveLease } from "./tokens.js";
 import { authenticateDeviceToken } from "./deviceAuth.js";
 import { DAEMON_PROTOCOL_VERSION } from "./protocol.js";
 import {
@@ -33,7 +35,7 @@ import {
   runResultToken,
   type MachineGateway,
 } from "./index.js";
-import { EMPTY_SHA256, fileLimitLabel, loopFileIssue, loopFileNames } from "./loopFiles.js";
+import { MEMORY_CHAR_CAP, MEMORY_FILE, memoryIssue } from "./memory.js";
 import { canonicalLoopEnvelope, scheduleFromLoop } from "./loopConfig.js";
 import { readLoopHistory } from "./history.js";
 import { stripNul, type HttpResult } from "./http.js";
@@ -63,7 +65,9 @@ export class CliGateway {
   }
 
   async cli(token: string, argv: string[]): Promise<HttpResult> {
-    const res = token.startsWith("dk_") ? await this.deviceCli(token, argv) : await this.runCli(token, argv);
+    const res = token.startsWith("dk_")
+      ? await this.deviceCli(token, argv)
+      : isContextTokenShape(token) ? await this.contextCli(token, argv) : await this.runCli(token, argv);
     return finalizeCli(res);
   }
 
@@ -114,27 +118,45 @@ export class CliGateway {
         if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
         return this.gateway.editLoop(deviceToken, loopArg || undefined, parsed.value as Record<string, unknown>, flags["dry-run"] === true);
       }
-      case "log": {
+      case "log":
+      case "show": {
+        // The machine-scope check is a flat 404, so existence never leaks.
         const loop = await this.ownedLoop(machineId, loopArg);
         if (!loop) return { status: 404, body: { error: "no such loop on this machine" } };
-        return readLoopHistory(loop, flags);
+        return this.readVerb(verb, loop, flags);
       }
-      case "show": {
-        // Device `show` may inspect ANY loop bound to the machine; the machine-scope
-        // check mirrors loopLog/editLoop (flat 404, existence never leaks).
-        const loop = loopArg ? await store.getLoop(loopArg) : undefined;
-        if (!loop || loop.machineId !== machineId) return { status: 404, body: { error: "no such loop on this machine" } };
-        if (flags["json"] === true) {
-          const env = loopEnvelope(loop);
-          return { status: 200, body: { ok: true, loop: env, text: JSON.stringify(env, null, 2) } };
-        }
-        return { status: 200, body: { ok: true, text: await this.describe(loop.id, { full: flags["full"] === true }) } };
-      }
-      case "file":
-        return this.ownerFile(machineId, argv);
+      case "memory":
+        return this.ownerMemory(machineId, argv);
       default:
-        return { status: 400, body: { error: `pievo: unknown command "${verb}" for the device credential (try: new, loops, pause, start, stop, delete, run stop, edit, log, show, file)` } };
+        return { status: 400, body: { error: `pievo: unknown command "${verb}" for the device credential (try: new, loops, pause, start, stop, delete, run stop, edit, log, show, memory)` } };
     }
+  }
+
+  /** Inside a run: the owner's read verbs, scoped to the run's own loop. */
+  private async contextCli(contextToken: string, argv: string[]): Promise<HttpResult> {
+    const lease = await resolveContextToken(contextToken);
+    if (!lease) return { status: 401, body: { text: errorBlock("this run is no longer executing", "UNAUTHORIZED"), exitCode: 1 } };
+    const verb = argv[0] ?? "";
+    const flags = parseFlags(argv.slice(1));
+    if (flags["help"] === true && RUN_VERBS.has(verb)) return { status: 200, body: { ok: true, text: verbHelpText(verb)! } };
+    if (!RUN_VERBS.has(verb)) return { status: 403, body: { text: errorBlock(RUN_READ_ONLY, "FORBIDDEN"), exitCode: 1 } };
+    const loopArg = typeof flags["_"] === "string" ? flags["_"] as string : "";
+    if (verb === "memory" && loopArg === "set") return { status: 403, body: { text: errorBlock(RUN_READ_ONLY, "FORBIDDEN"), exitCode: 1 } };
+    if (loopArg && loopArg !== lease.loopId) return { status: 404, body: { error: "a run can only read its own loop" } };
+    const loop = await store.getLoop(lease.loopId);
+    if (!loop) return { status: 404, body: { error: "no such loop" } };
+    delete flags["_"];
+    return this.readVerb(verb, loop, flags, true);
+  }
+
+  private async readVerb(verb: string, loop: Loop, flags: Flags, readOnly = false): Promise<HttpResult> {
+    if (verb === "log") return readLoopHistory(loop, flags);
+    if (verb === "memory") return { status: 200, body: { text: loop.memory || "\n" } };
+    if (flags["json"] === true) {
+      const env = loopEnvelope(loop);
+      return { status: 200, body: { ok: true, loop: env, text: JSON.stringify(env, null, 2) } };
+    }
+    return { status: 200, body: { ok: true, text: await this.describe(loop.id, { full: flags["full"] === true, readOnly }) } };
   }
 
   private async ownedLoop(machineId: string, loopId: string): Promise<Loop | undefined> {
@@ -228,49 +250,25 @@ export class CliGateway {
     return { status: 403, body: { text: errorBlock(RUN_HAS_NO_CLI, "FORBIDDEN"), exitCode: 1 } };
   }
 
-  /** `file list|get|set` over one loop's files. `set` takes base64 content so
-   *  arbitrary text (including leading `--`) survives argv transport. */
-  private async ownerFile(machineId: string, argv: string[]): Promise<HttpResult> {
-    const [, sub, loopId, name] = argv;
-    const loop = loopId ? await this.ownedLoop(machineId, loopId) : undefined;
-    if (sub !== "list" && sub !== "get" && sub !== "set") return { status: 400, body: { error: `usage: ${FILE_USAGE}` } };
+  /** `memory <loop>` prints a loop's memory; `memory set <loop>` replaces it.
+   *  `set` takes base64 content so arbitrary text (including leading `--`)
+   *  survives argv transport. */
+  private async ownerMemory(machineId: string, argv: string[]): Promise<HttpResult> {
+    const setting = argv[1] === "set";
+    const loop = await this.ownedLoop(machineId, (setting ? argv[2] : argv[1]) ?? "");
     if (!loop) return { status: 404, body: { error: "no such loop on this machine" } };
-    const names = loopFileNames(loop);
-    if (sub === "list") {
-      const rows = await Promise.all(names.map(async (file) => {
-        const row = await store.getArtifactFile(loop.id, file);
-        const live = row && !row.deleted && row.hash ? row : undefined;
-        return [file, live?.size ?? 0, fileLimitLabel(file), live ? fmtTime(live.updatedAt) : null] as Scalar[];
-      }));
-      return { status: 200, body: { text: doc(listBlock("files", ["name", "size", "limit", "updatedAt"], rows), helpBlock([
-        `Run \`pievo file get ${loop.id} <name>\` to print a file`,
-        `Run \`pievo file set ${loop.id} <name> --from <path>\` to replace a file`,
-      ])) } };
-    }
-    if (!name || !names.includes(name)) {
-      return { status: 404, body: { error: `no such loop file: ${name ?? ""} (files: ${names.join(", ")})` } };
-    }
-    if (sub === "get") {
-      const row = await store.getArtifactFile(loop.id, name);
-      const bytes = await this.gateway.loopFiles.readBlob(row && !row.deleted && row.hash ? row.hash : EMPTY_SHA256);
-      if (!bytes) return { status: 500, body: { error: "loop file bytes are missing" } };
-      // An empty file prints as one blank line: the CLI transport requires non-empty text.
-      return { status: 200, body: { text: bytes.length ? bytes.toString("utf8") : "\n" } };
-    }
-    const flags = parseFlags(argv.slice(4));
-    const encoded = flags["content-base64"];
-    // A bare flag (no value) would silently mean "empty file"; require the value.
-    if (typeof encoded !== "string") return { status: 400, body: { error: `usage: ${FILE_USAGE}` } };
-    const bytes = Buffer.from(encoded, "base64");
-    const issue = loopFileIssue(name, bytes);
+    if (!setting) return this.readVerb("memory", loop, {});
+    const encoded = parseFlags(argv.slice(3))["content-base64"];
+    // A bare flag (no value) would silently mean "empty memory"; require the value.
+    if (typeof encoded !== "string") return { status: 400, body: { error: `usage: ${MEMORY_USAGE}` } };
+    const text = Buffer.from(encoded, "base64").toString("utf8");
+    const issue = memoryIssue(text);
     if (issue) return { status: 413, body: { error: `${issue}; nothing was changed` } };
-    const hash = await this.gateway.loopFiles.putBlob(bytes);
-    if (hash !== EMPTY_SHA256) await store.recordBlob(hash, bytes.length);
-    if (!(await store.writeLoopFile(loop.id, name, hash, bytes.length))) return { status: 404, body: { error: "no such loop file" } };
-    return { status: 200, body: { text: `file: ${name}\nsize: ${bytes.length}\nupdated: true` } };
+    if (!(await store.writeLoopMemory(loop.id, text))) return { status: 404, body: { error: "no such loop on this machine" } };
+    return { status: 200, body: { text: `memory: ${Array.from(text).length} of ${MEMORY_CHAR_CAP} characters\nupdated: true` } };
   }
 
-  private async describe(loopId: string, opts: { full?: boolean } = {}): Promise<string> {
+  private async describe(loopId: string, opts: { full?: boolean; readOnly?: boolean } = {}): Promise<string> {
     const loop = await store.getLoop(loopId);
     if (!loop) return "loop not found";
     const recent = (await store.listRuns(loop.id, LOG_RUNS_DEFAULT)).slice().reverse();
@@ -322,7 +320,9 @@ type Flags = Record<string, string | boolean>;
 
 const RUN_HAS_NO_CLI =
   "pievo commands are not available inside a run; end your final response with a summary and a last line `STATUS: ok|block`";
-const FILE_USAGE = "pievo file list <loop> | file get <loop> <name> | file set <loop> <name> --from <path>";
+const RUN_VERBS = new Set(["show", "log", "memory"]);
+const RUN_READ_ONLY = `inside a run, pievo is read-only: ${[...RUN_VERBS].join(", ")}. Edit ${MEMORY_FILE} in $PIEVO_LOOP_DIR and report through your final response`;
+const MEMORY_USAGE = "pievo memory <loop> | memory set <loop> --from <path|->";
 
 const PAUSED_FINISHING = "loop paused; current run is finishing";
 const STOP_UPGRADE_REQUIRED = "Daemon upgrade required to stop a running process. Run `npm install -g @kky42/pievo@latest`, then `pievo daemon restart`.";
@@ -440,26 +440,30 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
   },
   delete: {
     syntax: "delete <id> [--force]",
-    summary: "stop first, then delete server history, memory, and artifacts",
-    help: ["Stop this loop and delete its Pievo history, memory, and artifacts? Local project files are not deleted.", "--force requires a prior Delete request and explicit local confirmation; the local process may still be running"],
+    summary: "stop first, then delete server history and memory",
+    help: ["Stop this loop and delete its Pievo history and memory? Local project files are not deleted.", "--force requires a prior Delete request and explicit local confirmation; the local process may still be running"],
   },
   run: {
     syntax: "run stop <run-id>",
     summary: "stop one pending or running run without pausing its loop",
     help: ["A running run remains running until the daemon confirms cancellation"],
   },
-  file: {
-    syntax: "file list <id> | file get <id> <name> | file set <id> <name> --from <path>",
-    summary: "inspect or replace a loop's MEMORY.md and artifact files",
+  memory: {
+    syntax: "memory [<id>] | memory set <id> --from <path|->",
+    summary: `print or replace a loop's ${MEMORY_FILE} (lessons runs learned the hard way; max ${MEMORY_CHAR_CAP} characters)`,
     help: [
-      "Run `pievo file get <id> MEMORY.md` to read the loop's memory",
-      "An edit made while a run is executing wins over that run's version of the file",
+      "An edit made while a run is executing wins over that run's version",
+      "Run `pievo log <id> --run <index>` for one run's full response and memory notices",
     ],
   },
   log: {
-    syntax: "log [<id>] [--limit 1..20] [--since ISO] [--until ISO] [--status ok|block] [--phase done|error|canceled] [--run <index|UUID> [--diff]] [--json]",
-    summary: "bounded terminal history or one detailed run",
-    help: ["Run `pievo log <id> --json` for structured history", "Run `pievo log <id> --run 12 --diff` for bounded run detail and artifact diff"],
+    syntax: "log [<id>] [--limit 1..20] [--since ISO] [--until ISO] [--status ok|block] [--phase done|error|canceled] [--attention] [--run <index|UUID>] [--json]",
+    summary: "a loop's terminal runs, newest first (time, status, attention, summary, tokens), or one run in detail",
+    help: [
+      "Run `pievo log <id> --since 2026-10-01T00:00:00Z` for runs since a time",
+      "Run `pievo log <id> --attention` for runs that flagged the owner",
+      "Run `pievo log <id> --run 12` for one run's full response and memory notices",
+    ],
   },
 };
 
@@ -497,7 +501,7 @@ function renderShowText(
   env: Record<string, unknown>,
   totalRuns: number,
   lastRun: Pick<Run, "phase" | "status" | "ts" | "error" | "reportIncident"> | null,
-  opts: { full?: boolean } = {},
+  opts: { full?: boolean; readOnly?: boolean } = {},
 ): string {
   const full = opts.full === true;
   const block = detailBlock("loop", [
@@ -510,18 +514,20 @@ function renderShowText(
     ["model", env.model == null ? { raw: "default" } : env.model as Scalar],
     ["reasoningEffort", env.reasoningEffort == null ? { raw: "default" } : env.reasoningEffort as Scalar],
     ["prompt", contentField(loop.prompt, full)],
-    ["artifacts", { raw: JSON.stringify(env.artifacts) }],
+    ["memory", full ? loop.memory : { raw: `${Array.from(loop.memory).length} of ${MEMORY_CHAR_CAP} characters — use --full to see` }],
     ["enabled", env.enabled as Scalar],
   ]);
   const runsTally = lastRun
     ? `${totalRuns} total · last ${runResultToken(lastRun)} ${fmtTime(lastRun.ts)}`
     : `${totalRuns} total`;
-  const help = [
-    `Run \`pievo show ${loop.id} --full\` to see the complete prompt`,
-    `Run \`pievo edit ${loop.id} --json '{"schedule":{"mode":"continuous","delayMinutes":5}}'\` to change the schedule`,
-    `Run \`pievo log ${loop.id}\` to see recent run results`,
-    `Run \`pievo file list ${loop.id}\` to see the loop's memory and artifact files`,
-  ];
+  const help = opts.readOnly
+    ? ["Run `pievo log` to see recent run results", "Run `pievo log --since <ISO>` for runs since a time"]
+    : [
+        `Run \`pievo show ${loop.id} --full\` to see the complete prompt and memory`,
+        `Run \`pievo edit ${loop.id} --json '{"schedule":{"mode":"continuous","delayMinutes":5}}'\` to change the schedule`,
+        `Run \`pievo log ${loop.id}\` to see recent run results`,
+        `Run \`pievo memory set ${loop.id} --from <path>\` to replace the loop's memory`,
+      ];
   return doc(
     block,
     kvLine("nextFire", nextFireDisplay(loop)),

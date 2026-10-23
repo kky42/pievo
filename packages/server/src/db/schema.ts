@@ -61,9 +61,10 @@ export const loops = pgTable(
     name: text("name").notNull(),
     tags: text("tags").array().notNull().default(sql`ARRAY[]::text[]`),
     prompt: text("prompt").notNull(),
-    /** Configured artifact names, in addition to the always-present MEMORY.md.
-     *  See `gateway/loopFiles.ts`. */
-    artifacts: jsonb("artifacts").$type<string[]>().notNull().default([]),
+    /** The loop's MEMORY.md: lessons runs learned the hard way. Bounded by
+     *  `gateway/memory.ts`; every run reads it and may replace it. A run's
+     *  replacement applies only if the memory hash it started from is current. */
+    memory: text("memory").notNull().default(""),
     cron: text("cron").notNull(),
     scheduleMode: text("schedule_mode", { enum: ["cron", "continuous"] }).notNull(),
     /** Cron-only overlap behavior. Continuous runs never overlap. */
@@ -135,10 +136,9 @@ export const runs = pgTable(
     cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true, mode: "string" }),
     heartbeatAt: text("heartbeat_at"),
     reportIncident: jsonb("report_incident").$type<ReportIncident>(),
-    /** Loop-file versions this run produced but that were not kept (over limit,
-     *  owner edited during the run, upload lost). Shown on the run and repeated in
-     *  the next run's prompt so the agent can correct course. */
-    fileNotices: jsonb("file_notices").$type<string[]>(),
+    /** Why this run's memory was not kept (over limit, owner edited during the
+     *  run). Shown on the run and repeated in the next run's prompt. */
+    notices: jsonb("notices").$type<string[]>(),
   },
   (t) => [
     index("runs_loop_idx").on(t.loopId),
@@ -174,6 +174,10 @@ export const runLeases = pgTable(
     loopId: text("loop_id").notNull(),
     machineId: text("machine_id").notNull(),
     state: text("state", { enum: ["active", "terminal-grace", "reconciliation-only", "retired"] }).notNull().default("active"),
+    /** sha256 of the run's read-only context token (`rc_…`), which lets the
+     *  in-run `pievo` read this loop's history while the lease is active. It is
+     *  separate from the report token so an agent cannot forge its own result. */
+    contextHash: text("context_hash"),
     /** Null while active/retired; ISO only during terminal-grace. */
     expiresAt: text("expires_at"),
     createdAt: text("created_at").notNull(),
@@ -182,6 +186,7 @@ export const runLeases = pgTable(
   (t) => [
     index("run_leases_run_idx").on(t.runId),
     index("run_leases_loop_idx").on(t.loopId),
+    uniqueIndex("run_leases_context_idx").on(t.contextHash),
     check("run_leases_state_check", sql`${t.state} IN ('active', 'terminal-grace', 'reconciliation-only', 'retired')`),
   ],
 );
@@ -231,90 +236,9 @@ export const connectKeys = pgTable("connect_keys", {
   mintedAt: text("minted_at").notNull(),
 });
 
-// Loop files (MEMORY.md + configured artifacts). Blob bytes live in the local
-// blob store keyed by sha256, not in the business DB. These tables hold the
-// deduplicated metadata and each loop's current file versions.
-
-/**
- * One content-addressed blob (deduped across every loop/run). The bytes live in
- * the byte store under the hash; this row records verified byte presence and size.
- */
-export const blobs = pgTable("blobs", {
-  hash: text("hash").primaryKey(),
-  size: integer("size").notNull(),
-  createdAt: text("created_at").notNull(),
-});
-
-/**
- * The current file set of each loop — one row per live or tombstoned name.
- * `hash` → `blobs.hash`; null for a tombstoned (deleted or unconfigured) file.
- * The unique (loopId, path) index is the upsert key owner writes and run
- * finalization share.
- */
-export const artifactFiles = pgTable(
-  "artifact_files",
-  {
-    id: text("id").primaryKey(),
-    loopId: text("loop_id").notNull(),
-    path: text("path").notNull(),
-    hash: text("hash"),
-    size: integer("size"),
-    /** Legacy snapshot/diff metadata. Loop-file ingress rejects NUL, so new rows
-     *  always store false. */
-    binary: boolean("binary").notNull().default(false),
-    /** Legacy snapshot/diff metadata. Loop-file ingress rejects over-limit versions,
-     *  so new rows always store false. */
-    oversize: boolean("oversize").notNull().default(false),
-    deleted: boolean("deleted").notNull().default(false),
-    updatedAt: text("updated_at").notNull(),
-  },
-  (t) => [
-    index("artifact_files_loop_idx").on(t.loopId),
-    uniqueIndex("artifact_files_loop_path_idx").on(t.loopId, t.path),
-    // The blob GC's per-candidate referenced re-check + the putBlob cap guard both
-    // do a point lookup by hash; without this they full-scan artifact_files.
-    index("artifact_files_hash_idx").on(t.hash),
-  ],
-);
-
-/**
- * One file's metadata in a run snapshot (name → this). Richer than a bare
- * name→hash map so the per-run diff can compute a size delta and pick a render
- * mode without re-reading current files.
- */
-export interface SnapshotEntry {
-  /** → blobs.hash; null only for legacy metadata-only entries. */
-  hash: string | null;
-  size: number | null;
-  binary: boolean;
-  oversize: boolean;
-}
-
-export type SnapshotManifest = Record<string, SnapshotEntry>;
-
-/**
- * The loop's full loop-file manifest captured at each run's finalize — the input
- * to the per-run diff. Written cheaply on report (no diff computed on write);
- * `getRunDiff` lazily compares run N's snapshot with the preceding snapshot.
- * One row per run (runId primary key).
- */
-export const runSnapshots = pgTable(
-  "run_snapshots",
-  {
-    runId: text("run_id").primaryKey(),
-    loopId: text("loop_id").notNull(),
-    manifest: jsonb("manifest").$type<SnapshotManifest>().notNull(),
-    createdAt: text("created_at").notNull(),
-  },
-  (t) => [index("run_snapshots_loop_idx").on(t.loopId)],
-);
-
 export type Machine = typeof machines.$inferSelect;
 export type NewMachine = typeof machines.$inferInsert;
 export type Loop = typeof loops.$inferSelect;
 export type NewLoop = typeof loops.$inferInsert;
 export type Run = typeof runs.$inferSelect;
 export type NewRun = typeof runs.$inferInsert;
-export type Blob = typeof blobs.$inferSelect;
-export type ArtifactFile = typeof artifactFiles.$inferSelect;
-export type RunSnapshot = typeof runSnapshots.$inferSelect;

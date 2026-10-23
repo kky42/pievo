@@ -13,15 +13,12 @@ import { drizzle, type PgliteDatabase } from "drizzle-orm/pglite";
 
 import { dataDir } from "../env.js";
 import { logger } from "../logger.js";
-import { machines, loops, runs, blobs, artifactFiles, runSnapshots, runLeases, runReportReceipts, terminalReportIncidents, connectKeys } from "./schema.js";
+import { machines, loops, runs, runLeases, runReportReceipts, terminalReportIncidents, connectKeys } from "./schema.js";
 
 const schema = {
   machines,
   loops,
   runs,
-  blobs,
-  artifactFiles,
-  runSnapshots,
   runLeases,
   runReportReceipts,
   terminalReportIncidents,
@@ -69,7 +66,38 @@ export async function runMigrations(): Promise<void> {
   const dir = migrationsDir();
   if (!fs.existsSync(dir)) return; // not generated yet (pre-`db:generate`)
   const { migrate } = await import("drizzle-orm/pglite/migrator");
+  const carried = await carryLegacyMemory();
   await migrate(opened.db, { migrationsFolder: dir });
+  if (carried) fs.rmSync(path.join(dataDir(), "blobs"), { recursive: true, force: true });
+}
+
+/**
+ * Before 0004_loop_memory drops the blob-backed loop files, copy each loop's
+ * MEMORY.md bytes from `<dataDir>/blobs` into `loops.memory` (SQL cannot read the
+ * byte store). Artifacts are dropped without export, by owner decision. Runs only
+ * while the legacy `artifact_files` table exists, so it is a no-op afterwards.
+ * Remove once no 5.x data directory can still be upgraded.
+ */
+async function carryLegacyMemory(): Promise<boolean> {
+  const legacy = await opened.client.query<{ present: boolean }>(`SELECT to_regclass('public.artifact_files') IS NOT NULL AS present`);
+  if (!legacy.rows[0]?.present) return false;
+  await opened.client.query(`ALTER TABLE "loops" ADD COLUMN IF NOT EXISTS "memory" text DEFAULT '' NOT NULL`);
+  const rows = await opened.client.query<{ loop_id: string; hash: string }>(
+    `SELECT loop_id, hash FROM artifact_files WHERE path = 'MEMORY.md' AND deleted = false AND hash IS NOT NULL`,
+  );
+  for (const row of rows.rows) {
+    if (!/^[a-f0-9]{64}$/.test(row.hash)) continue;
+    let memory: string;
+    try {
+      memory = fs.readFileSync(path.join(dataDir(), "blobs", row.hash.slice(0, 2), row.hash), "utf8");
+    } catch {
+      logger.warn({ loopId: row.loop_id }, "migration: MEMORY.md bytes missing; the loop starts with empty memory");
+      continue;
+    }
+    await opened.client.query(`UPDATE loops SET memory = $1 WHERE id = $2`, [memory.replace(/\0/g, ""), row.loop_id]);
+  }
+  logger.info({ loops: rows.rows.length }, "migration: carried MEMORY.md into loops.memory");
+  return true;
 }
 
 /**

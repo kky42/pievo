@@ -2,19 +2,16 @@
  * Server functions backing the dashboard. They run server-side (createServerFn
  * → RPC) and call the IN-PROCESS scheduler + store directly — the scheduler
  * lives in this same TanStack process (booted on first call via ensureServer).
- * The machine-facing poll, CLI, report, and run-file endpoints are sibling server
+ * The machine-facing poll, CLI, and report endpoints are sibling server
  * routes in this same process, so one process owns the single scheduler.
  */
 import { createServerFn } from '@tanstack/react-start'
 
 import type {
-  ArtifactContent,
-  ArtifactSummary,
   LoopDetail,
   LoopPayload,
   LoopSummary,
   MutationResult,
-  RunDiffResult,
   RunSummary,
 } from '../types'
 import * as store from '../db/store.js'
@@ -73,35 +70,16 @@ export const loadOlderRuns = createServerFn({ method: 'GET' })
     return toRunSummaries(data.loopId, await store.listRunsBefore(data.loopId, data.beforeTs, limit))
   })
 
-export const getArtifacts = createServerFn({ method: 'GET' })
-  .validator((d: { loopId: string }) => d)
-  .handler(async ({ data }): Promise<ArtifactSummary[]> => {
+export const setLoopMemory = createServerFn({ method: 'POST' })
+  .validator((d: { id: string; memory: string }) => d)
+  .handler(async ({ data }): Promise<MutationResult> => {
     await backend()
-    if (!(await findLoop(data.loopId))) return []
-    const { listLoopArtifacts } = await import('./artifactFiles.js')
-    return listLoopArtifacts(data.loopId)
-  })
-
-export const getArtifact = createServerFn({ method: 'GET' })
-  .validator((d: { loopId: string; path: string }) => d)
-  .handler(async ({ data }): Promise<ArtifactContent> => {
-    await backend()
-    if (!(await findLoop(data.loopId))) return { error: 'file not found' }
-    const { readLoopArtifact } = await import('./artifactFiles.js')
-    return readLoopArtifact(data.loopId, data.path)
-  })
-
-/** A run's per-file diff against the previous run, computed at read time. Runs
- *  without a snapshot return `hasSnapshot: false`. */
-export const getRunDiff = createServerFn({ method: 'GET' })
-  .validator((d: { runId: string }) => d)
-  .handler(async ({ data }): Promise<RunDiffResult> => {
-    await backend()
-    const run = await store.getRun(data.runId)
-    if (!run) return { hasSnapshot: false, files: [] }
-    if (!(await findLoop(run.loopId))) return { hasSnapshot: false, files: [] }
-    const { computeRunDiff } = await import('./runDiff.js')
-    return computeRunDiff(data.runId)
+    if (!(await findLoop(data.id))) return { error: 'This loop does not exist.' }
+    if (typeof data.memory !== 'string') return { error: 'memory must be text' }
+    const { memoryIssue } = await import('../gateway/memory.js')
+    const issue = memoryIssue(data.memory)
+    if (issue) return { error: issue }
+    return (await store.writeLoopMemory(data.id, data.memory)) ? { ok: true } : { error: 'This loop does not exist.' }
   })
 
 export const patchLoop = createServerFn({ method: 'POST' })

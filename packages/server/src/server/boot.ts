@@ -1,13 +1,10 @@
-/** One-time, idempotent in-process backend boot (migrations, scheduler, sweep and
- * storage-maintenance intervals). Guarded on `globalThis` to survive dev HMR. */
+/** One-time, idempotent in-process backend boot (migrations, scheduler, sweep
+ * interval). Guarded on `globalThis` to survive dev HMR. */
 import { runMigrations, closeClient } from "../db/index.js";
 import { repairTerminalRunLeases } from "../db/store.js";
 import { logger } from "../logger.js";
 import { MachineGateway, ONLINE_TTL_MS } from "../gateway/index.js";
-import type { LoopFiles } from "../gateway/loopFiles.js";
 import { CliGateway } from "../gateway/cli.js";
-import { createBlobStore } from "../gateway/blobstore.js";
-import { GC_INTERVAL_MS } from "../env.js";
 import { Scheduler, type Dispatcher } from "../scheduler/index.js";
 
 interface Booted {
@@ -54,10 +51,7 @@ async function boot(): Promise<Booted> {
   let gateway: MachineGateway;
   const dispatcher: Dispatcher = { dispatch: (loop) => gateway.dispatcher.dispatch(loop) };
   const scheduler = new Scheduler(dispatcher);
-  // ONE blob store: loop-file writes/reads and the gateway's maintainStorage
-  // (retention/GC) must see the same bytes.
-  const blobStore = createBlobStore();
-  gateway = new MachineGateway(scheduler, blobStore);
+  gateway = new MachineGateway(scheduler);
   const cliGateway = new CliGateway(gateway);
 
   await scheduler.start(abort.signal);
@@ -71,25 +65,12 @@ async function boot(): Promise<Booted> {
   sweep.unref?.();
   abort.signal.addEventListener("abort", () => clearInterval(sweep), { once: true });
 
-  // Storage maintenance runs on its own slower cadence with the same
-  // unhandled-rejection guard as the sweep.
-  const gc = setInterval(
-    () => void gateway.maintainStorage().catch((err) => logger.error({ err: String(err) }, "gc tick failed")),
-    GC_INTERVAL_MS,
-  );
-  gc.unref?.();
-  abort.signal.addEventListener("abort", () => clearInterval(gc), { once: true });
-
   logger.info("pievo server booted");
   return { scheduler, gateway, cliGateway, abort, shutdown };
 }
 
 export async function getGateway(): Promise<MachineGateway> {
   return (await ensureServer()).gateway;
-}
-
-export async function getLoopFiles(): Promise<LoopFiles> {
-  return (await ensureServer()).gateway.loopFiles;
 }
 
 export async function getCliGateway(): Promise<CliGateway> {

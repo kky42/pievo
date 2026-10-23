@@ -80,13 +80,6 @@ export const fnum = (n: number): string => {
 
 export const dur = (ms: number | null | undefined): string => (ms ? `${Math.round(ms / 1000)}s` : '')
 
-export function humanBytes(n: number): string {
-  const abs = Math.abs(n)
-  if (abs < 1024) return `${abs} B`
-  if (abs < 1024 * 1024) return `${(abs / 1024).toFixed(1)} KB`
-  return `${(abs / (1024 * 1024)).toFixed(1)} MB`
-}
-
 interface StatusMeta {
   c: string
   label: string
@@ -94,6 +87,7 @@ interface StatusMeta {
 
 const ST = {
   ok: { c: 'var(--color-run-ok)', label: 'OK' },
+  attention: { c: 'var(--color-run-attention)', label: 'Attention' },
   block: { c: 'var(--color-run-block)', label: 'Block' },
   error: { c: 'var(--color-run-error)', label: 'Error' },
   canceled: { c: 'var(--color-run-canceled)', label: 'Canceled' },
@@ -102,6 +96,10 @@ const ST = {
   active: { c: 'var(--color-run-active)', label: 'Running…' },
 } satisfies Record<string, StatusMeta>
 
+/** Attention only survives on a successful run; block and error are their own signals. */
+export const attentionOf = (r: RunSummary): string | null =>
+  r.phase === 'done' && r.status === 'ok' ? (r.attention ?? null) : null
+
 /** The run's ink, for text and borders. Fills use `runSwatch`. */
 export function dotColor(r: RunSummary): string {
   if (r.reconciliation) return ST.reconciling.c
@@ -109,7 +107,8 @@ export function dotColor(r: RunSummary): string {
   if (r.phase === 'error') return ST.error.c
   if (r.phase === 'pending') return ST.queued.c
   if (r.phase === 'canceled') return ST.canceled.c
-  return r.status === 'block' ? ST.block.c : ST.ok.c
+  if (r.status === 'block') return ST.block.c
+  return attentionOf(r) ? ST.attention.c : ST.ok.c
 }
 
 export const runPulseAnim = { animation: 'runPulse 1.1s ease-in-out infinite' } as const
@@ -136,7 +135,14 @@ export function dotLabel(r: RunSummary): string {
   if (r.phase === 'error') return r.cancelRequested ? 'Failed while stopping' : ST.error.label
   if (r.phase === 'canceled') return ST.canceled.label
   if (r.status === 'block') return ST.block.label
+  if (attentionOf(r)) return ST.attention.label
   return r.cancelRequested ? 'Succeeded while stopping' : ST.ok.label
+}
+
+/** Input + output tokens a run reported, or null when it reported none. */
+export function runTokens(r: Pick<RunSummary, 'usage'>): number | null {
+  if (!r.usage || (r.usage.inputTokens === undefined && r.usage.outputTokens === undefined)) return null
+  return (r.usage.inputTokens ?? 0) + (r.usage.outputTokens ?? 0)
 }
 
 /** The newest finished run, whose attention reason the loop card surfaces until a

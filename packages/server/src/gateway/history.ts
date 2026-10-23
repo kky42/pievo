@@ -2,29 +2,24 @@ import { and, desc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 
 import { db } from "../db/index.js";
 import { runs, type Loop, type Run, type RunStatus, type RunUsage } from "../db/schema.js";
-import * as store from "../db/store.js";
-import { computeRunDiff } from "../server/runDiff.js";
 import { detailBlock, doc, emptyList, helpBlock, listBlock, scalar, truncate } from "./toon.js";
 import type { HttpResult } from "./http.js";
 
 export const HISTORY_LIMIT_MAX = 20;
 export const HISTORY_MESSAGE_CAP = 500;
 export const HISTORY_DETAIL_TEXT_CAP = 32 * 1024;
-export const HISTORY_DIFF_TEXT_CAP = 96 * 1024;
-export const HISTORY_DIFF_FILES_MAX = 100;
-export const HISTORY_DIFF_INPUT_BYTES_MAX = 2 * 1024 * 1024;
 export const HISTORY_JSON_TEXT_CAP = 512 * 1024;
 
 const TERMINAL_PHASES = ["done", "error", "canceled"] as const;
 const STATUSES = ["ok", "block"] as const;
-const LOG_FLAGS = new Set(["_", "loop", "help", "run", "diff", "since", "until", "status", "phase", "limit", "json"]);
+const LOG_FLAGS = new Set(["_", "loop", "help", "run", "since", "until", "status", "phase", "attention", "limit", "json"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Flags = Record<string, string | boolean | undefined>;
 type HistoryQuery = {
   mode: "list" | "detail";
   json: boolean;
-  diff: boolean;
+  attention: boolean;
   run?: number | string;
   since?: string;
   until?: string;
@@ -78,8 +73,7 @@ export function parseHistoryFlags(flags: Flags): Parsed {
   }
 
   const runRaw = flags.run;
-  if (bool(flags.diff) && runRaw === undefined) return { ok: false, error: "--diff requires --run" };
-  if (runRaw !== undefined && (since !== undefined || until !== undefined || status !== undefined || phase !== undefined || flags.limit !== undefined)) {
+  if (runRaw !== undefined && (since !== undefined || until !== undefined || status !== undefined || phase !== undefined || flags.attention !== undefined || flags.limit !== undefined)) {
     return { ok: false, error: "--run cannot be combined with time windows, list filters, or --limit" };
   }
   let run: number | string | undefined;
@@ -98,7 +92,7 @@ export function parseHistoryFlags(flags: Flags): Parsed {
     value: {
       mode: run === undefined ? "list" : "detail",
       json: bool(flags.json),
-      diff: bool(flags.diff),
+      attention: bool(flags.attention),
       ...(run !== undefined ? { run } : {}),
       ...(since !== undefined ? { since } : {}),
       ...(until !== undefined ? { until } : {}),
@@ -123,6 +117,10 @@ function boundedText(value: string | null, cap = HISTORY_DETAIL_TEXT_CAP): { val
   return { value: value.slice(0, cap), truncated: value.length > cap };
 }
 
+function attentionForRun(run: Pick<Run, "phase" | "status" | "attention">): string | null {
+  return run.phase === "done" && run.status === "ok" ? run.attention ?? null : null;
+}
+
 function normalizedListRun(run: Run) {
   const message = boundedText(run.message ?? null, HISTORY_MESSAGE_CAP);
   const error = boundedText(run.error ?? null, HISTORY_MESSAGE_CAP);
@@ -131,14 +129,13 @@ function normalizedListRun(run: Run) {
     terminalAt: run.ts,
     phase: run.phase,
     status: run.status ?? null,
-    attention: run.attention ?? null,
+    attention: attentionForRun(run),
     durationMs: run.durationMs ?? null,
     tokenUsage: totalTokenUsage(run.usage ?? null),
     message: message.value,
     messageTruncated: message.truncated,
     error: error.value,
     errorTruncated: error.truncated,
-    finalTextAvailable: !!run.finalText?.trim(),
   };
 }
 
@@ -164,6 +161,7 @@ async function listHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
     q.until ? lte(runs.ts, q.until) : undefined,
     q.status ? eq(runs.status, q.status) : undefined,
     q.phase ? eq(runs.phase, q.phase) : undefined,
+    q.attention ? and(isNotNull(runs.attention), eq(runs.status, "ok")) : undefined,
   ];
   const [rows, counted] = await Promise.all([
     db.select().from(runs).where(and(...conditions)).orderBy(desc(runs.runIndex)).limit(q.limit),
@@ -176,45 +174,24 @@ async function listHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
     return text ? response(text) : { status: 413, body: { error: "history JSON exceeds the response cap; lower --limit" } };
   }
   const table = rows.length
-    ? listBlock("runs", ["index", "terminal", "phase", "status", "attention", "durationMs", "tokenUsage", "message", "error", "finalTextAvailable"], rows.map((run) => [
-        run.runIndex!, fmt(run.ts), run.phase, run.status ?? null, run.attention ?? null, run.durationMs ?? null, totalTokenUsage(run.usage ?? null),
+    ? listBlock("runs", ["index", "terminal", "phase", "status", "attention", "durationMs", "tokenUsage", "message", "error"], rows.map((run) => [
+        run.runIndex!, fmt(run.ts), run.phase, run.status ?? null, attentionForRun(run), run.durationMs ?? null, totalTokenUsage(run.usage ?? null),
         run.message ? truncate(run.message, HISTORY_MESSAGE_CAP, "use --run for detail").value : null,
         run.error ? truncate(run.error, HISTORY_MESSAGE_CAP, "use --run for detail").value : null,
-        !!run.finalText?.trim(),
       ]))
     : emptyList("runs");
   return response(doc(
     `loop: ${scalar(loop.name)} (${loop.id})`,
     `count: ${rows.length} of ${Number(counted[0]?.n ?? 0)} matching`,
     table,
-    helpBlock(["Use `pievo log --run <index>` for one run"]),
+    helpBlock(["Use `pievo log --run <index>` for one run's full response and memory notices"]),
   ));
-}
-
-async function boundedDiff(runId: string) {
-  const raw = await computeRunDiff(runId, {
-    maxFiles: HISTORY_DIFF_FILES_MAX,
-    maxInputBytes: HISTORY_DIFF_INPUT_BYTES_MAX,
-    maxDiffChars: HISTORY_DIFF_TEXT_CAP,
-  });
-  if (!raw.hasSnapshot) return { included: true, available: false, reason: "snapshot-unavailable", truncated: false, files: [] };
-  return {
-    included: true,
-    available: true,
-    reason: null,
-    truncated: raw.truncated ?? false,
-    totalFiles: raw.totalFiles ?? raw.files.length,
-    truncation: raw.truncation,
-    work: raw.work,
-    files: raw.files,
-  };
 }
 
 async function detailHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
   const selector = typeof q.run === "number" ? eq(runs.runIndex, q.run) : eq(runs.id, q.run!);
   const run = (await db.select().from(runs).where(and(eq(runs.loopId, loop.id), selector)).limit(1))[0];
   if (!run) return { status: 404, body: { error: "no such run in this loop" } };
-  const snapshot = await store.getRunSnapshot(run.id);
   const message = boundedText(run.message ?? null);
   const error = boundedText(run.error ?? null);
   const finalText = boundedText(run.finalText ?? null);
@@ -223,7 +200,7 @@ async function detailHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
     terminalAt: TERMINAL_PHASES.includes(run.phase as typeof TERMINAL_PHASES[number]) ? run.ts : null,
     phase: run.phase,
     status: run.status ?? null,
-    attention: run.attention ?? null,
+    attention: attentionForRun(run),
     durationMs: run.durationMs ?? null,
     tokenUsage: totalTokenUsage(run.usage ?? null),
     message: message.value,
@@ -232,9 +209,7 @@ async function detailHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
     errorTruncated: error.truncated,
     finalText: finalText.value,
     finalTextTruncated: finalText.truncated,
-    fileNotices: run.fileNotices ?? [],
-    diffAvailable: !!snapshot,
-    diff: q.diff ? await boundedDiff(run.id) : { included: false, available: !!snapshot },
+    notices: run.notices ?? [],
   };
   const json = jsonText(detail);
   if (!json) return { status: 413, body: { error: "run detail exceeds the response cap" } };
@@ -245,8 +220,7 @@ async function detailHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
     ["durationMs", detail.durationMs], ["tokenUsage", detail.tokenUsage], ["message", detail.message],
     ["messageTruncated", detail.messageTruncated], ["error", detail.error], ["errorTruncated", detail.errorTruncated],
     ["finalText", detail.finalText], ["finalTextTruncated", detail.finalTextTruncated],
-    ["fileNotices", { raw: JSON.stringify(detail.fileNotices) }],
-    ["diffAvailable", detail.diffAvailable], ["diff", { raw: JSON.stringify(detail.diff) }],
+    ["notices", { raw: JSON.stringify(detail.notices) }],
   ]));
 }
 

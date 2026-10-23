@@ -8,14 +8,10 @@ import {
   loops,
   machines,
   runs,
-  blobs,
-  artifactFiles,
-  runSnapshots,
   runLeases,
   runReportReceipts,
   terminalReportIncidents,
   connectKeys,
-  type ArtifactFile,
   type Loop,
   type Machine,
   type NewLoop,
@@ -23,11 +19,9 @@ import {
   type NewRun,
   type Run,
   type RunRequester,
-  type RunSnapshot,
-  type SnapshotManifest,
 } from "./schema.js";
 import type { ReportIncident, ReportIncidentDisposition } from "../types.js";
-import { EMPTY_SHA256, MEMORY_FILE, loopFileNames } from "../gateway/loopFiles.js";
+import { memoryHash } from "../gateway/memory.js";
 
 export function newLoopId(): string {
   return `loop-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
@@ -210,17 +204,6 @@ async function updateLoopTx(tx: StoreTx, current: Loop, patch: Partial<NewLoop>,
       at,
     );
   }
-  if (patch.artifacts !== undefined) {
-    const allowed = new Set([MEMORY_FILE, ...(patch.artifacts ?? [])]);
-    const live = await tx.select({ id: artifactFiles.id, path: artifactFiles.path }).from(artifactFiles)
-      .where(and(eq(artifactFiles.loopId, current.id), eq(artifactFiles.deleted, false)));
-    const removed = live.filter((file) => !allowed.has(file.path)).map((file) => file.id);
-    if (removed.length) {
-      await tx.update(artifactFiles)
-        .set({ hash: null, deleted: true, updatedAt: at })
-        .where(inArray(artifactFiles.id, removed));
-    }
-  }
   return loop;
 }
 
@@ -239,8 +222,6 @@ async function deleteLoopDataTx(tx: StoreTx, id: string): Promise<boolean> {
   if (!deleted.length) return false;
   await tx.delete(runs).where(eq(runs.loopId, id));
   await tx.delete(runLeases).where(and(eq(runLeases.loopId, id), ne(runLeases.state, "retired")));
-  await tx.delete(artifactFiles).where(eq(artifactFiles.loopId, id));
-  await tx.delete(runSnapshots).where(eq(runSnapshots.loopId, id));
   return true;
 }
 
@@ -690,47 +671,32 @@ interface FinalizeTerminalRunInput {
   failureAutopauseStreak: number;
   receipt?: typeof runReportReceipts.$inferInsert;
   reconciliation?: boolean;
-  fileUpdates?: LoopFileUpdate[];
+  memoryUpdate?: MemoryUpdate;
 }
 
-/** One agent-produced loop-file version. `baseHash` is the version the run
- *  downloaded; the blob for `hash` is already stored. */
-export interface LoopFileUpdate {
-  name: string;
+/** The memory a run left behind, and the hash of the memory it started from. */
+export interface MemoryUpdate {
   baseHash: string;
-  hash: string;
-  size: number;
+  text: string;
 }
 
-/** Apply a run's loop-file versions under the loop lock. A file whose current
- * version is no longer the one the run started from was changed by the owner (or a
- * newer run) meanwhile; that version wins and the agent's edit becomes a notice. */
-async function applyLoopFileUpdatesTx(
+/** Apply a run's memory under the loop lock. If the memory the run started from
+ * is no longer current, the owner edited memory meanwhile; that edit wins and
+ * the run's edit becomes a notice. */
+async function applyMemoryUpdateTx(
   tx: StoreTx,
   loop: Loop,
-  updates: LoopFileUpdate[],
+  update: MemoryUpdate,
   at: string,
-): Promise<string[]> {
-  const notices: string[] = [];
-  const configured = new Set(loopFileNames(loop));
-  for (const update of updates) {
-    if (!configured.has(update.name)) {
-      notices.push(`${update.name}: no longer configured on this loop; this run's version was discarded`);
-      continue;
-    }
-    const row = (await tx.select().from(artifactFiles)
-      .where(and(eq(artifactFiles.loopId, loop.id), eq(artifactFiles.path, update.name)))
-      .limit(1).for("update"))[0];
-    const current = row && !row.deleted && row.hash ? row.hash : EMPTY_SHA256;
-    if (current !== update.baseHash) {
-      notices.push(`${update.name}: changed outside this run while it was running; that version was kept and this run's edit was discarded`);
-      continue;
-    }
-    await writeConfiguredArtifactTx(tx, {
-      loopId: loop.id, path: update.name, hash: update.hash, size: update.size, binary: false, oversize: false,
-    }, at);
+): Promise<{ notice?: string }> {
+  if (update.text === loop.memory) return {};
+  if (memoryHash(loop.memory) !== update.baseHash) {
+    return { notice: "MEMORY.md: changed by the owner while this run was running; that version was kept and this run's edit was discarded" };
   }
-  return notices;
+  await tx.update(loops)
+    .set({ memory: update.text, updatedAt: at })
+    .where(eq(loops.id, loop.id));
+  return {};
 }
 
 async function finalizeTerminalRunTx(
@@ -753,14 +719,12 @@ async function finalizeTerminalRunTx(
   if (!target) return undefined;
   const runIndex = await ensureRunIndexTx(tx, target);
   const at = typeof input.runPatch.ts === "string" ? input.runPatch.ts : nowIso();
-  const fileNotices = [
-    ...(input.runPatch.fileNotices ?? []),
-    ...(input.fileUpdates?.length ? await applyLoopFileUpdatesTx(tx, current, input.fileUpdates, at) : []),
-  ];
+  const memory = input.memoryUpdate ? await applyMemoryUpdateTx(tx, current, input.memoryUpdate, at) : {};
+  const notices = [...(input.runPatch.notices ?? []), ...(memory.notice ? [memory.notice] : [])];
   const run = (
     await tx
       .update(runs)
-      .set({ ...input.runPatch, fileNotices: fileNotices.length ? fileNotices : null, runIndex, updatedAt: at })
+      .set({ ...input.runPatch, notices: notices.length ? notices : null, runIndex, updatedAt: at })
       .where(and(eq(runs.id, input.runId), eq(runs.loopId, input.loopId), eq(runs.phase, input.runPhase)))
       .returning()
   )[0];
@@ -953,14 +917,14 @@ export async function finalizeRunningRun(
   leaseTokenHash?: string,
   failureAutopauseStreak = 0,
   receipt?: typeof runReportReceipts.$inferInsert,
-  fileUpdates?: LoopFileUpdate[],
+  memoryUpdate?: MemoryUpdate,
 ): Promise<FinalizeRunningRunResult | undefined> {
   return db.transaction(async (tx) => {
     return finalizeTerminalRunTx(tx, {
       loopId,
       runId,
       runPhase: "running",
-      fileUpdates,
+      memoryUpdate,
       runPatch,
       loopPatch,
       leaseTokenHash,
@@ -1048,14 +1012,14 @@ export async function reconcileReclaimedRun(
   loopPatch: Partial<NewLoop> = {},
   failureAutopauseStreak = 0,
   receipt?: typeof runReportReceipts.$inferInsert,
-  fileUpdates?: LoopFileUpdate[],
+  memoryUpdate?: MemoryUpdate,
 ): Promise<FinalizeRunningRunResult | undefined> {
   return db.transaction(async (tx) => {
     return finalizeTerminalRunTx(tx, {
       loopId,
       runId,
       runPhase: "error",
-      fileUpdates,
+      memoryUpdate,
       runPatch,
       loopPatch,
       leaseTokenHash,
@@ -1209,6 +1173,7 @@ export interface ClaimedRun {
   run: Run;
   loop: Loop;
   runToken: string;
+  contextToken: string;
 }
 
 /** Claim one ready loop and mint its lease atomically. Repeated polls may add
@@ -1271,15 +1236,17 @@ export async function claimReadyRunForMachine(
       loop = (await tx.update(loops).set({ nextCadenceAt: null, updatedAt: at }).where(eq(loops.id, loop.id)).returning())[0]!;
     }
     const runToken = `rk_${randomBytes(16).toString("hex")}`;
+    const contextToken = `rc_${randomBytes(16).toString("hex")}`;
     const tokenHash = createHash("sha256").update(runToken).digest("hex");
     await tx.insert(runLeases).values({
       tokenHash,
+      contextHash: createHash("sha256").update(contextToken).digest("hex"),
       runId: run.id,
       loopId: loop.id,
       machineId,
       createdAt: at,
     });
-    return { run, loop, runToken };
+    return { run, loop, runToken, contextToken };
   });
 }
 
@@ -1456,74 +1423,21 @@ export async function setMachineOnline(id: string, online: boolean): Promise<voi
   await db.update(machines).set({ online, lastSeen: nowIso() }).where(eq(machines.id, id));
 }
 
-export async function blobExists(hash: string): Promise<boolean> {
-  return !!(await db.select({ hash: blobs.hash }).from(blobs).where(eq(blobs.hash, hash)))[0];
+/** Owner replacement of a loop's memory. Serialized with run finalization by the
+ * loop lock; a run reports the hash of the memory it started from, so a run that
+ * started before this edit cannot overwrite it. */
+export async function writeLoopMemory(loopId: string, text: string): Promise<boolean> {
+  const updated = await db.update(loops)
+    .set({ memory: text, updatedAt: nowIso() })
+    .where(eq(loops.id, loopId))
+    .returning({ id: loops.id });
+  return updated.length > 0;
 }
 
-/** Verified byte lengths recorded at blob ingress, used to budget reads before
- * touching the byte store. Missing metadata is intentionally not estimated. */
-export async function blobSizes(hashes: string[]): Promise<Map<string, number>> {
-  if (!hashes.length) return new Map();
-  const rows = await db.select({ hash: blobs.hash, size: blobs.size }).from(blobs).where(inArray(blobs.hash, [...new Set(hashes)]));
-  return new Map(rows.map((row) => [row.hash, row.size]));
-}
-
-export async function recordBlob(hash: string, size: number): Promise<void> {
-  await db.insert(blobs).values({ hash, size, createdAt: nowIso() }).onConflictDoNothing();
-}
-
-export interface ArtifactFileInput {
-  loopId: string;
-  path: string;
-  hash: string | null;
-  size: number | null;
-  binary: boolean;
-  oversize: boolean;
-}
-
-async function writeConfiguredArtifactTx(tx: StoreTx, input: ArtifactFileInput, ts: string): Promise<void> {
-  await tx
-    .insert(artifactFiles)
-    .values({
-      id: randomUUID(),
-      loopId: input.loopId,
-      path: input.path,
-      hash: input.hash,
-      size: input.size,
-      binary: input.binary,
-      oversize: input.oversize,
-      deleted: false,
-      updatedAt: ts,
-    })
-    .onConflictDoUpdate({
-      target: [artifactFiles.loopId, artifactFiles.path],
-      set: {
-        hash: input.hash,
-        size: input.size,
-        binary: input.binary,
-        oversize: input.oversize,
-        deleted: false,
-        updatedAt: ts,
-      },
-    });
-}
-
-/** Owner replacement of one loop file. Serialized with run finalization by the
- * loop lock, so a run that started from the previous version cannot overwrite it. */
-export async function writeLoopFile(loopId: string, name: string, hash: string, size: number): Promise<boolean> {
-  return db.transaction(async (tx) => {
-    const loop = (await tx.select().from(loops).where(eq(loops.id, loopId)).for("update"))[0];
-    if (!loop || !loopFileNames(loop).includes(name)) return false;
-    await writeConfiguredArtifactTx(tx, { loopId, path: name, hash, size, binary: false, oversize: false }, nowIso());
-    return true;
-  });
-}
-
-/** File notices of the immediately previous terminal run, for the next prompt.
- *  Canceled runs are terminal too: their notices (edits discarded) are repeated,
- *  and an older run's notice must not masquerade as the previous run's. */
-export async function previousRunFileNotices(loopId: string, beforeRunIndex: number): Promise<string[]> {
-  const row = (await db.select({ fileNotices: runs.fileNotices }).from(runs)
+/** The newest terminal run before `beforeRunIndex`: the next prompt's "previous
+ *  run" facts. Canceled runs count, so their notices are not lost. */
+export async function previousTerminalRun(loopId: string, beforeRunIndex: number): Promise<Run | undefined> {
+  return (await db.select().from(runs)
     .where(and(
       eq(runs.loopId, loopId),
       isNotNull(runs.runIndex),
@@ -1532,164 +1446,4 @@ export async function previousRunFileNotices(loopId: string, beforeRunIndex: num
     ))
     .orderBy(desc(runs.runIndex))
     .limit(1))[0];
-  return row?.fileNotices ?? [];
-}
-
-export async function listArtifacts(loopId: string): Promise<ArtifactFile[]> {
-  return db
-    .select()
-    .from(artifactFiles)
-    .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.deleted, false)))
-    .orderBy(artifactFiles.path);
-}
-
-export async function getArtifactFile(loopId: string, path: string): Promise<ArtifactFile | undefined> {
-  return (
-    await db
-      .select()
-      .from(artifactFiles)
-      .where(and(eq(artifactFiles.loopId, loopId), eq(artifactFiles.path, path)))
-  )[0];
-}
-
-export async function buildLoopManifest(loopId: string): Promise<SnapshotManifest> {
-  const manifest: SnapshotManifest = {};
-  for (const f of await listArtifacts(loopId)) {
-    manifest[f.path] = { hash: f.hash, size: f.size, binary: f.binary, oversize: f.oversize };
-  }
-  return manifest;
-}
-
-/** Write/overwrite a run's snapshot (name → file metadata). Idempotent on runId
- *  so a re-report of the same run just refreshes the captured loop-file state. */
-export async function putRunSnapshot(runId: string, loopId: string, manifest: SnapshotManifest): Promise<void> {
-  await db
-    .insert(runSnapshots)
-    .values({ runId, loopId, manifest, createdAt: nowIso() })
-    .onConflictDoUpdate({ target: runSnapshots.runId, set: { loopId, manifest, createdAt: nowIso() } });
-}
-
-export async function getRunSnapshot(runId: string): Promise<RunSnapshot | undefined> {
-  return (await db.select().from(runSnapshots).where(eq(runSnapshots.runId, runId)))[0];
-}
-
-/** The most recent indexed snapshot before one run. History order, not a
- * timestamp tie, is the diff baseline. */
-export async function prevRunSnapshot(loopId: string, beforeRunIndex: number): Promise<RunSnapshot | undefined> {
-  const row = (
-    await db
-      .select({ snap: runSnapshots })
-      .from(runSnapshots)
-      .innerJoin(runs, eq(runSnapshots.runId, runs.id))
-      .where(and(eq(runSnapshots.loopId, loopId), isNotNull(runs.runIndex), lt(runs.runIndex, beforeRunIndex)))
-      .orderBy(desc(runs.runIndex))
-      .limit(1)
-  )[0];
-  return row?.snap;
-}
-
-/**
- * Prune a loop's run snapshots down to the `keep` most recent (by createdAt),
- * deleting the rest. Returns the number deleted. This is what makes an old
- * snapshot's now-unreferenced blobs collectable by the blob GC. `keep <= 0`
- * means "keep none" (still bounded). Safe to call repeatedly (idempotent once
- * at/under the window).
- */
-export async function pruneRunSnapshots(loopId: string, keep: number): Promise<number> {
-  const survivors = keep > 0
-    ? (
-        await db
-          .select({ runId: runSnapshots.runId })
-          .from(runSnapshots)
-          .where(eq(runSnapshots.loopId, loopId))
-          .orderBy(desc(runSnapshots.createdAt), desc(runSnapshots.runId))
-          .limit(keep)
-      ).map((r) => r.runId)
-    : [];
-  // Delete by the loop + NOT-IN-survivors predicate directly, NOT by an inArray of
-  // every victim runId: survivors is bounded by `keep` (≤20), so this binds a small,
-  // fixed number of variables even when a large backlog leaves thousands of
-  // snapshots to prune in one pass — no "too many SQL variables" on the first prune.
-  const pred = survivors.length
-    ? and(eq(runSnapshots.loopId, loopId), notInArray(runSnapshots.runId, survivors))
-    : eq(runSnapshots.loopId, loopId);
-  const deleted = await db.delete(runSnapshots).where(pred).returning({ id: runSnapshots.runId });
-  return deleted.length;
-}
-
-export async function loopIdsWithSnapshots(): Promise<string[]> {
-  return (
-    await db.selectDistinct({ loopId: runSnapshots.loopId }).from(runSnapshots)
-  ).map((r) => r.loopId);
-}
-
-/**
- * The full set of blob hashes still referenced by a LIVE row — the GC's keep
- * set. A hash is live if ANY artifact_files row points at it (deleted tombstones
- * carry hash=null, so they don't pin a blob) OR ANY retained run_snapshot's
- * manifest references it. Computed in one pass so the GC never deletes a blob a
- * snapshot still needs for its diff.
- */
-export async function liveBlobRefs(): Promise<Set<string>> {
-  const refs = new Set<string>();
-  for (const r of await db
-    .selectDistinct({ hash: artifactFiles.hash })
-    .from(artifactFiles)
-    .where(isNotNull(artifactFiles.hash))) {
-    if (r.hash) refs.add(r.hash);
-  }
-  for (const hash of await collectSnapshotBlobRefs()) refs.add(hash);
-  return refs;
-}
-
-/** Blob hashes whose metadata row predates `cutoffIso` (GC candidates — the grace
- *  window excludes freshly-written blobs a concurrent sync may be referencing). */
-export async function blobHashesOlderThan(cutoffIso: string): Promise<string[]> {
-  return (
-    await db
-      .select({ hash: blobs.hash })
-      .from(blobs)
-      .where(lt(blobs.createdAt, cutoffIso))
-  ).map((r) => r.hash);
-}
-
-/** Delete a blob's metadata row (the bytes are reclaimed separately via the
- *  BlobStore). Idempotent. */
-export async function deleteBlob(hash: string): Promise<void> {
-  await db.delete(blobs).where(eq(blobs.hash, hash));
-}
-
-/** Indexed point check: does any LIVE artifact_files row still point at this hash?
- *  The GC's cheap, always-fresh per-candidate guard (the common re-reference path) —
- *  uses the artifact_files_hash index, so it stays O(1) even as candidates pile up. */
-export async function artifactFileReferencesHash(hash: string): Promise<boolean> {
-  return !!(await db.select({ id: artifactFiles.id }).from(artifactFiles).where(eq(artifactFiles.hash, hash)))[0];
-}
-
-/** Every blob hash referenced by ANY retained run_snapshot's manifest — the full
- *  snapshot scan deserialized ONCE into a Set so the GC can answer per-candidate
- *  snapshot membership in O(1) instead of re-scanning the whole table per garbage
- *  hash. The GC rebuilds this only when the snapshot row count changes (a report()
- *  raced the pass), so a snapshot that comes to reference a hash mid-pass is still
- *  caught — closing the GC-check-time gap where a snapshot references a hash no live
- *  file row does — without paying O(garbage × snapshots). */
-async function collectSnapshotBlobRefs(): Promise<Set<string>> {
-  const refs = new Set<string>();
-  for (const r of await db.select({ manifest: runSnapshots.manifest }).from(runSnapshots)) {
-    for (const entry of Object.values(r.manifest)) {
-      if (entry?.hash) refs.add(entry.hash);
-    }
-  }
-  return refs;
-}
-
-export async function snapshotBlobRefs(): Promise<Set<string>> {
-  return collectSnapshotBlobRefs();
-}
-
-/** Count of retained run_snapshot rows — the GC's cheap change-detector for deciding
- *  whether to rebuild its precomputed snapshotBlobRefs() set mid-pass. */
-export async function countRunSnapshots(): Promise<number> {
-  const r = (await db.select({ n: sql<number>`count(*)` }).from(runSnapshots))[0];
-  return Number(r?.n ?? 0);
 }

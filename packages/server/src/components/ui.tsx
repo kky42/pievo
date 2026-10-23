@@ -107,21 +107,6 @@ export function Loading({ className = '' }: { className?: string }) {
   return <div className={`text-body text-disabled ${className}`}>Loading…</div>
 }
 
-/** Yellow "!" for a run that asked for owner attention. It overlays the status
- *  color instead of replacing it because attention is independent of status; the
- *  dark outline keeps yellow legible on green, red, and grey blocks. */
-export function AttentionMark() {
-  return (
-    <span
-      aria-hidden
-      className="pointer-events-none select-none text-[14px] font-black leading-none text-run-attention"
-      style={{ WebkitTextStroke: '3px rgba(0,0,0,0.55)', paintOrder: 'stroke fill' }}
-    >
-      !
-    </span>
-  )
-}
-
 export function StatusPill({ run, colorText }: { run: RunSummary; colorText?: boolean }) {
   return (
     <span

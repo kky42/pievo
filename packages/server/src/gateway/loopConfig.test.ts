@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { isAbsoluteWorkdir, scheduleFromLoop, validateArtifactNames, validateLoopCreate, validateLoopEdit, validateSchedule } from "./loopConfig.js";
+import { isAbsoluteWorkdir, scheduleFromLoop, validateLoopCreate, validateLoopEdit, validateSchedule } from "./loopConfig.js";
 import type { Loop } from "../db/schema.js";
 
 const base = {
@@ -23,7 +23,6 @@ test("canonical create requires the complete prompt-runner config", () => {
         continuousDelayMinutes: 1,
         timezone: "UTC",
         prompt: base.prompt,
-        artifacts: [],
       },
     },
   });
@@ -31,7 +30,7 @@ test("canonical create requires the complete prompt-runner config", () => {
   expect(validateLoopCreate({ ...base, statusDefinitions: { block: "owner input" } } as any)).toMatchObject({ ok: false });
   expect(validateLoopCreate({ ...base, cron: "0 7 * * *" } as any)).toMatchObject({ ok: false });
   expect(validateLoopCreate({ ...base, enabled: "false" } as any)).toMatchObject({ ok: false, detail: "enabled must be boolean" });
-  expect(validateLoopCreate({ ...base, artifacts: "report.md" } as any)).toMatchObject({ ok: false });
+  expect(validateLoopCreate({ ...base, artifacts: ["report.md"] } as any)).toMatchObject({ ok: false });
 });
 
 test("canonical create and edit normalize optional loop tags", () => {
@@ -119,15 +118,6 @@ test("workdir is absolute in either supported platform syntax", () => {
   }
 });
 
-test("artifacts are up to four unique plain text/code names other than MEMORY.md", () => {
-  expect(validateArtifactNames(["report.html", "notes.md", "deploy.sh", "a_b-1.2.md"])).toEqual({ ok: true, value: ["report.html", "notes.md", "deploy.sh", "a_b-1.2.md"] });
-  expect(validateArtifactNames(["a.md", "b.md", "c.md", "d.md", "e.md"])).toMatchObject({ ok: false });
-  expect(validateArtifactNames(["Report.md", "report.md"])).toMatchObject({ ok: false });
-  for (const name of ["MEMORY.md", "memory.md", "reports/latest.md", "../x.md", "/etc/x.md", "report.exe", "report.pdf", "screenshot.png", ".hidden.md", " report.md", "*.md", `${"a".repeat(65)}.md`]) {
-    expect(validateArtifactNames([name])).toMatchObject({ ok: false });
-  }
-});
-
 test("canonical edit rejects unknown top-level fields", () => {
   const loop = {
     ...base,
@@ -137,7 +127,6 @@ test("canonical edit rejects unknown top-level fields", () => {
     timezone: "UTC",
     cronOverlap: "skip",
     continuousDelayMinutes: 1,
-    artifacts: [],
   } as unknown as Loop;
   expect(validateLoopEdit(loop, { schedule: { mode: "continuous", delayMinutes: 7 } })).toMatchObject({
     ok: true,
@@ -146,4 +135,5 @@ test("canonical edit rejects unknown top-level fields", () => {
   expect(validateLoopEdit(loop, { scheduleMode: "continuous" })).toMatchObject({ ok: false });
   expect(validateLoopEdit(loop, { workdir: "relative/project" })).toEqual({ ok: false, detail: "workdir must be an absolute path" });
   expect(validateLoopEdit(loop, { unknown: true })).toMatchObject({ ok: false });
+  expect(validateLoopEdit(loop, { artifacts: [] })).toMatchObject({ ok: false });
 });

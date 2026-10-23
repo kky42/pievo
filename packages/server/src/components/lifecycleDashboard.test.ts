@@ -16,13 +16,13 @@ vi.mock('../server/loopApi', () => ({
   deleteLoop: h.del,
   pauseLoop: h.pause, startLoop: vi.fn(async () => ({ ok: true })), stopLoop: vi.fn(async () => ({ ok: true, waiting: true })),
   patchLoop: vi.fn(async () => ({})), runLoop: vi.fn(async () => ({})),
-  getRunDiff: vi.fn(async () => null), stopRun: vi.fn(async () => ({ ok: true, waiting: true })),
+  stopRun: vi.fn(async () => ({ ok: true, waiting: true })),
 }))
 vi.mock('@tanstack/react-router', () => ({ Link: ({ children }: { children: React.ReactNode }) => createElement('span', null, children), useNavigate: () => () => {} }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const runningRun = (cancelRequested = false): RunSummary => ({
-  id: 'r1', loopId: 'l1', ts: '2026-01-01T00:00:00Z', phase: 'running', cancelRequested,
+  id: 'r1', loopId: 'l1', runIndex: 1, ts: '2026-01-01T00:00:00Z', phase: 'running', cancelRequested,
   agent: 'claude-code', status: null, message: null, durationMs: null,
   exitCode: null, finalText: null, usage: null, error: null, sessionId: null,
 })
@@ -35,10 +35,10 @@ function makeDetail(over: { state?: DetailState; online?: boolean; protocol?: nu
   const enabled = state === 'active'
   const deleteRequestedAt = state === 'deleting' ? '2026-01-01T00:01:00Z' : null
   return {
-    loop: { id: 'l1', name: 'Lifecycle loop', tags: [], schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' }, workdir: '/tmp/project', agent: 'claude-code', model: null, reasoningEffort: null, prompt: 'Do the work.', artifacts: [], enabled },
+    loop: { id: 'l1', name: 'Lifecycle loop', tags: [], schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' }, workdir: '/tmp/project', agent: 'claude-code', model: null, reasoningEffort: null, prompt: 'Do the work.', memory: '', enabled },
     summary: { id: 'l1', name: 'Lifecycle loop', tags: [], schedule: { mode: 'cron', cron: '0 6 * * *', timezone: 'UTC', overlap: 'queue-one' }, workdir: '/tmp/project', agent: 'claude-code', model: null, reasoningEffort: null, machine: { id: 'm1', name: 'MacBook Pro', online: over.online ?? true, presence: (over.online ?? true) ? 'online' : 'offline', lastSeen: null }, enabled, nextRun: null, running, lastRunTs: running ? r.ts : null, deleteRequestedAt, runs: running ? [r] : [], runCount: running ? 1 : 0, recentUsage: { runCount: running ? 1 : 0, tokenCount: 0 } },
     runs: running ? [r] : [],
-    machine: { id: 'm1', name: 'MacBook Pro', online: over.online ?? true, presence: (over.online ?? true) ? 'online' : 'offline', lastSeen: null, daemonProtocol: over.protocol === undefined ? 5 : over.protocol, daemonVersion: '4.0.0', needsUpdate: false, requiredDaemonVersion: '4.0.0' },
+    machine: { id: 'm1', name: 'MacBook Pro', online: over.online ?? true, presence: (over.online ?? true) ? 'online' : 'offline', lastSeen: null, daemonProtocol: over.protocol === undefined ? 7 : over.protocol, daemonVersion: '6.0.0', needsUpdate: false, requiredDaemonVersion: '6.0.0' },
   }
 }
 
@@ -78,11 +78,11 @@ describe('LoopDetailView flat lifecycle actions', () => {
     expect(host!.textContent).not.toContain('Push…')
     for (const label of on) expect(enabled(label), `${label} enabled`).toBe(true)
     for (const label of off) expect(enabled(label), `${label} disabled`).toBe(false)
-    expect(host!.querySelectorAll('button')).toHaveLength(6)
+    expect(button('Run once')!.parentElement!.querySelectorAll('button')).toHaveLength(6)
   })
 
   it('enables Stop only for a running run and keeps protocol gating actionable', async () => {
-    await mount(makeDetail({ state: 'paused', running: true, protocol: 5 }))
+    await mount(makeDetail({ state: 'paused', running: true, protocol: 7 }))
     expect(enabled('Stop')).toBe(true)
     await act(async () => { root!.unmount() }); root = null; host!.remove(); host = null
     await mount(makeDetail({ state: 'active', running: true, protocol: 1 }))
@@ -100,7 +100,7 @@ describe('LoopDetailView flat lifecycle actions', () => {
   it('uses one complete Delete confirmation and no force-delete second step', async () => {
     await mount(makeDetail({ state: 'active', online: false, running: true }))
     await act(async () => { button('Delete')!.click(); await Promise.resolve() })
-    expect(host!.textContent).toContain('This stops the loop and deletes server history, the loop memory, and artifacts.')
+    expect(host!.textContent).toContain('This stops the loop and deletes its server history and memory.')
     expect(host!.textContent).toContain('Files in the working directory are not deleted.')
     expect(host!.textContent).toContain('If the machine is unreachable, its local process may continue running.')
     expect(host!.textContent).not.toContain('Delete server data anyway')

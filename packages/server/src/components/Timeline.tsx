@@ -1,14 +1,16 @@
 import { useState } from 'react'
 import { Tooltip } from '@base-ui/react/tooltip'
 import type { LoopSummary, RunSummary } from '../types'
-import { dotLabel, dur, fmt, runSwatch, until } from '../lib/format'
-import { AttentionMark, useHydrated } from './ui'
+import { attentionOf, dotLabel, dur, fmt, fnum, runSwatch, runTokens, until } from '../lib/format'
+import { TokenCurve } from './TokenCurve'
+import { useHydrated } from './ui'
 
 /*
  * One block per run, at most WINDOW at a time. Overflow collapses into "+N" pagers
  * drawn as the same block shape, so the strip reserves no whitespace. Paging is
  * lazy: stepping past the loaded runs fetches the next older page via onLoadMore,
  * and the "+N" counts use the loop's true `total`, not just what is loaded.
+ * A token curve under the blocks shows each visible run's relative token use.
  */
 export const WINDOW = 16
 const PAGE = WINDOW
@@ -17,7 +19,9 @@ const SEG = `h-5 w-[18px] shrink-0 ${RAD}`
 
 function RunSeg({ run, onClick }: { run: RunSummary; onClick: () => void }) {
   const body = run.error || run.message || ''
-  const meta = run.durationMs ? ` · ${dur(run.durationMs)}` : ''
+  const tokens = runTokens(run)
+  const meta = `${run.durationMs ? ` · ${dur(run.durationMs)}` : ''}${tokens != null ? ` · ${fnum(tokens)} tokens` : ''}`
+  const attention = attentionOf(run)
   return (
     <Tooltip.Root>
       <Tooltip.Trigger
@@ -28,12 +32,10 @@ function RunSeg({ run, onClick }: { run: RunSummary; onClick: () => void }) {
               e.stopPropagation()
               onClick()
             }}
-            aria-label={run.attention ? `${dotLabel(run)} · needs attention` : dotLabel(run)}
-            className={`${SEG} relative flex cursor-pointer items-center justify-center transition-opacity hover:opacity-70`}
+            aria-label={dotLabel(run)}
+            className={`${SEG} cursor-pointer transition-opacity hover:opacity-70`}
             style={runSwatch(run)}
-          >
-            {run.attention && <AttentionMark />}
-          </button>
+          />
         }
       />
       <Tooltip.Portal>
@@ -47,7 +49,7 @@ function RunSeg({ run, onClick }: { run: RunSummary; onClick: () => void }) {
                 {meta}
               </span>
             </div>
-            {run.attention && <div className="mt-1.5 break-words font-medium text-attention">! {run.attention}</div>}
+            {attention && <div className="mt-1.5 break-words font-medium text-attention">✦ {attention}</div>}
             {body && (
               <div
                 className={`mt-1.5 max-h-[150px] overflow-hidden whitespace-pre-wrap ${
@@ -150,36 +152,38 @@ export function Timeline({
   const showPaused = atLatest && !en && !running && loop.deleteRequestedAt == null
 
   return (
-    // A full WINDOW of fixed-width blocks can be wider than a narrow rail (the loop
-    // page's ~320px runs rail). min-w-0 + overflow-x-auto scroll the surplus inside
-    // this box so the card never forces page-level horizontal scroll; tooltips portal
-    // out of the scroll box.
-    <div className="flex min-w-0 items-center gap-[3px] overflow-x-auto">
-      <Pager count={olderHidden} onClick={pageBack} loading={loading} />
-      {visible.map((r) => (
-        <RunSeg key={r.id} run={r} onClick={() => onPickRun(r)} />
-      ))}
-      {showNext ? (
-        <div className="ml-1 flex items-center gap-2">
-          <span className="w-12 border-t border-dashed border-wire" />
-          <span
-            className="size-[11px] shrink-0 rounded-full border border-wire"
-            title={hydrated ? `Next scheduled run · ${fmt(loop.nextRun)}` : undefined}
-          />
-          <span className="text-caption text-disabled">{hydrated ? until(loop.nextRun) : ''}</span>
-        </div>
-      ) : showPaused ? (
-        <div className="ml-1 flex items-center gap-2" title="Paused: no runs are scheduled until the loop is started">
-          <span className="w-8 border-t border-dashed border-wire" />
-          <span aria-hidden className="flex gap-[2px]">
-            <span className="h-[11px] w-[3px] rounded-[1px] bg-secondary" />
-            <span className="h-[11px] w-[3px] rounded-[1px] bg-secondary" />
-          </span>
-          <span className="text-caption text-secondary">paused</span>
-        </div>
-      ) : (
-        !atLatest && <Pager count={newerHidden} onClick={pageFwd} />
-      )}
+    // A full WINDOW of fixed-width blocks can be wider than a narrow card. min-w-0 +
+    // overflow-x-auto scroll the surplus inside this box so the card never forces
+    // page-level horizontal scroll; tooltips portal out of the scroll box.
+    <div className="min-w-0 overflow-x-auto">
+      <div className="flex items-center gap-[3px]">
+        <Pager count={olderHidden} onClick={pageBack} loading={loading} />
+        {visible.map((r) => (
+          <RunSeg key={r.id} run={r} onClick={() => onPickRun(r)} />
+        ))}
+        {showNext ? (
+          <div className="ml-1 flex items-center gap-2">
+            <span className="w-12 border-t border-dashed border-wire" />
+            <span
+              className="size-[11px] shrink-0 rounded-full border border-wire"
+              title={hydrated ? `Next scheduled run · ${fmt(loop.nextRun)}` : undefined}
+            />
+            <span className="text-caption text-disabled">{hydrated ? until(loop.nextRun) : ''}</span>
+          </div>
+        ) : showPaused ? (
+          <div className="ml-1 flex items-center gap-2" title="Paused: no runs are scheduled until the loop is started">
+            <span className="w-8 border-t border-dashed border-wire" />
+            <span aria-hidden className="flex gap-[2px]">
+              <span className="h-[11px] w-[3px] rounded-[1px] bg-secondary" />
+              <span className="h-[11px] w-[3px] rounded-[1px] bg-secondary" />
+            </span>
+            <span className="text-caption text-secondary">paused</span>
+          </div>
+        ) : (
+          !atLatest && <Pager count={newerHidden} onClick={pageFwd} />
+        )}
+      </div>
+      <TokenCurve runs={visible} offset={olderHidden ? 1 : 0} />
     </div>
   )
 }

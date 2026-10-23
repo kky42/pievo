@@ -30,7 +30,7 @@ function seams(d: LogDeps): Seams {
 
 /** Boolean flags that never take a value — so `log --json <loop>` keeps `<loop>`
  *  as a positional instead of swallowing it as `--json`'s argument. */
-const BOOL_FLAGS = new Set(["json", "diff", "help"]);
+const BOOL_FLAGS = new Set(["json", "attention", "help"]);
 const VALUE_FLAGS = ["run", "since", "until", "status", "phase", "limit"] as const;
 
 /** The daemon only recognizes syntax; the server owns semantic validation. */
@@ -57,7 +57,7 @@ export async function runLog(argv: string[], injected: LogDeps = {}): Promise<nu
   if (resolution.kind === "resolve-error") return renderResolveError(resolution.error, d.out, d.err);
 
   const forwarded: string[] = [];
-  for (const key of ["diff", "json"] as const) if (flags[key] === true || flags[key] === "true") forwarded.push(`--${key}`);
+  for (const key of ["attention", "json"] as const) if (flags[key] === true || flags[key] === "true") forwarded.push(`--${key}`);
   for (const key of VALUE_FLAGS) {
     const value = flags[key];
     if (typeof value === "string") forwarded.push(`--${key}`, value);

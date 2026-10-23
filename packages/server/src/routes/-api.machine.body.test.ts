@@ -7,12 +7,10 @@
  */
 import { describe, expect, test } from 'vitest'
 
-import { LOOP_FILE_BYTE_CAP } from '../gateway/loopFiles'
 import { MACHINE_BODY_CAP, POLL_VERSION_CAP, WIRE_TEXT_CAP, readJsonBody } from '../gateway/http'
 import { parsePollBody, Route as PollRoute } from './api.machine.poll'
 import { Route as ReportRoute } from './machine.report'
 import { Route as CliRoute } from './api.machine.cli'
-import { Route as RunFilesRoute } from './api.machine.run-files.$name'
 
 type Handler = (ctx: { request: Request }) => Response | Promise<Response>
 const handler = (route: unknown, method: string): Handler =>
@@ -81,8 +79,8 @@ describe('readJsonBody', () => {
 })
 
 test('poll HTTP envelope has an exact, strictly typed field allowlist', () => {
-  expect(parsePollBody({ protocolVersion: 5, recoveryComplete: true })).not.toBeNull()
-  expect(parsePollBody({ protocolVersion: 5, recoveryComplete: true, unknown: true })).toBeNull()
+  expect(parsePollBody({ protocolVersion: 7, recoveryComplete: true })).not.toBeNull()
+  expect(parsePollBody({ protocolVersion: 7, recoveryComplete: true, unknown: true })).toBeNull()
   expect(parsePollBody({ host: 42 })).toBeNull()
   expect(parsePollBody({ platform: null })).toBeNull()
   expect(parsePollBody({ arch: ['arm64'] })).toBeNull()
@@ -99,10 +97,10 @@ test('poll HTTP envelope has an exact, strictly typed field allowlist', () => {
 
 test.each([
   ['invalid JSON', 'not json'],
-  ['an unknown field', JSON.stringify({ protocolVersion: 5, unknown: true })],
-  ['a non-string host', JSON.stringify({ protocolVersion: 5, host: 42 })],
-  ['a NUL-bearing platform', JSON.stringify({ protocolVersion: 5, platform: 'darwin\0x' })],
-  ['an over-cap version', JSON.stringify({ protocolVersion: 5, version: 'v'.repeat(POLL_VERSION_CAP + 1) })],
+  ['an unknown field', JSON.stringify({ protocolVersion: 7, unknown: true })],
+  ['a non-string host', JSON.stringify({ protocolVersion: 7, host: 42 })],
+  ['a NUL-bearing platform', JSON.stringify({ protocolVersion: 7, platform: 'darwin\0x' })],
+  ['an over-cap version', JSON.stringify({ protocolVersion: 7, version: 'v'.repeat(POLL_VERSION_CAP + 1) })],
 ])('poll route rejects %s before boot', async (_label, body) => {
   const h = handler(PollRoute, 'POST')
   const res = await h({ request: new Request('http://localhost:3000/api/machine/poll', {
@@ -111,22 +109,6 @@ test.each([
     body,
   }) })
   expect(res.status).toBe(400)
-})
-
-test.each(['GET', 'PUT'])('run-files %s route requires a run token before boot', async (method) => {
-  const h = handler(RunFilesRoute, method)
-  const res = await h({ request: new Request('http://localhost:3000/api/machine/run-files/MEMORY.md', { method }) })
-  expect(res.status).toBe(401)
-})
-
-test('run-files PUT enforces the loop-file byte cap before boot', async () => {
-  const h = handler(RunFilesRoute, 'PUT')
-  const res = await h({ request: new Request('http://localhost:3000/api/machine/run-files/report.html', {
-    method: 'PUT',
-    headers: { authorization: 'Bearer rk_test', 'content-length': String(LOOP_FILE_BYTE_CAP + 1) },
-    body: 'x',
-  }) })
-  expect(res.status).toBe(413)
 })
 
 test.each([

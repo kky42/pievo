@@ -3,13 +3,11 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 
 import type * as Store from "../src/db/store.js";
 import {
-  artifactFiles,
   loops,
   runLeases,
   runReportReceipts,
   runs,
   terminalReportIncidents,
-  type ArtifactFile,
   type NewRun,
   type Run,
 } from "../src/db/schema.js";
@@ -30,7 +28,6 @@ export type TestStore = Omit<StoreModule, "createLoop" | "createMachine"> & {
   countReportReceipts(): Promise<number>;
   updateRun(id: string, patch: Partial<NewRun>): Promise<Run | undefined>;
   openRunsForLoop(loopId: string): Promise<Run[]>;
-  listAllArtifactFiles(loopId: string): Promise<ArtifactFile[]>;
 };
 
 type AddRunInput = Omit<NewRun, "id" | "createdAt" | "updatedAt"> & {
@@ -114,20 +111,19 @@ export async function openRunsForLoop(loopId: string): Promise<Run[]> {
   return (await getTestDb()).select().from(runs).where(and(eq(runs.loopId, loopId), inArray(runs.phase, ["pending", "running"])));
 }
 
-export async function listAllArtifactFiles(loopId: string): Promise<ArtifactFile[]> {
-  return (await getTestDb()).select().from(artifactFiles).where(eq(artifactFiles.loopId, loopId)).orderBy(artifactFiles.path);
-}
-
 export interface RunLeaseRegistration {
   runId: string;
   loopId: string;
   machineId: string;
+  /** Also bind this read-only run context token (`rc_…`) to the lease. */
+  contextToken?: string;
 }
 
 export async function registerRunLease(caps: RunLeaseRegistration): Promise<string> {
   const token = `rk_${randomBytes(16).toString("hex")}`;
   await (await getTestDb()).insert(runLeases).values({
     tokenHash: sha256(token),
+    ...(caps.contextToken ? { contextHash: sha256(caps.contextToken) } : {}),
     runId: caps.runId,
     loopId: caps.loopId,
     machineId: caps.machineId,
@@ -147,7 +143,6 @@ export function testStore(store: StoreModule): TestStore {
     countReportReceipts,
     updateRun,
     openRunsForLoop,
-    listAllArtifactFiles,
     createLoop(input) {
       const scheduleMode = input.scheduleMode ?? "cron";
       const timezone = input.timezone !== undefined

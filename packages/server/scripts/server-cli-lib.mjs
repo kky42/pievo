@@ -22,7 +22,7 @@ Options:
   --host <host>          bind host (default: HOST/NITRO_HOST or 0.0.0.0)
   --port <port>          bind port (default: PORT/NITRO_PORT/PIEVO_PORT or 3000)
   --no-https             do not publish https://<device>.ts.net via Tailscale Serve
-  --data-dir <path>      select the instance (database, blobs, pid, lock, and log)
+  --data-dir <path>      select the instance (database, pid, lock, and log)
   -h, --help             show this help
   -v, --version          print the server version and exit
 

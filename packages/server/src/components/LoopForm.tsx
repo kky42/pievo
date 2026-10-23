@@ -17,7 +17,6 @@ export interface LoopFormSeed {
   model?: string | null
   reasoningEffort?: string | null
   prompt?: string
-  artifacts?: string[]
   enabled?: boolean
 }
 
@@ -35,7 +34,6 @@ interface FormState {
   model: string
   reasoningEffort: string
   prompt: string
-  artifacts: string
 }
 
 const AGENT_LABEL: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi' }
@@ -57,7 +55,6 @@ function initState(initial?: LoopFormSeed): FormState {
     model: initial?.model ?? '',
     reasoningEffort: initial?.reasoningEffort ?? '',
     prompt: initial?.prompt ?? '',
-    artifacts: (initial?.artifacts ?? []).join('\n'),
   }
 }
 
@@ -161,7 +158,6 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed }>(f
         model: form.model.trim() || null,
         reasoningEffort: form.reasoningEffort.trim() || null,
         prompt: form.prompt,
-        artifacts: form.artifacts.split(/\r?\n/).filter((name) => name.length > 0),
       }
     },
   }))
@@ -263,10 +259,8 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed }>(f
       </div>
 
       <div className="min-w-0">
-        <Section title="Prompt" hint="Sent unchanged before Pievo appends the report contract." />
-        <TextArea label="User prompt" value={form.prompt} onChange={(value) => set('prompt', value)} rows={10} />
-        <Section title="Artifacts" hint="Optional text/code file names such as .md, .html, .sh, .py, .json, or .csv (up to 4, 256 KB each) that runs update and the dashboard renders. One name per line. Every loop also has MEMORY.md." />
-        <TextArea label="Artifact files" value={form.artifacts} onChange={(value) => set('artifacts', value)} rows={6} mono />
+        <Section title="Prompt" hint="Sent unchanged between Pievo's run header (time, run number, previous result) and its contract." />
+        <TextArea label="User prompt" value={form.prompt} onChange={(value) => set('prompt', value)} rows={14} />
         {error && <div className="mt-4 text-body text-accent">{error}</div>}
       </div>
     </div>

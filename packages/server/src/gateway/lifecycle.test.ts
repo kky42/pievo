@@ -34,13 +34,6 @@ function gateway() {
   } as any);
 }
 
-test("machine terminal payload has one exact top-level allowlist", () => {
-  expect(gatewayMod.MACHINE_REPORT_FIELDS).toEqual([
-    "reportId", "runId", "result", "exitCode", "durationMs",
-    "sessionId", "usage", "error", "finalText", "files", "fileNotices",
-  ]);
-});
-
 async function seedMachine(id = "m-life") {
   return store.createMachine({ id, name: id, tokenHash: id, online: true });
 }
@@ -144,8 +137,8 @@ test("protocol v4 rejects old protocols and repeats per-run cancellation", async
 
   expect((await gw.pollV4(deviceToken, { protocolVersion: 2, currentRuns: [] })).status).toBe(426);
   expect((await store.getMachine(machineId))?.daemonProtocol).toBe(2);
-  const first = await gw.pollV4(deviceToken, { protocolVersion: 5, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [{ runId: run.id, stage: "executing" }] });
-  const second = await gw.pollV4(deviceToken, { protocolVersion: 5, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [{ runId: run.id, stage: "reporting" }] });
+  const first = await gw.pollV4(deviceToken, { protocolVersion: 7, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [{ runId: run.id, stage: "executing" }] });
+  const second = await gw.pollV4(deviceToken, { protocolVersion: 7, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [{ runId: run.id, stage: "reporting" }] });
   expect(first.body).toMatchObject({ delivery: null, cancelRunIds: [run.id] });
   expect(second.body).toMatchObject({ delivery: null, cancelRunIds: [run.id] });
 });
@@ -162,8 +155,8 @@ test("a complete recovery snapshot keeps a reclaimed run blocking while it is ex
     await store.enqueueRun(loop.id, { requestedBy: "owner" });
 
     const result = await gateway().pollV4(deviceToken, {
-      protocolVersion: 5, daemonInstanceId: `daemon-${stage}`, recoveryComplete: true,
-      currentRuns: [{ runId: interrupted.id, stage }], info: { version: "4.0.0" },
+      protocolVersion: 7, daemonInstanceId: `daemon-${stage}`, recoveryComplete: true,
+      currentRuns: [{ runId: interrupted.id, stage }], info: { version: "6.0.0" },
     });
     expect((result.body as any).delivery).toBeNull();
     expect((await tokens.resolveLease(runToken))?.state).toBe("terminal-grace");
@@ -184,11 +177,11 @@ test("protocol v4 skips a local run's loop and returns one delivery per poll", a
   await store.enqueueRun(freeLoop.id, { requestedBy: "owner" });
 
   const result = await gateway().pollV4(deviceToken, {
-    protocolVersion: 5,
+    protocolVersion: 7,
     daemonInstanceId: "test-daemon",
     recoveryComplete: true,
     currentRuns: [{ runId: older.id, stage: "executing" }],
-    info: { version: "4.0.0" },
+    info: { version: "6.0.0" },
   });
   expect((result.body as any).delivery.loop.id).toBe(freeLoop.id);
   expect((await store.listRuns(occupiedLoop.id)).some((run) => run.phase === "pending")).toBe(true);
@@ -204,23 +197,23 @@ test("repeated v4 polls accumulate cross-loop concurrency and target cancellatio
   await store.enqueueRun(b.id, { requestedBy: "owner" });
   const gw = gateway();
 
-  const first = (await gw.pollV4(deviceToken, { protocolVersion: 5, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { version: "4.0.0" } }).then((r) => (r.body as any).delivery));
+  const first = (await gw.pollV4(deviceToken, { protocolVersion: 7, daemonInstanceId: "test-daemon", recoveryComplete: true, currentRuns: [], info: { version: "6.0.0" } }).then((r) => (r.body as any).delivery));
   const second = (await gw.pollV4(deviceToken, {
-    protocolVersion: 5,
+    protocolVersion: 7,
     daemonInstanceId: "test-daemon",
     recoveryComplete: true,
     currentRuns: [{ runId: first.runId, stage: "executing" }],
-    info: { version: "4.0.0" },
+    info: { version: "6.0.0" },
   }).then((r) => (r.body as any).delivery));
   expect(new Set([first.loop.id, second.loop.id])).toEqual(new Set([a.id, b.id]));
 
   for (const delivery of [first, second]) await store.requestRunCancel(delivery.loop.id, delivery.runId);
   const polled = await gw.pollV4(deviceToken, {
-    protocolVersion: 5,
+    protocolVersion: 7,
     daemonInstanceId: "test-daemon",
     recoveryComplete: true,
     currentRuns: [first, second].map((delivery) => ({ runId: delivery.runId, stage: "executing" as const })),
-    info: { version: "4.0.0" },
+    info: { version: "6.0.0" },
   });
   expect(new Set((polled.body as any).cancelRunIds)).toEqual(new Set([first.runId, second.runId]));
   expect((polled.body as any).delivery).toBeNull();
@@ -232,11 +225,11 @@ test("an active v4 poll never enters the idle long-poll", async () => {
   await store.createMachine({ id: machineId, name: "M", tokenHash: tokens.sha256(deviceToken), online: true });
   const result = await Promise.race([
     gateway().pollV4Wait(deviceToken, {
-      protocolVersion: 5,
+      protocolVersion: 7,
       daemonInstanceId: "test-daemon",
       recoveryComplete: true,
       currentRuns: [{ runId: "local-run", stage: "executing" }],
-      info: { version: "4.0.0" },
+      info: { version: "6.0.0" },
     }, 1_000).then(() => "returned"),
     new Promise<string>((resolve) => setTimeout(() => resolve("parked"), 100)),
   ]);

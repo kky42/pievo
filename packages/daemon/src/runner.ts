@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { execEnv, runProcess } from "./spawn.js";
@@ -6,7 +6,7 @@ import { expandTilde } from "./loopdir.js";
 import { effectiveRoots, isWithinRoots } from "./roots.js";
 import { CALLBACK_BIN_DIR } from "./callback-bin.js";
 import { makeTerminalCollector, type TokenUsage } from "./telemetry.js";
-import { collectLoopFiles, prepareLoopFiles, type ReportedLoopFile } from "./loop-files.js";
+import { collectMemory, prepareMemory, removeRunDir } from "./loop-files.js";
 import type { CodingAgent } from "./create.js";
 import type { TerminalReport, TerminalResult } from "./report-outbox.js";
 
@@ -18,6 +18,8 @@ export interface Delivery {
   runId: string;
   runIndex: number;
   runToken: string;
+  /** Read-only credential the in-run `pievo` uses to read this loop's history. */
+  contextToken: string;
   loop: {
     id: string;
     name: string;
@@ -31,11 +33,11 @@ export interface Delivery {
   roots: string[];
   /** Contains the literal LOOP_DIR_PLACEHOLDER, replaced with the run directory. */
   task: string;
-  /** Loop file names (MEMORY.md first) to download into the run directory. */
-  files: string[];
+  /** The loop's MEMORY.md, written into the run directory. */
+  memory: { text: string };
 }
 
-/** Server prompt placeholder for the run's loop-file directory; also exported to the provider env. */
+/** Server prompt placeholder for the run's memory directory; also exported to the provider env. */
 export const LOOP_DIR_PLACEHOLDER = "$PIEVO_LOOP_DIR";
 
 interface ReportBody {
@@ -46,8 +48,8 @@ interface ReportBody {
   usage?: TokenUsage;
   error?: string;
   finalText?: string;
-  files?: ReportedLoopFile[];
-  fileNotices?: string[];
+  memory?: { baseHash: string; text: string };
+  notices?: string[];
 }
 
 const SELF_SCHEDULING_TOOLS = "ScheduleWakeup,CronCreate,CronList,CronDelete";
@@ -133,7 +135,6 @@ export async function executeDelivery(
   serverUrl: string,
   roots: string[],
   signal?: AbortSignal,
-  fetchImpl?: typeof fetch,
 ): Promise<TerminalReport> {
   const start = Date.now();
   const canceled = () => signal?.aborted && signal.reason === RUN_CANCEL_REASON;
@@ -152,11 +153,11 @@ export async function executeDelivery(
   } catch (err) {
     return completeRun({ runId: d.runId, exitCode: null, durationMs: Date.now() - start, error: msg(err) });
   }
-  let loopFiles: Awaited<ReturnType<typeof prepareLoopFiles>>;
+  let loopDir: string;
   try {
-    loopFiles = await prepareLoopFiles({ serverUrl, runToken: d.runToken, runId: d.runId, files: d.files, fetchImpl });
+    loopDir = prepareMemory(d.runId, d.memory.text);
   } catch (err) {
-    return completeRun({ runId: d.runId, exitCode: null, durationMs: Date.now() - start, error: `could not prepare loop files: ${msg(err)}` });
+    return completeRun({ runId: d.runId, exitCode: null, durationMs: Date.now() - start, error: `could not prepare loop memory: ${msg(err)}` });
   }
 
   // Run the selected coding agent exactly once.
@@ -172,12 +173,16 @@ export async function executeDelivery(
     const env: NodeJS.ProcessEnv = {
       ...execEnv(agent),
       // Prepend the home bin dir so `pievo` resolves to our re-exec wrapper,
-      // which refuses owner commands inside a run (PIEVO_IN_RUN).
+      // which serves only read-only commands inside a run (PIEVO_IN_RUN).
       PATH: `${CALLBACK_BIN_DIR}${path.delimiter}${process.env.PATH ?? ""}`,
       PIEVO_IN_RUN: "1",
-      PIEVO_LOOP_DIR: loopFiles.dir,
+      PIEVO_LOOP_DIR: loopDir,
+      PIEVO_SERVER_URL: serverUrl,
+      // Read-only and valid only while this run executes; the report token never
+      // enters the agent's environment, so the agent cannot forge its own result.
+      PIEVO_RUN_CONTEXT: d.contextToken,
     };
-    const task = d.task.split(LOOP_DIR_PLACEHOLDER).join(loopFiles.dir);
+    const task = d.task.split(LOOP_DIR_PLACEHOLDER).join(loopDir);
 
     // Provider sessions are deliberately single-shot. Capture sessionId for
     // possible future use, but never resume or retry this run's provider process.
@@ -188,7 +193,10 @@ export async function executeDelivery(
       reasoningEffort: d.loop.reasoningEffort,
     });
 
-    if (canceled()) return completeRun({ runId: d.runId, exitCode: null, durationMs: Date.now() - start, error: "canceled before provider spawn" }, "canceled");
+    if (canceled()) {
+      removeRunDir(d.runId);
+      return completeRun({ runId: d.runId, exitCode: null, durationMs: Date.now() - start, error: "canceled before provider spawn" }, "canceled");
+    }
     const collector = makeTerminalCollector(agent);
     const r = await runProcess(bin, args, { cwd: workdir, env, timeoutMs: TIMEOUT_MS, onStdout: collector.feed, signal, stdin });
     const final = collector.result();
@@ -225,14 +233,15 @@ export async function executeDelivery(
   }
 
   // Collection happens after the provider exits and before the terminal report
-  // enters the durable outbox; the bytes stay in the run dir until the ACK.
-  // Only a provider that was actually killed mid-edit (canceled or timed out)
-  // has untrustworthy files. A stop that arrives after a clean provider exit
-  // still lets the completed run's versions apply.
+  // enters the durable outbox, which then carries the memory text itself. Only a
+  // provider that was actually killed mid-edit (canceled or timed out) has an
+  // untrustworthy memory. A stop that arrives after a clean provider exit still
+  // lets the completed run's version apply.
   const discard = error === "canceled by server request"
     ? "the run was canceled"
     : error?.includes("timed out") ? "the run timed out" : undefined;
-  const collected = collectLoopFiles(loopFiles.dir, loopFiles.baseHashes, discard);
+  const collected = collectMemory(loopDir, d.memory.text, discard);
+  removeRunDir(d.runId);
 
   return completeRun({
     runId: d.runId,
@@ -244,8 +253,14 @@ export async function executeDelivery(
     // The server reads the run's status from the final response's last
     // `STATUS:` line.
     finalText,
-    ...(collected.files.length ? { files: collected.files } : {}),
-    ...(collected.notices.length ? { fileNotices: collected.notices } : {}),
+    ...(collected.memory !== undefined ? {
+      memory: {
+        // Lowercase SHA-256 hex; the server recomputes it from loops.memory.
+        baseHash: createHash("sha256").update(d.memory.text).digest("hex"),
+        text: collected.memory,
+      },
+    } : {}),
+    ...(collected.notices.length ? { notices: collected.notices } : {}),
   }, error === "canceled by server request" ? "canceled" : undefined, ok);
 }
 

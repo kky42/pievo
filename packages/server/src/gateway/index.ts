@@ -2,9 +2,8 @@
  * Machine gateway: the run-lifecycle core the daemon talks to. Methods return
  * transport-free `{ status, body }` results for the thin route shells:
  *
- *   POST /api/machine/poll                (device token) claim and deliver runs
- *   POST /machine/report                  (run token)    finalize a run
- *   GET|PUT /api/machine/run-files/:name  (run token)    loop-file transfer
+ *   POST /api/machine/poll   (device token) claim and deliver runs
+ *   POST /machine/report     (run token)    finalize a run, including its memory
  *
  * Idle polls may be held open (long-poll) until the scheduler's dispatcher wakes
  * them. `sweep()` marks stale machines offline and reclaims silent runs. CLI verbs
@@ -19,19 +18,8 @@ import type { ReportIncident, ReportIncidentCode, ReportIncidentFaultDomain } fr
 import type { Scheduler } from "../scheduler/index.js";
 import { buildDelivery } from "./delivery.js";
 import { parseFinalStatus } from "./prompt.js";
-import {
-  EMPTY_SHA256,
-  LOOP_FILE_BYTE_CAP,
-  LoopFiles,
-  isValidHash,
-  loopFileIssue,
-  loopFileNames,
-  sha256Buf,
-} from "./loopFiles.js";
-import { createBlobStore, type BlobStore } from "./blobstore.js";
-import { maintainStorage, type MaintainOptions, type MaintainResult } from "./retention.js";
+import { MEMORY_CHAR_CAP, memoryIssue } from "./memory.js";
 import { isValidSemver } from "../lib/semver.js";
-import { SNAPSHOT_RETENTION } from "../env.js";
 import {
   connectKeyValid,
   TERMINAL_GRACE_MS,
@@ -86,11 +74,9 @@ export const EDITABLE_LOOP_FIELDS = LOOP_EDIT_FIELDS;
 /** Run summary (the final response minus its STATUS line) and run errors share
  *  this cap; the full final response is stored separately as finalText. */
 export const MESSAGE_CAP = 2000;
-/** A run reports at most one version per loop file (MEMORY.md + 4 artifacts). */
-const REPORT_FILES_MAX = 5;
-/** One notice per file plus a few upload/rejection reasons; bounds the prompt echo. */
-const REPORT_NOTICES_MAX = 10;
-/** One short sentence (name + reason); 500 chars keeps the next prompt small. */
+/** A run's own memory rejection plus a few spare; bounds the prompt echo. */
+const REPORT_NOTICES_MAX = 4;
+/** One short sentence; 500 chars keeps the next prompt small. */
 const NOTICE_CAP = 500;
 /** Provider session IDs are opaque short tokens; this rejects malformed payloads
  *  without constraining known provider formats. */
@@ -117,23 +103,22 @@ export interface MachineReportBody {
   usage?: unknown;
   error?: string;
   finalText?: string;
-  files?: ReportedLoopFile[];
-  fileNotices?: string[];
+  memory?: ReportedMemory;
+  notices?: string[];
 }
 
-/** A changed loop file whose bytes the daemon already uploaded with this run's token. */
-export interface ReportedLoopFile {
-  name: string;
+/** The MEMORY.md a run left behind and the SHA-256 hash of the memory it started from. */
+export interface ReportedMemory {
   baseHash: string;
-  hash: string;
-  size: number;
+  text: string;
 }
 
 export const MACHINE_REPORT_FIELDS = [
   "reportId", "runId", "result", "exitCode", "durationMs",
-  "sessionId", "usage", "error", "finalText", "files", "fileNotices",
+  "sessionId", "usage", "error", "finalText", "memory", "notices",
 ] as const;
-const REPORT_FILE_FIELDS = ["baseHash", "hash", "name", "size"];
+const REPORT_MEMORY_FIELDS = "baseHash,text";
+const MEMORY_HASH_RE = /^[0-9a-f]{64}$/;
 const MACHINE_REPORT_FIELD_SET = new Set<string>(MACHINE_REPORT_FIELDS);
 const MACHINE_REPORT_USAGE_FIELDS = new Set<string>([
   "inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens",
@@ -235,7 +220,7 @@ function reportOutcome(body: MachineReportBody): {
   }
   const parsed = parseFinalStatus(body.finalText);
   if (!parsed) return { ok: false, canceled, patch: { error: MISSING_STATUS_ERROR } };
-  return { ok: true, canceled, patch: { status: parsed.status, message: clipText(parsed.message, MESSAGE_CAP) || null, attention: parsed.attention, error: null } };
+  return { ok: true, canceled, patch: { status: parsed.status, message: clipText(parsed.message, MESSAGE_CAP) || null, attention: parsed.status === "ok" ? parsed.attention : null, error: null } };
 }
 
 function validateTerminalReport(body: MachineReportBody): string[] {
@@ -255,31 +240,20 @@ function validateTerminalReport(body: MachineReportBody): string[] {
   for (const key of ["sessionId", "error", "finalText"] as const) {
     if (has(key) && typeof body[key] !== "string") issues.push(`${key} must be a string`);
   }
-  if (has("files")) {
-    const files = body.files as unknown;
-    if (!Array.isArray(files) || files.length > REPORT_FILES_MAX) {
-      issues.push(`files must be an array of at most ${REPORT_FILES_MAX} entries`);
-    } else {
-      const names = new Set<string>();
-      for (const entry of files as unknown[]) {
-        const file = entry as Record<string, unknown>;
-        const valid = file !== null && typeof file === "object" && !Array.isArray(file)
-          && Object.keys(file).sort().join(",") === REPORT_FILE_FIELDS.join(",")
-          && typeof file.name === "string" && file.name.length > 0 && file.name.length <= 100 && !names.has(file.name)
-          && isValidHash(file.baseHash) && isValidHash(file.hash)
-          && typeof file.size === "number" && Number.isInteger(file.size) && file.size >= 0 && file.size <= LOOP_FILE_BYTE_CAP;
-        if (!valid) {
-          issues.push("files entries must be exactly {name, baseHash, hash, size} with unique names, sha256 hashes, and an in-cap size");
-          break;
-        }
-        names.add(file.name as string);
-      }
-    }
+  if (has("memory")) {
+    const memory = body.memory as unknown as Record<string, unknown> | null;
+    // Over-cap text is a daemon contract break (it checks the cap first); the
+    // 4-bytes-per-character bound only rejects absurd payloads here.
+    const valid = memory !== null && typeof memory === "object" && !Array.isArray(memory)
+      && Object.keys(memory).sort().join(",") === REPORT_MEMORY_FIELDS
+      && typeof memory.baseHash === "string" && MEMORY_HASH_RE.test(memory.baseHash)
+      && typeof memory.text === "string" && memory.text.length <= MEMORY_CHAR_CAP * 4;
+    if (!valid) issues.push("memory must be exactly {baseHash, text} with a lowercase SHA-256 baseHash");
   }
-  if (has("fileNotices")) {
-    const notices = body.fileNotices as unknown;
+  if (has("notices")) {
+    const notices = body.notices as unknown;
     if (!Array.isArray(notices) || notices.length > REPORT_NOTICES_MAX || notices.some((notice) => typeof notice !== "string" || notice.length > NOTICE_CAP)) {
-      issues.push(`fileNotices must be an array of at most ${REPORT_NOTICES_MAX} strings of at most ${NOTICE_CAP} characters`);
+      issues.push(`notices must be an array of at most ${REPORT_NOTICES_MAX} strings of at most ${NOTICE_CAP} characters`);
     }
   }
   if (has("usage")) {
@@ -320,19 +294,7 @@ function coerceTelemetry(body: MachineReportBody): Partial<Pick<NewRun, "duratio
 }
 
 export class MachineGateway {
-  constructor(
-    readonly scheduler: Scheduler,
-    private readonly blobStore: BlobStore = createBlobStore(),
-  ) {
-    this.loopFiles = new LoopFiles(blobStore);
-  }
-
-  readonly loopFiles: LoopFiles;
-
-  /** In-flight latch: the maintenance pass is sequential and the first post-deploy
-   *  backlog reclamation can overrun the interval, so a fresh tick skips rather than
-   *  running a second pass concurrently (idempotent but wasteful + double-counts). */
-  private maintenanceRunning = false;
+  constructor(readonly scheduler: Scheduler) {}
 
   private applyAutopauseTimer(loopId: string, terminal: { failureStreak: number; autoPaused: boolean }): void {
     if (!terminal.autoPaused) return;
@@ -459,31 +421,6 @@ export class MachineGateway {
     else this.scheduler.removeLoop(reclaimed.loop.id);
   }
 
-  /**
-   * Periodic storage maintenance: prune each loop's run snapshots to the
-   * retention window, then GC blob bytes no live row needs. Wired to its own
-   * interval in boot (independent of the faster offline-sweep) and exposed for
-   * tests / on-demand triggers. Safe to run concurrently with owner writes and
-   * run uploads (a grace window + final re-check protect freshly-written or
-   * referenced blobs) and idempotent with no garbage. Best-effort — never throws
-   * into the caller.
-   */
-  async maintainStorage(options?: MaintainOptions): Promise<MaintainResult> {
-    if (this.maintenanceRunning) {
-      log.info("storage maintenance already in progress — skipping this tick");
-      return { snapshotsPruned: 0, blobsReclaimed: 0 };
-    }
-    this.maintenanceRunning = true;
-    try {
-      return await maintainStorage(this.blobStore, options);
-    } catch (err) {
-      log.warn({ err: err instanceof Error ? err.message : String(err) }, "storage maintenance failed");
-      return { snapshotsPruned: 0, blobsReclaimed: 0 };
-    } finally {
-      this.maintenanceRunning = false;
-    }
-  }
-
   private async pollCore(
     deviceToken: string,
     info?: { host?: string; platform?: string; arch?: string; version?: string },
@@ -563,7 +500,7 @@ export class MachineGateway {
       // concurrency ceiling, while a transport failure can strand only one claim.
       await this.scheduler.advanceDueSchedules(machineId);
       const claimed = await store.claimReadyRunForMachine(machineId, undefined, currentRunIds ?? []);
-      if (claimed) delivery = await buildDelivery(claimed.loop, claimed.run, claimed.runToken, machine.roots ?? []);
+      if (claimed) delivery = await buildDelivery(claimed.loop, claimed.run, claimed.runToken, claimed.contextToken, machine.roots ?? []);
     }
 
     if (delivery) log.info({ machineId, runId: delivery.runId }, "poll: delivered");
@@ -682,7 +619,6 @@ export class MachineGateway {
       tags?: unknown;
       schedule?: unknown;
       prompt?: unknown;
-      artifacts?: unknown;
       enabled?: unknown;
       model?: unknown;
       reasoningEffort?: unknown;
@@ -796,7 +732,6 @@ export class MachineGateway {
       tags?: unknown;
       schedule?: unknown;
       prompt?: unknown;
-      artifacts?: unknown;
       workdir?: unknown;
       model?: unknown;
       reasoningEffort?: unknown;
@@ -955,69 +890,14 @@ export class MachineGateway {
     return { status: 409, body: { error: "terminal report was not finalized", code: "REPORT_NOT_FINALIZED", reportId: body.reportId } };
   }
 
-  /** Reported loop-file versions whose uploaded bytes are present. A canceled run
-   * was killed mid-edit, so none of its files are applied. */
-  private async terminalFiles(body: MachineReportBody): Promise<{ updates: store.LoopFileUpdate[]; notices: string[] }> {
-    const notices = (body.fileNotices ?? []).map((notice) => clipText(notice, NOTICE_CAP));
-    const updates: store.LoopFileUpdate[] = [];
-    if (body.result === "canceled") return { updates, notices };
-    const files = body.files ?? [];
-    // The report's size is client-supplied metadata; the blob row written at
-    // upload is authoritative. A mismatch means the report cannot be trusted
-    // for this version, so the previous version stays.
-    const sizes = await store.blobSizes(files.map((file) => file.hash).filter((hash) => hash !== EMPTY_SHA256));
-    for (const file of files) {
-      if (!(await this.loopFiles.hasBlob(file.hash))) {
-        notices.push(`${file.name}: the upload was lost; the previous version was kept`);
-        continue;
-      }
-      const size = file.hash === EMPTY_SHA256 ? 0 : sizes.get(file.hash);
-      if (size === undefined || size !== file.size) {
-        notices.push(`${file.name}: reported size did not match the stored version; the previous version was kept`);
-        continue;
-      }
-      updates.push({ name: file.name, baseHash: file.baseHash, hash: file.hash, size });
-    }
-    return { updates, notices };
-  }
-
-  /** Current bytes of one loop file for an executing run (the run's starting version). */
-  async readRunFile(runToken: string, name: string): Promise<HttpResult & { bytes?: Buffer; hash?: string }> {
-    const lease = await resolveLease(runToken);
-    if (!lease) return { status: 401, body: { error: "invalid or expired token" } };
-    if (lease.state !== "active") return { status: 409, body: { error: "run is no longer executing" } };
-    const loop = await store.getLoop(lease.loopId);
-    if (!loop || !loopFileNames(loop).includes(name)) return { status: 404, body: { error: "no such loop file" } };
-    const row = await store.getArtifactFile(loop.id, name);
-    const hash = row && !row.deleted && row.hash ? row.hash : EMPTY_SHA256;
-    const bytes = await this.loopFiles.readBlob(hash);
-    if (!bytes) return { status: 500, body: { error: "loop file bytes are missing" } };
-    return { status: 200, body: {}, bytes, hash };
-  }
-
-  /** Store one loop-file version produced by a run. Accepted until the run's
-   * authority retires, so the durable report outbox can retry after a crash.
-   * Applying it to the loop happens only in the terminal report transaction. */
-  async storeRunFile(runToken: string, name: string, bytes: Buffer, expectedHash: string | null): Promise<HttpResult> {
-    const lease = await resolveLease(runToken);
-    if (!lease || lease.state === "retired") return { status: 401, body: { error: "invalid or expired token" } };
-    const loop = await store.getLoop(lease.loopId);
-    if (!loop || !loopFileNames(loop).includes(name)) return { status: 404, body: { error: "no such loop file" } };
-    const issue = loopFileIssue(name, bytes);
-    if (issue) return { status: 413, body: { error: issue } };
-    if (expectedHash !== null && expectedHash !== sha256Buf(bytes)) return { status: 400, body: { error: "hash mismatch" } };
-    const hash = await this.loopFiles.putBlob(bytes);
-    if (hash !== EMPTY_SHA256) await store.recordBlob(hash, bytes.length);
-    return { status: 200, body: { ok: true, hash } };
-  }
-
-  private async captureRunSnapshot(runId: string, loopId: string): Promise<void> {
-    try {
-      await store.putRunSnapshot(runId, loopId, await store.buildLoopManifest(loopId));
-      await store.pruneRunSnapshots(loopId, SNAPSHOT_RETENTION);
-    } catch (err) {
-      log.warn({ runId, err: err instanceof Error ? err.message : String(err) }, "snapshot capture failed");
-    }
+  /** The run's memory and notices to apply. A canceled or timed-out run was
+   * killed mid-edit, so its memory is not applied (the daemon also withholds it). */
+  private terminalMemory(body: MachineReportBody): { update?: store.MemoryUpdate; notices: string[] } {
+    const notices = (body.notices ?? []).map((notice) => clipText(notice, NOTICE_CAP));
+    if (!body.memory || body.result === "canceled" || body.result === "timeout") return { notices };
+    const issue = memoryIssue(body.memory.text);
+    if (issue) return { notices: [...notices, `${issue}; the previous version was kept`] };
+    return { update: body.memory, notices };
   }
 
   /** Reconcile one swept run. The store consumes the terminal-grace lease in the
@@ -1030,7 +910,7 @@ export class MachineGateway {
     body: MachineReportBody,
   ): Promise<HttpResult> {
     const { ok, canceled, patch } = reportOutcome(body);
-    const files = await this.terminalFiles(body);
+    const memory = this.terminalMemory(body);
     const loopPatch: Partial<NewLoop> = {};
     const receipt = receiptFor(body, lease.runId)!;
     const payloadDigest = sha256(JSON.stringify(body));
@@ -1044,13 +924,13 @@ export class MachineGateway {
         phase: canceled ? "canceled" : ok ? "done" : "error",
         ...coerceTelemetry(body),
         ...patch,
-        fileNotices: files.notices,
+        notices: memory.notices,
         ts: nowIso(),
       },
         loopPatch,
         AUTOPAUSE_STREAK,
         receipt,
-        files.updates,
+        memory.update,
       );
     } catch (error) {
       const raced = await this.reportRaceResponse(runToken, lease, body, payloadDigest);
@@ -1065,7 +945,6 @@ export class MachineGateway {
 
     const deleting = reconciled.loop.deleteRequestedAt != null;
     const reportOnly = reconciled.reportOnly === true;
-    if (!deleting && !reportOnly) await this.captureRunSnapshot(lease.runId, lease.loopId);
     if (!reportOnly) this.scheduler.addLoop(reconciled.loop);
     if (!reportOnly) this.applyAutopauseTimer(lease.loopId, reconciled);
     if (deleting) await store.tryDeleteLoop(lease.loopId);
@@ -1188,7 +1067,7 @@ export class MachineGateway {
     }
 
     const { ok: effectiveOk, canceled, patch } = reportOutcome(body);
-    const files = await this.terminalFiles(body);
+    const memory = this.terminalMemory(body);
 
     // Held until the running→terminal CAS wins. Cancel/reclaim/report losers can
     // never reach loop-level writes.
@@ -1203,14 +1082,14 @@ export class MachineGateway {
         phase: canceled ? "canceled" : effectiveOk ? "done" : "error",
         ...coerceTelemetry(body),
         ...patch,
-        fileNotices: files.notices,
+        notices: memory.notices,
         ts: nowIso(),
       },
         loopPatch,
         sha256(runToken),
         AUTOPAUSE_STREAK,
         expected,
-        files.updates,
+        memory.update,
       );
     } catch (error) {
       // A different loop may win the reportId unique race while this transaction
@@ -1228,7 +1107,6 @@ export class MachineGateway {
     // A delete-requested loop needs only the atomic receipt/finalization; deletion
     // follows in a second transaction and maintenance can repair a crash gap.
     const deleting = terminal.loop.deleteRequestedAt != null;
-    if (!deleting) await this.captureRunSnapshot(lease.runId, lease.loopId);
 
     // Terminal cadence was committed with the run transition. This only
     // refreshes the best-effort timer.

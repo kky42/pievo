@@ -1,8 +1,8 @@
-const INTERACTIVE_VERBS = new Set(["loops", "edit", "pause", "start", "stop", "delete", "run", "file"]);
+const INTERACTIVE_VERBS = new Set(["loops", "edit", "pause", "start", "stop", "delete", "run"]);
 const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 const HELP_FLAG_ARGS = new Set(["--help", "-h"]);
 const VERSION_FLAGS = new Set(["--version", "-v"]);
-const COMMAND_VERBS = new Set(["daemon", "new", "skill", "log", "show", ...INTERACTIVE_VERBS]);
+const COMMAND_VERBS = new Set(["daemon", "new", "skill", "log", "show", "memory", ...INTERACTIVE_VERBS]);
 const HELP_VERBS = new Set(COMMAND_VERBS);
 const DAEMON_SUBCOMMANDS = new Set(["connect", "connections", "start", "stop", "restart", "status"]);
 
@@ -20,6 +20,7 @@ export type Route =
   | { kind: "skill"; args: string[] }
   | { kind: "log"; args: string[] }
   | { kind: "show"; args: string[] }
+  | { kind: "memory"; args: string[] }
   | { kind: "interactive"; argv: string[] }
   | { kind: "home" }
   | { kind: "unknown"; verb: string };
@@ -47,6 +48,7 @@ export function classify(argv: string[], env: NodeJS.ProcessEnv): Route {
   if (verb === "skill") return { kind: "skill", args: argv.slice(1) };
   if (verb === "log") return { kind: "log", args: argv.slice(1) };
   if (verb === "show") return { kind: "show", args: argv.slice(1) };
+  if (verb === "memory") return { kind: "memory", args: argv.slice(1) };
   if (verb !== undefined && INTERACTIVE_VERBS.has(verb)) return { kind: "interactive", argv };
   if (argv.length === 0) return { kind: "home" };
   return { kind: "unknown", verb: verb! };

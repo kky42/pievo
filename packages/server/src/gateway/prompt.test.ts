@@ -5,27 +5,47 @@ import { ATTENTION_CAP, buildRunTask, parseFinalStatus } from "./prompt.js";
 
 const loop = {
   id: "loop-test",
+  name: "Disk watch",
+  scheduleMode: "cron",
+  cron: "0 8 * * *",
+  timezone: "UTC",
   prompt: "First line.\n\n  Preserve this spacing.  ",
-  artifacts: ["report.html"],
 } as Loop;
 
-test("delivery prompt starts with the unchanged user prompt and ends with the status line contract", () => {
-  const task = buildRunTask(loop);
-  expect(task.startsWith(`First line.\n\n  Preserve this spacing.  \n\nLoop files in `)).toBe(true);
-  expect(task).toContain("- report.html: artifact shown on the Pievo dashboard (max 256 KB).");
+test("delivery keeps the user prompt unchanged between the run header and the contract", () => {
+  const task = buildRunTask(loop, { runIndex: 1, now: "2026-10-23T08:00:00.000Z" });
+  expect(task).toContain("\n\nFirst line.\n\n  Preserve this spacing.  \n\n---\n");
+  expect(task.endsWith("Block pauses the loop.")).toBe(true);
   expect(task).toContain("\nSTATUS: ok|block\n");
 });
 
-test("the previous run's file notices are repeated to the next run", () => {
-  const task = buildRunTask({ ...loop, artifacts: [] } as Loop, ["MEMORY.md: 9001 characters exceeds the 8000-character limit; the previous version was kept"]);
-  expect(task).not.toContain("report.html");
-  expect(task).toContain("Notices from the previous run:\n- MEMORY.md: 9001 characters exceeds the 8000-character limit; the previous version was kept\n\n");
-});
-
-test("prompt does not inject loop identity or history index", () => {
-  const task = buildRunTask(loop);
-  expect(task).not.toContain("loop-test");
-  expect(task).not.toContain("#99");
+test("the header gives the run index, the time, and the previous run's outcome and notices", () => {
+  const task = buildRunTask(loop, {
+    runIndex: 42,
+    now: "2026-10-23T08:00:00.000Z",
+    previous: {
+      runIndex: 41,
+      ts: "2026-10-22T08:00:05.000Z",
+      phase: "done",
+      status: "ok",
+      attention: "new release",
+      message: "Checked 3 feeds.\nLatest: v2.1",
+      error: null,
+      notices: ["MEMORY.md: 9001 characters exceeds the 8000-character limit; the previous version was kept"],
+    },
+  });
+  expect(task.startsWith('Pievo run #42 of loop "Disk watch" (cron `0 8 * * *` (UTC)).\nNow: 2026-10-23T08:00:00.000Z.\n')).toBe(true);
+  expect(task).toContain("Previous run: #41 at 2026-10-22T08:00:05.000Z, ok, attention: new release.");
+  expect(task).toContain("> Checked 3 feeds.\n> Latest: v2.1");
+  expect(task).toContain("Notice: MEMORY.md: 9001 characters exceeds");
+  expect(buildRunTask(loop, { runIndex: 1, now: "2026-10-23T08:00:00.000Z" })).toContain("Previous run: none, this is the first run.");
+  const block = buildRunTask(loop, {
+    runIndex: 42,
+    now: "2026-10-23T08:00:00.000Z",
+    previous: { runIndex: 41, ts: "2026-10-22T08:00:05.000Z", phase: "done", status: "block", attention: "legacy block reason", message: "stopped", error: null, notices: [] },
+  });
+  expect(block).toContain("Previous run: #41 at 2026-10-22T08:00:05.000Z, block.");
+  expect(block).not.toContain("attention: legacy block reason");
 });
 
 test("the last exact STATUS line sets status; the rest is the summary", () => {

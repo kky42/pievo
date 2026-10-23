@@ -1,16 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import type { CodingAgent, LoopDetail, RunSummary } from '../types'
-import { dotLabel, dur, rel, runSwatch, tsShort } from '../lib/format'
+import { attentionOf, dotLabel, rel, runSwatch, scheduleText, tsShort } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { DAEMON_UPGRADE_REQUIRED, daemonStopSupport, deriveLoopLifecycle } from '../lib/lifecycleUi'
 import { deleteLoop, getLoopDetail, loadOlderRuns, patchLoop, pauseLoop, runLoop, startLoop, stopLoop } from '../server/loopApi'
-import { LoopFilesPanel } from './LoopFilesPanel'
 import { LoopForm, type LoopFormHandle } from './LoopForm'
 import { LoopOverview } from './LoopOverview'
 import { MachinesModal } from './MachinesModal'
-import { Timeline, WINDOW } from './Timeline'
-import { btn, btnDanger, btnPrimary, btnQuiet, ErrorBanner, Loading, runPulseStyle, sectionHeadCls } from './ui'
+import { MemoryPanel } from './MemoryPanel'
+import { WINDOW } from './Timeline'
+import { btn, btnDanger, btnPrimary, btnQuiet, ErrorBanner, Loading, sectionHeadCls, useHydrated } from './ui'
 import { ConfirmBar, FlashLine, LoadErrorCard, useFlash } from './actionUi'
 
 const AGENT_LABEL: Record<CodingAgent, string> = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi' }
@@ -168,27 +168,30 @@ export function LoopDetailView({ id }: { id: string }) {
             <button className={btnDanger} disabled={busy || !canStop} title={summary.running && !stopSupport.supported ? DAEMON_UPGRADE_REQUIRED : !summary.running ? 'No run is currently running' : undefined} onClick={() => void doLifecycle('stop')}>Stop</button>
             <button className={btnDanger} disabled={busy || deleting} onClick={() => setConfirmingDelete(true)}>{deleting ? 'Deleting…' : 'Delete'}</button>
           </div>
-          {confirmingDelete && !deleting && <div className="mt-3"><ConfirmBar prompt="Stop this loop and delete its server data?" note="This stops the loop and deletes server history, the loop memory, and artifacts. Files in the working directory are not deleted. If the machine is unreachable, its local process may continue running." cta="Delete" danger busy={busy} onConfirm={() => void doLifecycle('delete')} onCancel={() => setConfirmingDelete(false)} /></div>}
+          {confirmingDelete && !deleting && <div className="mt-3"><ConfirmBar prompt="Stop this loop and delete its server data?" note="This stops the loop and deletes its server history and memory. Files in the working directory are not deleted. If the machine is unreachable, its local process may continue running." cta="Delete" danger busy={busy} onConfirm={() => void doLifecycle('delete')} onCancel={() => setConfirmingDelete(false)} /></div>}
         </div>
       </header>
 
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
-        <LoopFilesPanel loopId={id} configuredPaths={loop.artifacts} running={running} />
-        <RunsSection loopId={id} summary={summary} runs={runs} older={older} onPickRun={(run) => navigate({ to: '/loops/$loopId/runs/$runId', params: { loopId: id, runId: run.id } })} onMore={loadMore} />
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,420px)]">
+        <Highlights loopId={id} runs={runs} />
+        <MemoryPanel loopId={id} memory={loop.memory} onSaved={() => load(true)} />
       </div>
 
-      <section className="mt-6 min-w-0 rounded-card border border-hairline bg-surface px-6 py-5 shadow-card">
-        <h2 className={`mb-4 border-b border-hairline pb-1.5 ${sectionHeadCls}`}>Configuration</h2>
-        <dl className="grid min-w-0 gap-x-6 gap-y-4 md:grid-cols-[180px_minmax(0,1fr)]">
+      <details className="group mt-6 min-w-0 rounded-card border border-hairline bg-surface px-6 py-4 shadow-card">
+        <summary className={`flex cursor-pointer select-none items-center gap-2 marker:content-[''] ${sectionHeadCls}`}>
+          <span aria-hidden className="text-micro text-disabled transition-transform group-open:rotate-90">▸</span>
+          Configuration
+          <span className="ml-2 truncate font-normal text-disabled">{scheduleText(loop.schedule)} · {AGENT_LABEL[loop.agent]}</span>
+        </summary>
+        <dl className="mt-4 grid min-w-0 gap-x-6 gap-y-4 border-t border-hairline pt-4 md:grid-cols-[180px_minmax(0,1fr)]">
           <Config label="Schedule"><code className="break-all font-mono">{configurationScheduleText}</code></Config>
           <Config label="Tags">{loop.tags.length ? <div className="flex flex-wrap gap-1.5">{loop.tags.map((tag) => <span key={tag} className="inline-flex h-[22px] max-w-52 items-center truncate rounded-full bg-raised px-2.5 text-caption font-medium text-secondary" title={tag}>{tag}</span>)}</div> : <span className="text-disabled">None</span>}</Config>
           <Config label="Working directory"><code className="break-all font-mono">{loop.workdir}</code></Config>
           <Config label="Agent">{AGENT_LABEL[loop.agent]}</Config>
           <Config label="Model / effort">{model} / {effort}</Config>
           <Config label="Prompt"><pre className="whitespace-pre-wrap break-words font-sans">{loop.prompt}</pre></Config>
-          <Config label="Artifacts">{loop.artifacts.length ? <ul className="space-y-1">{loop.artifacts.map((name) => <li key={name}><code className="break-all font-mono">{name}</code></li>)}</ul> : <span className="text-disabled">None</span>}</Config>
         </dl>
-      </section>
+      </details>
 
       <MachinesModal open={machinesOpen} onClose={() => setMachinesOpen(false)} />
     </Shell>
@@ -204,25 +207,42 @@ function MachineBanner({ text, action, onAction, tone }: { text: string; action:
 }
 
 function EditHead({ name, onBack }: { name: string; onBack: () => void }) {
-  return <div><button type="button" onClick={onBack} className={btnQuiet}><span aria-hidden>←</span> Back to loop</button><h1 className="mt-2.5 text-[24px] font-semibold text-display">Settings · {name}</h1><p className="mt-1.5 text-meta text-secondary">Edit tags, schedule, execution settings, prompt, and artifact files.</p></div>
+  return <div><button type="button" onClick={onBack} className={btnQuiet}><span aria-hidden>←</span> Back to loop</button><h1 className="mt-2.5 text-[24px] font-semibold text-display">Settings · {name}</h1><p className="mt-1.5 text-meta text-secondary">Edit tags, schedule, execution settings, and prompt.</p></div>
 }
 
 function Shell({ back, children }: { back: React.ReactNode; children: React.ReactNode }) {
   return <main className="mx-auto max-w-[1360px] px-8 pb-24 pt-10"><div className="mb-5">{back}</div>{children}</main>
 }
 
-function RunsSection({ loopId, summary, runs, older, onMore, onPickRun }: { loopId: string; summary: LoopDetail['summary']; runs: RunSummary[]; older: RunSummary[]; onMore: () => Promise<number>; onPickRun: (run: RunSummary) => void }) {
-  const stripRuns = useMemo(() => older.length ? mergeRuns(summary.runs, older) : summary.runs, [summary.runs, older])
+/** Runs worth the owner's time: attention, block, and errors. Routine ok runs
+ *  live only on the timeline. */
+function Highlights({ loopId, runs }: { loopId: string; runs: RunSummary[] }) {
+  const hydrated = useHydrated()
+  const notable = runs.filter((run) => attentionOf(run) || run.status === 'block' || run.phase === 'error').slice(0, 30)
   return (
     <section className="min-w-0">
-      <div className="mb-2.5 border-b border-hairline pb-1.5"><h2 className={sectionHeadCls}>Runs ({summary.runCount})</h2></div>
-      {summary.runCount === 0 ? <div className="rounded-card border border-hairline bg-surface px-5 py-10 text-center text-body text-disabled">Never run</div> : (
-        <div className="rounded-card border border-hairline bg-surface px-5 pb-4 pt-5 shadow-card">
-          <Timeline loop={summary} runs={stripRuns} total={summary.runCount} onLoadMore={onMore} onPickRun={onPickRun} />
-          <ul className="mt-5 max-h-[clamp(280px,46vh,520px)] divide-y divide-hairline overflow-y-auto border-t border-hairline">
-            {runs.map((run) => <li key={run.id}><Link to="/loops/$loopId/runs/$runId" params={{ loopId, runId: run.id }} className="flex items-start gap-2.5 py-2.5 hover:bg-raised"><span className="mt-1 inline-block size-2.5 shrink-0 rounded-[2px]" style={runSwatch(run)} title={dotLabel(run)} /><span className="min-w-0 flex-1"><span className="flex justify-between gap-2"><span className="font-mono text-label text-secondary">{tsShort(run.ts)}</span><span className="font-mono text-caption text-disabled">{dur(run.durationMs)}</span></span><span className="mt-0.5 block line-clamp-2 text-meta text-primary">{run.phase === 'pending' ? 'Queued' : run.phase === 'running' ? <span className="inline-flex items-center gap-2"><span className="size-1.5 rounded-full" style={runPulseStyle} />Running</span> : run.attention ? <span className="font-medium text-attention">! {run.attention}</span> : run.error || run.message || dotLabel(run)}</span></span></Link></li>)}
-          </ul>
-        </div>
+      <div className="mb-2.5 border-b border-hairline pb-1.5"><h2 className={sectionHeadCls}>Highlights</h2></div>
+      {notable.length === 0 ? (
+        <div className="rounded-card border border-hairline bg-surface px-5 py-10 text-center text-body text-disabled shadow-card">Nothing needs you yet. Routine runs stay on the timeline.</div>
+      ) : (
+        <ul className="divide-y divide-hairline overflow-hidden rounded-card border border-hairline bg-surface shadow-card">
+          {notable.map((run) => {
+            const attention = attentionOf(run)
+            return (
+              <li key={run.id}>
+                <Link to="/loops/$loopId/runs/$runId" params={{ loopId, runId: run.id }} className="flex items-start gap-3 px-5 py-3 hover:bg-raised">
+                  <span className="mt-[3px] inline-block size-2.5 shrink-0 rounded-[3px]" style={runSwatch(run)} title={dotLabel(run)} />
+                  <span className="min-w-0 flex-1">
+                    <span className={`block break-words text-body ${attention ? 'font-medium text-attention' : 'text-primary'}`}>
+                      {attention ?? (run.phase === 'error' ? run.error : run.message?.split('\n')[0]) ?? dotLabel(run)}
+                    </span>
+                    <span className="mt-0.5 block font-mono text-caption text-disabled">#{run.runIndex} · {hydrated ? tsShort(run.ts) : ''}</span>
+                  </span>
+                </Link>
+              </li>
+            )
+          })}
+        </ul>
       )}
     </section>
   )

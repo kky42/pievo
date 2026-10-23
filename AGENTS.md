@@ -23,8 +23,7 @@ in code, or in tests.
   server launcher may run the local `tailscale` CLI (bounded) to publish HTTPS;
   request handling never spawns processes.
 - A loop has one exclusive cron or continuous schedule, one machine/workdir/agent,
-  a non-empty stored prompt, optional model/effort, up to four artifact file names,
-  and an enabled state.
+  a non-empty stored prompt, optional model/effort, and an enabled state.
   `packages/server/src/gateway/loopConfig.ts` is the canonical create/edit validator;
   unknown keys fail.
 - Database cadence facts and durable pending runs are authoritative. Timers and
@@ -34,28 +33,36 @@ in code, or in tests.
   cancellation intent; running becomes canceled only with daemon proof. Delete never
   removes local project files. Preserve `store.forceDeleteLoop` as the authority-
   retirement path used by owner/server lifecycle flows.
-- Delivery is the stored prompt unchanged, the loop-file contract, and the
-  final-line `STATUS: ok|block` contract (`gateway/prompt.ts`). The status comes
+- Delivery is a run header (run index, time, previous run), the stored prompt
+  unchanged, and Pievo's contract: memory, history access, attention, and the
+  final-line `STATUS: ok|block` (`gateway/prompt.ts`). The status comes
   only from the provider's final response; a run is `done` exactly when it reported
   one, and a missing status line is an `error`. Runs have no CLI. A provider launches once, without retry or session resume.
 - Protocol v5 recovery and the daemon SQLite outbox make terminal reports durable.
   Lease/report/lifecycle transitions stay loop-locked. Breaking protocol behavior
   requires updating `gateway/protocol.ts` and the matching daemon release together.
-- Loop files (`gateway/loopFiles.ts`): the server owns each loop's required
-  `MEMORY.md` (8000 characters) and up to four text/code artifacts (256 KB). A run
-  downloads them into `~/.pievo/runs/<run>`, uploads changed versions with its run
-  token, and the terminal transaction applies them only if the version the run
-  started from is still current (owner edits win). Over-limit versions are rejected,
-  never truncated. Daemon limits mirror the server's.
+- Persistence is config, memory, and run history; there are no artifacts. Memory
+  (`gateway/memory.ts`) is `loops.memory`, lessons only, 8000 characters. The
+  delivery carries it; the daemon stages it as `~/.pievo/runs/<run>/MEMORY.md`
+  and returns changed memory inline in the terminal report with the SHA-256 hash
+  of the memory it started from. The server applies it only if that hash still
+  matches (owner edits win). No memory version or diff is stored. Over-limit
+  memory is rejected, never truncated. Daemon limits mirror the server's. Task
+  state lives in the workdir or the run summary, which the next run's header
+  repeats.
+- Attention is for an ok run the owner will want to see (an improvement, something
+  new); routine completion is not attention. A block is its own signal and never
+  carries attention. The dashboard reserves green for attention.
 - No login: the network is the human access boundary. `src/start.ts` rejects every
   request whose peer is not loopback, private LAN, or Tailscale
   (`server/networkAccess.ts`); `tailscale serve` traffic arrives from loopback. Never
   add a route that bypasses it. Device tokens impersonate machines and first contact
-  requires a live connect key; run tokens authorize only the terminal report and
-  that run's loop-file transfer. `PIEVO_ROOTS` is an always-applied daemon cwd jail,
+  requires a live connect key; run report tokens (`rk_`) authorize only the
+  terminal report and never reach the agent. A run context token (`rc_`) in the
+  agent's environment allows read-only `show`/`log`/`memory` on its own loop while
+  the run executes. `PIEVO_ROOTS` is an always-applied daemon cwd jail,
   and server roots may only narrow it.
-- Exactly one server process owns a data directory (embedded PGlite plus local
-  blobs). Keep heavy/native server dependencies out of client bundles via dynamic
+- Exactly one server process owns a data directory (embedded PGlite). Keep heavy/native server dependencies out of client bundles via dynamic
   imports.
 - Server state lives in `~/.pievo-server`, daemon state in `~/.pievo`. Source
   development entrypoints use repo-local, mutually isolated server/daemon state and a
@@ -70,29 +77,29 @@ that a change works is an end-to-end run, not a unit test. Follow the recipe in
 `CONTRIBUTING.md` ("End-to-end check").
 
 - **Agent behavior** (prompt, delivery, runner, provider spawn, telemetry, status
-  parsing, loop files, protocol, scheduling, lifecycle): run real loops with a real
+  parsing, memory, protocol, scheduling, lifecycle): run real loops with a real
   agent on the dev server. Use a disposable working directory, a small prompt, and the
-  owner's everyday provider (Pi on `dgx-spark/deepseek-v4.1-flash`), plus any other
+  owner's everyday provider (Pi on `dgx/deepseek-v4.1-flash`), plus any other
   provider the change touches.
 - **Skill and owner flows** (`packages/daemon/skill`, CLI verbs it uses): drive the
   skill with a headless coding agent the way the owner would: ask in plain words, let
-  it propose, then confirm. Cover each flow the change touches: create, edit, memory or
-  artifact repair, lifecycle.
+  it propose, then confirm. Cover each flow the change touches: create, edit,
+  investigation, memory repair, lifecycle.
 - **Test both sides of a loop.** Owner-side agents author loops through the skill;
   in-loop agents run them. A change to either side's instructions can break the
   other, so a loop created through the skill should also be run.
 - **Design scenarios, not a single run.** Shape workdir inputs so successive runs hit
   every outcome the change affects: ok, block, attention, a failure, and a messy
   input that teaches a real lesson. Change the inputs between runs. Seed
-  realistic bad state with `file set` and `edit` (bloated memory, a `block` used for
+  realistic bad state with `memory set` and `edit` (bloated memory, a `block` used for
   findings) when testing repair.
 - **Judge results against the design, not exit codes.** Check:
   - terminal phase and status;
-  - attention set only for findings;
+  - attention set only for improvements or something new, never for routine work;
   - `block` pauses the loop, attention does not;
   - the final response is a few lines;
   - `MEMORY.md` holds only lessons learned the hard way;
-  - state and history sit in a bounded artifact section;
+  - task state sits in a bounded workdir file or the summary, not in memory;
   - the owner-side agent proposed before mutating, stayed brief, and created a loop
     whose prompt does not restate Pievo's contract.
 
@@ -113,10 +120,10 @@ that a change works is an end-to-end run, not a unit test. Follow the recipe in
 ## Tests
 
 Unit tests guard core mechanisms that are hard to reach end to end: loop-locked
-state transitions, leases and report durability, protocol decoding, loop-file limits
+state transitions, leases and report durability, protocol decoding, memory limits
 and conflict rules, scheduling and cadence, process and pid safety, and security
 boundaries (network guard, roots jail, environment allowlists, token handling,
-artifact-serving headers, request size caps).
+run context token scope, request size caps).
 
 - Add a regression test at the lowest level that reproduces a bug in one of those
   mechanisms.
@@ -144,20 +151,21 @@ explains and update it when the behavior changes.
 
 - `packages/server/src/gateway/index.ts`: poll/report lifecycle, reconciliation,
   owner loop methods, sweep, and storage maintenance.
-- `packages/server/src/gateway/{cli,loopConfig,loopFiles,prompt,protocol}.ts`: CLI
-  routing, config validation, loop-file limits and bytes, prompt/status contract, and
-  wire version.
+- `packages/server/src/gateway/{cli,history,loopConfig,memory,prompt,protocol}.ts`:
+  CLI routing (owner and run context), run history queries, config validation,
+  memory limits and hash, prompt/status contract, and wire version.
 - `packages/server/src/db/{schema,store}.ts`: baseline schema and loop-locked state
   transitions.
-- `packages/server/src/server/boot.ts`: singleton scheduler/gateway/blob-store boot.
+- `packages/server/src/server/boot.ts`: singleton scheduler/gateway boot.
 - `packages/server/src/{start.ts,server/networkAccess.ts}`: network access guard.
 - `packages/server/scripts/{pievo-server,server-cli-lib,server-network}.mjs`: server
   lifecycle launcher, pid/lock safety, and LAN/Tailscale URL publishing.
 - `packages/server/src/types.ts`: client-safe shared types and coding-agent enum.
-- `packages/daemon/src/{route,runner,cli-client,server-cli}.ts`: command routing,
-  provider spawn, server-rendered CLI transport, and `pievo server` delegation.
+- `packages/daemon/src/{route,runner,cli-client,callback,server-cli}.ts`: command
+  routing, provider spawn, server-rendered CLI transport, the in-run read-only
+  `pievo`, and `pievo server` delegation.
 - `packages/daemon/src/report-outbox.ts`: durable terminal report persistence/retry.
-- `packages/daemon/src/loop-files.ts`: per-run loop-file download, collection, and upload.
+- `packages/daemon/src/loop-files.ts`: per-run memory staging and collection.
 
 ## Changes that need extra care
 

@@ -47,7 +47,7 @@ test("loop tag database constraints protect count and reserved names", async () 
 
 test("every migration is applied and Pi is a valid agent", async () => {
   const migrations = await queryClient.query<{ count: string }>(`SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations`);
-  expect(migrations.rows).toEqual([{ count: "4" }]);
+  expect(migrations.rows).toEqual([{ count: "5" }]);
 
   await queryClient.query("BEGIN");
   try {

@@ -6,11 +6,13 @@ import { isOutdated, isValidSemver } from "../lib/semver.js";
  * Keep this as a coarse package-version gate. Bump it whenever the current
  * prompt/CLI/report contract changes. Daemons that omit a version cannot claim work.
  */
-export const DAEMON_PROTOCOL_VERSION = 5;
-// Protocol v5: deliveries name the loop files, runs transfer them over
-// /api/machine/run-files, and the status comes from the final response's
-// `STATUS:` line instead of an in-run `pievo report` callback.
-export const MIN_DAEMON_VERSION = "4.0.0";
+export const DAEMON_PROTOCOL_VERSION = 7;
+// Protocol v7: deliveries carry the loop's memory and a read-only run context
+// token; the terminal report carries changed memory with the SHA-256 hash of the
+// memory the run started from, and the status comes from the final response's
+// `STATUS:` line. There is no loop-file transfer route and no stored memory
+// version or diff.
+export const MIN_DAEMON_VERSION = "6.0.0";
 
 export function daemonNeedsUpdate(current: string | null | undefined, required = MIN_DAEMON_VERSION): boolean {
   if (!current || !isValidSemver(current) || !isValidSemver(required)) return true;

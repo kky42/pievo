@@ -8,32 +8,33 @@ vi.hoisted(() => {
 
 import { runCallback } from "./callback.js";
 
-describe("runCallback — in-run shim refusal", () => {
-  let errSpy: ReturnType<typeof vi.spyOn>;
-  let fetchSpy: ReturnType<typeof vi.fn>;
+describe("runCallback — in-run read-only pievo", () => {
+  let outSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
+    outSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   });
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
+  afterEach(() => vi.restoreAllMocks());
+
+  const stdout = () => outSpy.mock.calls.map((call) => String(call[0])).join("");
+
+  test("forwards argv with the run context token, never the device credential", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ text: "runs: 0", exitCode: 0 }), { status: 200 }));
+    const env = { PIEVO_RUN_CONTEXT: `rc_${"a".repeat(32)}`, PIEVO_SERVER_URL: "http://127.0.0.1:3001" };
+    expect(await runCallback(["log", "--since", "2026-10-01T00:00:00Z"], env, fetchImpl as unknown as typeof fetch)).toBe(0);
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:3001/api/machine/cli");
+    expect((init.headers as Record<string, string>).Authorization).toBe(`Bearer ${env.PIEVO_RUN_CONTEXT}`);
+    expect(JSON.parse(String(init.body))).toEqual({ argv: ["log", "--since", "2026-10-01T00:00:00Z"] });
+    expect(stdout()).toContain("runs: 0");
   });
 
-  const stderr = () => errSpy.mock.calls.map((call) => String(call[0])).join("");
-
-  test.each([
-    ["report", "--status", "ok", "--message", "done"],
-    ["report", "--help"],
-    ["log"],
-    [],
-  ])("refuses %j with the run contract message", async (...argv: string[]) => {
-    expect(await runCallback(argv)).toBe(2);
-    expect(stderr()).toMatch(/commands are not available inside a Pievo run/);
-    expect(stderr()).toContain("$PIEVO_LOOP_DIR");
-    expect(stderr()).toContain("STATUS: ok|block");
-    expect(fetchSpy).not.toHaveBeenCalled();
+  test("help needs no server, and a run without context makes no request", async () => {
+    const fetchImpl = vi.fn();
+    expect(await runCallback([], {}, fetchImpl as unknown as typeof fetch)).toBe(0);
+    expect(stdout()).toContain("read-only");
+    expect(await runCallback(["log"], {}, fetchImpl as unknown as typeof fetch)).toBe(2);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

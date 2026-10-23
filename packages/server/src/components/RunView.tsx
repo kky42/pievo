@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import type { LoopDetail, RunDiffResult, RunSummary } from '../types'
-import { dur, fmt, fnum } from '../lib/format'
+import type { LoopDetail, RunSummary } from '../types'
+import { attentionOf, dur, fmt, fnum, runTokens } from '../lib/format'
 import { DAEMON_UPGRADE_REQUIRED, DASHBOARD_PROTOCOL } from '../lib/lifecycleUi'
-import { getLoopDetail, getRunDiff, loadOlderRuns, stopRun } from '../server/loopApi'
-import { DiffView } from './DiffView'
+import { getLoopDetail, loadOlderRuns, stopRun } from '../server/loopApi'
 import { MarkdownView } from './MarkdownView'
 import { btn, btnDanger, Loading, Pill, runPulseStyle, sectionHeadCls, StatusPill } from './ui'
 import { LoadErrorCard } from './actionUi'
 
-/* `min-w-0` keeps wide diff lines from widening the page. */
+/* `min-w-0` keeps wide content (long response lines, code blocks) from widening the page. */
 function Card({ label, count, children }: { label: string; count?: number; children: React.ReactNode }) {
   return (
     <section className="min-w-0 rounded-card border border-hairline bg-surface px-6 py-5 shadow-card">
@@ -28,53 +27,6 @@ function Field({ k, children }: { k: string; children: React.ReactNode }) {
       <div className="mb-0.5 text-label font-medium text-secondary">{k}</div>
       <div className="min-w-0 text-body text-primary">{children}</div>
     </div>
-  )
-}
-
-function visibleTokenUsage(usage: RunSummary['usage']): number | null {
-  if (!usage || (usage.inputTokens === undefined && usage.outputTokens === undefined)) return null
-  return (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)
-}
-
-function Changes({ run }: { run: RunSummary }) {
-  const [data, setData] = useState<RunDiffResult | null>(null)
-  useEffect(() => {
-    if (run.phase === 'pending' || run.phase === 'running') return // snapshot is captured at finalize — nothing to diff yet
-    let alive = true
-    getRunDiff({ data: { runId: run.id } })
-      .then((d) => alive && setData(d))
-      .catch(() => alive && setData({ hasSnapshot: false, files: [] }))
-    return () => {
-      alive = false
-    }
-  }, [run.id, run.phase])
-
-  if (run.phase === 'pending' || run.phase === 'running')
-    return (
-      <Card label="Changes">
-        <div className="text-body text-disabled">File changes appear once the run finishes.</div>
-      </Card>
-    )
-  if (!data)
-    return (
-      <Card label="Changes">
-        <Loading />
-      </Card>
-    )
-  if (!data.hasSnapshot)
-    return (
-      <Card label="Changes">
-        <div className="text-body text-disabled">No file snapshot was recorded for this run.</div>
-      </Card>
-    )
-  return (
-    <Card label="Changes" count={data.files.length}>
-      {data.files.length === 0 ? (
-        <div className="text-body text-disabled">No files changed since the previous run.</div>
-      ) : (
-        <DiffView files={data.files} />
-      )}
-    </Card>
   )
 }
 
@@ -150,7 +102,7 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
   }, [loopId, runId, load])
 
   const run = detail?.runs.find((r) => r.id === runId) ?? olderRun
-  const tokenUsage = visibleTokenUsage(run?.usage ?? null)
+  const tokenUsage = run ? runTokens(run) : null
 
   // Not in the latest window → walk older pages by cursor until we find it or run
   // out (try/finally so searchDone always settles, even on a transient failure —
@@ -215,15 +167,16 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
     )
 
   const loopName = detail.summary.name
+  const attention = attentionOf(run)
   return (
     <>
       <header className="rounded-card border border-hairline bg-surface px-6 pb-5 pt-[22px] shadow-card">
         <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-[26px] font-medium leading-tight tracking-tight text-display">Run · {loopName}</h1>
+              <h1 className="text-[26px] font-medium leading-tight tracking-tight text-display">Run #{run.runIndex ?? '–'} · {loopName}</h1>
               <StatusPill run={run} colorText />
-              {run.attention && <Pill tone="attention">Needs attention</Pill>}
+              {attention && <Pill tone="attention">✦ Attention</Pill>}
             </div>
             <div className="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-meta text-secondary">
               <span className="text-primary">{fmt(run.ts)}</span>
@@ -272,9 +225,9 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
             </Card>
           ) : null}
 
-          {run.attention && (
-            <Card label="Needs attention">
-              <div className="break-words text-body font-medium text-attention">{run.attention}</div>
+          {attention && (
+            <Card label="Attention">
+              <div className="break-words text-body font-medium text-attention">{attention}</div>
             </Card>
           )}
 
@@ -292,10 +245,10 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
             </Card>
           )}
 
-          {run.fileNotices && run.fileNotices.length > 0 && (
-            <Card label="Loop files not kept">
+          {run.notices && run.notices.length > 0 && (
+            <Card label="Memory not kept">
               <ul className="list-disc space-y-1.5 pl-5 text-body text-primary">
-                {run.fileNotices.map((notice) => <li key={notice} className="break-words">{notice}</li>)}
+                {run.notices.map((notice) => <li key={notice} className="break-words">{notice}</li>)}
               </ul>
             </Card>
           )}
@@ -307,8 +260,6 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
               </div>
             </Card>
           )}
-
-          <Changes run={run} />
 
           {/* The report is the final response minus its STATUS line; show the raw
               response only when no report could be taken from it. */}

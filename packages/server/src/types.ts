@@ -46,6 +46,8 @@ export const RESERVED_LOOP_TAGS = ['all loops', 'active', 'paused', 'blocked'] a
 export interface RunSummary {
   id: string
   loopId: string
+  /** 1-based history number, as in `pievo log --run <index>`; null while pending. */
+  runIndex: number | null
   ts: string
   phase: RunPhase
   /** Interrupted terminal report authority: blocking waits for daemon recovery;
@@ -73,8 +75,8 @@ export interface RunSummary {
   error: string | null
   sessionId: string | null
   reportIncident?: ReportIncident | null
-  /** Loop-file versions from this run that were not kept, with the reason. */
-  fileNotices?: string[] | null
+  /** Why this run's memory edit was not kept. */
+  notices?: string[] | null
 }
 
 export interface MachineSummary {
@@ -144,7 +146,7 @@ export interface LoopFull {
   model: string | null
   reasoningEffort: string | null
   prompt: string
-  artifacts: string[]
+  memory: string
   enabled: boolean
   pauseCause?: PauseCause | null
   createdAt?: string
@@ -162,52 +164,6 @@ export interface LoopDetail {
   runs: RunSummary[]
 }
 
-export interface ArtifactSummary {
-  path: string
-  size: number | null
-  updatedAt: string
-  /** The bytes contain a NUL → download-only (no inline text render). */
-  binary: boolean
-  /** Over the per-file cap → metadata only (no bytes stored; not downloadable). */
-  oversize: boolean
-}
-
-export type ArtifactContent =
-  | { text: string }
-  | { binary: true; size: number | null; oversize: boolean }
-  | { error: string }
-
-export interface RunDiffFile {
-  path: string
-  status: 'added' | 'modified' | 'removed'
-  /** Binary/oversize on either side → no inline diff, just the size delta. */
-  binary: boolean
-  /** A real text file that exceeds the inline-diff size cap (but is under the
-   *  oversize cap) → no inline diff, but it's NOT binary — the UI says "too large
-   *  to diff" rather than mislabeling it. */
-  tooLarge?: boolean
-  /** newSize − oldSize (added ⇒ +newSize, removed ⇒ −oldSize); null when unknown. */
-  sizeDelta: number | null
-  diff?: string
-  /** Bounded callers may omit work before reading blobs or running jsdiff. */
-  diffOmitted?: 'input-budget' | 'diff-budget'
-  /** Bounded callers clip emitted text without hiding its original size. */
-  diffTruncated?: boolean
-  diffTotalChars?: number
-}
-
-/** getRunDiff result. `hasSnapshot` false ⇒ this run predates the feature
- *  (no recorded manifest) → the UI shows the degrade copy, not an empty diff. */
-export interface RunDiffResult {
-  hasSnapshot: boolean
-  files: RunDiffFile[]
-  /** Present for budgeted computation; total changed paths before file limiting. */
-  totalFiles?: number
-  truncated?: boolean
-  truncation?: { files: boolean; inputBytes: boolean; diffChars: boolean }
-  work?: { filesProcessed: number; inputBytes: number; emittedDiffChars: number }
-}
-
 export interface LoopPayload {
   name?: string
   tags?: string[]
@@ -217,7 +173,6 @@ export interface LoopPayload {
   model?: string | null
   reasoningEffort?: string | null
   prompt?: string
-  artifacts?: string[]
   enabled?: boolean
 }
 

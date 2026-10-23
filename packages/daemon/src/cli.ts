@@ -46,6 +46,8 @@ async function main(): Promise<number> {
       return (await import("./log.js")).runLog(r.args);
     case "show":
       return (await import("./show.js")).runShow(r.args);
+    case "memory":
+      return (await import("./memory.js")).runMemory(r.args);
     case "interactive":
       return (await import("./interactive.js")).runInteractive(r.argv);
     case "home":

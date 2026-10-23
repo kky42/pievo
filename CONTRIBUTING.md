@@ -8,7 +8,7 @@ must respect (invariants, testing policy, comment standard) are in
 ## Layout
 
 - `packages/server` (`@kky42/pievo-server`): TanStack Start dashboard, scheduler,
-  embedded PGlite database, blob store, and the `pievo-server` launcher.
+  embedded PGlite database, and the `pievo-server` launcher.
 - `packages/daemon` (`@kky42/pievo`): the `pievo` CLI, daemon, provider runner,
   and the bundled owner skill (`skill/`).
 - `scripts/`: shared development helpers.
@@ -57,9 +57,10 @@ behavior change done, exercise it for real:
    real agent, the cheapest suitable model, and a small prompt. Use the dashboard
    flow, the owner skill, or `pnpm dev:daemon new --json '<config>'`.
 4. Click **Run once** and watch it reach a terminal state. Check the reported
-   status, the run summary, `MEMORY.md` and artifact updates, their rendering and
-   diff in the dashboard, and any lifecycle action you touched (Pause, Start, Stop,
-   Delete).
+   status and attention, the run summary, the loop's `MEMORY.md` in the dashboard
+   memory panel and any "Memory not kept" notice on the run, the token curve on the
+   timeline, and any lifecycle action you touched
+   (Pause, Start, Stop, Delete).
 5. For dashboard changes, interact with the affected screens in the browser:
    loading, empty and error states, light and dark mode, and a narrow window (the
    page must never scroll horizontally).
@@ -74,15 +75,9 @@ behavior change done, exercise it for real:
   `83`). Then edit them between runs to drive each outcome: a value over a threshold
   (attention), the same value again (ok, nothing to flag), a removed file (block), and a changed
   format (a lesson worth remembering).
-- After each run, read `pnpm dev:daemon log <loop> --run <n>`, both loop files
-  (`file get`), and `show` (enabled, pauseCause, nextFire).
+- After each run, read `pnpm dev:daemon log <loop> --run <n>`, `memory <loop>`, and
+  `show` (enabled, pauseCause, nextFire).
 - Click **Run once** in the browser to start runs. There is no owner CLI for it.
-- TODO: `pnpm dev` answers any `/api/machine/run-files/*.md` request with Vite's
-  "Cannot GET" 404, so runs fail at the `MEMORY.md` download. Until that's fixed:
-  1. Run `pnpm build`.
-  2. Start the built server on the dev state:
-     `node packages/server/scripts/pievo-server.mjs start --foreground --host 127.0.0.1 --port 3001 --no-https --data-dir .pievo/development/server`.
-  3. After stopping it, wait for the old process to exit before starting it again.
 
 ### Owner skill
 
@@ -101,7 +96,7 @@ behavior change done, exercise it for real:
      `--allowedTools`, which consumes every argument after it.
    - Pi: `pi -p --model <model> --session-id <uuid> "/skill:pievo <request>"`,
      then the same `--session-id` with the confirmation.
-4. Read the created or edited loop back with `show --full` and `file get`, then run it
+4. Read the created or edited loop back with `show --full` and `memory`, then run it
    at least once.
 
 ## Database migrations
