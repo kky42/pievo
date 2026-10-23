@@ -8,7 +8,6 @@ import type {
   Loop,
   LoopSchedule,
   NewLoop,
-  StatusDefinitions,
 } from "../db/schema.js";
 import { CODING_AGENTS, coerceCodingAgent } from "../types.js";
 import { validateLoopTags } from "../lib/loopTags.js";
@@ -24,7 +23,6 @@ const LOOP_CONFIG_FIELDS = [
   "model",
   "reasoningEffort",
   "prompt",
-  "statusDefinitions",
   "artifacts",
   "enabled",
 ] as const;
@@ -43,7 +41,6 @@ export interface CanonicalLoopConfig {
   model: string | null;
   reasoningEffort: string | null;
   prompt: string;
-  statusDefinitions: StatusDefinitions;
   artifacts: string[];
   enabled: boolean;
 }
@@ -66,9 +63,6 @@ export interface ValidatedLoopCreate {
     | "model"
     | "reasoningEffort"
     | "prompt"
-    | "statusKeep"
-    | "statusNoChange"
-    | "statusBlock"
     | "artifacts"
     | "enabled"
   > & { timezone: string | null };
@@ -185,20 +179,6 @@ export function validateSchedule(value: unknown): Validation<LoopSchedule> {
   return { ok: false, detail: "schedule.mode must be cron|continuous" };
 }
 
-function validateStatusDefinitions(value: unknown): Validation<StatusDefinitions> {
-  const raw = object(value);
-  if (!raw) return { ok: false, detail: "statusDefinitions is required" };
-  const unknown = Object.keys(raw).filter((key) => !["keep", "noChange", "block"].includes(key));
-  if (unknown.length) return { ok: false, detail: `statusDefinitions has unknown field(s): ${unknown.join(", ")}` };
-  const keep = requiredText(raw.keep, "statusDefinitions.keep", true);
-  if (!keep.ok) return keep;
-  const noChange = requiredText(raw.noChange, "statusDefinitions.noChange", true);
-  if (!noChange.ok) return noChange;
-  const block = requiredText(raw.block, "statusDefinitions.block", true);
-  if (!block.ok) return block;
-  return { ok: true, value: { keep: keep.value, noChange: noChange.value, block: block.value } };
-}
-
 export function validateArtifactNames(value: unknown): Validation<string[]> {
   if (value === undefined || value === null) return { ok: true, value: [] };
   if (!Array.isArray(value)) return { ok: false, detail: "artifacts must be an array of file names" };
@@ -251,15 +231,10 @@ export function scheduleFromLoop(loop: Loop): LoopSchedule {
   throw new Error(`invariant: loop ${loop.id} has unknown schedule mode: ${String(loop.scheduleMode)}`);
 }
 
-function statusDefinitionsFromLoop(loop: Loop): StatusDefinitions {
-  return { keep: loop.statusKeep, noChange: loop.statusNoChange, block: loop.statusBlock };
-}
-
 export function canonicalLoopEnvelope(loop: Loop): CanonicalLoopConfig & { id: string } {
   return {
     ...canonicalLoopSummary(loop),
     prompt: loop.prompt,
-    statusDefinitions: statusDefinitionsFromLoop(loop),
     artifacts: loop.artifacts,
     enabled: loop.enabled,
   };
@@ -293,8 +268,6 @@ export function validateLoopCreate(value: unknown): Validation<ValidatedLoopCrea
   if (!prompt.ok) return prompt;
   const schedule = validateSchedule(raw.schedule);
   if (!schedule.ok) return schedule;
-  const statusDefinitions = validateStatusDefinitions(raw.statusDefinitions);
-  if (!statusDefinitions.ok) return statusDefinitions;
   const artifacts = validateArtifactNames(raw.artifacts);
   if (!artifacts.ok) return artifacts;
   const model = optionalProvider(raw.model, "model");
@@ -313,7 +286,6 @@ export function validateLoopCreate(value: unknown): Validation<ValidatedLoopCrea
     model: model.value,
     reasoningEffort: reasoningEffort.value,
     prompt: prompt.value,
-    statusDefinitions: statusDefinitions.value,
     artifacts: artifacts.value,
     enabled: raw.enabled !== false,
   };
@@ -330,9 +302,6 @@ export function validateLoopCreate(value: unknown): Validation<ValidatedLoopCrea
         model: config.model,
         reasoningEffort: config.reasoningEffort,
         prompt: config.prompt,
-        statusKeep: config.statusDefinitions.keep,
-        statusNoChange: config.statusDefinitions.noChange,
-        statusBlock: config.statusDefinitions.block,
         artifacts: config.artifacts,
         enabled: config.enabled,
       },
@@ -370,13 +339,6 @@ export function validateLoopEdit(loop: Loop, value: unknown): Validation<Partial
     const result = validateSchedule(raw.schedule);
     if (!result.ok) return result;
     Object.assign(update, rowSchedule(result.value, loop.cron));
-  }
-  if (raw.statusDefinitions !== undefined) {
-    const result = validateStatusDefinitions(raw.statusDefinitions);
-    if (!result.ok) return result;
-    update.statusKeep = result.value.keep;
-    update.statusNoChange = result.value.noChange;
-    update.statusBlock = result.value.block;
   }
   if (raw.artifacts !== undefined) {
     const result = validateArtifactNames(raw.artifacts);

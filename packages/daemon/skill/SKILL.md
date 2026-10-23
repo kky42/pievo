@@ -6,46 +6,45 @@ disable-model-invocation: true
 
 # Pievo owner workflow
 
-Pievo stores a prompt and schedule on the server, then asks the daemon on the user's
-machine to run one selected coding agent in one fixed working directory. A loop is
-serialized: cron occurrences may skip or coalesce one follow-up, while continuous
-waits until the prior run ends.
+A Pievo loop runs one stored prompt on a schedule, with one coding agent in one
+working directory on one machine. Runs of a loop never overlap.
 
-Use this skill for owner-side setup and management. Pievo supplies scheduled runs
-with their status and report instructions separately; keep those instructions out of
-the stored prompt.
+Use the CLI prefix the user gives; otherwise `pievo`. Written below as `<pievo-cli>`.
 
-Every loop has a server-owned `MEMORY.md` (its memory across runs, 8000 characters)
-and up to four text/code artifact files (256 KB each) the dashboard renders. Runs
-edit them in a private directory, not the workdir. The owner can read or repair them
-with `<pievo-cli> file get|set`.
+## What Pievo adds to every run
 
-- `MEMORY.md` is the loop's long-term experience: lessons runs learned the hard way
-  (pitfalls, workarounds, environment facts). Task instructions belong in the
-  prompt; state, results, baselines, trends, and history belong in an artifact.
-  Neither goes in memory.
-- `block` pauses the loop. Reserve it for "cannot continue safely". A finding the
-  owner should see while the loop keeps running is an `ATTENTION: <reason>` line,
-  which the run adds on its own; it works with any status.
+Pievo appends its own run contract to the stored prompt. Never restate any of it in
+a prompt:
 
-Be brief with the owner, who has to review everything you write. Use short tables or
-lists instead of paragraphs, show only the choices that need a decision, and don't
-echo help output or JSON back to them.
+- A run ends with `STATUS: ok` (finished, loop continues) or `STATUS: block` (cannot
+  continue safely without the owner; pauses the loop). Failed runs are recorded as
+  errors, and repeated errors pause the loop.
+- A run adds `ATTENTION: <reason>` when the owner should look at something. It flags
+  the run and never pauses the loop. Findings use attention, not block.
+- Loop files live in `$PIEVO_LOOP_DIR`, not in the workdir:
+  - `MEMORY.md` (8000 characters): lessons runs learned the hard way. No task
+    instructions, state, results, or history.
+  - Up to 4 artifacts (256 KB each): the files the dashboard shows. Task state,
+    results, baselines, and bounded history go here.
 
-Use this flow:
+## Flow
 
-1. **Understand** the task, desired outcome, and requested operation.
-2. **Inspect** the project, connection, existing loop, and real paths; do not guess.
-3. **Propose** the prompt and any missing tags, schedule, status, provider, or artifact choices
-   as one compact table, with a recommended default for each.
-4. **Confirm** choices with product meaning or side effects.
-5. **Consult help** with `<pievo-cli> <command> --help` for the installed command contract.
-6. **Dry-run** create/edit operations and inspect the normalized preview.
-7. **Mutate** only after confirmation and successful validation.
-8. **Show result** by reading the resulting loop state rather than trusting only an exit code.
+1. **Inspect** the project, connection, existing loops, and real paths. Do not guess.
+2. **Propose** the prompt and every open choice in one short table, each with a
+   recommended default.
+3. **Wait** for the owner's confirmation before any create, edit, file set, or
+   lifecycle change.
+4. **Check the contract** with `<pievo-cli> <command> --help`, then `--dry-run` and
+   fix every rejection.
+5. **Apply**, then read the result back (`show --json`) and report it.
 
-Read only the reference needed:
+Be brief: tables or short lists, only the decisions that matter, no echoed help or
+JSON. Leave out anything that is fine and anything the owner didn't ask about.
+
+## References
+
+Read only the one you need:
 
 - Connect this machine: `references/connect.md`
 - Create a loop: `references/create.md`
-- Inspect, edit, or operate a loop: `references/update.md`
+- Inspect, edit, repair, or operate a loop: `references/update.md`

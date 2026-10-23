@@ -106,7 +106,7 @@ test("an ordinary terminal does not enqueue hidden follow-up work", async () => 
     loopId: loop.id, machineId: loop.machineId,
     phase: "running", requestedBy: "system", ts: new Date().toISOString(),
   });
-  await store.finalizeRunningRun(loop.id, running.id, { phase: "done", status: "keep", ts: new Date().toISOString() });
+  await store.finalizeRunningRun(loop.id, running.id, { phase: "done", status: "ok", ts: new Date().toISOString() });
   expect(await pending(loop.id)).toHaveLength(0);
 });
 
@@ -165,7 +165,7 @@ test("continuous activation, claim, terminal, and due transitions use nextCadenc
   const terminal = await store.finalizeRunningRun(
     loop.id,
     item.run.id,
-    { phase: "done", ts: terminalAt },
+    { phase: "done", status: "ok", ts: terminalAt },
     {},
     tokens.sha256(item.runToken),
   );
@@ -287,7 +287,7 @@ test("failure streak ordering uses runIndex rather than timestamps", async () =>
   });
   await store.addRun({
     loopId: loop.id, machineId: loop.machineId,
-    phase: "done", requestedBy: "system", ts: "2020-01-01T00:00:00Z",
+    phase: "done", status: "ok", requestedBy: "system", ts: "2020-01-01T00:00:00Z",
   });
   const running = await store.addRun({
     loopId: loop.id, machineId: loop.machineId,
@@ -325,7 +325,7 @@ test("terminal-grace fences due cadence until one late reconcile retimes it", as
     loop.id,
     running.id,
     tokens.sha256(token),
-    { phase: "done", error: null, ts: actualAt },
+    { phase: "done", status: "ok", error: null, ts: actualAt },
   );
   expect(reconciled?.loop.nextCadenceAt).toBe(new Date(Date.parse(actualAt) + 5 * 60_000).toISOString());
   expect(await tokens.resolveLease(token)).toBeUndefined();
@@ -348,7 +348,7 @@ test("expired terminal-grace cannot reconcile after a successor claim", async ()
     loop.id,
     old.id,
     tokens.sha256(token),
-    { phase: "done", error: null, ts: new Date().toISOString() },
+    { phase: "done", status: "ok", error: null, ts: new Date().toISOString() },
   );
   expect(reconciled).toBeUndefined();
   expect((await store.getRun(old.id))?.phase).toBe("error");

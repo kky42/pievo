@@ -35,6 +35,6 @@ async function seeded() {
 test("detail selector is loop-scoped", async () => {
   const { machine, loop } = await seeded();
   const other = await store.createLoop({ workdir: "/work", machineId: machine.id, name: "Other", cron: "0 0 * * *", enabled: true });
-  const foreign = await store.addRun({ loopId: other.id, machineId: machine.id, phase: "done", ts: "2026-01-04T00:00:00Z" });
+  const foreign = await store.addRun({ loopId: other.id, machineId: machine.id, phase: "done", status: "ok", ts: "2026-01-04T00:00:00Z" });
   expect((await history.readLoopHistory(loop, { run: foreign.id, json: true })).status).toBe(404);
 });

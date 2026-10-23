@@ -155,9 +155,6 @@ export function testStore(store: StoreModule): TestStore {
         : scheduleMode === "cron" ? "UTC" : null;
       return store.createLoop({
         prompt: "Test prompt.",
-        statusKeep: "Keep the test result.",
-        statusNoChange: "No test change was needed.",
-        statusBlock: "The test needs owner input.",
         agent: "claude-code",
         cronOverlap: "queue-one",
         continuousDelayMinutes: 1,

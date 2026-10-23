@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { useSyncExternalStore } from 'react'
 import type { RunSummary } from '../types'
-import { dotColor, dotLabel, dotOpacity } from '../lib/format'
+import { dotColor, dotLabel, runPulseAnim, runSwatch } from '../lib/format'
 
 /*
  * Hydration gate. `fmt`/`rel`/`until` (lib/format) read the wall clock and the
@@ -39,15 +39,10 @@ export const labelCls = 'mb-1.5 mt-3 block text-label font-medium text-secondary
 export const inputCls = `w-full rounded-control border border-wire bg-surface px-3 py-2.5 text-sm text-primary outline-none transition-shadow focus:border-transparent focus:shadow-focus`
 export const selectCls = `${inputCls} lp-select cursor-pointer`
 
-/**
- * The live "running" pulse — a display-ink fill breathing via the `runPulse`
- * keyframe (app.css). Shared so the in-flight timeline block and the Running
- * badge stay in lockstep. Spread into a `style` prop.
- */
-export const runPulseAnim = { animation: 'runPulse 1.1s ease-in-out infinite' } as const
-
+/** The live "running" indicator outside the timeline: the same ink fill and
+ *  `runPulse` breath as the in-flight run block. Spread into a `style` prop. */
 export const runPulseStyle = {
-  background: 'var(--color-rubik-yellow)',
+  background: 'var(--color-run-active)',
   ...runPulseAnim,
 } as const
 
@@ -81,8 +76,7 @@ const PILL_TONES = {
   neutral: 'bg-raised text-secondary',
   ink: 'bg-raised text-primary',
   outline: 'border border-hairline text-secondary',
-  running: 'bg-running-soft text-running',
-  attention: 'bg-running-soft text-running',
+  attention: 'bg-attention-soft text-attention',
   success: 'bg-success-soft text-success',
   accent: 'bg-accent-soft text-accent',
   warn: 'bg-warn-soft text-warn',
@@ -90,13 +84,11 @@ const PILL_TONES = {
 
 export function Pill({
   tone = 'neutral',
-  dot,
   title,
   className = '',
   children,
 }: {
   tone?: keyof typeof PILL_TONES
-  dot?: 'pulse' | 'green'
   title?: string
   className?: string
   children: ReactNode
@@ -106,12 +98,6 @@ export function Pill({
       title={title}
       className={`inline-flex h-[22px] items-center gap-1.5 rounded-full px-2.5 text-caption font-medium ${PILL_TONES[tone]} ${className}`}
     >
-      {dot && (
-        <span
-          className="size-1.5 rounded-full"
-          style={dot === 'pulse' ? runPulseStyle : { background: 'var(--color-rubik-green)' }}
-        />
-      )}
       {children}
     </span>
   )
@@ -142,7 +128,7 @@ export function StatusPill({ run, colorText }: { run: RunSummary; colorText?: bo
       className="inline-flex items-center gap-1.5 font-medium"
       style={colorText ? { color: dotColor(run) } : undefined}
     >
-      <span className="size-2 rounded-full" style={{ background: dotColor(run), opacity: dotOpacity(run) }} />
+      <span className="size-2 rounded-full" style={runSwatch(run)} />
       {dotLabel(run)}
     </span>
   )

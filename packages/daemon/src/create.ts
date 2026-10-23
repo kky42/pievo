@@ -100,7 +100,7 @@ export async function runCreate(args: string[], deps: CreateDeps = {}): Promise<
     return 1;
   }
   if (!raw.trim()) {
-    process.stderr.write("pievo: --json needs the loop config object (including schedule, agent, prompt, and statusDefinitions)\n");
+    process.stderr.write("pievo: --json needs the loop config object (including name, schedule, workdir, agent, and prompt)\n");
     return 2;
   }
   let config: Record<string, unknown>;

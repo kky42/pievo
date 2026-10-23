@@ -337,7 +337,7 @@ test("terminal reports are idempotent, conflict-safe, and preserve actual post-c
   const token = await tokens.registerRunLease({ runId: run.id, loopId: loop.id, machineId: machine.id });
   await store.requestRunCancel(loop.id, run.id);
   const reportId = "018f47a2-9c2b-7d11-8f52-123456789abc";
-  const payload = { reportId, runId: run.id, result: "success" as const, durationMs: 12, finalText: "completed despite cancellation\nSTATUS: keep" };
+  const payload = { reportId, runId: run.id, result: "success" as const, durationMs: 12, finalText: "completed despite cancellation\nSTATUS: ok" };
   const gw = gateway();
 
   const first = await gw.report(token, payload);
@@ -347,7 +347,7 @@ test("terminal reports are idempotent, conflict-safe, and preserve actual post-c
   expect(first.status).toBe(200);
   expect(duplicate).toEqual(first);
   expect(conflict).toEqual(first);
-  expect(await store.getRun(run.id)).toMatchObject({ phase: "done", status: "keep", message: "completed despite cancellation" });
+  expect(await store.getRun(run.id)).toMatchObject({ phase: "done", status: "ok", message: "completed despite cancellation" });
   expect(await store.countReportReceipts()).toBe(1);
 });
 
@@ -363,8 +363,8 @@ test("same reportId is bound to runId and concurrent cross-loop reports finalize
   const reportId = "018f47a2-9c2b-7d11-8f52-123456789aa3";
 
   const settled = await Promise.allSettled([
-    gateway().report(aToken, { reportId, runId: a.id, result: "success", finalText: "a complete\nSTATUS: keep" }),
-    gateway().report(bToken, { reportId, runId: b.id, result: "success", finalText: "b complete\nSTATUS: keep" }),
+    gateway().report(aToken, { reportId, runId: a.id, result: "success", finalText: "a complete\nSTATUS: ok" }),
+    gateway().report(bToken, { reportId, runId: b.id, result: "success", finalText: "b complete\nSTATUS: ok" }),
   ]);
   expect(settled.every((result) => result.status === "fulfilled")).toBe(true);
   const responses = settled.map((result) => (result as PromiseFulfilledResult<any>).value);

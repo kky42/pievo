@@ -90,7 +90,7 @@ export function LoopOverview({
         <RecentUsage usage={loop.recentUsage} />
       </div>
 
-      {attention && <div className="mt-1.5 truncate text-meta font-medium text-running" title={attention}>! {attention}</div>}
+      {attention && <div className="mt-1.5 truncate text-meta font-medium text-attention" title={attention}>! {attention}</div>}
 
       {latestIncidentRun?.reportIncident && (
         <div className="mt-1.5 text-meta text-secondary">

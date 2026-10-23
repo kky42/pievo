@@ -23,8 +23,8 @@ in code, or in tests.
   server launcher may run the local `tailscale` CLI (bounded) to publish HTTPS;
   request handling never spawns processes.
 - A loop has one exclusive cron or continuous schedule, one machine/workdir/agent,
-  a non-empty stored prompt, all three status definitions, optional model/effort and
-  up to four artifact file names, and an enabled state.
+  a non-empty stored prompt, optional model/effort, up to four artifact file names,
+  and an enabled state.
   `packages/server/src/gateway/loopConfig.ts` is the canonical create/edit validator;
   unknown keys fail.
 - Database cadence facts and durable pending runs are authoritative. Timers and
@@ -34,10 +34,10 @@ in code, or in tests.
   cancellation intent; running becomes canceled only with daemon proof. Delete never
   removes local project files. Preserve `store.forceDeleteLoop` as the authority-
   retirement path used by owner/server lifecycle flows.
-- Delivery is the stored prompt unchanged, status definitions, the loop-file
-  contract, and the final-line `STATUS: keep|no-change|block` contract
-  (`gateway/prompt.ts`). The status comes only from the provider's final response;
-  runs have no CLI. A provider launches once, without retry or session resume.
+- Delivery is the stored prompt unchanged, the loop-file contract, and the
+  final-line `STATUS: ok|block` contract (`gateway/prompt.ts`). The status comes
+  only from the provider's final response; a run is `done` exactly when it reported
+  one, and a missing status line is an `error`. Runs have no CLI. A provider launches once, without retry or session resume.
 - Protocol v5 recovery and the daemon SQLite outbox make terminal reports durable.
   Lease/report/lifecycle transitions stay loop-locked. Breaking protocol behavior
   requires updating `gateway/protocol.ts` and the matching daemon release together.
@@ -82,8 +82,8 @@ that a change works is an end-to-end run, not a unit test. Follow the recipe in
   in-loop agents run them. A change to either side's instructions can break the
   other, so a loop created through the skill should also be run.
 - **Design scenarios, not a single run.** Shape workdir inputs so successive runs hit
-  every outcome the change affects: keep, no-change, block, attention, a failure, and
-  a messy input that teaches a real lesson. Change the inputs between runs. Seed
+  every outcome the change affects: ok, block, attention, a failure, and a messy
+  input that teaches a real lesson. Change the inputs between runs. Seed
   realistic bad state with `file set` and `edit` (bloated memory, a `block` used for
   findings) when testing repair.
 - **Judge results against the design, not exit codes.** Check:

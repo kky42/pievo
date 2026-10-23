@@ -113,7 +113,7 @@ test("GC keeps a blob a retained snapshot still references, then reclaims it onc
   const hash = await putBlob(blobs, "report v1");
 
   await putArtifact({ loopId: loop.id, path: "report.md", hash, size: 9 });
-  const run = (await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: new Date().toISOString() }));
+  const run = (await store.addRun({ loopId: loop.id, machineId, phase: "done", status: "ok", ts: new Date().toISOString() }));
   (await store.putRunSnapshot(run.id, loop.id, { "report.md": { hash, size: 9, binary: false, oversize: false } }));
   await keepOnlyArtifacts(loop.id, []);
 
@@ -181,7 +181,7 @@ test("snapshot retention prunes the oldest beyond the window, keeps the newest N
   const { loop, machineId } = (await seed());
   const ids: string[] = [];
   for (let i = 0; i < 5; i++) {
-    const run = (await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: new Date().toISOString() }));
+    const run = (await store.addRun({ loopId: loop.id, machineId, phase: "done", status: "ok", ts: new Date().toISOString() }));
     (await store.putRunSnapshot(run.id, loop.id, {}));
     ids.push(run.id);
     await new Promise((r) => setTimeout(r, 5));
@@ -202,7 +202,7 @@ test("pruneSnapshots applies the window across every loop", async () => {
   const l2 = (await store.createLoop({ workdir: "/work", machineId, name: "L2", cron: "0 0 1 1 *", enabled: true }));
   for (const loopId of [l2.id]) {
     for (let i = 0; i < 4; i++) {
-      const run = (await store.addRun({ loopId, machineId, phase: "done", ts: new Date().toISOString() }));
+      const run = (await store.addRun({ loopId, machineId, phase: "done", status: "ok", ts: new Date().toISOString() }));
       (await store.putRunSnapshot(run.id, loopId, {}));
       await new Promise((r) => setTimeout(r, 5));
     }
@@ -214,7 +214,7 @@ test("pruneRunSnapshots handles a large backlog without a per-victim bound-varia
   const { loop, machineId } = (await seed());
   const N = 1200;
   for (let i = 0; i < N; i++) {
-    const run = (await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: new Date().toISOString() }));
+    const run = (await store.addRun({ loopId: loop.id, machineId, phase: "done", status: "ok", ts: new Date().toISOString() }));
     (await store.putRunSnapshot(run.id, loop.id, {}));
   }
   // Prune to the window in ONE statement — the delete binds only the survivors (≤20),
@@ -234,7 +234,7 @@ test("GC spares a blob a snapshot comes to reference MID-PASS (per-candidate sna
   await store.recordBlob(h1, c1.length);
   await base.put(h2, Buffer.from(c2));
   await store.recordBlob(h2, c2.length);
-  const run = (await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: new Date().toISOString() }));
+  const run = (await store.addRun({ loopId: loop.id, machineId, phase: "done", status: "ok", ts: new Date().toISOString() }));
 
   // While the FIRST garbage blob's bytes are being deleted, a report() captures the
   // SECOND garbage hash into a retained snapshot — the GC-check-time race that the
@@ -265,7 +265,7 @@ test("deleting a loop cascades runs/artifact_files/run_snapshots so its blobs be
   const hash = await putBlob(blobs, "doomed loop content");
 
   await putArtifact({ loopId: loop.id, path: "f.md", hash, size: 19 });
-  const run = (await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: new Date().toISOString() }));
+  const run = (await store.addRun({ loopId: loop.id, machineId, phase: "done", status: "ok", ts: new Date().toISOString() }));
   (await store.putRunSnapshot(run.id, loop.id, { "f.md": { hash, size: 19, binary: false, oversize: false } }));
   expect(await retention.gcBlobs(blobs, FORCE)).toBe(0);
 
@@ -338,10 +338,10 @@ test("maintainStorage prunes snapshots then reclaims the blobs they freed", asyn
 
   const old = await putBlob(blobs, "old run content");
   const recent = await putBlob(blobs, "recent run content");
-  const r1 = (await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: new Date().toISOString() }));
+  const r1 = (await store.addRun({ loopId: loop.id, machineId, phase: "done", status: "ok", ts: new Date().toISOString() }));
   (await store.putRunSnapshot(r1.id, loop.id, { "f.md": { hash: old, size: 15, binary: false, oversize: false } }));
   await new Promise((r) => setTimeout(r, 5));
-  const r2 = (await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: new Date().toISOString() }));
+  const r2 = (await store.addRun({ loopId: loop.id, machineId, phase: "done", status: "ok", ts: new Date().toISOString() }));
   (await store.putRunSnapshot(r2.id, loop.id, { "f.md": { hash: recent, size: 18, binary: false, oversize: false } }));
 
   // Window of 1: prune the older snapshot → its blob `old` becomes collectable.

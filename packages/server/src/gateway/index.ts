@@ -219,7 +219,7 @@ function incidentDiagnosis(
   return { at: nowIso(), code, reason, issues, reportId, payloadDigest, faultDomain, recommendedAction };
 }
 
-const MISSING_STATUS_ERROR = 'run protocol incomplete: the final response has no "STATUS: keep|no-change|block" line';
+const MISSING_STATUS_ERROR = 'run protocol incomplete: the final response has no "STATUS: ok|block" line';
 
 /** The run outcome a terminal report establishes. Only a successful provider
  * exit is read for a status; a successful exit without one is a protocol error. */
@@ -682,7 +682,6 @@ export class MachineGateway {
       tags?: unknown;
       schedule?: unknown;
       prompt?: unknown;
-      statusDefinitions?: unknown;
       artifacts?: unknown;
       enabled?: unknown;
       model?: unknown;
@@ -797,7 +796,6 @@ export class MachineGateway {
       tags?: unknown;
       schedule?: unknown;
       prompt?: unknown;
-      statusDefinitions?: unknown;
       artifacts?: unknown;
       workdir?: unknown;
       model?: unknown;
@@ -1347,10 +1345,8 @@ function renderLoopsText(loops: LoopListRecord[], fields: string[]): string {
 }
 
 export function runResultToken(r: { phase: string; status: string | null }): string {
-  if (r.status === "block") return `block/${r.phase}`;
-  if (r.phase === "canceled") return "canceled";
-  const base = r.phase === "error" ? "failed" : r.phase === "done" ? "ok" : r.phase;
-  return r.status ? `${base}/${r.status}` : `${base}/missing-status`;
+  if (r.phase === "error") return "failed";
+  return r.status ?? r.phase;
 }
 
 /** Stable JSON with recursively sorted object keys — so two structurally-equal values

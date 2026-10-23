@@ -15,7 +15,7 @@ import type {
   ReportIncident,
   ReportIncidentDisposition,
 } from "../types.js";
-export type { CodingAgent, CronOverlap, LoopSchedule, RunPhase, RunStatus, StatusDefinitions } from "../types.js";
+export type { CodingAgent, CronOverlap, LoopSchedule, RunPhase, RunStatus } from "../types.js";
 
 export interface RunUsage {
   inputTokens?: number;
@@ -61,9 +61,6 @@ export const loops = pgTable(
     name: text("name").notNull(),
     tags: text("tags").array().notNull().default(sql`ARRAY[]::text[]`),
     prompt: text("prompt").notNull(),
-    statusKeep: text("status_keep").notNull(),
-    statusNoChange: text("status_no_change").notNull(),
-    statusBlock: text("status_block").notNull(),
     /** Configured artifact names, in addition to the always-present MEMORY.md.
      *  See `gateway/loopFiles.ts`. */
     artifacts: jsonb("artifacts").$type<string[]>().notNull().default([]),
@@ -123,7 +120,7 @@ export const runs = pgTable(
     ts: text("ts").notNull(),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP::text`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP::text`),
-    status: text("status", { enum: ["keep", "no-change", "block"] }),
+    status: text("status", { enum: ["ok", "block"] }),
     message: text("message"),
     /** Owner-facing reason from the final response's ATTENTION line. Independent
      *  of status: it never pauses the loop. */
@@ -156,7 +153,9 @@ export const runs = pgTable(
     check("runs_agent_check", sql`${t.agent} IS NULL OR ${t.agent} IN ('claude-code', 'codex', 'pi')`),
     check("runs_phase_check", sql`${t.phase} IN ('pending', 'running', 'done', 'error', 'canceled')`),
     check("runs_requested_by_check", sql`${t.requestedBy} IN ('owner', 'system')`),
-    check("runs_status_check", sql`${t.status} IS NULL OR ${t.status} IN ('keep', 'no-change', 'block')`),
+    check("runs_status_check", sql`${t.status} IS NULL OR ${t.status} IN ('ok', 'block')`),
+    // Only a run that completed the final-line contract has a status.
+    check("runs_done_status_check", sql`(${t.phase} = 'done') = (${t.status} IS NOT NULL)`),
   ],
 );
 

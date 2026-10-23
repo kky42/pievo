@@ -72,7 +72,7 @@ behavior change done, exercise it for real:
   seeded files, transcripts.
 - Make the workdir inputs small files the prompt reads (for example `disk.txt` holding
   `83`). Then edit them between runs to drive each outcome: a value over a threshold
-  (attention), the same value again (no-change), a removed file (block), and a changed
+  (attention), the same value again (ok, nothing to flag), a removed file (block), and a changed
   format (a lesson worth remembering).
 - After each run, read `pnpm dev:daemon log <loop> --run <n>`, both loop files
   (`file get`), and `show` (enabled, pauseCause, nextFire).

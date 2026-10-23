@@ -1,5 +1,5 @@
 import { forwardRef, useId, useImperativeHandle, useRef, useState } from 'react'
-import type { CodingAgent, LoopPayload, LoopSchedule, StatusDefinitions } from '../types'
+import type { CodingAgent, LoopPayload, LoopSchedule } from '../types'
 import { CODING_AGENTS, MAX_LOOP_TAGS } from '../types'
 import { validateLoopTags } from '../lib/loopTags'
 import { focusRing, inputCls, labelCls, sectionHeadCls, selectCls } from './ui'
@@ -17,7 +17,6 @@ export interface LoopFormSeed {
   model?: string | null
   reasoningEffort?: string | null
   prompt?: string
-  statusDefinitions?: StatusDefinitions
   artifacts?: string[]
   enabled?: boolean
 }
@@ -36,9 +35,6 @@ interface FormState {
   model: string
   reasoningEffort: string
   prompt: string
-  keep: string
-  noChange: string
-  block: string
   artifacts: string
 }
 
@@ -61,9 +57,6 @@ function initState(initial?: LoopFormSeed): FormState {
     model: initial?.model ?? '',
     reasoningEffort: initial?.reasoningEffort ?? '',
     prompt: initial?.prompt ?? '',
-    keep: initial?.statusDefinitions?.keep ?? '',
-    noChange: initial?.statusDefinitions?.noChange ?? '',
-    block: initial?.statusDefinitions?.block ?? '',
     artifacts: (initial?.artifacts ?? []).join('\n'),
   }
 }
@@ -134,7 +127,6 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed }>(f
     read(): LoopPayload | null {
       const required = [
         ['Name', form.name], ['Working directory', form.workdir], ['Prompt', form.prompt],
-        ['Keep definition', form.keep], ['No-change definition', form.noChange], ['Block definition', form.block],
       ] as const
       const missing = required.find(([, value]) => !value.trim())
       if (missing) {
@@ -169,7 +161,6 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed }>(f
         model: form.model.trim() || null,
         reasoningEffort: form.reasoningEffort.trim() || null,
         prompt: form.prompt,
-        statusDefinitions: { keep: form.keep, noChange: form.noChange, block: form.block },
         artifacts: form.artifacts.split(/\r?\n/).filter((name) => name.length > 0),
       }
     },
@@ -274,10 +265,6 @@ export const LoopForm = forwardRef<LoopFormHandle, { initial?: LoopFormSeed }>(f
       <div className="min-w-0">
         <Section title="Prompt" hint="Sent unchanged before Pievo appends the report contract." />
         <TextArea label="User prompt" value={form.prompt} onChange={(value) => set('prompt', value)} rows={10} />
-        <Section title="Status definitions" hint="All three definitions are required and are appended to every run." />
-        <TextArea label="keep" value={form.keep} onChange={(value) => set('keep', value)} rows={2} />
-        <TextArea label="no-change" value={form.noChange} onChange={(value) => set('noChange', value)} rows={2} />
-        <TextArea label="block" value={form.block} onChange={(value) => set('block', value)} rows={2} />
         <Section title="Artifacts" hint="Optional text/code file names such as .md, .html, .sh, .py, .json, or .csv (up to 4, 256 KB each) that runs update and the dashboard renders. One name per line. Every loop also has MEMORY.md." />
         <TextArea label="Artifact files" value={form.artifacts} onChange={(value) => set('artifacts', value)} rows={6} mono />
         {error && <div className="mt-4 text-body text-accent">{error}</div>}

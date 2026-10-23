@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import type { CodingAgent, LoopDetail, RunSummary } from '../types'
-import { dotColor, dotLabel, dur, rel, tsShort } from '../lib/format'
+import { dotLabel, dur, rel, runSwatch, tsShort } from '../lib/format'
 import { mergeRuns } from '../lib/runs'
 import { DAEMON_UPGRADE_REQUIRED, daemonStopSupport, deriveLoopLifecycle } from '../lib/lifecycleUi'
 import { deleteLoop, getLoopDetail, loadOlderRuns, patchLoop, pauseLoop, runLoop, startLoop, stopLoop } from '../server/loopApi'
@@ -186,7 +186,6 @@ export function LoopDetailView({ id }: { id: string }) {
           <Config label="Agent">{AGENT_LABEL[loop.agent]}</Config>
           <Config label="Model / effort">{model} / {effort}</Config>
           <Config label="Prompt"><pre className="whitespace-pre-wrap break-words font-sans">{loop.prompt}</pre></Config>
-          <Config label="Status definitions"><ul className="space-y-1"><li><b>keep:</b> {loop.statusDefinitions.keep}</li><li><b>no-change:</b> {loop.statusDefinitions.noChange}</li><li><b>block:</b> {loop.statusDefinitions.block}</li></ul></Config>
           <Config label="Artifacts">{loop.artifacts.length ? <ul className="space-y-1">{loop.artifacts.map((name) => <li key={name}><code className="break-all font-mono">{name}</code></li>)}</ul> : <span className="text-disabled">None</span>}</Config>
         </dl>
       </section>
@@ -205,7 +204,7 @@ function MachineBanner({ text, action, onAction, tone }: { text: string; action:
 }
 
 function EditHead({ name, onBack }: { name: string; onBack: () => void }) {
-  return <div><button type="button" onClick={onBack} className={btnQuiet}><span aria-hidden>←</span> Back to loop</button><h1 className="mt-2.5 text-[24px] font-semibold text-display">Settings · {name}</h1><p className="mt-1.5 text-meta text-secondary">Edit tags, schedule, execution settings, prompt, status definitions, and artifact files.</p></div>
+  return <div><button type="button" onClick={onBack} className={btnQuiet}><span aria-hidden>←</span> Back to loop</button><h1 className="mt-2.5 text-[24px] font-semibold text-display">Settings · {name}</h1><p className="mt-1.5 text-meta text-secondary">Edit tags, schedule, execution settings, prompt, and artifact files.</p></div>
 }
 
 function Shell({ back, children }: { back: React.ReactNode; children: React.ReactNode }) {
@@ -221,7 +220,7 @@ function RunsSection({ loopId, summary, runs, older, onMore, onPickRun }: { loop
         <div className="rounded-card border border-hairline bg-surface px-5 pb-4 pt-5 shadow-card">
           <Timeline loop={summary} runs={stripRuns} total={summary.runCount} onLoadMore={onMore} onPickRun={onPickRun} />
           <ul className="mt-5 max-h-[clamp(280px,46vh,520px)] divide-y divide-hairline overflow-y-auto border-t border-hairline">
-            {runs.map((run) => <li key={run.id}><Link to="/loops/$loopId/runs/$runId" params={{ loopId, runId: run.id }} className="flex items-start gap-2.5 py-2.5 hover:bg-raised"><span className="mt-1 inline-block size-2.5 shrink-0 rounded-[2px]" style={{ background: dotColor(run) }} title={dotLabel(run)} /><span className="min-w-0 flex-1"><span className="flex justify-between gap-2"><span className="font-mono text-label text-secondary">{tsShort(run.ts)}</span><span className="font-mono text-caption text-disabled">{dur(run.durationMs)}</span></span><span className="mt-0.5 block line-clamp-2 text-meta text-primary">{run.phase === 'pending' ? 'Queued' : run.phase === 'running' ? <span className="inline-flex items-center gap-2"><span className="size-1.5 rounded-full" style={runPulseStyle} />Running</span> : run.attention ? <span className="font-medium text-running">! {run.attention}</span> : run.error || run.message || dotLabel(run)}</span></span></Link></li>)}
+            {runs.map((run) => <li key={run.id}><Link to="/loops/$loopId/runs/$runId" params={{ loopId, runId: run.id }} className="flex items-start gap-2.5 py-2.5 hover:bg-raised"><span className="mt-1 inline-block size-2.5 shrink-0 rounded-[2px]" style={runSwatch(run)} title={dotLabel(run)} /><span className="min-w-0 flex-1"><span className="flex justify-between gap-2"><span className="font-mono text-label text-secondary">{tsShort(run.ts)}</span><span className="font-mono text-caption text-disabled">{dur(run.durationMs)}</span></span><span className="mt-0.5 block line-clamp-2 text-meta text-primary">{run.phase === 'pending' ? 'Queued' : run.phase === 'running' ? <span className="inline-flex items-center gap-2"><span className="size-1.5 rounded-full" style={runPulseStyle} />Running</span> : run.attention ? <span className="font-medium text-attention">! {run.attention}</span> : run.error || run.message || dotLabel(run)}</span></span></Link></li>)}
           </ul>
         </div>
       )}

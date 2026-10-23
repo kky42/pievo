@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Tooltip } from '@base-ui/react/tooltip'
 import type { LoopSummary, RunSummary } from '../types'
-import { dotColor, dotLabel, dotOpacity, dur, fmt, until } from '../lib/format'
-import { AttentionMark, runPulseAnim, useHydrated } from './ui'
+import { dotLabel, dur, fmt, runSwatch, until } from '../lib/format'
+import { AttentionMark, useHydrated } from './ui'
 
 /*
  * One block per run, at most WINDOW at a time. Overflow collapses into "+N" pagers
@@ -30,7 +30,7 @@ function RunSeg({ run, onClick }: { run: RunSummary; onClick: () => void }) {
             }}
             aria-label={run.attention ? `${dotLabel(run)} · needs attention` : dotLabel(run)}
             className={`${SEG} relative flex cursor-pointer items-center justify-center transition-opacity hover:opacity-70`}
-            style={{ background: dotColor(run), opacity: dotOpacity(run), ...(run.phase === 'running' ? runPulseAnim : {}) }}
+            style={runSwatch(run)}
           >
             {run.attention && <AttentionMark />}
           </button>
@@ -40,14 +40,14 @@ function RunSeg({ run, onClick }: { run: RunSummary; onClick: () => void }) {
         <Tooltip.Positioner sideOffset={8}>
           <Tooltip.Popup className="glass-strong pointer-events-none max-w-[340px] rounded-control px-3.5 py-2.5 text-meta leading-snug text-primary">
             <div className="flex items-center gap-1.5 font-medium">
-              <span className="size-2 shrink-0 rounded-[2px]" style={{ background: dotColor(run) }} />
+              <span className="size-2 shrink-0 rounded-[2px]" style={runSwatch(run)} />
               {dotLabel(run)}
               <span className="ml-auto whitespace-nowrap pl-3 font-mono text-caption font-normal text-secondary">
                 {fmt(run.ts)}
                 {meta}
               </span>
             </div>
-            {run.attention && <div className="mt-1.5 break-words font-medium text-running">! {run.attention}</div>}
+            {run.attention && <div className="mt-1.5 break-words font-medium text-attention">! {run.attention}</div>}
             {body && (
               <div
                 className={`mt-1.5 max-h-[150px] overflow-hidden whitespace-pre-wrap ${
@@ -142,9 +142,12 @@ export function Timeline({
   // pulsing RunSeg in `visible` and settles into its finished color in place once
   // the report lands. We only need the flag here to suppress the next-run marker
   // while it executes (the live block already stands in for "what's next").
-  const running = !!(loop.running || loop.queued) && atLatest
+  // Blocking reconciliation fences the cadence until the machine recovers, so its
+  // next-run time is not real either; report-only reconciliation does not.
+  const running = !!(loop.running || loop.queued || loop.reconciliationBlocking) && atLatest
 
   const showNext = atLatest && en && !!loop.nextRun && !running
+  const showPaused = atLatest && !en && !running && loop.deleteRequestedAt == null
 
   return (
     // A full WINDOW of fixed-width blocks can be wider than a narrow rail (the loop
@@ -164,6 +167,15 @@ export function Timeline({
             title={hydrated ? `Next scheduled run · ${fmt(loop.nextRun)}` : undefined}
           />
           <span className="text-caption text-disabled">{hydrated ? until(loop.nextRun) : ''}</span>
+        </div>
+      ) : showPaused ? (
+        <div className="ml-1 flex items-center gap-2" title="Paused: no runs are scheduled until the loop is started">
+          <span className="w-8 border-t border-dashed border-wire" />
+          <span aria-hidden className="flex gap-[2px]">
+            <span className="h-[11px] w-[3px] rounded-[1px] bg-secondary" />
+            <span className="h-[11px] w-[3px] rounded-[1px] bg-secondary" />
+          </span>
+          <span className="text-caption text-secondary">paused</span>
         </div>
       ) : (
         !atLatest && <Pager count={newerHidden} onClick={pageFwd} />

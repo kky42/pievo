@@ -25,7 +25,7 @@ describe("runCallback — in-run shim refusal", () => {
   const stderr = () => errSpy.mock.calls.map((call) => String(call[0])).join("");
 
   test.each([
-    ["report", "--status", "keep", "--message", "done"],
+    ["report", "--status", "ok", "--message", "done"],
     ["report", "--help"],
     ["log"],
     [],
@@ -33,7 +33,7 @@ describe("runCallback — in-run shim refusal", () => {
     expect(await runCallback(argv)).toBe(2);
     expect(stderr()).toMatch(/commands are not available inside a Pievo run/);
     expect(stderr()).toContain("$PIEVO_LOOP_DIR");
-    expect(stderr()).toContain("STATUS: keep|no-change|block");
+    expect(stderr()).toContain("STATUS: ok|block");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

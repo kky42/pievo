@@ -1,7 +1,7 @@
 import { and, desc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 
 import { db } from "../db/index.js";
-import { runs, type Loop, type Run, type RunUsage } from "../db/schema.js";
+import { runs, type Loop, type Run, type RunStatus, type RunUsage } from "../db/schema.js";
 import * as store from "../db/store.js";
 import { computeRunDiff } from "../server/runDiff.js";
 import { detailBlock, doc, emptyList, helpBlock, listBlock, scalar, truncate } from "./toon.js";
@@ -16,7 +16,7 @@ export const HISTORY_DIFF_INPUT_BYTES_MAX = 2 * 1024 * 1024;
 export const HISTORY_JSON_TEXT_CAP = 512 * 1024;
 
 const TERMINAL_PHASES = ["done", "error", "canceled"] as const;
-const STATUSES = ["keep", "no-change", "block"] as const;
+const STATUSES = ["ok", "block"] as const;
 const LOG_FLAGS = new Set(["_", "loop", "help", "run", "diff", "since", "until", "status", "phase", "limit", "json"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -28,7 +28,7 @@ type HistoryQuery = {
   run?: number | string;
   since?: string;
   until?: string;
-  status?: "keep" | "no-change" | "block";
+  status?: RunStatus;
   phase?: "done" | "error" | "canceled";
   limit: number;
 };
@@ -70,7 +70,7 @@ export function parseHistoryFlags(flags: Flags): Parsed {
 
   const status = flags.status;
   if (status !== undefined && (typeof status !== "string" || !(STATUSES as readonly string[]).includes(status))) {
-    return { ok: false, error: "--status must be keep|no-change|block" };
+    return { ok: false, error: "--status must be ok|block" };
   }
   const phase = flags.phase;
   if (phase !== undefined && (typeof phase !== "string" || !(TERMINAL_PHASES as readonly string[]).includes(phase))) {
@@ -125,6 +125,7 @@ function boundedText(value: string | null, cap = HISTORY_DETAIL_TEXT_CAP): { val
 
 function normalizedListRun(run: Run) {
   const message = boundedText(run.message ?? null, HISTORY_MESSAGE_CAP);
+  const error = boundedText(run.error ?? null, HISTORY_MESSAGE_CAP);
   return {
     runIndex: run.runIndex!,
     terminalAt: run.ts,
@@ -135,6 +136,8 @@ function normalizedListRun(run: Run) {
     tokenUsage: totalTokenUsage(run.usage ?? null),
     message: message.value,
     messageTruncated: message.truncated,
+    error: error.value,
+    errorTruncated: error.truncated,
     finalTextAvailable: !!run.finalText?.trim(),
   };
 }
@@ -173,9 +176,10 @@ async function listHistory(loop: Loop, q: HistoryQuery): Promise<HttpResult> {
     return text ? response(text) : { status: 413, body: { error: "history JSON exceeds the response cap; lower --limit" } };
   }
   const table = rows.length
-    ? listBlock("runs", ["index", "terminal", "phase", "status", "attention", "durationMs", "tokenUsage", "message", "finalTextAvailable"], rows.map((run) => [
+    ? listBlock("runs", ["index", "terminal", "phase", "status", "attention", "durationMs", "tokenUsage", "message", "error", "finalTextAvailable"], rows.map((run) => [
         run.runIndex!, fmt(run.ts), run.phase, run.status ?? null, run.attention ?? null, run.durationMs ?? null, totalTokenUsage(run.usage ?? null),
         run.message ? truncate(run.message, HISTORY_MESSAGE_CAP, "use --run for detail").value : null,
+        run.error ? truncate(run.error, HISTORY_MESSAGE_CAP, "use --run for detail").value : null,
         !!run.finalText?.trim(),
       ]))
     : emptyList("runs");

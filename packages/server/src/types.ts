@@ -32,17 +32,12 @@ export type PauseCause =
   | { kind: 'failure-streak'; at: string; runId: string; count: number }
   | { kind: 'blocked'; at: string; runId: string }
 
-export type RunStatus = 'keep' | 'no-change' | 'block'
+export type RunStatus = 'ok' | 'block'
 export type RunPhase = 'pending' | 'running' | 'done' | 'error' | 'canceled'
 export type CronOverlap = 'skip' | 'queue-one'
 export type LoopSchedule =
   | { mode: 'cron'; cron: string; timezone: string; overlap: CronOverlap }
   | { mode: 'continuous'; delayMinutes: number }
-export interface StatusDefinitions {
-  keep: string
-  noChange: string
-  block: string
-}
 
 export const MAX_LOOP_TAGS = 4
 export const MAX_LOOP_TAG_LENGTH = 64
@@ -149,7 +144,6 @@ export interface LoopFull {
   model: string | null
   reasoningEffort: string | null
   prompt: string
-  statusDefinitions: StatusDefinitions
   artifacts: string[]
   enabled: boolean
   pauseCause?: PauseCause | null
@@ -223,7 +217,6 @@ export interface LoopPayload {
   model?: string | null
   reasoningEffort?: string | null
   prompt?: string
-  statusDefinitions?: StatusDefinitions
   artifacts?: string[]
   enabled?: boolean
 }

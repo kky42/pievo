@@ -63,7 +63,7 @@ export function buildPatch(flags: Flags): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
 
   if (typeof flags["json"] === "string") {
-    const parsed = JSON.parse(flags["json"]);
+    const parsed = JSON.parse(flags["json"] === "-" ? fs.readFileSync(0, "utf8") : flags["json"]);
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("--json must be a JSON object of loop fields");
     }
@@ -74,8 +74,8 @@ export function buildPatch(flags: Flags): Record<string, unknown> {
 
 const USAGE =
   "pievo: usage: pievo edit <loop-id> [options]\n" +
-  "  --json '<json-object>'      patch name/tags/schedule/workdir/agent/model/reasoningEffort/\n" +
-  "                              prompt/statusDefinitions/artifacts/enabled\n" +
+  "  --json '<json-object>'|-    patch name/tags/schedule/workdir/agent/model/reasoningEffort/\n" +
+  "                              prompt/artifacts/enabled\n" +
   "                              e.g. '{\"schedule\":{\"mode\":\"continuous\",\"delayMinutes\":5}}'\n" +
   "  --dry-run                   validate + preview before/after, change nothing\n" +
   "  the server validates every field; unknown keys are rejected.\n";

@@ -27,9 +27,8 @@ Daemon (on every device that runs loops)
 Loop setup and management
   new --json '<config>' [--dry-run]
                           Create from the canonical config envelope (--json - reads stdin).
-                          Required: name, schedule, workdir, agent, prompt,
-                          statusDefinitions. Optional: tags, model, reasoningEffort,
-                          artifacts, enabled.
+                          Required: name, schedule, workdir, agent, prompt.
+                          Optional: tags, model, reasoningEffort, artifacts, enabled.
   pause <loop>            Pause future runs; the current run continues.
   start <loop>            Start a paused loop using its existing schedule.
   stop <loop>             Pause, cancel queued work, and request run termination.
@@ -39,7 +38,7 @@ Loop setup and management
   log [<loop>]            Show recent runs (--json, --limit N).
   loops [--fields a,b] [--json]
   edit <loop> --json '<patch>' [--dry-run]
-                          Patch tags/schedule/prompt/status/artifact/provider config.
+                          Patch (--json - reads stdin) tags/schedule/prompt/artifact/provider config.
   skill [status|install]  Install or inspect the bundled owner-facing Pievo skill.
                           Install overwrites same-named user Pievo skills.
 
@@ -51,7 +50,7 @@ Loop setup and management
 Inside a run
   pievo commands are unavailable. Runs edit loop files in $PIEVO_LOOP_DIR and end
   their final response with an optional \`ATTENTION: <reason>\` line and a last
-  line \`STATUS: keep|no-change|block\`.
+  line \`STATUS: ok|block\`; block pauses the loop.
 
 Upgrade
   npm install -g @kky42/pievo@latest
@@ -84,7 +83,6 @@ Canonical config
     workdir             absolute path on this machine
     agent               claude-code|codex|pi
     prompt              non-empty string, stored unchanged
-    statusDefinitions   non-empty keep, noChange, block strings
   Optional:
     tags                   up to 4 strings, 64 characters each; default []
                            NFKC lowercase with collapsed whitespace, then sorted;
@@ -93,6 +91,8 @@ Canonical config
     model, reasoningEffort string or null for the provider default
                            Pi thinking: off|minimal|low|medium|high|xhigh|max
     artifacts              up to 4 text/code file names (256 KB each); default []
+                           .md renders as Markdown, .html in a sandboxed frame,
+                           .svg as an image, other text/code as source
     enabled                boolean; default true
 
   Cron and continuous fields cannot be mixed. Every loop also has MEMORY.md (8000
@@ -111,16 +111,16 @@ Canonical config
   this machine's owner authority, and explicit local confirmation; it may retire server
   authority while a local process is still running.`,
   run: "pievo run stop <run>\n  Stop one pending or running run without pausing its loop. A running run changes state only after daemon confirmation.",
-  log: "pievo log [<loop>] [--limit 1..20] [--status keep|no-change|block] [--phase done|error|canceled] [--run <index|UUID> [--diff]] [--json]\n  Show bounded run history or detail. <loop> defaults from the current workdir.",
+  log: "pievo log [<loop>] [--limit 1..20] [--status ok|block] [--phase done|error|canceled] [--run <index|UUID> [--diff]] [--json]\n  Show bounded run history or detail. <loop> defaults from the current workdir.",
   show: "pievo show [<loop>] [--full] [--json]\n  Show canonical config and recent runs. For an edit, select only changed fields from --json; id is read-only.",
   loops: "pievo loops [--fields a,b] [--json]\n  List loops on this machine.",
   edit: `pievo edit <loop> --json '<patch>' [--dry-run]
-  Inspect first with: pievo show <loop> --json
+  Use --json - to read the patch from stdin. Inspect first with: pievo show <loop> --json
 
   Accepted fields: name, tags, schedule, workdir, agent, model, reasoningEffort,
-  prompt, statusDefinitions, artifacts, enabled. Unknown fields are rejected.
-  The patch changes only supplied fields, except schedule and statusDefinitions each
-  require a complete replacement value. Use null for the provider-default model or
+  prompt, artifacts, enabled. Unknown fields are rejected.
+  The patch changes only supplied fields; schedule requires a complete replacement
+  value. Use null for the provider-default model or
   reasoning effort. Use --dry-run to preview normalized before/after values without
   changing the loop.`,
   file: `pievo file list <loop> | file get <loop> <name> | file set <loop> <name> --from <path|->

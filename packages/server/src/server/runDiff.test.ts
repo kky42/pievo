@@ -150,7 +150,7 @@ test("getRunDiff: first run (no previous snapshot) shows everything as added", a
 
 test("getRunDiff degrades cleanly for a run with no snapshot (predates the feature)", async () => {
   const { machineId, loop } = await seed();
-  const run = await store.addRun({ loopId: loop.id, machineId, phase: "done", ts: "2026-05-01T00:00:00.000Z" });
+  const run = await store.addRun({ loopId: loop.id, machineId, phase: "done", status: "ok", ts: "2026-05-01T00:00:00.000Z" });
   const diff = await runDiff.computeRunDiff(run.id);
   expect(diff).toEqual({ hasSnapshot: false, files: [] });
 });

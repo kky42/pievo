@@ -78,12 +78,12 @@ test("(a) a running run reclaimed while asleep is reconciled to done by the late
   expect(swept.error).toBe("machine timed out / disconnected");
   expect((await tokens.resolveLease(rt))?.state).toBe("terminal-grace");
 
-  const res = (await gw.report(rt, { result: "success" as const, durationMs: 1234, sessionId: "sess-1", finalText: "opened PR #42\nSTATUS: keep" }));
+  const res = (await gw.report(rt, { result: "success" as const, durationMs: 1234, sessionId: "sess-1", finalText: "opened PR #42\nSTATUS: ok" }));
   expect(res.status).toBe(200);
   const final = (await store.getRun(run.id))!;
   expect(final.phase).toBe("done");
   expect(final.error).toBeNull();
-  expect(final.status).toBe("keep");
+  expect(final.status).toBe("ok");
   expect(final.message).toBe("opened PR #42");
   expect(final.durationMs).toBe(1234);
   expect(await tokens.resolveLease(rt)).toBeUndefined();
@@ -105,7 +105,7 @@ test("a reclaimed late success stays failed when its final response has no statu
     phase: "error",
     status: null,
     message: null,
-    error: 'run protocol incomplete: the final response has no "STATUS: keep|no-change|block" line',
+    error: 'run protocol incomplete: the final response has no "STATUS: ok|block" line',
   });
 });
 
@@ -148,8 +148,8 @@ test("a report-only late success updates only the old run after queued work star
   const successor = await store.claimReadyRunForMachine(machineId);
   expect(successor?.run.phase).toBe("running");
   const before = await store.getLoop(loop.id);
-  expect((await gw.report(rt, { result: "success", finalText: "old result\nSTATUS: keep" })).status).toBe(200);
-  expect(await store.getRun(interrupted.id)).toMatchObject({ phase: "done", status: "keep", message: "old result" });
+  expect((await gw.report(rt, { result: "success", finalText: "old result\nSTATUS: ok" })).status).toBe(200);
+  expect(await store.getRun(interrupted.id)).toMatchObject({ phase: "done", status: "ok", message: "old result" });
   expect((await store.getRun(successor!.run.id))?.phase).toBe("running");
   expect(await store.getLoop(loop.id)).toMatchObject({ nextCadenceAt: before?.nextCadenceAt });
 });
@@ -232,7 +232,7 @@ test("a ready pending row gets a fresh claim window after a 21-minute blocker en
   });
   // The blocker just ended. The old pending timestamp must not make the follow-up
   // instantly look 21m stale on this very first eligible sweep.
-  await store.updateRun(blocker.id, { phase: "done", ts: new Date().toISOString() });
+  await store.updateRun(blocker.id, { phase: "done", status: "ok", ts: new Date().toISOString() });
   await gw.sweep();
   expect((await store.getRun(pending.id))!.phase).toBe("pending");
 });

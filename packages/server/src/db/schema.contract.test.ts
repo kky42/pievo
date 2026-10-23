@@ -12,9 +12,6 @@ const queryClient = client as unknown as {
 
 const canonicalLoopColumns = [
   "prompt",
-  "status_keep",
-  "status_no_change",
-  "status_block",
   "agent",
   "schedule_mode",
   "cron_overlap",
@@ -37,11 +34,10 @@ test("fresh loop schema has no defaults for canonical required fields", async ()
 test("loop tag database constraints protect count and reserved names", async () => {
   const insert = (id: string, tags: string) => queryClient.query(`
     INSERT INTO loops (
-      id, machine_id, name, tags, prompt, status_keep, status_no_change,
-      status_block, cron, schedule_mode, cron_overlap, continuous_delay_minutes,
+      id, machine_id, name, tags, prompt, cron, schedule_mode, cron_overlap, continuous_delay_minutes,
       workdir, agent, enabled, created_at, updated_at
     ) VALUES (
-      '${id}', 'm', 'Tags', ${tags}, 'task', 'keep', 'none', 'block',
+      '${id}', 'm', 'Tags', ${tags}, 'task',
       '0 0 1 1 *', 'cron', 'skip', 1, '/work', 'pi', true, 'now', 'now'
     )
   `);
@@ -51,17 +47,16 @@ test("loop tag database constraints protect count and reserved names", async () 
 
 test("every migration is applied and Pi is a valid agent", async () => {
   const migrations = await queryClient.query<{ count: string }>(`SELECT count(*)::text AS count FROM drizzle.__drizzle_migrations`);
-  expect(migrations.rows).toEqual([{ count: "3" }]);
+  expect(migrations.rows).toEqual([{ count: "4" }]);
 
   await queryClient.query("BEGIN");
   try {
     await queryClient.query(`
       INSERT INTO loops (
-        id, machine_id, name, prompt, status_keep, status_no_change,
-        status_block, cron, schedule_mode, cron_overlap, continuous_delay_minutes,
+        id, machine_id, name, prompt, cron, schedule_mode, cron_overlap, continuous_delay_minutes,
         workdir, agent, enabled, created_at, updated_at
       ) VALUES (
-        'schema-pi-loop', 'm', 'Pi', 'task', 'keep', 'none', 'block',
+        'schema-pi-loop', 'm', 'Pi', 'task',
         '0 0 1 1 *', 'cron', 'skip', 1, '/work', 'pi', true, 'now', 'now'
       )
     `);
@@ -78,4 +73,26 @@ test("every migration is applied and Pi is a valid agent", async () => {
   } finally {
     await queryClient.query("ROLLBACK");
   }
+});
+
+test("a run has a status exactly when it is done", async () => {
+  await queryClient.query(`
+    INSERT INTO loops (
+      id, machine_id, name, prompt, cron, schedule_mode, cron_overlap, continuous_delay_minutes,
+      workdir, agent, enabled, created_at, updated_at
+    ) VALUES (
+      'schema-status-loop', 'm', 'Status', 'task',
+      '0 0 1 1 *', 'cron', 'skip', 1, '/work', 'pi', true, 'now', 'now'
+    )
+  `);
+  const insert = (id: string, phase: string, status: string | null) => queryClient.query(`
+    INSERT INTO runs (id, loop_id, machine_id, phase, status, requested_by, ts)
+    VALUES ('${id}', 'schema-status-loop', 'm', '${phase}', ${status === null ? "NULL" : `'${status}'`}, 'owner', 'now')
+  `);
+  await expect(insert("schema-done-null", "done", null)).rejects.toThrow(/runs_done_status_check/);
+  await expect(insert("schema-error-ok", "error", "ok")).rejects.toThrow(/runs_done_status_check/);
+  await expect(insert("schema-done-keep", "done", "keep")).rejects.toThrow(/runs_status_check/);
+  await insert("schema-done-ok", "done", "ok");
+  await insert("schema-done-block", "done", "block");
+  await insert("schema-error", "error", null);
 });

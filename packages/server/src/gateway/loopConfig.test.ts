@@ -9,11 +9,6 @@ const base = {
   workdir: "/work/project",
   agent: "claude-code",
   prompt: "Inspect the project exactly as requested.",
-  statusDefinitions: {
-    keep: "A useful result was produced.",
-    noChange: "The check completed and no change was needed.",
-    block: "Owner input is required.",
-  },
 };
 
 test("canonical create requires the complete prompt-runner config", () => {
@@ -28,13 +23,12 @@ test("canonical create requires the complete prompt-runner config", () => {
         continuousDelayMinutes: 1,
         timezone: "UTC",
         prompt: base.prompt,
-        statusKeep: base.statusDefinitions.keep,
         artifacts: [],
       },
     },
   });
   expect(validateLoopCreate({ ...base, prompt: "" })).toMatchObject({ ok: false, detail: "prompt is required" });
-  expect(validateLoopCreate({ ...base, statusDefinitions: { keep: "yes", noChange: "no" } })).toMatchObject({ ok: false });
+  expect(validateLoopCreate({ ...base, statusDefinitions: { block: "owner input" } } as any)).toMatchObject({ ok: false });
   expect(validateLoopCreate({ ...base, cron: "0 7 * * *" } as any)).toMatchObject({ ok: false });
   expect(validateLoopCreate({ ...base, enabled: "false" } as any)).toMatchObject({ ok: false, detail: "enabled must be boolean" });
   expect(validateLoopCreate({ ...base, artifacts: "report.md" } as any)).toMatchObject({ ok: false });
@@ -143,9 +137,6 @@ test("canonical edit rejects unknown top-level fields", () => {
     timezone: "UTC",
     cronOverlap: "skip",
     continuousDelayMinutes: 1,
-    statusKeep: base.statusDefinitions.keep,
-    statusNoChange: base.statusDefinitions.noChange,
-    statusBlock: base.statusDefinitions.block,
     artifacts: [],
   } as unknown as Loop;
   expect(validateLoopEdit(loop, { schedule: { mode: "continuous", delayMinutes: 7 } })).toMatchObject({

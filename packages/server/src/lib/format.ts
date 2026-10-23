@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react'
 import type { LoopSchedule, LoopSummary, RunSummary } from '../types'
 
 export const fmt = (t: string | null | undefined): string =>
@@ -92,63 +93,50 @@ interface StatusMeta {
 }
 
 const ST = {
-  keep: { c: 'var(--color-run-keep)', label: 'Keep' },
-  'no-change': { c: 'var(--color-run-no-change)', label: 'No change' },
+  ok: { c: 'var(--color-run-ok)', label: 'OK' },
   block: { c: 'var(--color-run-block)', label: 'Block' },
   error: { c: 'var(--color-run-error)', label: 'Error' },
-  warning: { c: 'var(--color-run-warning)', label: 'Missing status' },
   canceled: { c: 'var(--color-run-canceled)', label: 'Canceled' },
   queued: { c: 'var(--color-run-queued)', label: 'Queued' },
-  reconciling: { c: 'var(--color-run-warning)', label: 'Reconciling…' },
+  reconciling: { c: 'var(--color-run-reconciling)', label: 'Reconciling…' },
   active: { c: 'var(--color-run-active)', label: 'Running…' },
 } satisfies Record<string, StatusMeta>
 
-const statusMeta = (k: string | null | undefined): StatusMeta | undefined =>
-  k === 'keep' || k === 'no-change' || k === 'block' ? ST[k] : undefined
-
+/** The run's ink, for text and borders. Fills use `runSwatch`. */
 export function dotColor(r: RunSummary): string {
   if (r.reconciliation) return ST.reconciling.c
   if (r.phase === 'running') return ST.active.c
   if (r.phase === 'error') return ST.error.c
-  if (r.status === 'block') return ST.block.c
   if (r.phase === 'pending') return ST.queued.c
   if (r.phase === 'canceled') return ST.canceled.c
-  if (r.phase === 'done' && !statusMeta(r.status)) return ST.warning.c
-  return (statusMeta(r.status) ?? ST['no-change']).c
+  return r.status === 'block' ? ST.block.c : ST.ok.c
 }
 
-export function dotOpacity(r: RunSummary): number {
-  if (r.attention) return 1
-  if (r.reconciliation || r.phase === 'running' || r.status === 'block' || r.phase === 'error') return 1
-  if (r.phase === 'pending') return 0.7
-  if (r.phase === 'canceled') return 0.5
-  if (r.phase === 'done' && !statusMeta(r.status)) return 0.9
-  if (r.status === 'no-change') return 0.55
-  return 1
+export const runPulseAnim = { animation: 'runPulse 1.1s ease-in-out infinite' } as const
+
+/** Fill, outline, and motion for a run block or dot. */
+export function runSwatch(r: RunSummary): CSSProperties {
+  const ink = dotColor(r)
+  if (r.reconciliation) {
+    return { outline: `1.5px dashed ${ink}`, outlineOffset: '-1.5px', animation: 'runWait 2.4s ease-in-out infinite' }
+  }
+  if (r.phase === 'running') return { background: ink, ...runPulseAnim }
+  if (r.phase === 'pending') return { boxShadow: `inset 0 0 0 1.5px ${ink}` }
+  if (r.phase === 'canceled') return { background: ink, opacity: 0.5 }
+  // 3px stripes stay readable from the 8px dots up to the 20px timeline block.
+  if (r.phase === 'error') return { background: `repeating-linear-gradient(135deg, ${ink} 0 3px, var(--color-run-error-stripe) 3px 6px)` }
+  return { background: ink }
 }
 
 export function dotLabel(r: RunSummary): string {
   if (r.reconciliation === 'blocking') return 'Waiting for machine recovery'
   if (r.reconciliation === 'report-only') return 'Awaiting late report'
   if (r.phase === 'pending') return ST.queued.label
-  if (r.phase === 'running') {
-    if (r.cancelRequested) return 'Stopping…'
-    return ST.active.label
-  }
-  if (r.phase === 'error') {
-    if (r.cancelRequested) return 'Failed while stopping'
-    return ST.error.label
-  }
+  if (r.phase === 'running') return r.cancelRequested ? 'Stopping…' : ST.active.label
+  if (r.phase === 'error') return r.cancelRequested ? 'Failed while stopping' : ST.error.label
+  if (r.phase === 'canceled') return ST.canceled.label
   if (r.status === 'block') return ST.block.label
-  if (r.phase === 'canceled') {
-    if (r.error === 'stopped by user') return 'Canceled'
-    return 'Canceled'
-  }
-  if (r.cancelRequested && r.phase === 'done') return 'Succeeded while stopping'
-  if (r.status === 'keep') return ST.keep.label
-  if (r.status === 'no-change') return ST['no-change'].label
-  if (r.phase === 'done') return ST.warning.label
-  return ST['no-change'].label
+  return r.cancelRequested ? 'Succeeded while stopping' : ST.ok.label
 }
 
 /** The newest finished run, whose attention reason the loop card surfaces until a

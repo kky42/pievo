@@ -176,7 +176,6 @@ test("canonical create/edit expose one exclusive schedule union", async () => {
     workdir: "/work/project",
     agent: "claude-code",
     prompt: "Inspect the project.",
-    statusDefinitions: { keep: "useful result", noChange: "nothing changed", block: "owner input needed" },
     artifacts: ["latest.md"],
     idempotencyKey: "a".repeat(64),
   };
@@ -219,7 +218,6 @@ test("owner CLI creates, edits, and shows normalized tags through the agent-faci
     workdir: "/work/project",
     agent: "claude-code",
     prompt: "Inspect the project.",
-    statusDefinitions: { keep: "keep", noChange: "none", block: "blocked" },
     idempotencyKey: "d".repeat(64),
   };
 
@@ -244,7 +242,6 @@ test("create transport requires exact idempotency/dryRun fields", async () => {
     workdir: "/work/project",
     agent: "claude-code",
     prompt: "Inspect the project.",
-    statusDefinitions: { keep: "keep", noChange: "none", block: "blocked" },
   };
   const gw = gateway();
 
@@ -259,10 +256,10 @@ test("create transport requires exact idempotency/dryRun fields", async () => {
 test("run credentials have no CLI: every verb, including the old report callback, is refused", async () => {
   const { run, rt } = await seededExecRun();
   const gw = gateway();
-  for (const argv of [["report", "--status", "keep", "--message", "completed"], ["show"], ["help"], []]) {
+  for (const argv of [["report", "--status", "ok", "--message", "completed"], ["show"], ["help"], []]) {
     const res = await gw.runCli(rt, argv);
     expect(res.status).toBe(403);
-    expect(textOf(res)).toMatch(/not available inside a run.*STATUS: keep\|no-change\|block/);
+    expect(textOf(res)).toMatch(/not available inside a run.*STATUS: ok\|block/);
   }
   expect(await store.getRun(run.id)).toMatchObject({ phase: "running", status: null, message: null });
 });
@@ -290,11 +287,11 @@ test("block persists telemetry and atomically pauses", async () => {
   expect(await store.getLoop(loop.id)).toMatchObject({ enabled: false, nextCadenceAt: null, nextRunAt: null, pauseCause: { kind: "blocked", runId: run.id } });
 });
 
-test("attention is stored with a keep status and never pauses the loop", async () => {
+test("attention is stored with an ok status and never pauses the loop", async () => {
   const { loop, run, rt } = await seededExecRun();
-  const response = await reportV2(gateway(), rt, { result: "success", exitCode: 0, finalText: "disk 83%\nATTENTION: disk above 80%\nSTATUS: keep" });
+  const response = await reportV2(gateway(), rt, { result: "success", exitCode: 0, finalText: "disk 83%\nATTENTION: disk above 80%\nSTATUS: ok" });
   expect(response.status).toBe(200);
-  expect(await store.getRun(run.id)).toMatchObject({ phase: "done", status: "keep", message: "disk 83%", attention: "disk above 80%" });
+  expect(await store.getRun(run.id)).toMatchObject({ phase: "done", status: "ok", message: "disk 83%", attention: "disk above 80%" });
   expect(await store.getLoop(loop.id)).toMatchObject({ enabled: true, pauseCause: null });
 });
 
@@ -342,14 +339,14 @@ test("report persists normalized terminal telemetry without cost or transcript f
     exitCode: 0,
     durationMs: 1234,
     sessionId: "sess-abc",
-    finalText: "agent summary\nSTATUS: no-change",
+    finalText: "agent summary\nSTATUS: ok",
     usage: { inputTokens: 120, outputTokens: 9, cacheReadTokens: 40, cacheCreationTokens: 3 },
   });
   expect(res.status).toBe(200);
   const stored = await store.getRun(run.id);
   expect(stored).toMatchObject({
-    phase: "done", status: "no-change",
-    exitCode: 0, durationMs: 1234, sessionId: "sess-abc", finalText: "agent summary\nSTATUS: no-change",
+    phase: "done", status: "ok",
+    exitCode: 0, durationMs: 1234, sessionId: "sess-abc", finalText: "agent summary\nSTATUS: ok",
     message: "agent summary",
     usage: { inputTokens: 120, outputTokens: 9, cacheReadTokens: 40, cacheCreationTokens: 3 },
   });
@@ -373,7 +370,7 @@ test("machine finalization turns a successful process into an error when the fin
     status: null,
     message: null,
     finalText: "provider claimed success",
-    error: 'run protocol incomplete: the final response has no "STATUS: keep|no-change|block" line',
+    error: 'run protocol incomplete: the final response has no "STATUS: ok|block" line',
   });
 });
 
@@ -532,7 +529,6 @@ test("createLoop always persists the authenticated machine owner", async () => {
     workdir: "/work/project",
     agent: "claude-code",
     prompt: "Inspect the project.",
-    statusDefinitions: { keep: "keep", noChange: "none", block: "blocked" },
     idempotencyKey: "d".repeat(64),
   });
 
@@ -553,7 +549,6 @@ test("createLoop --dry-run still validates (bad cron → 400, nothing created)",
   const res = await gateway().createLoop(token, {
     name: "bad", schedule: { mode: "cron", cron: "not a cron", timezone: "UTC", overlap: "skip" },
     workdir: "/work", agent: "codex", prompt: "test", dryRun: true, idempotencyKey: "b".repeat(64),
-    statusDefinitions: { keep: "keep", noChange: "no change", block: "block" },
   });
   expect(res.status).toBe(400);
   expect((await store.loopsForMachine(machineId))).toHaveLength(0);
@@ -701,7 +696,7 @@ test("a stale sweep observation that loses its phase CAS has zero side effects",
   const core = new gatewayMod.MachineGateway({
     addLoop(): void { calls.push("arm"); }, removeLoop(): void {}, advanceDueSchedules(): never[] { return []; },
   } as any);
-  await store.updateRun(run.id, { phase: "done"});
+  await store.updateRun(run.id, { phase: "done", status: "ok"});
 
   await (core as any).reclaimRun(run, "stale reclaim");
   expect((await store.getRun(run.id))!.phase).toBe("done");
@@ -819,11 +814,11 @@ test("heartbeat refresh throttling stays inside short custom timeout windows", (
 
 test("the run summary is clipped to the 2000-char cap while finalText keeps the full response", async () => {
   const { run, rt } = (await seededExecRun());
-  const res = await gateway().report(rt, { result: "success", finalText: `${"m".repeat(5000)}\nSTATUS: keep` });
+  const res = await gateway().report(rt, { result: "success", finalText: `${"m".repeat(5000)}\nSTATUS: ok` });
   expect(res.status).toBe(200);
   const stored = (await store.getRun(run.id))!;
   expect(stored.message!.length).toBe(2000);
-  expect(stored.finalText!.length).toBe(5013);
+  expect(stored.finalText!.length).toBe(5011);
 });
 
 test("CLI flags are NUL-stripped before any pg write", async () => {
@@ -1080,14 +1075,14 @@ test("loop-file round trip: run-token transfer, terminal apply, and the next del
 
   const terminal = await gw.report(runToken, {
     result: "success",
-    finalText: "did the work\nSTATUS: keep",
+    finalText: "did the work\nSTATUS: ok",
     files: [
       { name: "MEMORY.md", baseHash: loopFilesMod.EMPTY_SHA256, hash: memoryHash, size: memory.length },
       { name: "report.md", baseHash: loopFilesMod.EMPTY_SHA256, hash: artifactHash, size: artifact.length },
     ],
   });
   expect(terminal.status).toBe(200);
-  expect(await store.getRun(run.id)).toMatchObject({ phase: "done", status: "keep", message: "did the work", fileNotices: null });
+  expect(await store.getRun(run.id)).toMatchObject({ phase: "done", status: "ok", message: "did the work", fileNotices: null });
   expect(await store.getArtifactFile(loop.id, "MEMORY.md")).toMatchObject({ hash: memoryHash, size: memory.length, deleted: false });
   expect(await store.getArtifactFile(loop.id, "report.md")).toMatchObject({ hash: artifactHash, size: artifact.length, deleted: false });
 
@@ -1121,7 +1116,7 @@ test("an owner file edit during a run wins over the run's base-hash version", as
   expect((await gw.storeRunFile(runToken, "MEMORY.md", agent, agentHash)).status).toBe(200);
   expect((await gw.report(runToken, {
     result: "success",
-    finalText: "done\nSTATUS: keep",
+    finalText: "done\nSTATUS: ok",
     files: [{ name: "MEMORY.md", baseHash: beforeHash, hash: agentHash, size: agent.length }],
   })).status).toBe(200);
 
@@ -1145,7 +1140,7 @@ test("an over-limit run version is rejected, kept out, and repeated in the next 
   expect((rejected.body as { error: string }).error).toContain(`${loopFilesMod.MEMORY_CHAR_CAP + 1} characters exceeds`);
 
   const notice = `MEMORY.md: ${loopFilesMod.MEMORY_CHAR_CAP + 1} characters exceeds the ${loopFilesMod.MEMORY_CHAR_CAP}-character limit; the previous version was kept`;
-  expect((await gw.report(runToken, { result: "success", finalText: "done\nSTATUS: keep", fileNotices: [notice] })).status).toBe(200);
+  expect((await gw.report(runToken, { result: "success", finalText: "done\nSTATUS: ok", fileNotices: [notice] })).status).toBe(200);
   expect((await store.getRun(run.id))!.fileNotices).toEqual([notice]);
   expect(await store.getArtifactFile(loop.id, "MEMORY.md")).toBeUndefined();
 
@@ -1163,7 +1158,7 @@ test("notices come from the immediately previous run, including canceled runs", 
   const run1 = await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: new Date().toISOString() });
   const token1 = await tokens.registerRunLease({ runId: run1.id, loopId: loop.id, machineId });
   const stale = "MEMORY.md: 9001 characters exceeds the 8000-character limit; the previous version was kept";
-  expect((await gw.report(token1, { result: "success", finalText: "done\nSTATUS: keep", fileNotices: [stale] })).status).toBe(200);
+  expect((await gw.report(token1, { result: "success", finalText: "done\nSTATUS: ok", fileNotices: [stale] })).status).toBe(200);
 
   const run2 = await store.addRun({ loopId: loop.id, machineId, phase: "running", ts: new Date().toISOString() });
   const token2 = await tokens.registerRunLease({ runId: run2.id, loopId: loop.id, machineId });
@@ -1185,7 +1180,7 @@ test("a report whose size disagrees with the stored blob is not applied", async 
 
   expect((await gw.report(runToken, {
     result: "success",
-    finalText: "done\nSTATUS: keep",
+    finalText: "done\nSTATUS: ok",
     files: [{ name: "MEMORY.md", baseHash: loopFilesMod.EMPTY_SHA256, hash, size: bytes.length + 1 }],
   })).status).toBe(200);
   expect((await store.getRun(run.id))!.fileNotices).toEqual([

@@ -1,22 +1,16 @@
 # Connect a machine
 
-Use the Pievo command prefix supplied by the user; otherwise use `pievo`. A dashboard
-connection command supplies a server URL and connect key. Reuse both verbatim, never
-print the key unnecessarily, and never guess replacement credentials.
+The dashboard's connect command supplies a server URL and a connect key. Reuse both
+exactly as given. Treat the key as a secret: don't print it again, and never invent
+one.
 
-If the default CLI is unavailable, install the current release:
-
-```bash
-npm install -g @kky42/pievo@latest
-```
-
-Consult the installed command contract, then connect:
+If `pievo` is not installed, run `npm install -g @kky42/pievo@latest`.
 
 ```bash
 <pievo-cli> daemon connect --help
 <pievo-cli> daemon connect --server-url <server-url> --connect-key <connect-key>
 ```
 
-Follow the command's status and printed log path if it cannot reach the server. Once
-online, continue with `create.md` if the user wants a loop. Saved connections normally
-supply later owner commands with their server and device identity.
+If it can't reach the server, follow the status and log path the command prints.
+Later commands reuse the saved connection. Continue with `create.md` if the owner
+wants a loop.

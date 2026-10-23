@@ -321,7 +321,7 @@ export class CliGateway {
 type Flags = Record<string, string | boolean>;
 
 const RUN_HAS_NO_CLI =
-  "pievo commands are not available inside a run; end your final response with a summary and a last line `STATUS: keep|no-change|block`";
+  "pievo commands are not available inside a run; end your final response with a summary and a last line `STATUS: ok|block`";
 const FILE_USAGE = "pievo file list <loop> | file get <loop> <name> | file set <loop> <name> --from <path>";
 
 const PAUSED_FINISHING = "loop paused; current run is finishing";
@@ -401,7 +401,7 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
     syntax: "new --json '<config>' [--dry-run]",
     summary: `create a loop from the canonical envelope (keys: ${[...EDITABLE_LOOP_FIELDS].join(", ")}; agent required)`,
     help: [
-      "Run `pievo new --json '{\"name\":\"Daily check\",\"schedule\":{\"mode\":\"cron\",\"cron\":\"0 8 * * *\",\"timezone\":\"UTC\",\"overlap\":\"skip\"},\"workdir\":\"<path>\",\"agent\":\"claude-code\",\"prompt\":\"Check the project.\",\"statusDefinitions\":{\"keep\":\"result retained\",\"noChange\":\"nothing changed\",\"block\":\"owner input required\"}}'` to create a loop",
+      "Run `pievo new --json '{\"name\":\"Daily check\",\"schedule\":{\"mode\":\"cron\",\"cron\":\"0 8 * * *\",\"timezone\":\"UTC\",\"overlap\":\"skip\"},\"workdir\":\"<path>\",\"agent\":\"claude-code\",\"prompt\":\"Check the project.\"}'` to create a loop",
       "Run `pievo new --json '{...}' --dry-run` to validate without creating",
     ],
   },
@@ -457,7 +457,7 @@ const DEVICE_VERB_HELP: Record<string, VerbHelpSpec> = {
     ],
   },
   log: {
-    syntax: "log [<id>] [--limit 1..20] [--since ISO] [--until ISO] [--status keep|no-change|block] [--phase done|error|canceled] [--run <index|UUID> [--diff]] [--json]",
+    syntax: "log [<id>] [--limit 1..20] [--since ISO] [--until ISO] [--status ok|block] [--phase done|error|canceled] [--run <index|UUID> [--diff]] [--json]",
     summary: "bounded terminal history or one detailed run",
     help: ["Run `pievo log <id> --json` for structured history", "Run `pievo log <id> --run 12 --diff` for bounded run detail and artifact diff"],
   },
@@ -510,7 +510,6 @@ function renderShowText(
     ["model", env.model == null ? { raw: "default" } : env.model as Scalar],
     ["reasoningEffort", env.reasoningEffort == null ? { raw: "default" } : env.reasoningEffort as Scalar],
     ["prompt", contentField(loop.prompt, full)],
-    ["statusDefinitions", { raw: JSON.stringify(env.statusDefinitions) }],
     ["artifacts", { raw: JSON.stringify(env.artifacts) }],
     ["enabled", env.enabled as Scalar],
   ]);

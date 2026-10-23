@@ -274,7 +274,7 @@ export function RunDetailView({ loopId, runId }: { loopId: string; runId: string
 
           {run.attention && (
             <Card label="Needs attention">
-              <div className="break-words text-body font-medium text-running">{run.attention}</div>
+              <div className="break-words text-body font-medium text-attention">{run.attention}</div>
             </Card>
           )}
 

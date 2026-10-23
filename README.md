@@ -17,7 +17,7 @@ project files on the device that runs each loop.
 ## What Pievo does
 
 A loop combines a prompt, a cron or continuous schedule, a project folder on one
-device, and one of three outcomes: `keep`, `no-change`, or `block`. Each loop keeps a
+device, and one of two outcomes per run: `ok` or `block`. Each loop keeps a
 memory file its runs read and update, so later runs avoid earlier mistakes, and can
 maintain Markdown, HTML, or text/code artifacts the dashboard renders and diffs.
 
@@ -109,7 +109,7 @@ Loops
   new --json '<config>' [--dry-run]
   loops [--fields a,b] [--json]
   show [<loop>] [--full] [--json]
-  log [<loop>] [--limit N] [--status keep|no-change|block] [--json]
+  log [<loop>] [--limit N] [--status ok|block] [--json]
   edit <loop> --json '<patch>' [--dry-run]
   pause <loop> | start <loop> | stop <loop>
   delete <loop> [--force]
@@ -153,10 +153,12 @@ server-specific SQLite outbox until the server accepts it. Different loops may r
 concurrently, while each loop stays serialized.
 
 A run reports through its final response, which must end with the line
-`STATUS: keep|no-change|block`. `keep` and `no-change` continue the schedule;
-`block` pauses the loop. A line `ATTENTION: <reason>` just above it flags the run
-for the owner (a yellow mark on the dashboard) without pausing the loop, whatever
-the status. `pievo` commands are unavailable inside a run.
+`STATUS: ok|block`. `ok` means the run finished and the schedule continues;
+`block` means the loop cannot continue safely without the owner and pauses it. A
+response without that line is recorded as a failed run, and consecutive failures
+(3 by default, `PIEVO_FAILURE_AUTOPAUSE_STREAK`) pause the loop. A line
+`ATTENTION: <reason>` just above the status flags the run for the owner (a yellow
+mark on the dashboard) without pausing the loop. `pievo` commands are unavailable inside a run.
 
 Each loop has server-owned files: `MEMORY.md` (at most 8000 characters) plus up to
 four text/code artifacts (256 KB each) that the dashboard renders and diffs.

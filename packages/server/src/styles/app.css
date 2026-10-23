@@ -100,15 +100,22 @@
   --color-interactive-soft: rgba(0, 70, 173, 0.08);
   --color-warn: #c44700;
   --color-warn-soft: rgba(255, 88, 0, 0.1);
-  --color-running: #8a6d00;
-  --color-running-soft: rgba(255, 213, 0, 0.16);
+  /* Yellow is reserved for attention: this ink/soft pair is its text and pill. */
+  --color-attention: #8a6d00;
+  --color-attention-soft: rgba(255, 213, 0, 0.16);
 
-  --color-run-keep: var(--color-success);
-  --color-run-no-change: var(--color-secondary);
+  /*
+   * Run swatches (lib/format.ts runSwatch). Every state has its own look:
+   * block (deliberate stop) is solid red, error (something broke) is striped
+   * orange so the two differ without relying on color, and the two transient
+   * states (queued, reconciling) are hollow outlines.
+   */
+  --color-run-ok: var(--color-success);
   --color-run-block: var(--color-accent);
   --color-run-attention: var(--color-rubik-yellow);
-  --color-run-error: var(--color-accent);
-  --color-run-warning: var(--color-warn);
+  --color-run-error: var(--color-warn);
+  --color-run-error-stripe: #e8762e;
+  --color-run-reconciling: var(--color-display);
   --color-run-canceled: var(--color-disabled);
   --color-run-queued: var(--color-secondary);
   --color-run-active: var(--color-display);
@@ -162,8 +169,9 @@
     --color-interactive-soft: rgba(92, 157, 255, 0.13);
     --color-warn: #ff7a3d;
     --color-warn-soft: rgba(255, 122, 61, 0.14);
-    --color-running: #ffd500;
-    --color-running-soft: rgba(255, 213, 0, 0.12);
+    --color-attention: #ffd500;
+    --color-attention-soft: rgba(255, 213, 0, 0.12);
+    --color-run-error-stripe: #c45a22;
 
     --color-diff-add-bg: rgba(0, 155, 72, 0.18);
     --color-diff-del-bg: rgba(255, 93, 117, 0.14);
@@ -334,15 +342,22 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* "Working" breath - a slow opacity pulse for the live running indicator (the
- * in-flight run block + the header Running pill). Fade, don't slide/bounce. */
+/* "Working" breath - an opacity pulse for every live running indicator (the
+ * in-flight run block, run-list row, and run page). Fade, don't slide/bounce. */
 @keyframes runPulse {
   0%, 100% { opacity: 0.9; }
   50% { opacity: 0.26; }
 }
 
+/* "Waiting" breath - slower and shallower than runPulse, for a reconciling run
+ * that is waiting on its machine rather than doing work. */
+@keyframes runWait {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 /*
- * Respect reduced-motion globally. fadeIn (card entrance) and runPulse are
+ * Respect reduced-motion globally. fadeIn (card entrance), runPulse, and runWait are
  * applied inline via the `style` prop, so neutralizing them needs !important to
  * outrank the inline rule. (Standard a11y reset.)
  */
